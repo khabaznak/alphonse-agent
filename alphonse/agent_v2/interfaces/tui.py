@@ -1054,7 +1054,7 @@ def _build_textual_app_class() -> type[Any]:
             super().__init__(); self.settings = settings; self.save = save; self.verify = verify
 
         def compose(self) -> ComposeResult:
-            tts = dict(self.settings.get("tts") or {}); stt = dict(self.settings.get("stt") or {}); ocr = dict(self.settings.get("ocr") or {})
+            tts = dict(self.settings.get("tts") or {}); stt = dict(self.settings.get("stt") or {})
             with Vertical(id="project-dialog"):
                 yield Static("Local Media Tools", classes="dialog-title")
                 yield Static(f"TTS ready: {tts.get('available')} | macOS say available: {self.settings.get('say_available')}", id="tts-status")
@@ -1067,11 +1067,6 @@ def _build_textual_app_class() -> type[Any]:
                     yield Input(value=str(stt.get(key, "")), placeholder=key, id=f"stt-{key}")
                 yield Input(placeholder="Audio sample path", id="stt-sample")
                 yield Button("Save STT", id="save-stt", variant="primary"); yield Button("Verify STT", id="verify-stt")
-                yield Static(f"OCR ready: {ocr.get('available')}", id="ocr-status")
-                for key in ("enabled", "ollama_base_url", "model_id", "timeout_seconds"):
-                    yield Input(value=str(ocr.get(key, "")), placeholder=key, id=f"ocr-{key}")
-                yield Input(placeholder="Image sample path", id="ocr-sample")
-                yield Button("Save OCR", id="save-ocr", variant="primary"); yield Button("Verify OCR", id="verify-ocr")
                 yield Static("", id="media-tools-notice"); yield Button("Close", id="close-media-tools")
 
         def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -1080,11 +1075,10 @@ def _build_textual_app_class() -> type[Any]:
             kind = action.rsplit("-", 1)[-1]
             try:
                 if action.startswith("save-"):
-                    keys = {"tts": ("enabled", "model_id", "device_map", "dtype", "language", "speaker", "instruct", "attn_implementation", "local_files_only"), "stt": ("enabled", "executable_path", "model", "default_language"), "ocr": ("enabled", "ollama_base_url", "model_id", "timeout_seconds")}[kind]
+                    keys = {"tts": ("enabled", "model_id", "device_map", "dtype", "language", "speaker", "instruct", "attn_implementation", "local_files_only"), "stt": ("enabled", "executable_path", "model", "default_language")}[kind]
                     values: dict[str, Any] = {key: self.query_one(f"#{kind}-{key}", Input).value for key in keys}
                     for key in ("enabled", "local_files_only"):
                         if key in values: values[key] = str(values[key]).strip().lower() in {"1", "true", "yes", "on"}
-                    if kind == "ocr": values["timeout_seconds"] = float(values["timeout_seconds"])
                     self.settings = self.save(kind, values)
                     self.query_one("#media-tools-notice", Static).update(f"{kind.upper()} saved; verify it to enable readiness.")
                 else:

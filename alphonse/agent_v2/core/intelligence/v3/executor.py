@@ -253,6 +253,7 @@ class PhaseExecutor:
             attachment_manifest=_task_attachment_manifest(task),
             skill_guidance=skill_guidance,
         )
+        images = context.image_inputs(task)
         result = context.inference.generate_json(
             InferenceRequest(
                 prompt=prompt,
@@ -260,12 +261,25 @@ class PhaseExecutor:
                 project_id=task.project_id,
                 user=task.user,
                 task_id=task.task_id,
+                images=images,
                 tools=tools,
                 metadata={"phase_id": state.phase.phase_id, "subgoal_id": subgoal.subgoal_id},
                 cancel_checker=context.is_cancelled if context.cancellation_checker is not None else None,
             )
         )
-        return dict(result.json_value) if isinstance(result.json_value, dict) else None
+        if not isinstance(result.json_value, dict):
+            return None
+        if images:
+            state.evidence.append({
+                "evidence_ref": f"inference-images:{uuid4()}",
+                "phase_id": state.phase.phase_id,
+                "subgoal_id": subgoal.subgoal_id,
+                "kind": "inference_image_input",
+                "status": "provided",
+                "asset_ids": [image.asset_id for image in images],
+                "model": result.model_profile.model if result.model_profile else "",
+            })
+        return dict(result.json_value)
 
     def _revealed_tools(
         self, task: "TaskState", state: TacticalState, subgoal: PhaseSubgoal, context: "CoreLoopContext"
@@ -346,11 +360,11 @@ class PhaseExecutor:
         if (
             Capability.ATTACHMENT_ANALYSIS.value in subgoal.allowed_capabilities
             and _has_task_image(task)
-            and not _successful_image_analysis(state, subgoal.subgoal_id)
+            and not _image_inputs_provided(state, subgoal.subgoal_id)
         ):
-            # Permission to analyze an attached image in a subgoal is an
-            # explicit plan prerequisite; a successful file lookup or Bash
-            # inspection cannot stand in for OCR/vision evidence.
+            # Successful inference transport is required; a filename or a
+            # shell lookup alone is not a model image input. Jev still reviews
+            # whether the resulting action satisfies the requested outcome.
             result = False
             metadata["completion_blocker"] = "required_attachment_analysis_not_completed"
         _record_system_one_tactical_review(task, state, subgoal, action, metadata)
@@ -546,9 +560,10 @@ def _tactical_prompt(
         "executed but did not make semantic progress. Do not select the same tool with the same arguments again; "
         "choose different arguments or another revealed tool. For a CLI-backed artifact that returns an unexpected "
         "result shape, use native.bash to inspect or invoke the underlying CLI when Bash is revealed. "
-        "If the current subgoal authorizes attachment_analysis, first call native.analyze_image with the exact asset ID from "
-        "the task attachment manifest and read its returned text. Do not ask the user to repeat image contents before this "
-        "call; Bash file discovery is not image analysis.\n\n"
+        "Task images are attached directly to this inference request and mapped to asset IDs. Inspect them using your "
+        "vision capabilities and follow the selected skill guidance for what to extract or describe. Use the observations "
+        "to compose the current action. No separate OCR tool is needed. Do not ask the user to repeat readable image contents. "
+        "Image input delivery establishes availability only; do not claim an external effect from visual reasoning.\n\n"
         "The tool entries below include their complete registry descriptors: descriptions, schemas, capabilities, tags, "
         "metadata, program behavior, and read-only semantics. Treat description and metadata as operational guidance. "
         "Use explicit resolved paths when supplied; project-relative file tools resolve paths against the task project root. "
@@ -631,11 +646,12 @@ def _task_attachment_manifest(task: "TaskState") -> list[dict[str, str]]:
     return manifest
 
 
-def _successful_image_analysis(state: TacticalState, subgoal_id: str) -> bool:
+def _image_inputs_provided(state: TacticalState, subgoal_id: str) -> bool:
     return any(
         str(item.get("subgoal_id") or "") == subgoal_id
-        and str(item.get("tool_id") or "") == "native.analyze_image"
-        and str(item.get("status") or "") == "success"
+        and item.get("kind") == "inference_image_input"
+        and item.get("status") == "provided"
+        and bool(item.get("asset_ids"))
         for item in state.evidence.entries
     )
 

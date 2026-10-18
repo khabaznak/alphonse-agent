@@ -100,6 +100,7 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
             project_id=task.project_id,
             user=task.user,
             task_id=task.task_id,
+            images=context.image_inputs(task),
             tools=(),
             cancel_checker=context.is_cancelled if context.cancellation_checker is not None else None,
         )
@@ -173,11 +174,6 @@ def _curate_request_tools(
             f"request_tool_curation:{type(exc).__name__}:{detail}"
         ) from exc
     selected_ids = set((*selection.selected_tool_ids, *selection.ambiguous_tool_ids))
-    # Jev narrows the planning context, but an attached image must not make
-    # its analyzer undiscoverable when the user's request depends on that image.
-    if attachment_manifest and any(item.get("mime_type", "").startswith("image/") for item in attachment_manifest):
-        if any(tool.tool_id == "native.analyze_image" for tool in tools):
-            selected_ids.add("native.analyze_image")
     curated = tuple(tool for tool in tools if tool.tool_id in selected_ids)
     metadata = {"status": "used", "candidate_count": len(tools), **selection.to_metadata()}
     history = task.metadata.setdefault("system_one_request_tool_selections", [])
@@ -287,8 +283,8 @@ def _strategic_plan_instructions() -> str:
         "do not treat catalog metadata as a substitute for skill expertise. For a requested correction to an existing artifact registration, use native.artifact_metadata_update for the mutation; editing a README or program is not a substitute. Do not edit catalog databases with Bash. Verify the intended location before updating resource metadata. "
         "If Act requires closure, plan exactly one isolated user_response subgoal; if Act requests input, plan an ask-question "
         "subgoal. When an attached image is needed to answer or fulfill the request, authorize attachment_analysis in the "
-        "relevant subgoal and use the listed task asset ID; do not ask the user to repeat image contents before analysis. "
-        "An attachment_analysis authorization means image analysis is a required prerequisite for completing that subgoal. "
+        "relevant subgoal. Images are supplied directly to the selected inference model; follow selected skill guidance for interpretation and extraction. Do not plan a separate OCR tool call or an image-only tool subgoal. Combine visual reasoning with the action that uses it, including a user response. "
+        "An attachment_analysis subgoal requires verified image inputs to its tactical inference call before completion. "
         "Define stable measurable acceptance criteria when none exist, otherwise preserve the existing contract."
     )
 
@@ -390,12 +386,6 @@ def _curate_phase_tools(task, phase: PhasePlan, tools, context, *, task_context:
     else:
         metadata = {"status": "used", **selection.to_metadata()}
         selected_ids = list((*selection.selected_tool_ids, *selection.ambiguous_tool_ids))
-        image_analysis_required = any(
-            Capability.ATTACHMENT_ANALYSIS.value in subgoal.allowed_capabilities
-            for subgoal in phase.subgoals
-        )
-        if image_analysis_required and any(tool.tool_id == "native.analyze_image" for tool in tools):
-            selected_ids.append("native.analyze_image")
         selected = tuple(dict.fromkeys(selected_ids))
         curated = replace(phase, curated_tool_ids=selected, tool_curation_status="used")
     _record_tool_curation(task, phase, metadata)

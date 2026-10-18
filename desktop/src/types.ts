@@ -87,7 +87,6 @@ export type MediaToolsSettings = {
   platform: string; say_available: boolean;
   tts: { enabled: boolean; model_id: string; device_map: string; dtype: string; language: string; speaker: string; instruct: string; attn_implementation: string; local_files_only: boolean; available: boolean; verification: VerificationState };
   stt: { enabled: boolean; executable_path: string; model: string; default_language: string; available: boolean; verification: VerificationState };
-  ocr: { enabled: boolean; ollama_base_url: string; model_id: string; timeout_seconds: number; available: boolean; verification: VerificationState };
 };
 
 export type ChatMessage = {

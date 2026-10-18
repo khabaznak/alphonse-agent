@@ -71,7 +71,7 @@ from alphonse.agent_v2.memory_sessions import SQLiteMemorySessionStore
 from alphonse.agent_v2.memory_sessions import MemorySessionBindingKey
 from alphonse.agent_v2.web_tools_settings import SQLiteWebToolsSettingsStore
 from alphonse.agent_v2.media_tools_settings import SQLiteMediaToolsSettingsStore
-from alphonse.agent_v2.core.tools.registry.native.media import verify_ocr, verify_stt, verify_stt_recording, verify_tts
+from alphonse.agent_v2.core.tools.registry.native.media import verify_stt, verify_stt_recording, verify_tts
 from alphonse.agent_v2.runtime import refresh_runtime_web_tools
 from alphonse.agent_v2.runtime import refresh_runtime_media_tools
 from alphonse.agent_v2.runtime import refresh_runtime_artifacts
@@ -939,13 +939,10 @@ class V2Daemon:
         settings = self.runtime.media_tools_settings_store.get()
         if kind == "tts": result = verify_tts(settings.tts, sample_text=sample or "Alphonse text-to-speech verification.")
         elif kind == "stt": result = verify_stt(settings.stt, sample_path=sample)
-        elif kind == "ocr": result = verify_ocr(settings.ocr, sample_path=sample)
         else: raise ValueError("media_tools_kind_invalid")
         exception = result.get("exception") if isinstance(result, dict) else {"message": "verification_failed"}
         output = result.get("output") if isinstance(result, dict) else {}
         preview = str((output or {}).get("text") or (output or {}).get("file_path") or "")
-        if kind == "ocr" and isinstance(output, dict) and isinstance(output.get("latency_ms"), (int, float)):
-            preview = f"Verified in {float(output['latency_ms']) / 1000:.1f}s: {preview}"
         error = str((exception or {}).get("message") or "") if isinstance(exception, dict) else ""
         details = (exception or {}).get("details") if isinstance(exception, dict) else {}
         detail_error = str((details or {}).get("error") or "") if isinstance(details, dict) else ""

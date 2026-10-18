@@ -515,6 +515,7 @@ def _system_two_acceptance_review(
         project_id=task.project_id,
         user=task.user,
         task_id=task.task_id,
+        images=context.image_inputs(task),
     )
     try:
         result = context.inference.generate_json(request)

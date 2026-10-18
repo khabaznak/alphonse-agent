@@ -349,7 +349,6 @@ def test_jev_native_registry_template_covers_every_out_of_box_tool() -> None:
         "native.skill_artifact_register",
         "native.skill_install",
         "native.artifact_metadata_update",
-        "native.analyze_image",
         "native.web_search",
         "native.web_fetch",
         "native.search_memory",

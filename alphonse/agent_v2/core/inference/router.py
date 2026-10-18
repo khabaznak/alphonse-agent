@@ -16,6 +16,8 @@ from alphonse.agent_v2.core.telemetry import InferenceTelemetryEvent, approximat
 class InferenceProvider(Protocol):
     """Provider boundary for model-backed CAPD node calls."""
 
+    supports_image_input: bool
+
     def generate_markdown(self, request: InferenceRequest) -> InferenceResult:
         """Generate markdown or plain text content."""
 
@@ -58,6 +60,8 @@ class InferenceRouter:
         resolved = self._with_profile(request)
         started = monotonic()
         try:
+            if resolved.images and not getattr(self.provider, "supports_image_input", False):
+                raise ValueError("inference_provider_image_input_unsupported")
             result = getattr(self.provider, method)(resolved)
         except Exception as exc:
             self._emit(resolved, None, started, status="failed", error=f"{type(exc).__name__}: {exc}")

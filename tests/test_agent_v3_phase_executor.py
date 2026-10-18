@@ -674,3 +674,49 @@ def test_phase_executor_can_pivot_to_bash_after_incomplete_artifact_result() -> 
     assert outcome.status == PhaseStatus.PHASE_COMPLETE
     assert calls == ["artifact", "bash"]
     assert [entry["progress_review"]["complete"] for entry in state.evidence.entries] == [False, True]
+
+
+def test_tactical_vision_receives_images_and_completes_without_ocr_tool(tmp_path):
+    from alphonse.agent_v2.assets import AttachmentDescriptor, SQLiteAssetStore
+    from alphonse.agent_v2.core.inference import InferencePurpose, InferenceRouter, ModelProfile, StubInferenceProvider
+
+    assets = SQLiteAssetStore(':memory:', tmp_path / 'assets')
+    asset = assets.register_bytes(owner_user_id='alex', descriptor=AttachmentDescriptor('photo.png', 'image/png', 3), content=b'png', source='desktop')
+    task = TaskState(task_id='vision', user='alex', goal='Describe image', metadata={'attachments': [{'asset_id': asset.asset_id, 'mime_type': 'image/png'}]})
+    phase = PhasePlan(
+        phase_id='vision', objective='Describe image', authorized_capabilities=('attachment_analysis', 'native.respond'),
+        subgoals=(PhaseSubgoal('answer', 'Describe image', 'text', allowed_capabilities=('attachment_analysis', 'native.respond'), allowed_side_effects=(SideEffectClass.USER_RESPONSE,), completion=CompletionCondition('output_present', output_type='text')),),
+    )
+    registry = InMemoryToolRegistry()
+    registry.register(_tool('native.respond', lambda args: {'message': args['message']}, read_only=False))
+    provider = StubInferenceProvider(json_by_purpose={InferencePurpose.TACTICAL_ACTION: {
+        'tool_id': 'native.respond', 'arguments': {'message': 'A red bicycle.'},
+        'acceptance_questions': [{'question_id': 'answer', 'type': 'noul', 'instructions': 'Does the answer describe the supplied image?', 'criteria': {'true': 'The image is described.', 'false': 'No description.'}}],
+    }})
+    context = CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry, asset_store=assets,
+        inference=InferenceRouter(provider=provider, default_profile=ModelProfile('stub', 'selected', 'selected')), system_one=_accept_successful_actions())
+    state = new_tactical_state(phase)
+    state.revealed_tool_ids = ['native.respond']
+    outcome = PhaseExecutor().run(task, state, context)
+    assert outcome.status == PhaseStatus.PHASE_COMPLETE
+    assert provider.requests[0].images[0].content == b'png'
+    assert state.evidence.entries[0]['kind'] == 'inference_image_input'
+    assert state.evidence.entries[0]['status'] == 'provided'
+    assert state.evidence.entries[0]['asset_ids'] == [asset.asset_id]
+    assert [action.tool_id for action in state.actions] == ['native.respond']
+
+
+def test_image_subgoal_cannot_complete_from_text_only_injected_action():
+    task = TaskState(task_id='vision', user='alex', metadata={'attachments': [{'asset_id': 'missing', 'mime_type': 'image/png'}]})
+    phase = PhasePlan(phase_id='vision', objective='Describe image', authorized_capabilities=('attachment_analysis', 'native.respond'),
+        subgoals=(PhaseSubgoal('answer', 'Describe', 'text', allowed_capabilities=('attachment_analysis', 'native.respond'), allowed_side_effects=(SideEffectClass.USER_RESPONSE,), completion=CompletionCondition('output_present', output_type='text')),))
+    registry = InMemoryToolRegistry()
+    registry.register(_tool('native.respond', lambda _: {'message': 'unsupported claim'}, read_only=False))
+    state = new_tactical_state(phase)
+    state.revealed_tool_ids = ['native.respond']
+    context = CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry, system_one=_accept_successful_actions())
+    executor = PhaseExecutor(action_selector=lambda *_: {'tool_id': 'native.respond', 'arguments': {}})
+    outcome = executor.run(task, state, context)
+    assert outcome.status == PhaseStatus.BLOCKED
+    assert not state.completed_subgoal_ids
+    assert state.evidence.entries[0]['progress_review']['complete'] is False

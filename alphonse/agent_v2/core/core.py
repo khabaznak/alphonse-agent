@@ -29,7 +29,7 @@ from alphonse.agent_v2.core.state.ddfsm import build_default_ddfsm
 from alphonse.agent_v2.core.state.runtime import State
 
 if TYPE_CHECKING:
-    from alphonse.agent_v2.core.inference import InferenceRouter
+    from alphonse.agent_v2.core.inference import InferenceImage, InferenceRouter
     from alphonse.agent_v2.core.intelligence.task_state import TaskState
     from alphonse.agent_v2.core.messages.queue import MessageSelector, QueuedMessage
     from alphonse.agent_v2.core.tools.registry import ToolDefinition
@@ -232,7 +232,14 @@ class CoreLoopContext:
     system_one: Any | None = None
     skill_store: Any | None = None
     artifact_resources: Any | None = None
+    asset_store: Any | None = None
     consumed_message_ids: list[str] = field(default_factory=list)
+
+    def image_inputs(self, task: TaskState) -> tuple[InferenceImage, ...]:
+        """Resolve authorized images for a substantive System Two call."""
+        from alphonse.agent_v2.core.inference.images import task_image_inputs
+
+        return task_image_inputs(task, self.asset_store)
 
     def consume_message(self, selector: MessageSelector | None = None) -> QueuedMessage | None:
         queued = self.messages.dequeue(selector)
@@ -518,6 +525,7 @@ class AlphonseCore:
     system_one: Any | None = None
     skill_store: Any | None = None
     artifact_resources: Any | None = None
+    asset_store: Any | None = None
     question_store: Any | None = None
     project_store: Any | None = None
     schedule_store: Any | None = None
@@ -622,6 +630,7 @@ class AlphonseCore:
                 system_one=self.system_one,
                 skill_store=self.skill_store,
                 artifact_resources=self.artifact_resources,
+                asset_store=self.asset_store,
                 question_store=self.question_store,
                 project_store=self.project_store,
                 schedule_store=self.schedule_store,

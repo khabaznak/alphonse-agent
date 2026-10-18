@@ -39,6 +39,15 @@ class ModelProfile:
 
 
 @dataclass(frozen=True)
+class InferenceImage:
+    """Authorized immutable image bytes; never included in text telemetry."""
+
+    asset_id: str
+    mime_type: str
+    content: bytes = field(repr=False)
+
+
+@dataclass(frozen=True)
 class InferenceRequest:
     """One model request from a CAPD node."""
 
@@ -51,6 +60,7 @@ class InferenceRequest:
     model_profile: ModelProfile | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     cancel_checker: Callable[[], bool] | None = field(default=None, repr=False, compare=False)
+    images: tuple[InferenceImage, ...] = ()
 
 
 @dataclass(frozen=True)

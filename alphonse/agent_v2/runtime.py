@@ -352,6 +352,7 @@ def build_runtime_host(
         system_one=build_system_one_provider(system_one_settings_store.get()),
         skill_store=skill_store,
         artifact_resources=artifact_resources,
+        asset_store=asset_store,
     )
     runtime = V2RuntimeHost(
         user=str(user or (user_store.admin_user().user_id if user_store.admin_user() else "local")).strip() or "local",

@@ -1,5 +1,6 @@
 """Inference routing contracts for Alphonse agent v2."""
 
+from alphonse.agent_v2.core.inference.models import InferenceImage
 from alphonse.agent_v2.core.inference.models import InferencePurpose
 from alphonse.agent_v2.core.inference.models import InferenceRequest
 from alphonse.agent_v2.core.inference.models import InferenceResult
@@ -14,6 +15,7 @@ __all__ = [
     "OpenAICodexProvider",
     "OpenAICodexProviderConfig",
     "InferenceProvider",
+    "InferenceImage",
     "InferencePurpose",
     "InferenceRequest",
     "InferenceResult",

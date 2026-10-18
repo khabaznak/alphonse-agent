@@ -61,6 +61,8 @@ class _RunState:
 
 
 class _DeterministicProvider:
+    supports_image_input = True
+
     def __init__(self, state: _RunState) -> None:
         self.state = state
 
@@ -220,6 +222,18 @@ def _run(
         telemetry_sink=telemetry_sink,
         ui_event_sink=lambda event: ui_events.append({"event_type": event.event_type, "payload": dict(event.payload)}),
     )
+    # Offline image fixtures use the same authorized asset resolution as runtime.
+    from alphonse.agent_v2.assets import AttachmentDescriptor, SQLiteAssetStore
+    assets = SQLiteAssetStore(":memory:", fixture_root / "assets")
+    attachments = []
+    for item in case.fixture.get("attachments") or []:
+        asset = assets.register_bytes(
+            owner_user_id="evaluation-user",
+            descriptor=AttachmentDescriptor("fixture.png", "image/png", 3),
+            content=b"png", source="offline-replay",
+        )
+        attachments.append({**item, "asset_id": asset.asset_id, "mime_type": "image/png"})
+    context.asset_store = assets
     task = TaskState(
         task_id=f"replay-{case.case_id}-{engine}",
         message_id=f"message-{case.case_id}",
@@ -228,7 +242,7 @@ def _run(
         goal=case.goal,
         intelligence_engine=engine,
         intelligence_schema_version=3 if engine == "hierarchical_v3" else 2,
-        metadata={"attachments": list(case.fixture.get("attachments") or [])},
+        metadata={"attachments": attachments},
         recent_conversation_md=str(case.fixture.get("recent_conversation") or "- (none)"),
     )
     if scenario.initial_acceptance or scenario.restart_after_role:
@@ -326,7 +340,7 @@ def _phase_plan(scenario: _Scenario) -> PhasePlan:
             "objective": f"Execute {action.role}",
             "required_output_type": f"result_{index}",
             "depends_on": list(prior[-1:]),
-            "allowed_capabilities": [action.capability],
+            "allowed_capabilities": [action.capability] + (["user_response"] if action.tool_id == "native.respond" else []),
             "allowed_side_effects": allowed_effects,
             "completion": completion,
             "failure_policy": action.failure_policy,
@@ -352,7 +366,7 @@ def _phase_plan(scenario: _Scenario) -> PhasePlan:
         "objective": scenario.acceptance,
         "subgoals": subgoals,
         "criterion_ids": ["ac-1"],
-        "authorized_capabilities": list(dict.fromkeys(action.capability for action in scenario.actions)),
+        "authorized_capabilities": list(dict.fromkeys(action.capability for action in scenario.actions)) + (["user_response"] if any(action.tool_id == "native.respond" for action in scenario.actions) else []),
         "mutation_scope": {
             "allowed_paths": list(scenario.mutation_paths),
             "allow_external_effects": any(action.side_effect.startswith("external_") for action in scenario.actions),
@@ -584,7 +598,7 @@ def _scenario(case_id: str) -> _Scenario:
             acceptance="The known treatment is recalled and the health event is recorded.", final_response="Listo, registré el evento con el tratamiento conocido.",
         ),
         "prescription-image-ocr": _Scenario(
-            actions=(_Action("native.analyze_image", "attachment_analysis", {"asset_id": "prescription-image"}, role="extract", result={"medicines": ["Medicine A"]}),),
+            actions=(_Action("native.respond", "attachment_analysis", {"message": "Medicine A"}, role="extract", behavior="respond", side_effect="user_response"),),
             acceptance="Medicine names are extracted from the attached prescription.", final_response="Extraje el nombre del medicamento de la receta.",
         ),
         "markdown-prescription-no-ocr": _Scenario(

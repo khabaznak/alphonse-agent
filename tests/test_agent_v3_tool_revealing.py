@@ -53,7 +53,7 @@ def test_solar_record_discovery_hides_ocr_home_assistant_and_lg() -> None:
     available = (
         _descriptor("native.project_search", Capability.PROJECT_RECORD_SEARCH),
         _descriptor("native.search_memory", Capability.MEMORY_RECALL),
-        _descriptor("native.analyze_image", Capability.ATTACHMENT_ANALYSIS),
+        _descriptor("fixture.document_reader", Capability.ATTACHMENT_ANALYSIS),
         _descriptor("artifact.home_assistant", Capability.HOME_AUTOMATION),
         _descriptor("artifact.lg", Capability.DEVICE_CONTROL),
     )
@@ -69,7 +69,7 @@ def test_attachment_analysis_requires_attachment_or_discovered_document() -> Non
         allowed_capabilities=(Capability.ATTACHMENT_ANALYSIS.value,),
     )
     state = _state(subgoal)
-    tool = _descriptor("native.analyze_image", Capability.ATTACHMENT_ANALYSIS)
+    tool = _descriptor("fixture.document_reader", Capability.ATTACHMENT_ANALYSIS)
 
     hidden = ToolRevealPolicy().reveal(TaskState(project_id="health"), state, subgoal, (tool,))
     visible = ToolRevealPolicy().reveal(
@@ -79,7 +79,7 @@ def test_attachment_analysis_requires_attachment_or_discovered_document() -> Non
 
     assert hidden.tools == ()
     assert hidden.decisions[0].reason == "attachment_required"
-    assert [item.tool_id for item in visible.tools] == ["native.analyze_image"]
+    assert [item.tool_id for item in visible.tools] == ["fixture.document_reader"]
 
 
 def test_plain_markdown_record_does_not_satisfy_ocr_prerequisite() -> None:
@@ -92,7 +92,7 @@ def test_plain_markdown_record_does_not_satisfy_ocr_prerequisite() -> None:
 
     result = ToolRevealPolicy().reveal(
         TaskState(project_id="health"), state, subgoal,
-        (_descriptor("native.analyze_image", Capability.ATTACHMENT_ANALYSIS),),
+        (_descriptor("fixture.document_reader", Capability.ATTACHMENT_ANALYSIS),),
     )
 
     assert result.tools == ()

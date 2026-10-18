@@ -19,8 +19,6 @@ from alphonse.agent_v2.core.tools.registry.native.deliver_message import DELIVER
 from alphonse.agent_v2.core.tools.registry.native.deliver_message import build_deliver_message_tool_definition
 from alphonse.agent_v2.core.tools.registry.native.deliver_message import execute_deliver_message
 from alphonse.agent_v2.core.tools.registry.native.send_attachment import build_send_attachment_tool_definition
-from alphonse.agent_v2.core.tools.registry.native.media import ANALYZE_IMAGE_TOOL_ID
-from alphonse.agent_v2.core.tools.registry.native.media import build_analyze_image_tool_definition
 from alphonse.agent_v2.core.tools.registry.native.respond import RESPOND_TOOL_ID
 from alphonse.agent_v2.core.tools.registry.native.respond import RESPOND_TOOL_NAME
 from alphonse.agent_v2.core.tools.registry.native.respond import build_respond_tool_definition
@@ -59,8 +57,6 @@ def build_native_tool_registry(web_tools_settings: WebToolsSettings | None = Non
         registry.register(build_artifact_metadata_update_tool_definition(artifact_store, is_admin=getattr(user_store, "is_admin", None), on_changed=on_artifact_changed if callable(on_artifact_changed) else None))
         if skill_store is not None:
             registry.register(build_artifact_registration_tool_definition(artifact_store, skill_store, on_artifact_changed if callable(on_artifact_changed) else None))
-    media = media_tools_settings or MediaToolsSettings()
-    registry.register(build_analyze_image_tool_definition(media.ocr, asset_store))
     settings = web_tools_settings or WebToolsSettings()
     registry.register(build_web_search_tool_definition(settings))
     registry.register(build_web_fetch_tool_definition(settings))
@@ -69,7 +65,6 @@ def build_native_tool_registry(web_tools_settings: WebToolsSettings | None = Non
 
 __all__ = [
     "ASK_QUESTION_TOOL_ID",
-    "ANALYZE_IMAGE_TOOL_ID",
     "ASK_QUESTION_TOOL_NAME",
     "BASH_TOOL_ID",
     "BASH_TOOL_NAME",

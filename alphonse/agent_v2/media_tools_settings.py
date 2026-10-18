@@ -57,22 +57,9 @@ class SttSettings:
 
 
 @dataclass(frozen=True)
-class OcrSettings:
-    enabled: bool = False
-    ollama_base_url: str = "http://localhost:11434"
-    model_id: str = "deepseek-ocr:3b"
-    timeout_seconds: float = 60.0
-    verification: VerificationState = VerificationState()
-
-    @property
-    def available(self) -> bool: return self.enabled and self.verification.ready
-
-
-@dataclass(frozen=True)
 class MediaToolsSettings:
     tts: TtsSettings = TtsSettings()
     stt: SttSettings = SttSettings()
-    ocr: OcrSettings = OcrSettings()
 
     def to_dict(self) -> dict[str, object]:
         def render(value: object) -> dict[str, object]:
@@ -81,7 +68,7 @@ class MediaToolsSettings:
             body["verification"] = verification
             body["available"] = bool(getattr(value, "available"))
             return body
-        return {"tts": render(self.tts), "stt": render(self.stt), "ocr": render(self.ocr), "platform": _platform_name(), "say_available": _say_available()}
+        return {"tts": render(self.tts), "stt": render(self.stt), "platform": _platform_name(), "say_available": _say_available()}
 
 
 class SQLiteMediaToolsSettingsStore:
@@ -114,7 +101,6 @@ class SQLiteMediaToolsSettingsStore:
         current = self.get()
         if kind == "tts": updated = replace(current, tts=_tts_from_values(current.tts, values))
         elif kind == "stt": updated = replace(current, stt=_stt_from_values(current.stt, values))
-        elif kind == "ocr": updated = replace(current, ocr=_ocr_from_values(current.ocr, values))
         else: raise ValueError("media_tools_kind_invalid")
         return self.save(updated)
 
@@ -122,7 +108,6 @@ class SQLiteMediaToolsSettingsStore:
         current = self.get(); state = VerificationState(ready=ready, verified_at=_now(), error=str(error or "")[:1000], preview=str(preview or "")[:2000])
         if kind == "tts": updated = replace(current, tts=replace(current.tts, verification=state))
         elif kind == "stt": updated = replace(current, stt=replace(current.stt, verification=state))
-        elif kind == "ocr": updated = replace(current, ocr=replace(current.ocr, verification=state))
         else: raise ValueError("media_tools_kind_invalid")
         return self.save(updated)
 
@@ -151,7 +136,7 @@ def _from_dict(value: object) -> MediaToolsSettings:
         raw = source.get(key) if isinstance(source.get(key), dict) else {}; defaults = cls(); values = {field: raw.get(field, getattr(defaults, field)) for field in cls.__dataclass_fields__ if field != "verification"}; values["verification"] = state(raw.get("verification"));
         if cls is SttSettings and not str(values.get("executable_path") or "").strip(): values["executable_path"] = _default_whisper_executable()
         return cls(**values)
-    return MediaToolsSettings(tts=part(TtsSettings, "tts"), stt=part(SttSettings, "stt"), ocr=part(OcrSettings, "ocr"))
+    return MediaToolsSettings(tts=part(TtsSettings, "tts"), stt=part(SttSettings, "stt"))
 
 
 def _verify_reset() -> VerificationState: return VerificationState()
@@ -161,18 +146,10 @@ def _tts_from_values(current: TtsSettings, values: dict[str, object]) -> TtsSett
 def _stt_from_values(current: SttSettings, values: dict[str, object]) -> SttSettings:
     candidate = replace(current, enabled=bool(values.get("enabled", current.enabled)), executable_path=str(values.get("executable_path", current.executable_path)).strip(), model=str(values.get("model", current.model)).strip(), default_language=str(values.get("default_language", current.default_language)).strip())
     return candidate if candidate == current else replace(candidate, verification=_verify_reset())
-def _ocr_from_values(current: OcrSettings, values: dict[str, object]) -> OcrSettings:
-    candidate = replace(current, enabled=bool(values.get("enabled", current.enabled)), ollama_base_url=str(values.get("ollama_base_url", current.ollama_base_url)).strip().rstrip("/"), model_id=str(values.get("model_id", current.model_id)).strip(), timeout_seconds=float(values.get("timeout_seconds", current.timeout_seconds)))
-    return candidate if candidate == current else replace(candidate, verification=_verify_reset())
 def _validate(settings: MediaToolsSettings) -> MediaToolsSettings:
     if settings.tts.dtype not in {"", "float16", "float32", "bfloat16"}: raise ValueError("media_tools_tts_dtype_invalid")
     if settings.tts.enabled and not settings.tts.model_id: raise ValueError("media_tools_tts_model_required")
     if settings.stt.enabled and not settings.stt.model: raise ValueError("media_tools_stt_model_required")
-    if settings.ocr.enabled and not settings.ocr.model_id: raise ValueError("media_tools_ocr_model_required")
-    from urllib.parse import urlparse
-    parsed = urlparse(settings.ocr.ollama_base_url)
-    if settings.ocr.enabled and (parsed.scheme not in {"http", "https"} or not parsed.netloc): raise ValueError("media_tools_ocr_base_url_invalid")
-    if not 1 <= settings.ocr.timeout_seconds <= 300: raise ValueError("media_tools_ocr_timeout_invalid")
     return settings
 def _now() -> str: return datetime.now(timezone.utc).isoformat()
 def _platform_name() -> str:

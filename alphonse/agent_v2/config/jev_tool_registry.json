@@ -65,14 +65,6 @@
         "false": "The phase is drafting or revising a skill proposal, the requester has not approved installation, or the task only needs to use an existing skill."
       }
     },
-    "native.analyze_image": {
-      "type": "noul",
-      "instructions": "Does this phase need to inspect or extract text from an image attached to the task?",
-      "criteria": {
-        "true": "An attached image contains visual or textual information required for the current phase, including OCR of receipts or documents.",
-        "false": "There is no relevant image attachment, the source is already text, or image contents are unnecessary."
-      }
-    },
     "native.web_search": {
       "type": "noul",
       "instructions": "Does this phase need to discover current or external information on the public web?",

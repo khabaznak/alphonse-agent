@@ -25,14 +25,21 @@ method or authorize tools. Ambiguous candidates remain available. Strategic Plan
 then receives the complete LLM-oriented descriptors for those candidates, so it
 can form a feasible plan without paying to show System Two the entire registry.
 
-When a task has image attachments, request curation and strategic planning also
-receive a bounded metadata-only manifest (asset ID, filename, MIME type, kind,
-and ingestion status). The manifest contains no image contents. An available
-`native.analyze_image` remains in the request candidate set whenever an image is
-attached, so Jev cannot make the analyzer undiscoverable before System Two has
-planned the work. Planning should authorize `attachment_analysis` only in a
-subgoal that needs image contents; that authorization makes image analysis a
-completion prerequisite for that subgoal.
+When a task has image attachments, Jev receives a metadata-only manifest. System
+Two receives authorized image bytes directly through the selected inference model
+for planning, tactical actions, and responses. The asset catalog enforces requester
+ownership; attachment metadata cannot supply filesystem paths. Codex transport
+attaches temporary copies with `--image`, maps their order to stable asset IDs, and
+removes the copies on success, failure, or cancellation. Unsupported providers,
+formats, missing files, or integrity failures fail explicitly rather than silently
+continuing with text alone. PNG, JPEG, WebP, and GIF inputs are supported.
+
+Skills and the user's request determine what to describe or extract. No Ollama
+OCR backend, image-analysis tool, or separate OCR settings are used. Plan may
+include `attachment_analysis` on the action that uses visual reasoning; it should
+not create an image-only tool subgoal. This is a model input capability, not a tool
+to curate or reveal. Jev continues to judge bounded progress from recorded evidence;
+it neither interprets images nor composes extraction instructions.
 
 After the phase is planned, Jev still curates the request-level candidate set for
 that phase. Deterministic authorization and subgoal prerequisites are applied
@@ -72,12 +79,12 @@ System Two. Jev can never grant execution permission.
 
 Tool reveal must enforce prerequisites before model choice:
 
-- Attachment OCR requires an attachment or a discovered image/PDF candidate.
-- A subgoal that authorizes `attachment_analysis` must execute
-  `native.analyze_image` successfully before it can be marked complete. File
-  discovery or shell inspection is not OCR evidence. If analysis fails, report
-  the tool failure; do not characterize the image as illegible without an actual
-  extraction result.
+- A subgoal that authorizes `attachment_analysis` requires an image-input receipt
+  from its successful tactical inference call before completion. The receipt proves
+  input availability only; it does not prove correct extraction, tool effects, or
+  semantic completion. Existing Jev review, mutation scopes, verified effects,
+  cancellation, and terminal-state checks still apply. Infrastructure failures do
+  not establish that an image is illegible.
 - Memory search and source expansion (`native.search_memory`, `native.read_memory_source`) share the read-only `memory_recall` capability. Search covers authorized person/audience knowledge, conversation history and captured task evidence across projects, including when no project is selected. Both operations recheck visibility; Jev relevance never widens access. See [structured recall](10-memory-recall.md). Project association is optional metadata, not a knowledge boundary. Raw legacy task-audit fallback retains the task's existing project authorization scope. See [durable knowledge](09-durable-knowledge.md).
 - Mutating native operations require the matching side-effect authorization. Bash is
   a trusted local-shell capability for project-file reads and writes; its work is
@@ -159,8 +166,8 @@ that phase unless new evidence and the phase contract make them relevant.
 ## Tests
 
 - [x] Solar-record discovery does not expose OCR, Home Assistant, or LG tools.
-- [x] A referenced prescription image exposes document/OCR tools.
-- [x] OCR remains hidden for a plain Markdown prescription record.
+- [x] Image inputs reach the selected model without OCR tool curation.
+- [x] Plain Markdown records require no image inputs.
 - [x] A prior-conversation fact exposes current-project memory search, not other
       projects.
 - [x] Project mutation is authorized by the phase side-effect contract; local_shell
