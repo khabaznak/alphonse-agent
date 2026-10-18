@@ -69,7 +69,8 @@ class HierarchicalCAPDProcessor:
                 break
             try:
                 outcome = self.executor.run(task, state, context)
-                evidence_before = _successful_evidence_refs(task.metadata.get("v3_phase_history"))
+                evidence_before = _successful_evidence_signatures(task.metadata.get("v3_phase_history"))
+                satisfied_before = _satisfied_criterion_ids(task)
                 self._append_history(task, state, outcome.to_dict())
                 review, decision = self.outer.review_and_route(task, state, outcome, context)
             except SystemOneUnavailableError as exc:
@@ -78,11 +79,11 @@ class HierarchicalCAPDProcessor:
                 self._persist(task, context)
                 break
             self._persist(task, context)
-            evidence_after = _successful_evidence_refs(task.metadata.get("v3_phase_history"))
-            evidence_progress = bool(evidence_after - evidence_before)
+            evidence_after = _successful_evidence_signatures(task.metadata.get("v3_phase_history"))
+            evidence_progress = bool(evidence_after - evidence_before) or bool(_satisfied_criterion_ids(task) - satisfied_before)
             review_status = str(getattr(getattr(review, "status", None), "value", ""))
             if review_status in {
-                "phase_blocked", "verification_failed",
+                "phase_blocked", "verification_failed", "phase_verified_task_incomplete",
             } and not evidence_progress:
                 no_progress_phases += 1
                 task.metadata["v3_no_progress_phase_count"] = no_progress_phases
@@ -502,4 +503,21 @@ def _successful_evidence_refs(raw_history: object) -> set[str]:
         str(item.get("evidence_ref"))
         for item in _deduplicated_history_evidence(raw_history)
         if str(item.get("status") or "") == "success" and item.get("evidence_ref")
+    }
+
+
+def _successful_evidence_signatures(raw_history: object) -> set[str]:
+    """New action IDs and phase names do not turn repeated results into progress."""
+    return {
+        json.dumps({key: item.get(key) for key in ("tool_id", "arguments", "result")},
+                   ensure_ascii=False, sort_keys=True, default=str)
+        for item in _deduplicated_history_evidence(raw_history)
+        if item.get("status") == "success"
+    }
+
+
+def _satisfied_criterion_ids(task: "TaskState") -> set[str]:
+    return {
+        str(item.get("id")) for item in task.ensure_acceptance_contract().get("criteria", [])
+        if isinstance(item, dict) and item.get("status") == "satisfied"
     }

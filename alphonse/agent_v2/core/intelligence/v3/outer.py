@@ -502,12 +502,36 @@ def _system_two_acceptance_review(
 ) -> dict[str, Any]:
     if context.inference is None:
         raise SystemOneUnavailableError("acceptance_review_unavailable")
+    review_contract = contract or task.ensure_acceptance_contract()
+    valid_refs = _successful_evidence_refs(state)
+    schema = {
+        "type": "object", "additionalProperties": False, "required": ["updates"],
+        "properties": {"updates": {"type": "array", "items": {
+            "type": "object", "additionalProperties": False,
+            "required": ["criterion_id", "status", "evidence_refs", "reason"],
+            "properties": {
+                "criterion_id": {"type": "string", "enum": [str(item["id"]) for item in review_contract.get("criteria", [])]},
+                "status": {"type": "string", "enum": ["pending", "satisfied", "blocked"]},
+                "evidence_refs": {"type": "array", "items": {"type": "string", **({"enum": list(valid_refs)} if valid_refs else {})}},
+                "reason": {"type": "string"},
+            },
+        }}},
+    }
     request = InferenceRequest(
         prompt=(
             "Review the verified evidence against the immutable acceptance criteria. Return JSON with an updates array. "
-            "Each update may only reference an existing criterion id and evidence_ref from the supplied evidence. "
-            "Do not invent evidence or rewrite criteria.\n\n"
-            f"Acceptance contract: {json.dumps(contract or task.ensure_acceptance_contract(), ensure_ascii=False)}\n"
+            "Each update must include criterion_id, status, evidence_refs (an array of valid reference strings), and reason. "
+            "Return exactly the supplied JSON Schema; singular evidence_ref is not a supported field. "
+            "Do not invent evidence or rewrite criteria. "
+            "The only valid evidence_refs are the successful action references listed below. "
+            "Image-input receipts (inference-images:...) record delivery only and are not valid outcome evidence references. "
+            "When images are attached to this review, inspect them directly to verify image-derived details in a successful "
+            "action's output, then cite that action's reference. A receipt alone cannot verify extraction or external effects. "
+            "Use the actual image-to-asset mapping supplied with this inference request. If the image or successful action "
+            "does not support a criterion, leave it pending. Never require an OCR or Bash call to read attached images.\n\n"
+            f"Valid evidence references: {json.dumps(valid_refs, ensure_ascii=False)}\n"
+            f"Response JSON Schema: {json.dumps(schema, ensure_ascii=False)}\n"
+            f"Acceptance contract: {json.dumps(review_contract, ensure_ascii=False)}\n"
             f"Phase: {json.dumps(state.phase.to_dict(), ensure_ascii=False)}\n"
             f"Verified evidence: {json.dumps(state.evidence.to_dict(), ensure_ascii=False)}"
         ),
@@ -516,6 +540,8 @@ def _system_two_acceptance_review(
         user=task.user,
         task_id=task.task_id,
         images=context.image_inputs(task),
+        output_schema=schema,
+        cancel_checker=context.is_cancelled if context.cancellation_checker is not None else None,
     )
     try:
         result = context.inference.generate_json(request)

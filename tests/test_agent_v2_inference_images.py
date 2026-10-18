@@ -152,3 +152,30 @@ def test_runtime_wires_the_asset_catalog_into_core_inference(tmp_path):
     runtime = build_runtime_host(user_store=users, asset_store=assets)
     assert runtime.core.asset_store is assets
     assert runtime.core.tools.get('native.analyze_image') is None
+
+
+def test_inference_transport_directory_is_not_presented_as_task_working_directory(monkeypatch):
+    captured = {}
+    def run(command, **kwargs):
+        captured.update(json.loads(kwargs['input']))
+        return SimpleNamespace(returncode=0, stdout='{"tool_id":"native.bash","arguments":{"command":"pwd"}}', stderr='')
+    monkeypatch.setattr('alphonse.agent_v2.core.inference.openai_codex.shutil.which', lambda _: '/bin/codex')
+    monkeypatch.setattr('alphonse.agent_v2.core.inference.openai_codex.subprocess.run', run)
+    OpenAICodexProvider().generate_json(InferenceRequest(prompt='Compose an authorized action', purpose=InferencePurpose.TACTICAL_ACTION))
+    assert 'deleted when this call ends' in captured['execution_boundary']
+    assert 'omit cwd' in captured['execution_boundary']
+
+
+def test_review_output_schema_is_passed_to_codex_and_removed_afterward(monkeypatch):
+    paths = []
+    schema = {'type': 'object', 'properties': {'updates': {'type': 'array'}}, 'required': ['updates']}
+    def run(command, **kwargs):
+        path = Path(command[command.index('--output-schema') + 1])
+        paths.append(path)
+        assert json.loads(path.read_text()) == schema
+        return SimpleNamespace(returncode=0, stdout='{"updates":[]}', stderr='')
+    monkeypatch.setattr('alphonse.agent_v2.core.inference.openai_codex.shutil.which', lambda _: '/bin/codex')
+    monkeypatch.setattr('alphonse.agent_v2.core.inference.openai_codex.subprocess.run', run)
+    result = OpenAICodexProvider().generate_json(InferenceRequest(prompt='Review', purpose=InferencePurpose.PHASE_REVIEW, output_schema=schema))
+    assert result.json_value == {'updates': []}
+    assert all(not path.exists() for path in paths)

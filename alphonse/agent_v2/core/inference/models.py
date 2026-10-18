@@ -61,6 +61,7 @@ class InferenceRequest:
     metadata: dict[str, Any] = field(default_factory=dict)
     cancel_checker: Callable[[], bool] | None = field(default=None, repr=False, compare=False)
     images: tuple[InferenceImage, ...] = ()
+    output_schema: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)

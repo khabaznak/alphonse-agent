@@ -557,6 +557,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       progressTaskIds.filter((taskId) => !questionTaskIds.has(taskId)),
       pendingProgressMessages,
       morphedMessageTaskIds,
+      Object.keys(archivedProgress),
     ).map((item) => {
       if (item.kind === "message") {
         const question = questions.find((candidate) => item.message.id === `question:${candidate.question_id}`);
@@ -960,14 +961,13 @@ function TaskProgressBubble({ surface, archived = false }: { surface: A2uiSurfac
   const taskContext = text("task_context");
   const criteria = text("criteria").replace(/^Acceptance criteria\n?/, "").trim();
   const visibleCriteria = criteria === "- (none)" ? "" : criteria;
-  const hasConcreteProgress = Boolean(visibleCriteria || text("intention") || steps.length || text("tool") || taskContext);
   const Container = archived ? "details" : "div";
   return <article className="message assistant task-progress-bubble" aria-live="polite">
     <Container className="task-progress-log">
-      {archived && <summary>Work log</summary>}
+      {archived && <summary>Work log{text("summary") ? ` · ${text("summary")}` : ""}</summary>}
     <div className="task-progress-content">
       {!archived && <div className="task-progress-heading"><span className="task-progress-spinner" aria-hidden="true">◌</span><strong>Alphonse is working</strong></div>}
-      {!hasConcreteProgress && text("summary") && <p>{text("summary")}</p>}
+      {!archived && text("summary") && <p>{text("summary")}</p>}
       {visibleCriteria && <section><small>Acceptance criteria</small><div className="task-progress-checklist"><ReactMarkdown remarkPlugins={[remarkGfm]}>{acceptanceCriteriaMarkdown(visibleCriteria)}</ReactMarkdown></div></section>}
       {text("intention") && <section><small>Intention</small><p>{text("intention").replace(/^Intention:\s*/, "")}</p></section>}
       {steps.length ? <section className="task-progress-trace"><small>Work log</small>{steps.map((step) => {

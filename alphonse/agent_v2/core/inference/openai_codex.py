@@ -77,6 +77,10 @@ class OpenAICodexProvider:
 
         try:
             with tempfile.TemporaryDirectory(prefix="alphonse-codex-") as workdir:
+                if request.output_schema is not None:
+                    schema_path = Path(workdir) / "response-schema.json"
+                    schema_path.write_text(json.dumps(request.output_schema), encoding="utf-8")
+                    command.extend(["--output-schema", str(schema_path)])
                 for index, image in enumerate(request.images):
                     suffix = IMAGE_SUFFIXES.get(image.mime_type)
                     if suffix is None:
@@ -175,6 +179,13 @@ def _render_envelope(
 ) -> str:
     envelope: dict[str, Any] = {
         "provider_contract": "alphonse_agent_v2_inference",
+        "execution_boundary": (
+            "You are Alphonse's inference provider. Return the requested result or composed action; "
+            "Alphonse executes its own authorized tools. Your temporary Codex working directory belongs only "
+            "to inference transport and is deleted when this call ends. Never use it as a task/project/artifact "
+            "root or as cwd in a composed tool call. Use only explicit verified task paths or skill resource "
+            "manifests; when no task path exists, omit cwd so the native host capability chooses its default."
+        ),
         "purpose": request.purpose.value,
         "project_id": request.project_id,
         "user": request.user or "",
