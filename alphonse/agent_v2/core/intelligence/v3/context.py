@@ -8,7 +8,8 @@ import re
 from typing import TYPE_CHECKING
 
 from alphonse.agent_v2.agent_config import parse_global_context_sections
-from alphonse.agent_v2.core.memory.formatting import bound_memory_context, join_context_sections
+from alphonse.agent_v2.core.memory.formatting import bound_context_record, bound_memory_context, join_context_sections
+from alphonse.agent_v2.core.memory.continuity import active_task_continuity
 
 if TYPE_CHECKING:
     from alphonse.agent_v2.core.core import CoreLoopContext
@@ -54,7 +55,7 @@ def prepare_context_curation(task: "TaskState", context: "CoreLoopContext") -> t
         candidate = _project_candidate_for_record(project, context)
         if candidate is not None:
             candidates.append(candidate)
-    return "\n\n".join(sections)[:12000], candidates[:64]
+    return join_context_sections(sections, 12000), candidates[:64]
 
 
 def conversation_context(
@@ -70,7 +71,7 @@ def conversation_context(
     for candidate in candidates:
         if candidate["id"] in selected:
             sections.append(f"{candidate['title']}:\n{candidate['content']}")
-    return "\n\n".join(sections)[:24000]
+    return join_context_sections(sections, 24000)
 
 
 def task_context_for_decision(
@@ -80,7 +81,7 @@ def task_context_for_decision(
     selected_context_ids: list[str] | tuple[str, ...] = (),
 ) -> str:
     """Render the shared task context used by Jev and System Two."""
-    sections = [conversation_context(task, context, selected_context_ids=selected_context_ids)]
+    sections = [active_task_continuity(task), conversation_context(task, context, selected_context_ids=selected_context_ids)]
     sections.extend(task_context_addenda(task))
     return join_context_sections(sections, 36000)
 
@@ -90,7 +91,7 @@ def task_context_addenda(task: "TaskState") -> list[str]:
     durable_memory = str(task.memory_context_md or "").strip() or "- (none)"
     durable_memory = bound_memory_context(durable_memory, 9000)
     return [
-        f"Current goal:\n{str(task.goal or '').strip() or '- (none)'}",
+        f"Current goal:\n{bound_context_record(task.goal, 9000) or '- (none)'}",
         f"Durable household memory (person/audience scoped; project association is optional):\n{durable_memory}",
         f"Known task facts:\n{_bounded_context_value(task.facts_md, 4000)}",
         f"Memory facts:\n{_bounded_context_value(task.memory_facts_md, 3000)}",
@@ -269,13 +270,7 @@ def _slug(value: str) -> str:
 
 
 def _bounded_context_value(value: object, max_chars: int) -> str:
-    rendered = str(value or "").strip() or "- (none)"
-    if len(rendered) <= max_chars:
-        return rendered
-    marker = "\n... context truncated ...\n"
-    available = max(2, max_chars - len(marker))
-    front = available // 2
-    return rendered[:front].rstrip() + marker + rendered[-(available - front):].lstrip()
+    return bound_context_record(value, max_chars) or "- (none)"
 
 
 def _prompt_file(context: "CoreLoopContext", name: str) -> str:

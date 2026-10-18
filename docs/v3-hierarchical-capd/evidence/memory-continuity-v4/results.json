@@ -1,0 +1,631 @@
+{
+  "schema_version": 1,
+  "corpus_version": "memory-context-v1",
+  "corpus_sha256": "9e2b3672a5d68e0914bd01466a4bd1a51e8f16b692fd775cee19775e7327cc77",
+  "adapter": "current-v3-continuity-and-native-search-v4",
+  "mode": "offline-context-only",
+  "cases": [
+    {
+      "id": "current-state",
+      "included_sources": [
+        "stale-temperature",
+        "unrelated-hobby"
+      ],
+      "retrieved_sources": [],
+      "search_backend_states": [],
+      "search_error": "",
+      "tool_calls": 0,
+      "prompt_tokens_estimate": 142,
+      "retrieval": {
+        "necessary_source_recall": 1.0,
+        "search_source_recall": null,
+        "irrelevant_sources": [
+          "stale-temperature",
+          "unrelated-hobby"
+        ],
+        "forbidden_sources": [
+          "stale-temperature",
+          "unrelated-hobby"
+        ],
+        "private_sources": []
+      },
+      "answer_quality": null,
+      "model_calls": 0,
+      "latency_ms": null
+    },
+    {
+      "id": "try-again",
+      "included_sources": [
+        "failed-request",
+        "unrelated-hobby"
+      ],
+      "retrieved_sources": [],
+      "search_backend_states": [],
+      "search_error": "",
+      "tool_calls": 0,
+      "prompt_tokens_estimate": 132,
+      "retrieval": {
+        "necessary_source_recall": 1.0,
+        "search_source_recall": 0.0,
+        "irrelevant_sources": [
+          "unrelated-hobby"
+        ],
+        "forbidden_sources": [
+          "unrelated-hobby"
+        ],
+        "private_sources": []
+      },
+      "answer_quality": null,
+      "model_calls": 0,
+      "latency_ms": null
+    },
+    {
+      "id": "pronoun",
+      "included_sources": [
+        "referent",
+        "unrelated-hobby"
+      ],
+      "retrieved_sources": [],
+      "search_backend_states": [],
+      "search_error": "",
+      "tool_calls": 0,
+      "prompt_tokens_estimate": 140,
+      "retrieval": {
+        "necessary_source_recall": 1.0,
+        "search_source_recall": 0.0,
+        "irrelevant_sources": [
+          "unrelated-hobby"
+        ],
+        "forbidden_sources": [
+          "unrelated-hobby"
+        ],
+        "private_sources": []
+      },
+      "answer_quality": null,
+      "model_calls": 0,
+      "latency_ms": null
+    },
+    {
+      "id": "clarification",
+      "included_sources": [
+        "original",
+        "question",
+        "unrelated-hobby"
+      ],
+      "retrieved_sources": [],
+      "search_backend_states": [],
+      "search_error": "",
+      "tool_calls": 0,
+      "prompt_tokens_estimate": 147,
+      "retrieval": {
+        "necessary_source_recall": 1.0,
+        "search_source_recall": 0.0,
+        "irrelevant_sources": [
+          "unrelated-hobby"
+        ],
+        "forbidden_sources": [
+          "unrelated-hobby"
+        ],
+        "private_sources": []
+      },
+      "answer_quality": null,
+      "model_calls": 0,
+      "latency_ms": null
+    },
+    {
+      "id": "steering",
+      "included_sources": [
+        "old-target",
+        "unrelated-hobby"
+      ],
+      "retrieved_sources": [],
+      "search_backend_states": [],
+      "search_error": "",
+      "tool_calls": 0,
+      "prompt_tokens_estimate": 138,
+      "retrieval": {
+        "necessary_source_recall": 1.0,
+        "search_source_recall": 0.0,
+        "irrelevant_sources": [
+          "unrelated-hobby"
+        ],
+        "forbidden_sources": [
+          "unrelated-hobby"
+        ],
+        "private_sources": []
+      },
+      "answer_quality": null,
+      "model_calls": 0,
+      "latency_ms": null
+    },
+    {
+      "id": "explicit-recall",
+      "included_sources": [
+        "filter",
+        "unrelated-hobby"
+      ],
+      "retrieved_sources": [
+        "filter"
+      ],
+      "search_backend_states": [
+        "available"
+      ],
+      "search_error": "",
+      "tool_calls": 1,
+      "prompt_tokens_estimate": 192,
+      "retrieval": {
+        "necessary_source_recall": 1.0,
+        "search_source_recall": 1.0,
+        "irrelevant_sources": [
+          "unrelated-hobby"
+        ],
+        "forbidden_sources": [
+          "unrelated-hobby"
+        ],
+        "private_sources": []
+      },
+      "answer_quality": null,
+      "model_calls": 0,
+      "latency_ms": null
+    },
+    {
+      "id": "implicit-fact",
+      "included_sources": [
+        "shelf",
+        "box",
+        "unrelated-hobby"
+      ],
+      "retrieved_sources": [],
+      "search_backend_states": [],
+      "search_error": "",
+      "tool_calls": 0,
+      "prompt_tokens_estimate": 152,
+      "retrieval": {
+        "necessary_source_recall": 1.0,
+        "search_source_recall": 0.0,
+        "irrelevant_sources": [
+          "unrelated-hobby"
+        ],
+        "forbidden_sources": [
+          "unrelated-hobby"
+        ],
+        "private_sources": []
+      },
+      "answer_quality": null,
+      "model_calls": 0,
+      "latency_ms": null
+    },
+    {
+      "id": "spanish-paraphrase",
+      "included_sources": [
+        "bilingual",
+        "unrelated-hobby"
+      ],
+      "retrieved_sources": [],
+      "search_backend_states": [
+        "available"
+      ],
+      "search_error": "",
+      "tool_calls": 1,
+      "prompt_tokens_estimate": 152,
+      "retrieval": {
+        "necessary_source_recall": 1.0,
+        "search_source_recall": 0.0,
+        "irrelevant_sources": [
+          "unrelated-hobby"
+        ],
+        "forbidden_sources": [
+          "unrelated-hobby"
+        ],
+        "private_sources": []
+      },
+      "answer_quality": null,
+      "model_calls": 0,
+      "latency_ms": null
+    },
+    {
+      "id": "english-paraphrase",
+      "included_sources": [
+        "spanish",
+        "unrelated-hobby"
+      ],
+      "retrieved_sources": [],
+      "search_backend_states": [
+        "available"
+      ],
+      "search_error": "",
+      "tool_calls": 1,
+      "prompt_tokens_estimate": 150,
+      "retrieval": {
+        "necessary_source_recall": 1.0,
+        "search_source_recall": 0.0,
+        "irrelevant_sources": [
+          "unrelated-hobby"
+        ],
+        "forbidden_sources": [
+          "unrelated-hobby"
+        ],
+        "private_sources": []
+      },
+      "answer_quality": null,
+      "model_calls": 0,
+      "latency_ms": null
+    },
+    {
+      "id": "exact-id",
+      "included_sources": [
+        "exact",
+        "near",
+        "unrelated-hobby"
+      ],
+      "retrieved_sources": [
+        "exact",
+        "near"
+      ],
+      "search_backend_states": [
+        "available"
+      ],
+      "search_error": "",
+      "tool_calls": 1,
+      "prompt_tokens_estimate": 271,
+      "retrieval": {
+        "necessary_source_recall": 1.0,
+        "search_source_recall": 1.0,
+        "irrelevant_sources": [
+          "near",
+          "unrelated-hobby"
+        ],
+        "forbidden_sources": [
+          "unrelated-hobby"
+        ],
+        "private_sources": []
+      },
+      "answer_quality": null,
+      "model_calls": 0,
+      "latency_ms": null
+    },
+    {
+      "id": "date-range",
+      "included_sources": [
+        "in-range",
+        "outside-range",
+        "unrelated-hobby"
+      ],
+      "retrieved_sources": [
+        "in-range",
+        "outside-range"
+      ],
+      "search_backend_states": [
+        "available"
+      ],
+      "search_error": "",
+      "tool_calls": 1,
+      "prompt_tokens_estimate": 264,
+      "retrieval": {
+        "necessary_source_recall": 1.0,
+        "search_source_recall": 1.0,
+        "irrelevant_sources": [
+          "outside-range",
+          "unrelated-hobby"
+        ],
+        "forbidden_sources": [
+          "unrelated-hobby"
+        ],
+        "private_sources": []
+      },
+      "answer_quality": null,
+      "model_calls": 0,
+      "latency_ms": null
+    },
+    {
+      "id": "cross-midnight",
+      "included_sources": [
+        "before-midnight",
+        "after-midnight",
+        "unrelated-hobby"
+      ],
+      "retrieved_sources": [],
+      "search_backend_states": [],
+      "search_error": "",
+      "tool_calls": 0,
+      "prompt_tokens_estimate": 170,
+      "retrieval": {
+        "necessary_source_recall": 1.0,
+        "search_source_recall": 0.0,
+        "irrelevant_sources": [
+          "unrelated-hobby"
+        ],
+        "forbidden_sources": [
+          "unrelated-hobby"
+        ],
+        "private_sources": []
+      },
+      "answer_quality": null,
+      "model_calls": 0,
+      "latency_ms": null
+    },
+    {
+      "id": "resumed-task",
+      "included_sources": [
+        "checkpoint",
+        "unrelated-hobby"
+      ],
+      "retrieved_sources": [],
+      "search_backend_states": [],
+      "search_error": "",
+      "tool_calls": 0,
+      "prompt_tokens_estimate": 166,
+      "retrieval": {
+        "necessary_source_recall": 1.0,
+        "search_source_recall": 0.0,
+        "irrelevant_sources": [
+          "unrelated-hobby"
+        ],
+        "forbidden_sources": [
+          "unrelated-hobby"
+        ],
+        "private_sources": []
+      },
+      "answer_quality": null,
+      "model_calls": 0,
+      "latency_ms": null
+    },
+    {
+      "id": "correction",
+      "included_sources": [
+        "wrong",
+        "correction",
+        "unrelated-hobby"
+      ],
+      "retrieved_sources": [],
+      "search_backend_states": [],
+      "search_error": "",
+      "tool_calls": 0,
+      "prompt_tokens_estimate": 158,
+      "retrieval": {
+        "necessary_source_recall": 1.0,
+        "search_source_recall": 0.0,
+        "irrelevant_sources": [
+          "unrelated-hobby",
+          "wrong"
+        ],
+        "forbidden_sources": [
+          "unrelated-hobby"
+        ],
+        "private_sources": []
+      },
+      "answer_quality": null,
+      "model_calls": 0,
+      "latency_ms": null
+    },
+    {
+      "id": "conflicting-reports",
+      "included_sources": [
+        "report-a",
+        "report-b",
+        "unrelated-hobby"
+      ],
+      "retrieved_sources": [],
+      "search_backend_states": [],
+      "search_error": "",
+      "tool_calls": 0,
+      "prompt_tokens_estimate": 151,
+      "retrieval": {
+        "necessary_source_recall": 1.0,
+        "search_source_recall": 0.0,
+        "irrelevant_sources": [
+          "unrelated-hobby"
+        ],
+        "forbidden_sources": [
+          "unrelated-hobby"
+        ],
+        "private_sources": []
+      },
+      "answer_quality": null,
+      "model_calls": 0,
+      "latency_ms": null
+    },
+    {
+      "id": "diagnostic-failure",
+      "included_sources": [
+        "scan",
+        "unrelated-hobby"
+      ],
+      "retrieved_sources": [],
+      "search_backend_states": [],
+      "search_error": "",
+      "tool_calls": 0,
+      "prompt_tokens_estimate": 174,
+      "retrieval": {
+        "necessary_source_recall": 1.0,
+        "search_source_recall": 0.0,
+        "irrelevant_sources": [
+          "unrelated-hobby"
+        ],
+        "forbidden_sources": [
+          "unrelated-hobby"
+        ],
+        "private_sources": []
+      },
+      "answer_quality": null,
+      "model_calls": 0,
+      "latency_ms": null
+    },
+    {
+      "id": "shared-visibility",
+      "included_sources": [
+        "shared",
+        "unrelated-hobby"
+      ],
+      "retrieved_sources": [
+        "shared"
+      ],
+      "search_backend_states": [
+        "available"
+      ],
+      "search_error": "",
+      "tool_calls": 1,
+      "prompt_tokens_estimate": 191,
+      "retrieval": {
+        "necessary_source_recall": 1.0,
+        "search_source_recall": 1.0,
+        "irrelevant_sources": [
+          "unrelated-hobby"
+        ],
+        "forbidden_sources": [
+          "unrelated-hobby"
+        ],
+        "private_sources": []
+      },
+      "answer_quality": null,
+      "model_calls": 0,
+      "latency_ms": null
+    },
+    {
+      "id": "historical-authorization",
+      "included_sources": [
+        "old-permission",
+        "unrelated-hobby"
+      ],
+      "retrieved_sources": [
+        "old-permission"
+      ],
+      "search_backend_states": [
+        "available"
+      ],
+      "search_error": "",
+      "tool_calls": 1,
+      "prompt_tokens_estimate": 213,
+      "retrieval": {
+        "necessary_source_recall": 1.0,
+        "search_source_recall": 1.0,
+        "irrelevant_sources": [
+          "unrelated-hobby"
+        ],
+        "forbidden_sources": [
+          "unrelated-hobby"
+        ],
+        "private_sources": []
+      },
+      "answer_quality": null,
+      "model_calls": 0,
+      "latency_ms": null
+    },
+    {
+      "id": "missing-search",
+      "included_sources": [
+        "unrelated-hobby"
+      ],
+      "retrieved_sources": [],
+      "search_backend_states": [
+        "empty"
+      ],
+      "search_error": "",
+      "tool_calls": 1,
+      "prompt_tokens_estimate": 137,
+      "retrieval": {
+        "necessary_source_recall": 1.0,
+        "search_source_recall": null,
+        "irrelevant_sources": [
+          "unrelated-hobby"
+        ],
+        "forbidden_sources": [
+          "unrelated-hobby"
+        ],
+        "private_sources": []
+      },
+      "answer_quality": null,
+      "model_calls": 0,
+      "latency_ms": null
+    },
+    {
+      "id": "unavailable-search",
+      "included_sources": [
+        "unrelated-hobby"
+      ],
+      "retrieved_sources": [],
+      "search_backend_states": [
+        "unavailable"
+      ],
+      "search_error": "",
+      "tool_calls": 1,
+      "prompt_tokens_estimate": 137,
+      "retrieval": {
+        "necessary_source_recall": 1.0,
+        "search_source_recall": null,
+        "irrelevant_sources": [
+          "unrelated-hobby"
+        ],
+        "forbidden_sources": [
+          "unrelated-hobby"
+        ],
+        "private_sources": []
+      },
+      "answer_quality": null,
+      "model_calls": 0,
+      "latency_ms": null
+    },
+    {
+      "id": "older-explicit-recall",
+      "included_sources": [
+        "old-filter",
+        "filler-30",
+        "filler-31",
+        "unrelated-hobby"
+      ],
+      "retrieved_sources": [
+        "old-filter"
+      ],
+      "search_backend_states": [
+        "available"
+      ],
+      "search_error": "",
+      "tool_calls": 1,
+      "prompt_tokens_estimate": 223,
+      "retrieval": {
+        "necessary_source_recall": 1.0,
+        "search_source_recall": 1.0,
+        "irrelevant_sources": [
+          "filler-30",
+          "filler-31",
+          "unrelated-hobby"
+        ],
+        "forbidden_sources": [
+          "unrelated-hobby"
+        ],
+        "private_sources": []
+      },
+      "answer_quality": null,
+      "model_calls": 0,
+      "latency_ms": null
+    },
+    {
+      "id": "older-implicit-recall",
+      "included_sources": [
+        "filler-31",
+        "new-box",
+        "unrelated-hobby"
+      ],
+      "retrieved_sources": [],
+      "search_backend_states": [],
+      "search_error": "",
+      "tool_calls": 0,
+      "prompt_tokens_estimate": 176,
+      "retrieval": {
+        "necessary_source_recall": 0.5,
+        "search_source_recall": 0.0,
+        "irrelevant_sources": [
+          "filler-31",
+          "unrelated-hobby"
+        ],
+        "forbidden_sources": [
+          "unrelated-hobby"
+        ],
+        "private_sources": []
+      },
+      "answer_quality": null,
+      "model_calls": 0,
+      "latency_ms": null
+    }
+  ]
+}

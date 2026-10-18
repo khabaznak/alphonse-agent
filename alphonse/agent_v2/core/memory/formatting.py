@@ -7,6 +7,13 @@ _RECORD_START = re.compile(r"(?m)^- \[memory:")
 OMITTED = "- (memory omitted to preserve complete claims and source/status labels)"
 
 
+def bound_context_record(value: object, max_chars: int) -> str:
+    """An opaque message/record either fits whole or carries an omission label."""
+    text = str(value or "").strip()
+    marker = "(complete record omitted: context budget exceeded; recall required)"
+    return text if len(text) <= max_chars else marker if len(marker) <= max_chars else ""
+
+
 def bound_memory_context(value: object, max_chars: int) -> str:
     text = str(value or "").strip() or "- (none)"
     if len(text) <= max_chars:
@@ -46,7 +53,9 @@ def join_context_sections(sections: list[str], max_chars: int) -> str:
             if section.startswith("Durable household memory"):
                 section = bound_memory_context(section, remaining)
             else:
-                section = section[:remaining]
+                # Conversation and active state contain whole records. A partial
+                # section can change a question or detach an answer from it.
+                continue
         if section:
             result += separator + section
     return result

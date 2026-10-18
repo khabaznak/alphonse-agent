@@ -25,9 +25,9 @@ def test_offline_replay_is_reproducible_without_network(monkeypatch):
     monkeypatch.setattr(socket, 'socket', no_network)
     corpus = load_corpus(CORPUS)
     first = run(corpus)
-    candidate = BASELINE.parent.parent / 'memory-search-v3/results.json'
+    candidate = BASELINE.parent.parent / 'memory-continuity-v4/results.json'
     assert first == run(corpus) == json.loads(candidate.read_text())
-    assert first['adapter'] == 'current-v3-context-and-native-search-v3'
+    assert first['adapter'] == 'current-v3-continuity-and-native-search-v4'
     # Preserve the frozen characterization evidence; do not overwrite it to
     # accommodate intentional runtime prompt changes.
     assert hashlib.sha256(BASELINE.read_bytes()).hexdigest() == '5306f97c018da232af46cd511c532306662685ac659d793683a04a08e5c4be99'

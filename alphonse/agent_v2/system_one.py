@@ -17,6 +17,7 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from alphonse.agent_v2.database import connect_database, default_database_path
+from alphonse.agent_v2.core.memory.formatting import bound_context_record, join_context_sections
 
 DEFAULT_SYSTEM_ONE_URL = "https://api.typesafe.ai/v1/systemone"
 DEFAULT_SYSTEM_ONE_MODEL = "jev-latest"
@@ -503,9 +504,9 @@ class JevCriterionDecisionProvider:
         """Curate optional context, then route using the finalized shared context."""
         candidates = [item for item in context_candidates if isinstance(item, dict) and item.get("id")]
         skills = [item for item in skill_candidates if isinstance(item, dict) and item.get("id")]
-        message_value = str(message or "")[:4000]
-        recent_value = str(recent_conversation or "")[:5000]
-        invariant_value = str(invariant_context or "")[:12000]
+        message_value = bound_context_record(message, 4000)
+        recent_value = bound_context_record(recent_conversation, 5000)
+        invariant_value = bound_context_record(invariant_context, 12000)
         candidate_state = {
             str(item["id"]): {
                 "title": str(item.get("title") or "")[:160],
@@ -607,8 +608,10 @@ class JevCriterionDecisionProvider:
                 selected_blocks.append(f"{str(item.get('title') or item['id'])}:\n{str(item.get('content') or item.get('snippet') or '')[:8000]}")
         shared_context = str(selected_context or "").strip()
         if not shared_context:
-            base_context = "\n\n".join(selected_blocks)[:24000]
-            shared_context = "\n\n".join([base_context, *(str(item) for item in additional_context if str(item).strip())])[:36000] or "(none)"
+            base_context = join_context_sections(selected_blocks, 24000)
+            shared_context = join_context_sections(
+                [*(str(item) for item in additional_context if str(item).strip()), base_context], 36000,
+            ) or "(none)"
         admission_state = {
             "user_message": message_value,
             "shared_context": shared_context,

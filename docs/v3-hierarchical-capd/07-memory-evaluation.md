@@ -11,6 +11,10 @@ compare that candidate separately rather than overwriting the original baseline.
 
 ## Reproduce the baseline
 
+Issue #15 adds a separate [version 4 continuity candidate](11-conversation-continuity.md)
+at `evidence/memory-continuity-v4/results.json`. Current commands reproduce that
+candidate. The original baseline and intervening snapshots remain frozen.
+
 From the repository root, with the project's Python dependencies installed:
 
 ```bash

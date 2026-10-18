@@ -473,6 +473,11 @@ class SQLiteQuestionStore:
         task.status = "running"
         task.metadata.pop("pending_question_id", None)
         task.metadata.pop("question_answer", None)
+        # Keep the actual question and normalized answer together in the
+        # checkpoint, independently of plan compaction or channel changes.
+        task.metadata["question_interrupt"] = {
+            **question.to_dict(), "status": "answered", "answer": dict(answer),
+        }
         _record_question_answer_tool_result(task=task, question=question, answer=answer)
         task.append_update(f"Question {question.question_id} answered; task resumed.")
 

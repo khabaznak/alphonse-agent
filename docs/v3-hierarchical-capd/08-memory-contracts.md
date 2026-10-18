@@ -100,9 +100,10 @@ Transcript assembly and native recall both use this gate. `visible_unique()`
 filters access before deduplicating canonical source IDs. Assembly records selected
 references in `task.metadata.conversation_sources`; native recall adds the same
 references in the structured `recall` envelope while preserving the existing
-`matches_markdown` compatibility field. The assembly manifest describes selected
-source candidates: a later character budget can partially or wholly omit text.
-It must not be interpreted as proof that every selected source was fully shown.
+`matches_markdown` compatibility field. Under #15's
+[continuity projection](11-conversation-continuity.md), the assembly manifest
+describes complete records actually included. Separate projection metadata records
+omissions; message text is never sliced to fit the budget.
 
 Legacy ledger search remains a compatibility adapter in the task's existing
 native authorized scope. Its opaque result gets a scoped content-snapshot hash
