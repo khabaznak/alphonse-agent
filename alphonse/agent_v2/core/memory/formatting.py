@@ -7,14 +7,14 @@ _RECORD_START = re.compile(r"(?m)^- \[memory:")
 OMITTED = "- (memory omitted to preserve complete claims and source/status labels)"
 
 
-def bound_context_record(value: object, max_chars: int) -> str:
+def _bound_context_record_text(value: object, max_chars: int) -> str:
     """An opaque message/record either fits whole or carries an omission label."""
     text = str(value or "").strip()
     marker = "(complete record omitted: context budget exceeded; recall required)"
     return text if len(text) <= max_chars else marker if len(marker) <= max_chars else ""
 
 
-def bound_memory_context(value: object, max_chars: int) -> str:
+def _bound_memory_context_text(value: object, max_chars: int) -> str:
     text = str(value or "").strip() or "- (none)"
     if len(text) <= max_chars:
         return text
@@ -41,21 +41,39 @@ def bound_memory_context(value: object, max_chars: int) -> str:
     return "\n".join(selected + [OMITTED])
 
 
+def bound_context_record(value: object, max_chars: int) -> str:
+    from alphonse.agent_v2.core.context_inventory import replaced
+    return replaced(value, _bound_context_record_text(value, max_chars))
+
+
+def bound_memory_context(value: object, max_chars: int) -> str:
+    from alphonse.agent_v2.core.context_inventory import replaced
+    result = replaced(value, _bound_memory_context_text(value, max_chars))
+    if len(str(value).strip()) > max_chars and '\n\n# Current Request\n' in str(value):
+        for record in result.records:
+            if record['source_type'] == 'current_request' and record['status'] == 'omitted':
+                record['reason'] = 'duplicate'
+    return result
+
+
 def join_context_sections(sections: list[str], max_chars: int) -> str:
-    """Preserve the memory section if it fits; otherwise select complete records."""
-    result = ""
-    for section in sections:
-        separator = "\n\n" if result else ""
-        remaining = max_chars - len(result) - len(separator)
+    """Preserve existing selection bytes and carry its call-time inventory."""
+    from alphonse.agent_v2.core.context_inventory import combined, omitted
+    selected = []
+    used = 0
+    for index, section in enumerate(sections):
+        separator = "\n\n" if used else ""
+        remaining = max_chars - used - len(separator)
         if remaining <= 0:
+            selected.extend(omitted(part) for part in sections[index:])
             break
         if len(section) > remaining:
             if section.startswith("Durable household memory"):
                 section = bound_memory_context(section, remaining)
             else:
-                # Conversation and active state contain whole records. A partial
-                # section can change a question or detach an answer from it.
+                selected.append(omitted(section))
                 continue
+        selected.append(section)
         if section:
-            result += separator + section
-    return result
+            used += len(separator) + len(section)
+    return combined(selected, max_chars=max_chars)

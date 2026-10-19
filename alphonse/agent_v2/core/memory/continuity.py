@@ -51,4 +51,11 @@ def active_task_continuity(task: Any, *, max_chars: int = 9000) -> str:
         "schema_version": 1, "task_id": task_id, "omitted_records": omitted,
         "reserved_overflow": any(k in {"objective", "constraints", "question"} for k in omitted),
     }
-    return "\n".join([header, *selected]) if len(header) <= max_chars else ""
+    from alphonse.agent_v2.core.context_inventory import combined, source, ContextText
+    pieces = [header]
+    for block in selected:
+        kind = block.split("]", 1)[0].removeprefix(f"[{task_id}:")
+        pieces.append(source(block, f"task-working:{task_id}:{kind}", "task_continuity", reason="required_continuity"))
+    result = combined(pieces, "\n", max_chars=max_chars)
+    missing = [{"source_id": f"task-working:{task_id}:{kind}", "source_type": "task_continuity", "status": "omitted", "reason": "over_budget", "tokens": 0, "input_range": None, "truncated": False} for kind in omitted]
+    return ContextText(str(result) if len(header) <= max_chars else "", result.records + missing, max_chars=max_chars)

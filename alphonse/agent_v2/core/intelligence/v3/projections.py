@@ -49,10 +49,14 @@ def token_count(text: str) -> int:
 
 def assemble(records: list[Record], *, budget: int) -> tuple[str, dict]:
     unique: dict[str, Record] = {}
+    omissions = []
     for record in records:
         if not record.text.strip():
             continue
         previous = unique.get(record.source_id)
+        if previous is not None:
+            omissions.append({"source_id": record.source_id, "source_type": record.source_id.split(":", 1)[0],
+                              "status": "omitted", "reason": "duplicate", "tokens": 0})
         # Required state wins over optional representations of the same source.
         if previous is None or (record.required and not previous.required):
             unique[record.source_id] = record
@@ -75,7 +79,19 @@ def assemble(records: list[Record], *, budget: int) -> tuple[str, dict]:
         else:
             omitted.extend(record.source_id for record in group)
     text = render(selected)
+    selected_ids = {r.source_id for r in selected}
+    inventory = [{"source_id": r.source_id, "source_type": r.source_id.split(":", 1)[0],
+                  "status": "included" if r.source_id in selected_ids else "omitted",
+                  "reason": ("required" if r.required else "selected_relevant") if r.source_id in selected_ids else "over_budget",
+                  "tokens": token_count(r.render()) if r.source_id in selected_ids else 0,
+                  "truncated": False} for r in unique.values()]
+    offset = 0
+    for record in selected:
+        row = next(r for r in inventory if r['source_id'] == record.source_id)
+        row['input_range'] = {'start_char': offset, 'end_char': offset + len(record.render())}
+        offset += len(record.render()) + 2
     return text, {"source_ids": [r.source_id for r in selected], "omitted_source_ids": omitted,
+                  "records": inventory + omissions, "separator_tokens": max(0, len(selected) - 1) * 2,
                   "tokens": token_count(text), "budget": budget, "tokenizer": "conservative_utf8_bytes"}
 
 
@@ -87,6 +103,10 @@ def project(task, context, *, purpose: str, selected_context_ids=()) -> str:
     if purpose not in PURPOSES:
         raise ValueError("invalid_context_purpose")
     excluded_sources = set()
+    omissions = []
+    recall = {}
+    ids = []
+    skills = ""
     records = [Record("request:" + str(task.message_id or task.task_id), "Current request", task.goal, True),
                Record("policy:recall", "Evidence rules", RECALL_GUIDANCE, True)]
     contract = task.acceptance_contract or task.acceptance_criteria_md
@@ -128,10 +148,14 @@ def project(task, context, *, purpose: str, selected_context_ids=()) -> str:
             for candidate in _global_candidates(global_text, max_chars=None):
                 if candidate["id"] in selected_context_ids:
                     records.append(Record(candidate["id"], candidate["title"], candidate["content"]))
+                else:
+                    omissions.append(_omission(candidate["id"], "irrelevant"))
             for p in _visible_active_projects(task, context):
                 candidate = _project_candidate_for_record(p, context, max_chars=None)
                 if candidate and candidate["id"] in selected_context_ids:
                     records.append(Record(candidate["id"], candidate["title"], candidate["content"]))
+                elif candidate:
+                    omissions.append(_omission(candidate["id"], "irrelevant"))
         recent = getattr(getattr(context, "conversation_store", None), "list_recent", None)
         if callable(recent) and task.user:
             try:
@@ -147,12 +171,14 @@ def project(task, context, *, purpose: str, selected_context_ids=()) -> str:
                     continue
                 if str(getattr(event, "source_message_id", "") or "") == str(task.message_id or "__missing__"):
                     excluded_sources.add(item.source.source_id)
+                    omissions.append(_omission(item.source.source_id, "duplicate"))
                     if copies[item.content]:
                         copies[item.content] -= 1
                     continue
                 if copies[item.content]:
                     copies[item.content] -= 1
                     excluded_sources.add(item.source.source_id)
+                    omissions.append(_omission(item.source.source_id, "duplicate"))
                     continue
                 history.insert(0, item)
             exchanges = []
@@ -163,13 +189,22 @@ def project(task, context, *, purpose: str, selected_context_ids=()) -> str:
                     exchanges[-1].append(item)
             # Whole exchanges are budget units; never leave an assistant answer
             # without its antecedent merely because one record is smaller.
-            exchanges = _relevant_exchanges(task, context, exchanges[-3:])
+            omissions.extend(_omission(item.source.source_id, "over_budget") for exchange in exchanges[:-3] for item in exchange)
+            candidates = exchanges[-3:]
+            exchanges = _relevant_exchanges(task, context, candidates)
+            retained = {item.source.source_id for exchange in exchanges for item in exchange}
+            omissions.extend(_omission(item.source.source_id, "irrelevant") for exchange in candidates for item in exchange if item.source.source_id not in retained)
             for exchange in reversed(exchanges):
                 group = "exchange:" + exchange[0].source.source_id
                 records.extend(Record(item.source.source_id, "Historical conversation", _json(item.to_dict()), group=group) for item in exchange)
         # Re-run access checks on every projection; never reuse persisted recalled text.
         recall = retrieve(task, context)
-        records.append(Record("recall:status", "Recall coverage and limits", _json({k: v for k, v in recall.items() if k != "results"}), True))
+        records.append(Record("recall:status", "Recall coverage and limits", _json({k: v for k, v in recall.items() if k not in {"results", "omissions"}}), True))
+        # Unavailable adapters have no known visible record IDs. Report only
+        # backend availability, never the existence of inaccessible sources.
+        omissions.extend(_omission("recall:" + kind, "unavailable") for kind, status in recall.get("coverage", {}).items() if status in {"unavailable", "failed"})
+        if recall.get("status") in {"unavailable", "failed"} and not recall.get("coverage"):
+            omissions.append(_omission("recall:backend", "unavailable"))
         for hit in recall.get("results", []):
             if hit["source_id"] in excluded_sources:
                 continue
@@ -180,8 +215,31 @@ def project(task, context, *, purpose: str, selected_context_ids=()) -> str:
     # unrelated ledger and historical retrieval never enter its context projection.
     budget = int(os.environ.get("ALPHONSE_V3_CONTEXT_TOKEN_BUDGET", "24000"))
     text, manifest = assemble(records, budget=budget)
+    manifest["records"].extend(omissions)
+    manifest["records"].extend(recall.get("omissions", []))
+    selection = task.metadata.get('v3_skill_selection')
+    manifest['selected_skill_ids'] = list(selection.get('selected_skill_ids', ids)) if isinstance(selection, dict) and purpose != 'review' else list(ids)
+    manifest['loaded_skill_ids'] = list(ids)
+    manifest['records'].extend(dict(record) for record in getattr(skills, 'records', []) if record['status'] == 'omitted')
+    manifest["recall"] = {k: recall[k] for k in ("status", "coverage", "next_offset", "further_search_required") if k in recall}
+    manifest["recall"]["result_count"] = len(recall.get("results", []))
+    truncated_ids = {hit["source_id"] for hit in recall.get("results", []) if hit.get("truncated")}
+    for record in manifest["records"]:
+        if record["status"] == "included" and record["source_id"] in truncated_ids:
+            record["truncated"] = True
+            hit = next(hit for hit in recall["results"] if hit["source_id"] == record["source_id"])
+            record["source_range"] = {k: hit[k] for k in ("start_char", "end_char", "total_chars") if k in hit}
+    manifest["purpose"] = purpose
     task.metadata.setdefault("v3_context_projections", {})[purpose] = manifest
-    return text
+    from alphonse.agent_v2.core.context_manifests import remember_projection
+    remember_projection(text, manifest)
+    from alphonse.agent_v2.core.context_inventory import ContextText
+    return ContextText(text, manifest['records'], **{k: v for k, v in manifest.items() if k != 'records'})
+
+
+def _omission(source_id, reason):
+    return {"source_id": source_id, "source_type": source_id.split(":", 1)[0],
+            "status": "omitted", "reason": reason, "tokens": 0}
 
 
 def _json(value) -> str:
@@ -257,13 +315,16 @@ def retrieve(task, context) -> dict:
         if context.is_cancelled():
             raise SystemOneUnavailableError("v3_recall_cancelled")
         hits = result.get("results", [])
+        omissions = []
         try:
             selected = judge(request=task.goal, candidates=hits) if callable(judge) and hits else None
         except Exception:
             selected = None
         if isinstance(selected, list):
+            omissions = [_omission(hit["source_id"], "irrelevant") for hit in hits if hit["source_id"] not in selected]
             hits = [hit for hit in hits if hit["source_id"] in selected]
         return {"status": result.get("status", "unavailable"), "coverage": result.get("coverage", {}),
+                "omissions": omissions,
                 "results": hits, "next_offset": result.get("next_offset"),
                 "further_search_required": not hits or result.get("status") != "found"
                 or result.get("next_offset") is not None or any(hit.get("truncated") for hit in hits)}

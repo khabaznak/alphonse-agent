@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from alphonse.agent_v2.core.context_inventory import source, prompt_receipt
+
 import json
 import time
 from typing import TYPE_CHECKING, Any, Callable
@@ -262,6 +264,11 @@ class PhaseExecutor:
             InferenceRequest(
                 prompt=prompt,
                 purpose=InferencePurpose.TACTICAL_ACTION,
+                context_manifests=prompt_receipt(prompt, [skill_guidance,
+                    source('Strategic plan: ' + json.dumps(state.phase.to_dict(), ensure_ascii=False), 'phase:' + state.phase.phase_id, 'strategic_plan'),
+                    source('Complete tool execution log (every entry, no omissions or truncation):\n' + state.prompt_projection(max_evidence_entries=None, max_chars=None), 'phase:' + state.phase.phase_id + ':execution', 'execution_evidence'),
+                    *([source('Goal: ' + task.goal, 'request:' + str(task.message_id or task.task_id), 'current_request')] if not projections_enabled() else []),
+                ], purpose='execution'),
                 project_id=task.project_id,
                 user=task.user,
                 task_id=task.task_id,

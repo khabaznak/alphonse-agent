@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from alphonse.agent_v2.core.context_inventory import source, prompt_receipt
+
 import json
 import inspect
 from dataclasses import dataclass
@@ -518,8 +520,7 @@ def _system_two_acceptance_review(
             },
         }}},
     }
-    request = InferenceRequest(
-        prompt=(
+    prompt = (
             "Review the verified evidence against the immutable acceptance criteria. Return JSON with an updates array. "
             "Each update must include criterion_id, status, evidence_refs (an array of valid reference strings), and reason. "
             "Return exactly the supplied JSON Schema; singular evidence_ref is not a supported field. "
@@ -535,8 +536,24 @@ def _system_two_acceptance_review(
             f"Acceptance contract: {json.dumps(review_contract, ensure_ascii=False)}\n"
             f"Phase: {json.dumps(state.phase.to_dict(), ensure_ascii=False)}\n"
             f"Verified evidence: {json.dumps(state.evidence.to_dict(), ensure_ascii=False)}"
-        ),
+    )
+    review_parts = [
+        source('Acceptance contract: ' + json.dumps(review_contract, ensure_ascii=False), 'task:' + str(task.task_id) + ':contract', 'acceptance_contract'),
+        source('Phase: ' + json.dumps(state.phase.to_dict(), ensure_ascii=False), 'phase:' + state.phase.phase_id, 'strategic_plan'),
+        source('Verified evidence: ' + json.dumps(state.evidence.to_dict(), ensure_ascii=False), 'phase:' + state.phase.phase_id + ':evidence', 'execution_evidence'),
+        source('Valid evidence references: ' + json.dumps(valid_refs, ensure_ascii=False), 'phase:' + state.phase.phase_id + ':valid_refs', 'verification_filter'),
+    ]
+    request = InferenceRequest(
+        prompt=prompt,
+        context_manifests=prompt_receipt(prompt, review_parts, purpose='review'),
         purpose=InferencePurpose.PHASE_REVIEW,
+        input_sources=tuple([
+            {"source_id": "criterion:" + str(item["id"]), "source_type": "acceptance_criterion", "reason": "completion_review"}
+            for item in review_contract.get("criteria", [])
+        ] + [
+            {"source_id": str(entry.get('evidence_ref')), "source_type": "execution_evidence", "reason": "completion_review", "evidence_status": str(entry.get('status') or '')}
+            for entry in state.evidence.entries if entry.get('evidence_ref')
+        ]),
         project_id=task.project_id,
         user=task.user,
         task_id=task.task_id,

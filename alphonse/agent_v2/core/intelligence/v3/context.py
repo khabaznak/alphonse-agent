@@ -7,6 +7,8 @@ from pathlib import Path
 import re
 from typing import TYPE_CHECKING
 
+from alphonse.agent_v2.core.context_inventory import ContextText, source, combined, omitted
+
 from alphonse.agent_v2.agent_config import parse_global_context_sections
 from alphonse.agent_v2.core.memory.formatting import bound_context_record, bound_memory_context, join_context_sections
 from alphonse.agent_v2.core.memory.continuity import active_task_continuity
@@ -42,10 +44,10 @@ def prepare_context_curation(task: "TaskState", context: "CoreLoopContext") -> t
                 if not body or heading.casefold() == "please remove":
                     continue
                 if heading.casefold() in _INVARIANT_GLOBAL_SECTIONS:
-                    sections.append(f"{heading}:\n{body}")
+                    sections.append(f"{heading}:\n" + source(body, "global:" + _slug(heading), "global_policy", reason="required"))
         else:
             # Preserve older free-form documents until they are structured.
-            sections.append("Household and global context:\n" + global_context)
+            sections.append("Household and global context:\n" + source(global_context, "global:policy", "global_policy", reason="required"))
 
     candidates = _global_candidates(global_context)
     for project in active_projects:
@@ -55,7 +57,11 @@ def prepare_context_curation(task: "TaskState", context: "CoreLoopContext") -> t
         candidate = _project_candidate_for_record(project, context)
         if candidate is not None:
             candidates.append(candidate)
-    return join_context_sections(sections, 12000), candidates[:64]
+        else:
+            sections.append(omitted(source("", "project:" + project_id, "project_guidance"), reason="unavailable"))
+    rendered = join_context_sections(sections, 12000)
+    overflow = [omitted(source(item['content'], item['id'], 'context_candidate')) for item in candidates[64:]]
+    return combined([rendered, *overflow], ''), candidates[:64]
 
 
 def conversation_context(
@@ -70,7 +76,9 @@ def conversation_context(
     sections = [invariant] if invariant else []
     for candidate in candidates:
         if candidate["id"] in selected:
-            sections.append(f"{candidate['title']}:\n{candidate['content']}")
+            sections.append(f"{candidate['title']}:\n" + candidate['content'])
+        else:
+            sections.append(omitted(candidate['content'], reason='irrelevant'))
     return join_context_sections(sections, 24000)
 
 
@@ -88,27 +96,50 @@ def task_context_for_decision(
         return project(task, context, purpose=purpose, selected_context_ids=selected_context_ids)
     sections = [active_task_continuity(task), conversation_context(task, context, selected_context_ids=selected_context_ids)]
     sections.extend(task_context_addenda(task))
-    return join_context_sections(sections, 36000)
+    result = join_context_sections(sections, 36000)
+    return ContextText(str(result), result.records, purpose=purpose, max_chars=36000)
 
 
 def task_context_addenda(task: "TaskState") -> list[str]:
     """Render task memory and fact sections shared across decision systems."""
-    durable_memory = str(task.memory_context_md or "").strip() or "- (none)"
+    identity = str(task.task_id or task.message_id or 'current')
+    durable_memory = memory_inventory(task.memory_context_md, f'task-working:{identity}:memory_context')
     durable_memory = bound_memory_context(durable_memory, 9000)
     return [
-        f"Current goal:\n{bound_context_record(task.goal, 9000) or '- (none)'}",
-        f"Durable household memory (person/audience scoped; project association is optional):\n{durable_memory}",
-        f"Known task facts:\n{_bounded_context_value(task.facts_md, 4000)}",
-        f"Memory facts:\n{_bounded_context_value(task.memory_facts_md, 3000)}",
+        "Current goal:\n" + (bound_context_record(source(task.goal, 'request:' + str(task.message_id or task.task_id), 'current_request'), 9000) or '- (none)'),
+        "Durable household memory (person/audience scoped; project association is optional):\n" + durable_memory,
+        "Known task facts:\n" + (bound_context_record(source(task.facts_md, f'task-working:{identity}:facts', 'working_facts'), 4000) or '- (none)'),
+        "Memory facts:\n" + (bound_context_record(source(task.memory_facts_md, f'task-working:{identity}:memory_facts', 'working_facts'), 3000) or '- (none)'),
     ]
+
+
+def memory_inventory(value, identity):
+    text = str(value or '').strip() or '- (none)'
+    marker = '\n\n# Current Request\n'
+    boundary = text.find(marker)
+    tail = ''
+    if boundary >= 0:
+        from alphonse.agent_v2.core.context_manifests import request_text
+        tail = request_text(text[boundary:])
+        text = text[:boundary]
+    matches = list(re.finditer(r'(?m)^- \[(memory:[a-zA-Z0-9_:-]+)(?=;|\])', text))
+    if not matches:
+        return combined([source(text, identity, 'memory_snapshot'), tail], '', recall={'status': 'not_performed', 'strategy': 'ledger_tail_snapshot', 'result_count': 0})
+    parts = [text[:matches[0].start()]]
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        block = text[match.start():end]
+        stripped = block.rstrip()
+        parts.extend([source(stripped, match[1], 'knowledge', reason='ledger_tail'), block[len(stripped):]])
+    return combined([*parts, tail], '', recall={'status': 'not_performed', 'strategy': 'ledger_tail', 'candidate_count': len(matches), 'result_count': 0})
 
 
 def selected_project_context(task: "TaskState", context: "CoreLoopContext") -> str:
     selection = task.metadata.get("v3_context_selection")
     selected = set(selection.get("selected_context_ids", [])) if isinstance(selection, dict) else set()
     _invariant, candidates = prepare_context_curation(task, context)
-    blocks = [f"{item['title']}:\n{item['content']}" for item in candidates if item.get("id", "").startswith("project:") and item.get("id") in selected]
-    return "\n\n".join(blocks)
+    blocks = [f"{item['title']}:\n" + item['content'] for item in candidates if item.get("id", "").startswith("project:") and item.get("id") in selected]
+    return combined(blocks)
 
 
 def recent_conversation_for_curation(task: "TaskState", context: "CoreLoopContext") -> str:
@@ -142,16 +173,20 @@ def selected_skill_guidance(task: "TaskState", context: "CoreLoopContext", *, ma
     store = context.skill_store
     getter = getattr(store, "get", None) if store is not None else None
     if not callable(getter):
-        return "", []
+        return combined([omitted(source('', str(identity), 'skill_guidance'), reason='unavailable') for identity in selected_ids], selected_skill_ids=list(selected_ids)), []
     blocks: list[str] = []
     loaded_ids: list[str] = []
     used_chars = 0
-    for skill_id in selected_ids:
+    unavailable_ids = []
+    budget_ids = []
+    for skill_index, skill_id in enumerate(selected_ids):
         try:
             skill = getter(str(skill_id))
         except (OSError, UnicodeDecodeError, ValueError):
+            unavailable_ids.append(str(skill_id))
             continue
         if skill is None:
+            unavailable_ids.append(str(skill_id))
             continue
         resources = context.artifact_resources
         # Artifact sections may contain another household member's private
@@ -187,8 +222,10 @@ def selected_skill_guidance(task: "TaskState", context: "CoreLoopContext", *, ma
             "Skill selection and resource manifests do not grant permission for effects.\n\n"
             + "\n\n".join(resource_blocks) + "\n\n" + base_instructions + "\n\n" + "\n\n".join(operating_blocks)
         )
+        block = source(block, str(skill.skill_id), "skill_guidance", reason="selected_skill")
         remaining = max_chars - used_chars if max_chars is not None else None
         if remaining is not None and remaining < 300:
+            budget_ids.extend(str(item) for item in selected_ids[skill_index:])
             break
         if remaining is not None and len(block) > remaining:
             marker = "\n(skill guidance truncated; inspect the authorized skill package for remaining instructions)"
@@ -196,9 +233,9 @@ def selected_skill_guidance(task: "TaskState", context: "CoreLoopContext", *, ma
         blocks.append(block)
         loaded_ids.append(skill.skill_id)
         used_chars += len(block) + 2
-    if not blocks:
-        return "", []
-    return "\n\n".join(blocks), loaded_ids
+    missing = [omitted(source('', identity, 'skill_guidance'), reason='unavailable') for identity in unavailable_ids]
+    missing.extend(omitted(source('', identity, 'skill_guidance')) for identity in budget_ids)
+    return combined([*blocks, *missing], selected_skill_ids=list(selected_ids), loaded_skill_ids=loaded_ids), loaded_ids
 
 
 def _global_candidates(content: str, *, max_chars: int | None = 6000) -> list[dict[str, str]]:
@@ -212,7 +249,7 @@ def _global_candidates(content: str, *, max_chars: int | None = 6000) -> list[di
         candidates.append({
             "id": f"global:{_slug(heading)}",
             "title": f"Global context — {heading}",
-            "content": body[:max_chars],
+            "content": source(body, f"global:{_slug(heading)}", "global_guidance", reason="selected_relevant")[:max_chars],
             "snippet": body[:500],
         })
     return candidates
@@ -239,7 +276,7 @@ def _project_candidate_for_record(project: Any, context: "CoreLoopContext", *, m
     return {
         "id": f"project:{project_id}",
         "title": f"Project — {title}",
-        "content": candidate_content[:max_chars],
+        "content": source(candidate_content, f"project:{project_id}", "project_guidance", reason="selected_relevant")[:max_chars],
         "snippet": candidate_content[:500],
     }
 
@@ -267,7 +304,7 @@ def _global_preamble(content: str) -> str:
         if line.startswith("## "):
             break
         preamble.append(line)
-    return "\n".join(preamble).strip()[:1200]
+    return source("\n".join(preamble).strip(), "global:preamble", "global_policy", reason="required")[:1200]
 
 
 def _slug(value: str) -> str:

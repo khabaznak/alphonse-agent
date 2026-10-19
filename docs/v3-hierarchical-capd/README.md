@@ -164,3 +164,7 @@ accepted contract layer, provenance, visibility, migration and retention boundar
 See [decision-specific context](12-decision-context.md) for the opt-in token-budgeted
 projection and bounded hybrid recall candidate (issue #16). The default ledger-tail
 path remains in place pending rollout gates.
+
+See [call-time decision context manifests](14-decision-context-manifests.md) for
+work-log input inventories, legacy labels, authorized source expansion and retention
+(issue #17). Projection rollout remains opt-in.

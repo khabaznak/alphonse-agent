@@ -1003,6 +1003,35 @@ class V2Daemon:
     def save_agent_config(self, file_name: str, content: str) -> dict[str, str]:
         return self.runtime.agent_config_store.save(file_name, content).to_dict()
 
+    def decision_context(self, *, actor_user_id: str, task_id: str, decision_id: str = "", source_id: str = "") -> dict[str, Any]:
+        """Read captured manifests; optional source expansion rechecks current visibility.
+
+        Source expansion is a current read, never a reconstruction of model input.
+        Unknown tasks, decisions and forbidden sources share the same response.
+        """
+        from copy import deepcopy
+        from alphonse.agent_v2.core.core import ToolExecutionContext
+        from alphonse.agent_v2.core.tools.registry.native.memory import execute_read_memory_source
+        self._require_admin(actor_user_id)
+        actor = str(actor_user_id).strip()
+        task = self.runtime.question_store.load_task_checkpoint(task_id)
+        missing = {"status": "not_found", "manifests": []}
+        if task is None or task.user != actor:
+            return missing
+        manifests = task.metadata.get("decision_context_manifests", [])
+        if not source_id:
+            return {"status": "found", "manifests": deepcopy(manifests), "legacy": not bool(manifests)}
+        decision = next((item for item in manifests if item["decision_id"] == decision_id), None)
+        sources = {record["source_id"] for projection in decision.get("projections", []) for record in projection.get("records", [])} if decision else set()
+        if decision:
+            sources.update(record["source_id"] for record in decision.get("sources", []))
+        if source_id not in sources:
+            return missing
+        result = execute_read_memory_source({"source_id": source_id, "neighbors": 0}, context=ToolExecutionContext(
+            task=task, messages=self.runtime.queue, memory=self.runtime.core.memory, conversation_store=self.runtime.conversation_store,
+        ))
+        return {"status": result["status"], "source": result, "expansion": "current_authorized_source; not retained decision text"}
+
     def pop_activity_events(self) -> list[dict[str, Any]]:
         """Legacy destructive-looking API backed by a shared event journal.
 

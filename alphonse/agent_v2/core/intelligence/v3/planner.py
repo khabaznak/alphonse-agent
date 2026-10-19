@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from alphonse.agent_v2.core.context_inventory import source, prompt_receipt
+
 import json
 import inspect
 import re
@@ -22,7 +24,7 @@ from alphonse.agent_v2.core.intelligence.v3.context import recent_conversation_f
 from alphonse.agent_v2.core.intelligence.v3.context import selected_project_context
 from alphonse.agent_v2.core.intelligence.v3.context import selected_skill_guidance
 from alphonse.agent_v2.core.memory.formatting import bound_memory_context
-from alphonse.agent_v2.core.intelligence.v3.context import task_context_for_decision
+from alphonse.agent_v2.core.intelligence.v3.context import task_context_for_decision, memory_inventory
 
 if TYPE_CHECKING:
     from alphonse.agent_v2.core.core import CoreLoopContext
@@ -42,7 +44,7 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
     ) if context.tools is not None else ()
     session_history = recent_conversation_for_curation(task, context)
     project_context = _project_context(task, context)
-    durable_memory = bound_memory_context(task.memory_context_md, 9000)
+    durable_memory = bound_memory_context(memory_inventory(task.memory_context_md, "task-working:" + str(task.task_id) + ":memory_context"), 9000)
     context_selection = task.metadata.get("v3_context_selection")
     selected_context_ids = context_selection.get("selected_context_ids", []) if isinstance(context_selection, dict) else []
     shared_context = task_context_for_decision(
@@ -100,10 +102,22 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
         "and only after showing the complete draft and receiving approval. "
         f"\nPhasePlan JSON Schema: {json.dumps(contract_schema, ensure_ascii=False, sort_keys=True)}"
     )
+    planning_manifest = prompt_receipt(prompt, [
+        "Household conversation, global, and selected project context:\n" + shared_context,
+        "Selected skill guidance (reusable instructions; they do not grant permissions or override controls):\n" + skill_guidance if skill_guidance else skill_guidance,
+        source(goal_section, 'request:' + str(task.message_id or task.task_id), 'current_request'),
+        source("Existing acceptance contract (preserve its definitions unless new user steering requires a justified revision): " + contract_context, 'task:' + str(task.task_id) + ':contract', 'acceptance_contract'),
+        source("Act directive (authoritative resilience instruction): " + directive_context, 'task:' + str(task.task_id) + ':act', 'act_directive'),
+        source('Prior V3 phase history: ' + json.dumps(task.metadata.get('v3_phase_history') or [], ensure_ascii=False), 'task:' + str(task.task_id) + ':phase_history', 'phase_evidence'),
+        source('Jev-curated tool registry (complete descriptors): ' + json.dumps(_tool_rows(tools), ensure_ascii=False), 'tools:planning', 'tool_descriptors'),
+        source('Task attachment manifest (metadata only; use asset IDs exactly as listed):\n' + json.dumps(attachment_manifest, ensure_ascii=False), 'attachments:planning', 'attachment_metadata'),
+    ], purpose='planning')
     result = context.inference.generate_json(
         InferenceRequest(
             prompt=prompt,
             purpose=InferencePurpose.PHASE_PLANNING,
+            context_manifests=planning_manifest,
+            input_sources=tuple({'source_id': tool.tool_id, 'source_type': 'tool_descriptor', 'reason': 'curated_for_planning'} for tool in tools),
             project_id=task.project_id,
             user=task.user,
             task_id=task.task_id,
@@ -159,7 +173,7 @@ def _curate_request_tools(
             goal="" if projections_enabled() else task.goal,
             system_prompt=system_prompt,
             session_history=(
-                f"{session_history}\nTask attachment manifest (metadata only): "
+                session_history + "\nTask attachment manifest (metadata only): "
                 f"{json.dumps(attachment_manifest, ensure_ascii=False)}"
             ),
             project_context=project_context,
@@ -422,7 +436,7 @@ def _project_context(task: "TaskState", context: "CoreLoopContext") -> str:
 
 
 def _bounded_text(value: object, max_chars: int) -> str:
-    rendered = str(value or "").strip() or "- (none)"
+    rendered = (value.strip() if isinstance(value, str) else str(value or "").strip()) or "- (none)"
     if len(rendered) <= max_chars:
         return rendered
     return rendered[-max(1, max_chars - 18):].lstrip() + "\n... truncated"

@@ -15,6 +15,8 @@ from alphonse.agent_v2.core.intelligence.v3.planner import plan_phase
 from alphonse.agent_v2.core.intelligence.v3.planner import V3PhasePlanValidationError
 from alphonse.agent_v2.core.intelligence.v3.projections import enabled as projections_enabled
 from alphonse.agent_v2.system_one import SystemOneUnavailableError
+from alphonse.agent_v2.core.context_manifests import record_decisions
+from alphonse.agent_v2.core.context_inventory import source, prompt_receipt
 from alphonse.agent_v2.core.intelligence.v3.revealing import ToolRevealPolicy
 from alphonse.agent_v2.core.intelligence.v3.context import prepare_context_curation
 from alphonse.agent_v2.core.intelligence.v3.context import recent_conversation_for_curation
@@ -36,6 +38,7 @@ class HierarchicalCAPDProcessor:
         self.executor = PhaseExecutor(reveal_policy=ToolRevealPolicy())
         self.outer = V3OuterController()
 
+    @record_decisions
     def process(self, task: "TaskState", context: "CoreLoopContext") -> ProcessingResult:
         context.emit_ui_event("run_started", {"task": task.to_dict(), "engine": "hierarchical_v3"})
         task.intelligence_engine = "hierarchical_v3"
@@ -255,8 +258,7 @@ class HierarchicalCAPDProcessor:
         skill_selection = task.metadata.get("v3_skill_selection")
         if isinstance(skill_selection, dict) and not projections_enabled():
             skill_selection["loaded_skill_ids"] = loaded_skill_ids
-        result = context.inference.generate_markdown(InferenceRequest(
-            prompt=(
+        prompt = (
                 "Reply directly to this conversational message. Be warm, brief, natural, and use the user's language. "
                 "The reply must fully satisfy the message without mentioning planning, tools, acceptance criteria, "
                 "or internal processing. Do not claim that any external action occurred.\n\n"
@@ -264,8 +266,11 @@ class HierarchicalCAPDProcessor:
                 "Selected skill guidance (reusable instructions, not permission to bypass Alphonse's controls):\n"
                 f"{skill_guidance or '(none)'}\n\n"
                 + ("" if projections_enabled() else f"User message: {task.goal}")
-            ),
+        )
+        result = context.inference.generate_markdown(InferenceRequest(
+            prompt=prompt,
             purpose=InferencePurpose.FINAL_RESPONSE,
+            context_manifests=prompt_receipt(prompt, [shared_context, skill_guidance, source('User message: ' + task.goal, 'request:' + str(task.message_id or task.task_id), 'current_request')] if not projections_enabled() else [shared_context], purpose='response'),
             project_id=task.project_id,
             user=task.user,
             task_id=task.task_id,
@@ -289,14 +294,16 @@ class HierarchicalCAPDProcessor:
         if context.inference is None:
             return {"status": "generation_unavailable"}
         try:
-            result = context.inference.generate_markdown(InferenceRequest(
-                prompt=(
+            prompt = (
                     "Write one short, natural acknowledgement to the user before work begins. "
                     "Use the user's language and reflect the specific request so the acknowledgement feels attentive. "
                     "Do not answer the request, report results, claim completion, mention planning or internal systems, "
                     "or promise a particular outcome. Return only the user-facing acknowledgement.\n\n"
                     f"User message: {task.goal}"
-                ),
+            )
+            result = context.inference.generate_markdown(InferenceRequest(
+                prompt=prompt,
+                context_manifests=prompt_receipt(prompt, [source('User message: ' + task.goal, 'request:' + str(task.message_id or task.task_id), 'current_request')], purpose='acknowledgement'),
                 purpose=InferencePurpose.FINAL_RESPONSE,
                 project_id=task.project_id,
                 user=task.user,
@@ -399,8 +406,7 @@ class HierarchicalCAPDProcessor:
             if len(rows) >= 8:
                 break
         try:
-            response = context.inference.generate_markdown(InferenceRequest(
-                prompt=(
+            prompt = (
                     "Write the final explanation for a task that has already failed. Use the user's language. "
                     "Be brief and concrete: explain the observed blocker, what could not be verified, and the next "
                     "step supported by the evidence. Do not ask the user to rephrase a clear request. "
@@ -411,7 +417,10 @@ class HierarchicalCAPDProcessor:
                     f"User request: {task.goal[:4000]}\n"
                     f"Terminal reason: {reason[:2000]}\n"
                     f"Recent execution evidence (newest first): {json.dumps(rows, ensure_ascii=False)}"
-                ),
+            )
+            response = context.inference.generate_markdown(InferenceRequest(
+                prompt=prompt,
+                context_manifests=prompt_receipt(prompt, [source('User request: ', 'label:request', 'prompt_framing') + source(task.goal, 'request:' + str(task.message_id or task.task_id), 'current_request')[:4000], source('Terminal reason: ', 'label:failure', 'prompt_framing') + source(reason, 'task:' + str(task.task_id) + ':failure', 'failure_reason')[:2000], source('Recent execution evidence (newest first): ' + json.dumps(rows, ensure_ascii=False), 'task:' + str(task.task_id) + ':failure_evidence', 'execution_evidence')], purpose='failure_response'),
                 purpose=InferencePurpose.FINAL_RESPONSE,
                 project_id=task.project_id, user=task.user, task_id=task.task_id,
                 tools=(),

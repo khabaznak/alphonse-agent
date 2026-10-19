@@ -193,7 +193,10 @@ class A2UiAdapter:
         if step_ids:
             components.append({"id": "steps", "component": "List", "children": step_ids, "direction": "vertical"})
             children.append("steps")
-        task_context = []
+        from alphonse.agent_v2.core.context_manifests import manifest_summary
+        children.append("decision_context")
+        components.append({"id": "decision_context", "component": "Text", "text": manifest_summary(progress.get("decision_context_manifests", []))})
+        task_context = ["Task state diagnostics · current checkpoint; not decision inputs."]
         for label, key in (("Goal", "goal"), ("Facts", "facts"), ("Memory facts", "memory_facts"), ("Recent conversation", "recent_conversation"), ("Conversation history", "conversation_history"), ("Durable memory", "durable_memory"), ("Task updates", "updates"), ("Evidence", "evidence"), ("Question", "question"), ("Outcome", "outcome")):
             value = progress.get(key)
             if value not in (None, "", {}, []):
@@ -205,7 +208,7 @@ class A2UiAdapter:
         messages = [
             {"version": A2UI_VERSION, "createSurface": {"surfaceId": surface_id, "catalogId": self.catalog_id, "sendDataModel": False}},
             {"version": A2UI_VERSION, "updateComponents": {"surfaceId": surface_id, "components": components}},
-            {"version": A2UI_VERSION, "updateDataModel": {"surfaceId": surface_id, "path": "/", "value": {"task_id": normalized_task_id, "project_id": str(progress.get("project_id") or "")}}},
+            {"version": A2UI_VERSION, "updateDataModel": {"surfaceId": surface_id, "path": "/", "value": {"task_id": normalized_task_id, "project_id": str(progress.get("project_id") or ""), "owner_user_id": str(progress.get("owner_user_id") or ""), "decision_context_manifests": progress.get("decision_context_manifests", [])}}},
         ]
         for item in messages:
             validate_envelope(item)

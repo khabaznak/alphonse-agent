@@ -57,16 +57,32 @@ class InferenceRouter:
         return self._invoke("plan_tool_call", request)
 
     def _invoke(self, method: str, request: InferenceRequest) -> InferenceResult:
+        from alphonse.agent_v2.core.context_manifests import begin_decision, finish_decision
         resolved = self._with_profile(request)
+        sections = {"prompt": resolved.prompt}
+        if resolved.tools:
+            sections["tool_descriptors"] = [{"name": t.name, "description": t.description, "argument_schema": t.argument_schema} for t in resolved.tools]
+        if resolved.output_schema is not None:
+            sections["output_schema"] = resolved.output_schema
+        manifest = begin_decision(
+            purpose=resolved.purpose.value,
+            sections=sections,
+            tools=resolved.tools, images=resolved.images, projections=resolved.context_manifests,
+            sources=(*resolved.input_sources, *({'source_id': image.asset_id, 'source_type': 'image_input', 'reason': 'attached'} for image in resolved.images)),
+        )
+        if manifest is not None:
+            resolved = replace(resolved, metadata={**resolved.metadata, "decision_id": manifest["decision_id"]})
         started = monotonic()
         try:
             if resolved.images and not getattr(self.provider, "supports_image_input", False):
                 raise ValueError("inference_provider_image_input_unsupported")
             result = getattr(self.provider, method)(resolved)
         except Exception as exc:
+            finish_decision(manifest, failed=True)
             self._emit(resolved, None, started, status="failed", error=f"{type(exc).__name__}: {exc}")
             raise
         normalized = self._with_result_profile(result, resolved.model_profile)
+        finish_decision(manifest)
         self._emit(resolved, normalized, started, status="success", error="")
         return normalized
 

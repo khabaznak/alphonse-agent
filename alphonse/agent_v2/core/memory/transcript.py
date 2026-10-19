@@ -37,6 +37,13 @@ def conversation_transcript(task: Any, store: Any, *, max_chars: int = 9000) -> 
             authorized.append(item)
             event_by_id[item.source.source_id] = event
     items = visible_unique(authorized, str(task.user or ""))
+    duplicate_ids = []
+    seen_ids = set()
+    for item in authorized:
+        if item.visible_to(str(task.user or '')):
+            if item.source.source_id in seen_ids:
+                duplicate_ids.append(item.source.source_id)
+            seen_ids.add(item.source.source_id)
     rows = []
     for item in items:
         event = event_by_id[item.source.source_id]
@@ -68,8 +75,10 @@ def conversation_transcript(task: Any, store: Any, *, max_chars: int = 9000) -> 
         current.insert(0, {"text": legacy, "role": "current", "content": "", "source": None})
     # Only the newest canonical user turn can deduplicate an unlinked current
     # turn. Repeated historical 'yes' messages must remain distinct exchanges.
+    mirrored_current = False
     if rows and current and rows[-1]["role"] == "user" and rows[-1]["content"] == current[-1]["content"]:
         current[-1] = rows.pop()
+        mirrored_current = True
     task_id = str(getattr(task, "task_id", None) or getattr(task, "message_id", None) or "current")
     for index, record in enumerate(current):
         record["record_id"] = f"task-working:{task_id}:conversation:{index}"
@@ -121,4 +130,18 @@ def conversation_transcript(task: Any, store: Any, *, max_chars: int = 9000) -> 
             "included_current_record_ids": [r["record_id"] for r in selected_current],
             "history_unavailable": unavailable, "window_may_have_earlier_events": len(events) >= 30,
         }
-    return rendered or ("- (none)" if limit >= len("- (none)") else "")
+    from alphonse.agent_v2.core.context_inventory import ContextText, combined, source
+    pieces = [OMITTED] if has_omissions and len(OMITTED) <= limit else []
+    for index, row in enumerate(selected):
+        identity = row["source"]["source_id"] if row["source"] else row.get("record_id", f"task-working:{task_id}:conversation:{index}")
+        pieces.append(source(row["text"], identity, "conversation" if row["source"] else "task_conversation", reason="continuity"))
+    inventory = combined(pieces, "\n", max_chars=limit)
+    missing = [{"source_id": item["source_id"], "source_type": "conversation", "status": "omitted", "reason": "over_budget", "selection_reason": item["reason"], "tokens": 0, "input_range": None, "truncated": False} for item in omitted]
+    missing.extend({"source_id": identity, "source_type": "conversation", "status": "omitted", "reason": "duplicate", "tokens": 0, "input_range": None, "truncated": False} for identity in duplicate_ids)
+    if mirrored_current:
+        missing.append({"source_id": f"task-working:{task_id}:conversation:{len(current) - 1}", "source_type": "task_conversation", "status": "omitted", "reason": "duplicate", "tokens": 0, "input_range": None, "truncated": False})
+    missing.extend({"source_id": identity, "source_type": "task_conversation", "status": "omitted", "reason": "over_budget", "tokens": 0, "input_range": None, "truncated": False} for identity in current_omitted_ids)
+    if unavailable:
+        missing.append({"source_id": "availability:conversation", "source_type": "availability", "status": "omitted", "reason": "unavailable", "tokens": 0, "input_range": None, "truncated": False})
+    result = rendered or ("- (none)" if limit >= len("- (none)") else "")
+    return ContextText(result, inventory.records + missing, max_chars=limit)

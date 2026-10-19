@@ -7,6 +7,7 @@ import or adapt v1 agent internals.
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import Enum
@@ -383,6 +384,8 @@ def _task_progress_snapshot(task: Any) -> dict[str, Any]:
         "tool_status": str(execution.get("status") or "").strip() if isinstance(execution, dict) else "",
         "intention": _truncate_progress(str(selected.get("internal_state") or ""), 500),
         "steps": steps,
+        "owner_user_id": str(getattr(task, "user", "") or ""),
+        "decision_context_manifests": deepcopy(metadata.get("decision_context_manifests", [])),
         "goal": _truncate_progress(str(getattr(task, "goal", "") or ""), 1200),
         "facts": _truncate_progress(str(getattr(task, "facts_md", "") or ""), 3000),
         "memory_facts": _truncate_progress(str(getattr(task, "memory_facts_md", "") or ""), 3000),

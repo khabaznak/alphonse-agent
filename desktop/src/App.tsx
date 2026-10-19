@@ -1,3 +1,4 @@
+import { DecisionContext } from "./DecisionContext";
 import { FormEvent, KeyboardEvent, memo, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CalendarClock, ChevronLeft, ChevronRight, FolderKanban, FolderOpen, Settings, UsersRound, Sparkles } from "lucide-react";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
@@ -970,11 +971,12 @@ function TaskProgressBubble({ surface, archived = false }: { surface: A2uiSurfac
       {!archived && text("summary") && <p>{text("summary")}</p>}
       {visibleCriteria && <section><small>Acceptance criteria</small><div className="task-progress-checklist"><ReactMarkdown remarkPlugins={[remarkGfm]}>{acceptanceCriteriaMarkdown(visibleCriteria)}</ReactMarkdown></div></section>}
       {text("intention") && <section><small>Intention</small><p>{text("intention").replace(/^Intention:\s*/, "")}</p></section>}
-      {steps.length ? <section className="task-progress-trace"><small>Work log</small>{steps.map((step) => {
+      {steps.length ? <section className="task-progress-trace"><small>Execution audit</small>{steps.map((step) => {
         const [summary, ...detail] = String(step.text || "").split("\n");
         return <details className="task-progress-step" key={step.id}><summary>{summary}</summary><pre className="task-progress-detail">{detail.filter((line) => line !== "Details:").join("\n") || "No additional action details."}</pre></details>;
       })}</section> : <>{text("tool") && <p className="task-progress-detail">{text("tool")}</p>}{text("arguments") && <pre className="task-progress-detail">{text("arguments")}</pre>}{text("result") && <pre className="task-progress-detail">{text("result")}</pre>}</>}
-      {taskContext && <details className="task-progress-context"><summary>Task context</summary><pre className="task-progress-detail">{taskContext}</pre></details>}
+      <DecisionContext summary={text("decision_context")} manifests={(surface.dataModel.decision_context_manifests || []) as Parameters<typeof DecisionContext>[0]["manifests"]} actorUserId={String(surface.dataModel.owner_user_id || "")} taskId={String(surface.dataModel.task_id || "")} />
+      {taskContext && <details className="task-progress-context"><summary>Task state diagnostics</summary><pre className="task-progress-detail">{taskContext}</pre></details>}
     </div>
     </Container>
   </article>;

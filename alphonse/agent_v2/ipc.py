@@ -414,6 +414,13 @@ class V2DaemonServer:
                 actor_user_id=str(params.get("actor_user_id") or ""),
                 source={"integration_id": "desktop", "provider_key": "tui"},
             )
+        if method == "decision_context":
+            return self.daemon.decision_context(
+                actor_user_id=str(params.get("actor_user_id") or ""),
+                task_id=str(params.get("task_id") or ""),
+                decision_id=str(params.get("decision_id") or ""),
+                source_id=str(params.get("source_id") or ""),
+            )
         if method == "events":
             return {"events": self.daemon.pop_activity_events()}
         if method == "desktop_poll":

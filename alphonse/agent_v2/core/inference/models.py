@@ -62,6 +62,8 @@ class InferenceRequest:
     cancel_checker: Callable[[], bool] | None = field(default=None, repr=False, compare=False)
     images: tuple[InferenceImage, ...] = ()
     output_schema: dict[str, Any] | None = None
+    context_manifests: tuple[dict[str, Any], ...] = field(default=(), repr=False, compare=False)
+    input_sources: tuple[dict[str, Any], ...] = field(default=(), repr=False, compare=False)
 
 
 @dataclass(frozen=True)
