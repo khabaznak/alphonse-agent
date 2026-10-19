@@ -18,6 +18,9 @@ RECALL_GUIDANCE = (
     "Missing, partial, ambiguous or clipped evidence requires further search/source expansion or an honest limitation; "
     "never invent memory. Optional sources can be omitted under the token budget; absence here never proves absence in history. "
     "System Two composes further queries and interprets evidence."
+    " If an entity/date/source filter finds too little, broaden or remove that filter and try a different query. "
+    "A complete positive source remains usable when unrelated backends are unavailable. "
+    "Use applicable remembered details to carry out the user's current authorized request; do not ask them to repeat resolved details."
 )
 
 

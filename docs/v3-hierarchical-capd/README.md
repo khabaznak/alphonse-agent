@@ -168,3 +168,8 @@ path remains in place pending rollout gates.
 See [call-time decision context manifests](14-decision-context-manifests.md) for
 work-log input inventories, legacy labels, authorized source expansion and retention
 (issue #17). Projection rollout remains opt-in.
+
+See [household delegation](16-household-delegation.md) for the outcome-first pilot:
+historical recall, reminders to another member, resourceful recovery, visible
+failure and reuse of an approved skill. Functional evidence comes before a larger
+qualifying rollout run; synthetic success does not itself change defaults.

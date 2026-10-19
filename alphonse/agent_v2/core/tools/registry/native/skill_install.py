@@ -58,12 +58,28 @@ def execute_skill_install(
     actor = str(context.task.user or "").strip()
     if not actor or not (is_admin and is_admin(actor)):
         raise PermissionError("skill_manager_required")
-    skill = store.create_skill(
-        str(arguments.get("name") or ""),
-        str(arguments.get("description") or ""),
-        str(arguments.get("instructions") or ""),
-    )
+    name = str(arguments.get("name") or "").strip()
+    description = str(arguments.get("description") or "").strip()
+    instructions = str(arguments.get("instructions") or "").strip()
+    skill = store.get(name)
+    created = skill is None
+    if skill is None:
+        try:
+            skill = store.create_skill(name, description, instructions)
+        except ValueError as exc:
+            if str(exc) != "skill_already_installed":
+                raise
+            skill = store.get(name)
+            created = False
+    installed = store.get(name)
+    if installed is None:
+        raise RuntimeError("skill_install_readback_failed")
+    if installed.description != description or installed.instructions != instructions:
+        raise ValueError("skill_install_existing_definition_mismatch")
     return {
-        "skill": skill.candidate(),
-        "message": f'Installed skill "{skill.name}" ({skill.skill_id}).',
+        "skill": installed.candidate(),
+        "instructions": installed.instructions,
+        "created": created,
+        "verification": {"status": "verified", "source": "skill_store_readback"},
+        "message": f'{"Installed" if created else "Verified existing"} skill "{installed.name}" ({installed.skill_id}).',
     }

@@ -1,5 +1,4 @@
-"""Native tools for finding reminders and adding a delivery destination."""
-
+"""Native tools for finding reminders and adding a registered delivery destination."""
 from __future__ import annotations
 
 from typing import Any
@@ -29,7 +28,7 @@ def build_scheduled_task_delivery_tool_definition() -> ToolDefinition:
         name=SCHEDULED_TASK_DELIVERY_TOOL_NAME,
         kind=ToolKind.NATIVE,
         description=(
-            "List the current user's active reminders in this project, or add the user's registered Telegram address "
+            "List the current user's active reminders in this project, or add the intended recipient's registered Telegram address "
             "to one pending reminder's delivery destinations. Use this to change where an existing reminder arrives."
         ),
         argument_schema=dict(_SCHEMA),
@@ -68,6 +67,7 @@ def execute_scheduled_task_delivery(
                     "prompt": task.prompt,
                     "schedule_summary": schedule_summary(task.schedule),
                     "delivery_channels": _delivery_channels(task.origin_channel),
+                    "recipient_user_id": task.origin_channel.get("reminder_recipient_user_id") or owner,
                 }
                 for task in tasks
                 if task.delivery_mode == "direct"
@@ -87,12 +87,13 @@ def execute_scheduled_task_delivery(
     if resolver is None:
         raise ValueError("scheduled_delivery_identity_unavailable")
     integration = resolver.integration_for(provider_key=str(arguments.get("provider_key") or "telegram"))
+    recipient = str(scheduled.origin_channel.get("reminder_recipient_user_id") or owner)
     resolved = resolver.resolve_outbound_address(
-        alphonse_user_id=owner,
+        alphonse_user_id=recipient,
         preferred_integration_id=integration.integration_id,
     )
     address = resolved.address if resolved.resolved else None
-    if address is None or address.provider_key != "telegram":
+    if address is None or address.provider_key != "telegram" or address.alphonse_user_id != recipient:
         raise ValueError("scheduled_delivery_channel_not_configured")
 
     origin = dict(scheduled.origin_channel)
@@ -106,12 +107,16 @@ def execute_scheduled_task_delivery(
         "name": scheduled.name,
         "delivery_channels": _delivery_channels(scheduled.origin_channel),
         "status": "updated",
+        "recipient_user_id": recipient,
     }
 
 
 def _delivery_channels(origin: dict[str, Any]) -> list[dict[str, Any]]:
     channels = origin.get("delivery_channels") if isinstance(origin, dict) else None
     result = [dict(item) for item in channels if isinstance(item, dict)] if isinstance(channels, list) else []
+    recipient = str(origin.get("reminder_recipient_user_id") or "")
+    if recipient:
+        return [item for item in result if item.get("alphonse_user_id") == recipient]
     if origin and all(str(origin.get(key) or "").strip() for key in ("integration_id", "provider_key", "channel_target")):
         primary = {key: origin.get(key, "") for key in (
             "integration_id", "provider_key", "channel_target", "alphonse_user_id", "provider_user_id",

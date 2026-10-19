@@ -370,6 +370,8 @@ class _StaticJevToolRegistry:
 
 
 class JevCriterionDecisionProvider:
+    requires_mission_outcome_review = True
+
     def __init__(self, settings: SystemOneSettings, *, transport: Transport | None = None) -> None:
         self.settings = _normalize_settings(settings)
         self.client = TypeSafeSystemOneClient(
@@ -885,6 +887,8 @@ class JevCriterionDecisionProvider:
 
     def recommend_act(self, *, state: dict[str, Any]) -> SystemOneActRecommendation:
         """Recommend the next mission-level action from Check's verdict and durable evidence."""
+        import math
+
         actions = {
             "complete": "All required acceptance criteria are verified and the task can end successfully.",
             "continue": "Continue the task using the current strategy.",
@@ -914,6 +918,14 @@ class JevCriterionDecisionProvider:
                 "instructions": "If the mission ends unsuccessfully, should Alphonse produce one final response explaining why to the user?",
                 "criteria": {"true": "A concise explanation of the failure is useful and safe to deliver.", "false": "No additional user-facing closure cycle is appropriate."},
             },
+            "mission_outcome_is_fulfilled": {
+                "type": "noul",
+                "instructions": "Have the authenticated_followups been carried out, rather than merely acknowledged after the original acceptance criteria were satisfied? Judge missing authorized follow-up work, not certainty of the underlying facts. If authenticated_followups is empty, answer true; ordinary task completion is checked separately.",
+                "criteria": {
+                    "true": "No authenticated follow-up remains undone: none is present, or the requested approved operation has verified execution evidence, or the follow-up requested only a proposal or explanation that has been supplied.",
+                    "false": "An authenticated follow-up authorizes a pending requested operation but work stops at approval acknowledgment, a draft or an intermediate step. Approval is not installation. A capability listed in available_tool_ids is not unavailable merely because the phase omitted it.",
+                },
+            },
         }
         started = monotonic()
         response = self._evaluate(purpose="recommend_act", state=state, questions=questions)
@@ -927,11 +939,13 @@ class JevCriterionDecisionProvider:
         probabilities = answer.get("probabilities") if isinstance(answer.get("probabilities"), dict) else {}
         confidence = max(0.0, min(1.0, float(probabilities.get(action) or 0.0)))
         fuse_answers: dict[str, float] = {}
-        for question_id in ("continuation_is_worthwhile", "user_input_can_unblock", "closure_explanation_is_warranted"):
+        for question_id in ("continuation_is_worthwhile", "user_input_can_unblock", "closure_explanation_is_warranted", "mission_outcome_is_fulfilled"):
             fuse = response["answers"].get(question_id)
-            if not isinstance(fuse, dict) or fuse.get("type") != "noul" or not isinstance(fuse.get("noul"), (int, float)):
+            if (not isinstance(fuse, dict) or fuse.get("type") != "noul"
+                    or type(fuse.get("noul")) not in {int, float}
+                    or not math.isfinite(fuse["noul"]) or not 0 <= fuse["noul"] <= 1):
                 raise ValueError(f"system_one_act_fuse_invalid:{question_id}")
-            fuse_answers[question_id] = max(0.0, min(1.0, float(fuse["noul"])))
+            fuse_answers[question_id] = float(fuse["noul"])
         return SystemOneActRecommendation(
             action=action,
             confidence=confidence,
@@ -1033,6 +1047,8 @@ class JevCriterionDecisionProvider:
         execution_log: list[dict[str, Any]] | None = None,
         task_context: str = "",
     ) -> SystemOneTacticalReview:
+        import math
+
         state = {
             "goal": request_text(goal),
             "task_context": task_context or "",
@@ -1051,10 +1067,33 @@ class JevCriterionDecisionProvider:
                     "false": "The call ran, but its result is irrelevant, incomplete, ambiguous, or does not establish the required output.",
                 },
             }]
+        # Model-authored action questions may describe an intermediate step
+        # (such as reading CLI help). They cannot substitute for the declared
+        # subgoal's completion condition. Jev judges that condition separately.
+        runtime_question_id = "runtime_declared_subgoal_complete"
+        if any(question.get("question_id") in {runtime_question_id, "runtime_action_added_progress"} for question in supplied):
+            raise ValueError("system_one_tactical_reserved_question_id")
+        supplied.append({
+            "question_id": runtime_question_id,
+            "type": "noul",
+            "instructions": "Does the complete observed execution log establish the declared stage_goal objective, required_output_type and completion condition? Judge the original stage goal, not merely the latest action's narrower acceptance questions.",
+            "criteria": {
+                "true": "The observed results satisfy the declared stage goal and required output. All necessary operations have actually occurred; preparatory help or discovery alone is insufficient for a requested read or mutation.",
+                "false": "The results establish only preparation, tool discovery, a partial attempt, a failed operation, or a narrower action goal while the declared stage remains unfinished.",
+            },
+        })
         acceptance_question_ids = {
             str(question.get("question_id") or f"acceptance_{index + 1}").strip()
             for index, question in enumerate(supplied)
         }
+        supplied.append({
+            "question_id": "runtime_action_added_progress", "type": "noul",
+            "instructions": "Compared with the earlier entries in tool_execution_log, did the latest action add meaningful new evidence or enable a concrete next step toward the declared stage goal?",
+            "criteria": {
+                "true": "The action discovers useful new source content, obtains a fresh result, verifies a change, or identifies a new actionable blocker. Preparatory help may count once when it reveals usable syntax.",
+                "false": "Only search wording, formatting, IDs or repeated attempts changed. Repeated empty searches, already-known sources, the same unavailable route, or repeated help without new information do not establish progress.",
+            },
+        })
         supplied.extend(_TACTICAL_RETRY_FUSE_QUESTIONS)
         question_payload: dict[str, Any] = {}
         for index, question in enumerate(supplied):
@@ -1076,9 +1115,11 @@ class JevCriterionDecisionProvider:
         answers: dict[str, float] = {}
         for question_id in question_payload:
             answer = response["answers"].get(question_id)
-            if not isinstance(answer, dict) or answer.get("type") != "noul" or not isinstance(answer.get("noul"), (int, float)):
+            if (not isinstance(answer, dict) or answer.get("type") != "noul"
+                    or type(answer.get("noul")) not in {int, float}
+                    or not math.isfinite(answer["noul"]) or not 0 <= answer["noul"] <= 1):
                 raise ValueError(f"system_one_tactical_review_invalid:{question_id}")
-            answers[question_id] = max(0.0, min(1.0, float(answer["noul"])))
+            answers[question_id] = float(answer["noul"])
         acceptance_answers = {key: answers[key] for key in acceptance_question_ids}
         complete = all(probability >= self.settings.yes_threshold for probability in acceptance_answers.values())
         confident = all(

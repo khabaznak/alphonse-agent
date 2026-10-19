@@ -84,6 +84,11 @@ class V2IdentityResolver:
             return IdentityResolution(resolved=True, alphonse_user_id=user_id, address=fallback_address)
 
         if self._user_store is not None:
+            get_user = getattr(self._user_store, "get_user", None)
+            if callable(get_user):
+                member = get_user(user_id)
+                if member is None or not member.is_active:
+                    return IdentityResolution(resolved=False, alphonse_user_id=user_id, reason="user_not_active")
             address_record = self._user_store.address_for_outbound(user_id, integration_id=preferred_integration_id)
             if address_record is None:
                 return IdentityResolution(resolved=False, alphonse_user_id=user_id, reason="preferred_delivery_not_found")

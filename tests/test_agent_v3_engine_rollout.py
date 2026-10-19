@@ -129,6 +129,37 @@ def test_v3_phase_history_stores_only_current_phase_evidence() -> None:
     ]
 
 
+def test_acknowledgement_variations_cannot_keep_an_unfulfilled_mission_running(monkeypatch):
+    from types import SimpleNamespace
+    from alphonse.agent_v2.core.intelligence.v3 import PhaseReviewStatus
+    processor = HierarchicalCAPDProcessor()
+    count = []
+
+    def new_state(task, context):
+        return new_tactical_state(PhasePlan("phase-" + str(len(count)), "Finish work",
+            (PhaseSubgoal("work", "Finish work", "result"),)))
+
+    def run(task, state, context):
+        count.append(1)
+        state.evidence.append({"evidence_ref": "reply:" + str(len(count)), "phase_id": state.phase.phase_id,
+            "tool_id": "native.respond", "status": "success", "result": {"message": "Acknowledged " + str(len(count))}})
+        return PhaseOutcome(state.phase.phase_id, PhaseStatus.PHASE_COMPLETE)
+
+    def review(task, state, outcome, context):
+        task.metadata["v3_route"] = "strategic_replan"
+        task.metadata["system_one_act_recommendation"] = {"answers": {"mission_outcome_is_fulfilled": 0.05}}
+        return SimpleNamespace(status=PhaseReviewStatus.PHASE_VERIFIED_TASK_COMPLETE), SimpleNamespace()
+
+    monkeypatch.setattr(processor, "_new_state", new_state)
+    processor.executor = SimpleNamespace(run=run)
+    processor.outer = SimpleNamespace(review_and_route=review)
+    task = TaskState(task_id="task", message_id="message", user="alex", goal="Complete a responsibility")
+    result = processor.process(task, CoreLoopContext(messages=InMemoryMessageQueue()))
+    assert result.status.value == "failed"
+    assert len(count) == 3
+    assert task.metadata["v3_no_progress_stop"]
+
+
 class _Processor:
     def __init__(self, label: str) -> None:
         self.label = label

@@ -28,8 +28,20 @@ executes a tool, broadens mutation scope, or grants authorization.
 After an operationally successful call, a separate Jev Noul decision determines
 whether the observed result semantically satisfies the current subgoal. Hard status,
 schema, scope, and verification failures remain deterministic and cannot be converted
-to success by Jev. Ambiguous or unavailable semantic reviews fall back to the declared
-deterministic completion predicate.
+to success by Jev. Model-authored questions about the latest action are accompanied
+by a runtime-owned question about the original subgoal's objective and completion
+condition. An ambiguous judgment of an operational subgoal cannot be promoted to
+completion merely because some output is present. A response-only stage retains
+the existing ambiguity fallback for preparing its message; outer acceptance review
+still checks its factual support and the requested outcome. Preparing a qualified
+answer and verifying an external operation are different completion questions.
+
+The same parallel request asks whether the latest action added meaningful new
+evidence. Three consecutive attempts without demonstrated progress return to outer
+strategy, including differently worded empty searches. A read-only stage declaring
+`local_fallback` can try a bounded alternative locally; unknown partial mutations
+still require outer recovery. These judgments neither execute tools nor alter the
+requested mission outcomes. See the [household pilot](16-household-delegation.md).
 
 ## Check boundary
 
@@ -57,6 +69,17 @@ The same Jev request asks a Choice question among `complete`, `continue`, `repla
 
 This keeps Jev useful as a fast judgment layer without making a probabilistic answer
 the authority for irreversible or terminal state transitions.
+
+The Act recommendation also includes a bounded `mission_outcome_is_fulfilled`
+Noul judgment against resumed authenticated follow-up answers. For those resumed
+tasks, completion requires both verified acceptance evidence and this follow-up
+check; approval acknowledgment alone cannot complete an approved installation.
+This additional guard does not apply to ordinary factual questions, which retain
+normal acceptance verification. A supported factual answer may state uncertainty
+and finish. Missing, non-finite or out-of-range probabilities cannot grant closure
+of pending authenticated follow-up work.
+Prepared acknowledgments are excluded from substantive outer progress, so changing
+their wording cannot keep an unfulfilled task running indefinitely.
 
 ## Configuration and failure behavior
 

@@ -90,6 +90,66 @@ def test_verified_complete_phase_routes_to_final_response_planning() -> None:
     assert all(item.tools == () for item in provider.requests)
 
 
+def test_later_work_invalidates_an_earlier_response_even_after_checkpoint_restore():
+    task = _task()
+    task.metadata["prepared_user_response"] = {
+        "source": "native.respond", "tool_call_id": "old-response",
+        "message": "I could not update the record.", "work_evidence_refs": [],
+    }
+    task = TaskState.from_dict(task.to_checkpoint_dict())
+    state = _completed_state()
+    context, _ = _context()
+    review, decision = V3OuterController().review_and_route(
+        task, state, PhaseOutcome("solar", PhaseStatus.PHASE_COMPLETE), context)
+    assert review.status == PhaseReviewStatus.PHASE_VERIFIED_TASK_COMPLETE
+    assert decision.action == StrategicAction.CONTINUE
+    assert not task.has_prepared_user_response()
+    assert task.metadata["act_directive"]["response_required"]
+    assert task.metadata["v3_response_refresh_required"]
+
+
+def test_same_evidence_does_not_discard_a_current_response():
+    task = _task()
+    task.metadata["prepared_user_response"] = {
+        "source": "native.respond", "message": "The record is updated.",
+        "work_evidence_refs": ["tactical-action:edit"],
+    }
+    state = _completed_state()
+    context, _ = _context()
+    _, decision = V3OuterController().review_and_route(
+        task, state, PhaseOutcome("solar", PhaseStatus.PHASE_COMPLETE), context)
+    assert decision.action == StrategicAction.COMPLETE
+    assert task.metadata["prepared_user_response"]["message"] == "The record is updated."
+
+
+@pytest.mark.parametrize("authenticated_followup", [False, True])
+def test_followup_completion_guard_does_not_become_a_global_confidence_gate(authenticated_followup):
+    task = _task()
+    task.metadata["prepared_user_response"] = {"message": "I acknowledged your request."}
+    if authenticated_followup:
+        task.metadata["v3_resumption_evidence"] = [{"kind": "authenticated_question_answer", "result": {"answer": True}}]
+    state = _completed_state()
+    context, _ = _context()
+
+    class MissionUnmet(_SystemOne):
+        def recommend_act(self, *, state):
+            assert "available_tool_ids" in state
+            return SystemOneActRecommendation("complete", 0.99, True, "Contract satisfied", answers={
+                "mission_outcome_is_fulfilled": 0.05, "continuation_is_worthwhile": 0.99,
+                "user_input_can_unblock": 0.05, "closure_explanation_is_warranted": 0.9,
+            })
+
+    context.system_one = MissionUnmet(SystemOneReviewResult(({
+        "criterion_id": "ac-1", "status": "satisfied", "evidence_refs": ["tactical-action:edit"],
+    },), ()))
+    review, decision = V3OuterController().review_and_route(task, state,
+        PhaseOutcome("solar", PhaseStatus.PHASE_COMPLETE), context)
+    assert review.status == PhaseReviewStatus.PHASE_VERIFIED_TASK_COMPLETE
+    assert decision.action == (StrategicAction.REPLAN if authenticated_followup else StrategicAction.COMPLETE)
+    assert task.status == ("running" if authenticated_followup else "completed")
+    assert task.metadata["v3_route"] == ("strategic_replan" if authenticated_followup else "respond_and_end")
+
+
 def test_completed_phase_with_unmet_criteria_routes_to_next_phase() -> None:
     task = _task()
     context, provider = _context(satisfy=False)

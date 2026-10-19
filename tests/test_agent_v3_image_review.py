@@ -46,7 +46,9 @@ def _run_replans(monkeypatch, *, distinct_results):
     class Executor:
         def run(self, task, state, context):
             calls.append(len(calls))
-            state.evidence.append({'phase_id':state.phase.phase_id,'evidence_ref':f'action:{len(calls)}','tool_id':'native.respond','arguments':{'message':'receipt summary'},'status':'success','result':{'message':f'step {len(calls)}' if distinct_results else 'same summary'}})
+            # Distinct source reads are substantive progress; reworded replies
+            # alone cannot establish that the receipt has been verified.
+            state.evidence.append({'phase_id':state.phase.phase_id,'evidence_ref':f'action:{len(calls)}','tool_id':'native.read_memory_source' if distinct_results else 'native.respond','arguments':{'source_id':'receipt'} if distinct_results else {'message':'receipt summary'},'status':'success','result':{'content':f'step {len(calls)}'} if distinct_results else {'message':'same summary'}})
             state.status=PhaseStatus.PHASE_COMPLETE
             return PhaseOutcome(state.phase.phase_id,PhaseStatus.PHASE_COMPLETE)
     class Outer:
@@ -62,7 +64,7 @@ def _run_replans(monkeypatch, *, distinct_results):
 
 def test_new_phase_and_action_ids_cannot_keep_repeating_the_same_unverified_answer(monkeypatch):
     task,calls,result=_run_replans(monkeypatch,distinct_results=False)
-    assert len(calls)==4
+    assert len(calls)==3
     assert result.status==ProcessingStatus.FAILED
     assert task.metadata['v3_no_progress_stop'] is True
 

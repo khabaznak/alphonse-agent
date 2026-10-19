@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import deque
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -423,9 +424,76 @@ def test_phase_executor_uses_bounded_local_fallback() -> None:
 
     outcome = executor.run(TaskState(user="alex"), state, CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry, system_one=_accept_successful_actions()))
 
+    assert outcome.status == PhaseStatus.PHASE_COMPLETE
+    assert calls == ["broken", "fallback"]
+    assert [item.status for item in state.actions] == ["failed", "success"]
+
+
+def test_different_queries_without_semantic_progress_return_to_strategy():
+    calls = []
+    registry = InMemoryToolRegistry()
+    registry.register(_tool("native.search", lambda arguments: calls.append(arguments) or {"query": arguments["query"], "results": []}, read_only=True))
+    phase = PhasePlan("search", "Find the needed evidence", (PhaseSubgoal(
+        "recall", "Find a necessary source", "source", allowed_capabilities=("native.search",),
+        failure_policy=FailurePolicy.LOCAL_FALLBACK,
+    ),), authorized_capabilities=("native.search",))
+    state = new_tactical_state(phase)
+    state.revealed_tool_ids = ["native.search"]
+    from alphonse.agent_v2.system_one import SystemOneTacticalReview
+    jev = SimpleNamespace(evaluate_tactical_progress=lambda **kwargs: SystemOneTacticalReview(
+        False, 0.95, True, answers={"runtime_action_added_progress": 0.05, "runtime_declared_subgoal_complete": 0.05}))
+    executor = PhaseExecutor(action_selector=_selector([
+        {"tool_id": "native.search", "arguments": {"query": str(i)}} for i in range(4)]))
+    outcome = executor.run(TaskState(user="alex"), state, CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry, system_one=jev))
     assert outcome.status == PhaseStatus.BLOCKED
-    assert calls == ["broken"]
-    assert [item.status for item in state.actions] == ["failed"]
+    assert len(calls) == 3
+    assert "tactical_stage_no_new_progress" in outcome.blockers
+
+
+def test_local_read_only_fallback_stops_after_three_distinct_failures():
+    calls = []
+
+    def unavailable(arguments):
+        calls.append(arguments)
+        raise RuntimeError("unavailable")
+
+    registry = InMemoryToolRegistry()
+    registry.register(_tool("native.read", unavailable, read_only=True))
+    phase = PhasePlan("read", "Read evidence", (PhaseSubgoal(
+        "read", "Read evidence", "record", allowed_capabilities=("native.read",),
+        failure_policy=FailurePolicy.LOCAL_FALLBACK,
+    ),), authorized_capabilities=("native.read",))
+    state = new_tactical_state(phase)
+    state.revealed_tool_ids = ["native.read"]
+    executor = PhaseExecutor(action_selector=_selector([
+        {"tool_id": "native.read", "arguments": {"route": i}} for i in range(4)]))
+    outcome = executor.run(TaskState(user="alex"), state, CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry,
+        system_one=_accept_successful_actions()))
+    assert outcome.status == PhaseStatus.BLOCKED
+    assert len(calls) == 3
+
+
+def test_local_fallback_does_not_repeat_an_uncertain_external_mutation():
+    calls = []
+
+    def mutate(arguments):
+        calls.append(arguments)
+        raise RuntimeError("completion unknown")
+
+    registry = InMemoryToolRegistry()
+    registry.register(_tool("native.mutate", mutate, read_only=False))
+    phase = PhasePlan("write", "Update a device", (PhaseSubgoal(
+        "write", "Update a device", "record", allowed_capabilities=("native.mutate",),
+        allowed_side_effects=(SideEffectClass.EXTERNAL_REVERSIBLE,), failure_policy=FailurePolicy.LOCAL_FALLBACK,
+    ),), authorized_capabilities=("native.mutate",), mutation_scope=MutationScope(allow_external_effects=True))
+    state = new_tactical_state(phase)
+    state.revealed_tool_ids = ["native.mutate"]
+    executor = PhaseExecutor(action_selector=_selector([
+        {"tool_id": "native.mutate", "arguments": {"value": i}} for i in range(2)]))
+    outcome = executor.run(TaskState(user="alex"), state, CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry,
+        system_one=_accept_successful_actions()))
+    assert outcome.status == PhaseStatus.BLOCKED
+    assert len(calls) == 1
 
 
 def test_phase_executor_retries_same_read_only_action_when_jev_approves(monkeypatch) -> None:
@@ -720,3 +788,24 @@ def test_image_subgoal_cannot_complete_from_text_only_injected_action():
     assert outcome.status == PhaseStatus.BLOCKED
     assert not state.completed_subgoal_ids
     assert state.evidence.entries[0]['progress_review']['complete'] is False
+
+
+@pytest.mark.parametrize("tool_id, confident, probability, expected", [
+    ("native.respond", False, 0.65, True),
+    ("native.respond", True, 0.05, False),
+    ("native.read", False, 0.65, False),
+])
+def test_response_uncertainty_does_not_replace_operational_or_outer_verification(tool_id, confident, probability, expected):
+    from alphonse.agent_v2.core.intelligence.v3.contracts import TacticalAction
+    response = tool_id == "native.respond"
+    subgoal = PhaseSubgoal("work", "Report the supported place with remaining uncertainty" if response else "Read measurement",
+        "result", allowed_side_effects=(SideEffectClass.USER_RESPONSE if response else SideEffectClass.READ_ONLY,))
+    state = new_tactical_state(PhasePlan("phase", "Answer request", (subgoal,)))
+    action = TacticalAction("action", "work", tool_id, {}, status="success",
+        result={"message": "The note supports this place, but the exact occasion is uncertain."})
+    jev = SimpleNamespace(evaluate_tactical_progress=lambda **kwargs: SystemOneTacticalReview(
+        complete=False, confident=confident, confidence=probability,
+        answers={"runtime_declared_subgoal_complete": probability}))
+    result, _, _ = PhaseExecutor()._completion_review(TaskState(user="alex"), state, subgoal, action,
+        CoreLoopContext(messages=InMemoryMessageQueue(), system_one=jev))
+    assert result is expected

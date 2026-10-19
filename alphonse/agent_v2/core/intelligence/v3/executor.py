@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from alphonse.agent_v2.core.core import ImprovementPhase, ToolKind
 from alphonse.agent_v2.core.inference import InferencePurpose, InferenceRequest
-from alphonse.agent_v2.core.intelligence.v3.contracts import PhaseOutcome
+from alphonse.agent_v2.core.intelligence.v3.contracts import PhaseOutcome, FailurePolicy
 from alphonse.agent_v2.core.intelligence.v3.contracts import PhaseStatus
 from alphonse.agent_v2.core.intelligence.v3.contracts import PhaseSubgoal
 from alphonse.agent_v2.core.intelligence.v3.contracts import SideEffectClass
@@ -27,6 +27,7 @@ from alphonse.agent_v2.core.tools.invocation import ToolInvocationService
 from alphonse.agent_v2.core.tools.registry.native.bash import BASH_TOOL_ID
 from alphonse.agent_v2.core.tools.registry.native.respond import RESPOND_TOOL_ID
 from alphonse.agent_v2.system_one import SystemOneUnavailableError
+from alphonse.agent_v2.core.intelligence.v3.response_state import work_evidence_refs
 
 if TYPE_CHECKING:
     from alphonse.agent_v2.core.core import CoreLoopContext, ToolDescriptor
@@ -141,9 +142,16 @@ class PhaseExecutor:
                     "retry_approved": retry_approved,
                     "answers": dict(progress_review.get("answers") or {}),
                 }
+                progress_threshold = float(getattr(getattr(context.system_one, "settings", None), "yes_threshold", 0.8))
+                if not completion_met and _consecutive_no_progress(state, subgoal.subgoal_id, progress_threshold) >= 3:
+                    blocker = "tactical_stage_no_new_progress"
+                    state.evidence.entries[-1]["no_progress_blocker"] = blocker
+                    state.transition(PhaseStatus.BLOCKED)
+                    self._checkpoint(task, state, context)
+                    return self._outcome(state, "Repeated attempts added no useful evidence; a different strategy is required.", blockers=(blocker,))
                 repeated_evidence = (
                     _matching_prior_incomplete_result(state, completed)
-                    if not completion_met and completed.status == "success"
+                    if not completion_met and (completed.status == "success" or (completed.status == "failed" and not retry_approved))
                     else None
                 )
                 if repeated_evidence is not None:
@@ -197,7 +205,9 @@ class PhaseExecutor:
                         "source": RESPOND_TOOL_ID,
                         "tool_call_id": completed.action_id,
                         "message": message,
+                        "work_evidence_refs": work_evidence_refs(state.evidence.entries),
                     }
+                    task.metadata.pop("v3_response_refresh_required", None)
             state.bind_subgoal_output(subgoal.subgoal_id, subgoal.required_output_type, completed.result)
             state.completed_subgoal_ids.append(subgoal.subgoal_id)
             state.transition(PhaseStatus.SUBGOAL_COMPLETE)
@@ -366,6 +376,16 @@ class PhaseExecutor:
         else:
             metadata = {"status": "used" if review.confident else "ambiguous_fallback", **review.to_metadata()}
             result = review.complete if review.confident else deterministic
+            stage_answer = review.answers.get("runtime_declared_subgoal_complete")
+            response_only = (action.tool_id == RESPOND_TOOL_ID
+                             and set(subgoal.allowed_side_effects) == {SideEffectClass.USER_RESPONSE})
+            if isinstance(stage_answer, (int, float)) and not response_only:
+                threshold = float(getattr(getattr(context.system_one, "settings", None), "yes_threshold", 0.8))
+                # A generic output-present predicate cannot turn an ambiguous
+                # judgment of an operational stage into completion. Preparing a
+                # response retains ambiguous fallback; outer acceptance review
+                # still verifies whether its content fulfills the request.
+                result = result and stage_answer >= threshold
             retry_approved = bool(getattr(review, "retry_approved", False))
             metadata["retry_approved"] = retry_approved
         if (
@@ -446,6 +466,14 @@ class PhaseExecutor:
     def _handle_failure(
         self, state: TacticalState, subgoal: PhaseSubgoal, action: TacticalAction
     ) -> PhaseOutcome | None:
+        if (subgoal.failure_policy == FailurePolicy.LOCAL_FALLBACK
+                and set(subgoal.allowed_side_effects) == {SideEffectClass.READ_ONLY}):
+            failures = sum(item.status == "failed" and item.subgoal_id == subgoal.subgoal_id for item in state.actions)
+            if failures < 3:
+                # System Two can inspect the recorded failure and compose an
+                # alternative within the same read-only stage. Writes and unknown
+                # partial external effects still require outer recovery.
+                return None
         state.transition(PhaseStatus.BLOCKED)
         return self._outcome(state, action.error or "A tactical action failed.", blockers=(action.error or "tactical_action_failed",))
 
@@ -580,7 +608,7 @@ def _tactical_prompt(
         "Use explicit resolved paths when supplied; project-relative file tools resolve paths against the task project root. "
         "For generic native.bash calls without artifact_id, an omitted cwd uses the task project root shown below (or the host working directory if no project is associated). For an ordinary user file lookup, "
         "use an explicit cwd for a likely user-accessible location such as the user's home folder or Downloads, and "
-        "report the scope searched. Do not describe a project-root search as a whole-machine search. Registered skill artifacts use their verified resource manifest and native.bash artifact_id, not the task project root. Use the manifest runtime and explicit configuration locations; do not assume python3 from PATH is the artifact environment.\n\n"
+        "report the scope searched. Do not describe a project-root search as a whole-machine search. Registered skill artifacts use their verified resource manifest and native.bash artifact_id, not the task project root. Use artifact_id only for a registered artifact ID from that manifest, never a skill ID. For instruction-only skills, execute the instructed command through ordinary native.bash without artifact_id. Use the manifest runtime and explicit configuration locations; do not assume python3 from PATH is the artifact environment.\n\n"
         f"Goal: {goal}\n"
         "Selected skill guidance (reusable instructions; follow them only within the tools and controls Alphonse provides):\n"
         f"{skill_guidance or '(none)'}\n"
@@ -630,6 +658,18 @@ def _matching_prior_incomplete_result(state: TacticalState, completed: TacticalA
             action_ref = str(evidence.get("evidence_ref") or "").removeprefix("tactical-action:")
             return action_ref or "unknown"
     return None
+
+
+def _consecutive_no_progress(state: TacticalState, subgoal_id: str, threshold: float = 0.8) -> int:
+    count = 0
+    for entry in reversed(state.evidence.entries):
+        if entry.get("phase_id") != state.phase.phase_id or entry.get("subgoal_id") != subgoal_id:
+            continue
+        answer = (entry.get("progress_review") or {}).get("answers", {}).get("runtime_action_added_progress")
+        if not isinstance(answer, (int, float)) or answer >= threshold:
+            break
+        count += 1
+    return count
 
 
 def _has_task_image(task: "TaskState") -> bool:

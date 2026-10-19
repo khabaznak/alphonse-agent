@@ -166,6 +166,11 @@ class V2Daemon:
             worker_id=self.daemon_id,
             on_message_queued=lambda: None,
             on_direct_delivery=self._deliver_scheduled_reminder,
+            on_failure=lambda occurrence, error: self._notify_scheduled_task_failure({
+                "scheduled_task_id": occurrence.task.scheduled_task_id,
+                "occurrence_key": occurrence.occurrence_key,
+                "channel": dict(occurrence.task.origin_channel),
+            }, error=error),
             memory_session_resolver=lambda project_id, identity, owner: self.runtime.memory_session_store.ensure_system(project_id=project_id, identity=identity, created_by_user_id=owner).session_id if project_id else "",
         )
         self.ipc = V2DaemonServer(self)
@@ -2165,7 +2170,18 @@ class V2Daemon:
         origins = [channel_address_from_metadata({"channel": channel}) for channel in raw_channels if isinstance(channel, dict)] if isinstance(raw_channels, list) else []
         origins = [address for address in origins if address is not None]
         origin = channel_address_from_metadata({"channel": dict(task.origin_channel)})
-        if origin is not None and origin not in origins:
+        recipient = str(task.origin_channel.get("reminder_recipient_user_id") or "").strip()
+        if recipient:
+            # Re-resolve the intended person at delivery time. A removed address
+            # must fail visibly, never fall back to sending the requester a copy.
+            resolved = self.runtime.identity_resolver.resolve_outbound_address(
+                alphonse_user_id=recipient,
+                preferred_integration_id=str(task.origin_channel.get("reminder_recipient_integration_id") or ""),
+            )
+            if not resolved.resolved or resolved.address is None or resolved.address.alphonse_user_id != recipient:
+                raise RuntimeError("scheduled_reminder_recipient_unresolved")
+            origins = [resolved.address]
+        elif origin is not None and origin not in origins:
             origins.insert(0, origin)
         if not origins:
             resolved = self.runtime.identity_resolver.resolve_outbound_address(
@@ -2187,7 +2203,7 @@ class V2Daemon:
                 address=destination,
                 message=f"Reminder: {message}",
                 kind="scheduled_reminder",
-                audience_user_id=task.owner_user_id,
+                audience_user_id=recipient or task.owner_user_id,
                 project_id=task.project_id,
                 metadata={
                     "source": "scheduled_reminder",
@@ -2198,7 +2214,7 @@ class V2Daemon:
             )
             outbounds.append(outbound)
             self.runtime.conversation_store.record(
-                owner_user_id=task.owner_user_id,
+                owner_user_id=recipient or task.owner_user_id,
                 project_id=task.project_id,
                 memory_session_id=memory_session.session_id if memory_session is not None else "",
                 role="assistant",
@@ -2216,6 +2232,8 @@ class V2Daemon:
             return
         origin = channel_address_from_metadata({"channel": metadata.get("channel")})
         if origin is None:
+            origin = channel_address_from_metadata({"channel": dict(task.origin_channel)})
+        if origin is None:
             resolved = self.runtime.identity_resolver.resolve_outbound_address(alphonse_user_id=task.owner_user_id)
             origin = resolved.address if resolved.resolved else None
         if origin is None:
@@ -2229,6 +2247,7 @@ class V2Daemon:
             audience_user_id=task.owner_user_id,
             project_id=task.project_id,
             metadata={"source": "scheduled_task_failure", "scheduled_task_id": task_id, "failure_code": _scheduled_failure_code(error)},
+            idempotency_key=("scheduled-failure:" + str(metadata["occurrence_key"])) if metadata.get("occurrence_key") else "",
         )
         self.runtime.conversation_store.record(
             owner_user_id=task.owner_user_id,
@@ -2455,6 +2474,8 @@ class V2Daemon:
         occurrence_key = str(metadata.get("occurrence_key") or "").strip() if isinstance(metadata, dict) else ""
         if occurrence_key:
             self.runtime.schedule_store.mark_occurrence_failed(occurrence_key, error=error)
+            if isinstance(metadata, dict) and metadata.get("scheduled_task_id"):
+                self._notify_scheduled_task_failure(metadata, error=error)
 
 
 def _without_sequence(event: dict[str, Any]) -> dict[str, Any]:

@@ -4,6 +4,23 @@ Projects track goals. A conversation does not need to select a project to use an
 installed skill's authorized artifacts. Artifact programs remain user-generated
 resources, never native tool definitions or independent Jev curation candidates.
 
+Skills carry the reusable expertise and workflows. Artifacts are implementations
+those skills can use and improve; an artifact's original implementation is not
+fixed just because it is registered. When an existing artifact fails to produce
+the expected result, Alphonse can use the relevant skill or combination of skills
+to diagnose it, change its implementation, and verify the requested behavior.
+
+Repair the existing artifact in its registered storage, preserving its stable ID
+and useful data. Load the owning skill and any additional expertise needed for the
+repair. Keep its definition and operating instructions accurate when the interface
+changes, and update catalog metadata when execution locations or requirements
+change. Use ordinary authorized native capabilities for program changes; catalog
+registration and metadata updates do not modify the program. Retain useful lessons
+in the skill so future tasks benefit from the repair.
+
+Improvement is demonstrated by the repaired artifact producing the expected result,
+not merely by a successful edit, new registration or updated instruction file.
+
 ## Storage and fresh installations
 
 The runtime initializes `<workspace>/artifacts/` alongside `<workspace>/skills/`.

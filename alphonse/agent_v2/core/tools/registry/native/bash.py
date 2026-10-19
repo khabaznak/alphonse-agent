@@ -29,7 +29,7 @@ BASH_ARGUMENT_SCHEMA: dict[str, Any] = {
             "type": "string",
             "description": "Shell command to execute with bash.",
         },
-        "artifact_id": {"type": "string", "description": "Optional registered resource from a selected skill. Validates access and availability, supplies its working directory, and exposes ALPHONSE_ARTIFACT_ENTRYPOINT and ALPHONSE_ARTIFACT_RUNTIME. Does not invoke a dedicated artifact tool or grant effects."},
+        "artifact_id": {"type": "string", "description": "Optional registered artifact ID (artifact. prefix) from a selected skill's verified resource manifest. Never supply a skill ID or skill name. Omit for ordinary commands and instruction-only skills. Validates access and availability, supplies its working directory, and exposes ALPHONSE_ARTIFACT_ENTRYPOINT and ALPHONSE_ARTIFACT_RUNTIME. Does not invoke a dedicated artifact tool or grant effects."},
         "cwd": {
             "type": "string",
             "description": "Optional working directory.",

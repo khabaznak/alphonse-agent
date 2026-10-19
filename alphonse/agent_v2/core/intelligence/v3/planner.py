@@ -300,8 +300,9 @@ def _strategic_plan_instructions() -> str:
         "unclear. Use shell commands to create or edit files only in the authorized task scope and verify changes with "
         "read-back or diff checks. "
         "Authorize local_shell for direct CLI, filesystem, process, build, test, diagnostic, and skill-owned program work. "
-        "Artifacts are owned by skills, independently of the task project, and are not independently callable tools. Use each selected skill's verified resource manifest and native.bash artifact_id for execution; never resolve an artifact entrypoint against the task project or daemon directory. Follow the selected skill's "
+        "Artifacts are owned by skills, independently of the task project, and are not independently callable tools. For a registered artifact, use its verified resource manifest and native.bash artifact_id for execution; never resolve an artifact entrypoint against the task project or daemon directory. A skill ID is not an artifact ID. Skills containing only workflow instructions need no artifact registration: invoke their commands through ordinary native.bash without artifact_id. Follow the selected skill's "
         "operating instructions and use authorized native capabilities such as local_shell to invoke or inspect its program. "
+        "When an existing artifact does not yield the requested results, use the owning skill and any relevant additional expertise to diagnose, repair and verify its implementation in registered storage within the authorized task scope. Preserve its stable artifact ID and useful data; keep the skill's operating instructions and catalog metadata accurate if its interface or execution requirements change. "
         "When registering an artifact, attach its definition and operating instructions to an existing installed skill; "
         "do not treat catalog metadata as a substitute for skill expertise. For a requested correction to an existing artifact registration, use native.artifact_metadata_update for the mutation; editing a README or program is not a substitute. Do not edit catalog databases with Bash. Verify the intended location before updating resource metadata. "
         "If Act requires closure, plan exactly one isolated user_response subgoal; if Act requests input, plan an ask-question "
@@ -309,6 +310,16 @@ def _strategic_plan_instructions() -> str:
         "relevant subgoal. Images are supplied directly to the selected inference model; follow selected skill guidance for interpretation and extraction. Do not plan a separate OCR tool call or an image-only tool subgoal. Combine visual reasoning with the action that uses it, including a user response. "
         "An attachment_analysis subgoal requires verified image inputs to its tactical inference call before completion. "
         "Define stable measurable acceptance criteria when none exist, otherwise preserve the existing contract."
+        " Mission criteria must describe the requested outcome, not replace it with searching, asking a question, or trying a tool. "
+        "For a newly authorized household task, resolve people, destinations and operating details from applicable authorized memory. "
+        "Historical evidence can supply parameters for the current request; it does not independently authorize a new task. "
+        "Do not ask the user to repeat a time, relationship or instruction already resolved by an applicable source unless it conflicts, "
+        "has expired, or is genuinely ambiguous. Unavailable unrelated memory backends do not negate a complete positive source."
+        " When asked to retain a reusable workflow, solve the task and present the complete skill name, description and instructions "
+        "as user-facing text. Use user_interaction to obtain any required installation approval. Do not use a shell merely to print "
+        "or save a draft that can be composed in the response. After approval, install through native.skill_install; "
+        "future tasks discover the installed skill through normal skill selection. native.respond prepares the final reply; "
+        "when parking for approval, put the complete proposal in native.ask_question itself so the requester actually receives it."
     )
 
 

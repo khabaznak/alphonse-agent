@@ -88,7 +88,7 @@ def test_jev_act_recommendation_combines_choice_with_parallel_resilience_fuses()
     assert result.action == "ask_user"
     assert result.confident is True
     assert set(result.answers) == {
-        "continuation_is_worthwhile", "user_input_can_unblock", "closure_explanation_is_warranted",
+        "continuation_is_worthwhile", "user_input_can_unblock", "closure_explanation_is_warranted", "mission_outcome_is_fulfilled",
     }
 
 
@@ -381,6 +381,34 @@ def test_jev_tactical_review_distinguishes_operational_success_from_semantic_com
     assert result.confident is True
 
 
+def test_intermediate_action_questions_cannot_complete_the_declared_subgoal():
+    def transport(url, api_key, payload, timeout):
+        assert payload["state"]["stage_goal"]["objective"] == "Read the live temperature"
+        return {"answers": {key: {"type": "noul", "noul": (
+            0.05 if key == "runtime_declared_subgoal_complete" else 0.95
+        )} for key in payload["questions"]}}
+
+    provider = JevCriterionDecisionProvider(SystemOneSettings(enabled=True, api_key="fixture", validated_at="now"), transport=transport)
+    result = provider.evaluate_tactical_progress(goal="Read temperature", phase={},
+        subgoal={"objective": "Read the live temperature"},
+        action={"status": "success", "result": {"stdout": "Usage: sensor read"}},
+        questions=[{"question_id": "help_found", "type": "noul", "instructions": "Was CLI help found?",
+                    "criteria": {"true": "Help found", "false": "Help missing"}}])
+    assert not result.complete
+    assert result.answers["help_found"] == 0.95
+    assert result.answers["runtime_declared_subgoal_complete"] == 0.05
+
+
+@pytest.mark.parametrize("invalid", [float("nan"), float("inf"), True, -0.1, 1.1])
+def test_malformed_tactical_probabilities_cannot_manufacture_completion(invalid):
+    def transport(url, api_key, payload, timeout):
+        return {"answers": {key: {"type": "noul", "noul": invalid} for key in payload["questions"]}}
+
+    provider = JevCriterionDecisionProvider(SystemOneSettings(enabled=True, api_key="fixture", validated_at="now"), transport=transport)
+    with pytest.raises(ValueError, match="tactical_review_invalid"):
+        provider.evaluate_tactical_progress(goal="Read live data", phase={}, subgoal={}, action={"status": "success"})
+
+
 def test_jev_tactical_review_sends_acceptance_and_retry_fuse_questions_together() -> None:
     payloads = []
 
@@ -419,6 +447,8 @@ def test_jev_tactical_review_sends_acceptance_and_retry_fuse_questions_together(
     payload = payloads[0]
     assert set(payload["questions"]) == {
         "record_was_read",
+        "runtime_declared_subgoal_complete",
+        "runtime_action_added_progress",
         "retry_fuse_transient_failure",
         "retry_fuse_same_call_likely_to_work",
         "retry_fuse_repeat_is_safe",

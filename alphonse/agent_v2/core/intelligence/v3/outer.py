@@ -11,6 +11,8 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any
 
 from alphonse.agent_v2.core.core import ImprovementPhase
+from alphonse.agent_v2.core.intelligence.v3.response_state import invalidate_outdated_response
+from alphonse.agent_v2.core.tools.registry import ToolExposurePolicy
 from alphonse.agent_v2.core.inference import InferencePurpose, InferenceRequest
 from alphonse.agent_v2.core.intelligence.acceptance_contract import apply_status_patch
 from alphonse.agent_v2.core.intelligence.v3.contracts import PhaseOutcome, PhaseStatus, SideEffectClass, TacticalState
@@ -65,6 +67,7 @@ class V3OuterController:
         outcome: PhaseOutcome,
         context: "CoreLoopContext",
     ) -> tuple[PhaseReview, StrategicDecision]:
+        invalidate_outdated_response(task, state)
         review = review_phase(task, state, outcome, context)
         context.emit_activity(
             phase=ImprovementPhase.CHECK,
@@ -109,6 +112,9 @@ class V3OuterController:
             try:
                 decision, recommendation = _recommend_act(task, state, outcome, review, context)
             except SystemOneUnavailableError:
+                if (getattr(context.system_one, "requires_mission_outcome_review", False)
+                        and task.metadata.get("v3_resumption_evidence")):
+                    raise
                 decision = decide_next_action(review)
         else:
             decision = decide_next_action(review)
@@ -282,6 +288,9 @@ def _recommend_act(task, state, outcome, review: PhaseReview, context):
         "user_constraints": task.metadata.get("user_constraints", {}),
         "failure_reason": task.metadata.get("failure_reason", ""),
         "plan_call_exception_count": task.count_plan_call_exceptions(),
+        "authenticated_followups": list(task.metadata.get("v3_resumption_evidence") or []),
+        "available_tool_ids": [tool.tool_id for tool in ToolExposurePolicy().select_tools(
+            registry=context.tools, project_id=task.project_id, user=task.user, task=task)] if context.tools is not None else [],
     }
     try:
         recommendation = context.system_one.recommend_act(state=input_state)
@@ -291,7 +300,11 @@ def _recommend_act(task, state, outcome, review: PhaseReview, context):
     recommended_action = action
     answers = recommendation.answers
     yes_threshold = float(getattr(recommendation, "yes_threshold", 0.8))
-    if action == "fail_explain" and review.status == PhaseReviewStatus.PHASE_VERIFIED_TASK_INCOMPLETE:
+    mission_fulfilled = answers.get("mission_outcome_is_fulfilled")
+    if (action == "complete" and task.metadata.get("v3_resumption_evidence")
+            and isinstance(mission_fulfilled, (int, float)) and mission_fulfilled < yes_threshold):
+        action = "replan"
+    elif action == "fail_explain" and review.status == PhaseReviewStatus.PHASE_VERIFIED_TASK_INCOMPLETE:
         # A completed phase is not the same as a completed mission. If the
         # phase review confirms that required acceptance criteria remain unmet,
         # do not turn a low continuation score into a user-facing failure while
@@ -316,7 +329,9 @@ def _recommend_act(task, state, outcome, review: PhaseReview, context):
     if action != recommended_action:
         rationale = {
             "continue": "The task is not yet verified complete; Plan must continue with any useful authorized work.",
-            "replan": "Jev's recommendation and resilience checks disagreed; returning to Plan for a fresh strategy.",
+            "replan": ("The current user request or authenticated follow-up remains unfulfilled despite the acceptance status; plan the remaining authorized work using the available tool registry."
+                       if isinstance(mission_fulfilled, (int, float)) and mission_fulfilled < yes_threshold
+                       else "Jev's recommendation and resilience checks disagreed; returning to Plan for a fresh strategy."),
             "ask_user": "A concrete user answer is needed before useful work can continue.",
             "fail_explain": "Further work is not worthwhile, and Jev recommends a final evidence-based explanation.",
             "fail": "Jev determined that the mission must stop without another execution phase.",

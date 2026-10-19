@@ -70,8 +70,22 @@ def test_failure_explanation_generation_failure_preserves_original_failure():
 
     assert result.status == ProcessingStatus.FAILED
     assert result.error == f"v3_task_failed:{REASON}"
-    assert "v3_failure_response" not in task.metadata
+    assert task.metadata["v3_failure_response"]["source"] == "v3_failure_fallback"
+    assert "not been fully verified" in task.metadata["v3_failure_response"]["message"]
     assert task.metadata["v3_failure_response_error_type"] == "RuntimeError"
+
+
+def test_failure_explanation_keeps_successful_observations_and_redacts_named_secrets():
+    task = _task()
+    task.hierarchical_state["evidence"]["entries"].insert(0, {
+        "evidence_ref": "action:earlier", "tool_id": "native.bash", "status": "success",
+        "result": {"exit_code": 0, "stdout": '{"temperature_c":24}', "api_key": "DO_NOT_FORWARD"},
+    })
+    inference = FailureInference()
+    HierarchicalCAPDProcessor._result(task, CoreLoopContext(messages=InMemoryMessageQueue(), inference=inference))
+    assert "temperature_c" in inference.requests[0].prompt and "24" in inference.requests[0].prompt
+    assert "DO_NOT_FORWARD" not in inference.requests[0].prompt
+    assert task.status == "failed"
 
 
 def test_failure_closure_reuses_prepared_response_without_another_model_call():

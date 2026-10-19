@@ -751,6 +751,35 @@ def _record_question_answer_tool_result(
         "answered_by": question.respondent_user_id,
     }
     now = _now().isoformat()
+    if task.intelligence_engine == "hierarchical_v3":
+        state = task.hierarchical_state if isinstance(task.hierarchical_state, dict) else {}
+        phase = state.get("phase") or {}
+        receipt = {
+            "evidence_ref": "question-answer:" + question.question_id,
+            "task_id": str(task.task_id or task.message_id or ""),
+            "phase_id": str(phase.get("phase_id") or "question-resume"),
+            "subgoal_id": str(state.get("active_subgoal_id") or "question-answer"),
+            "tool_id": "native.ask_question", "kind": "authenticated_question_answer",
+            "status": "success", "recorded_at": now,
+            "result": {**result, "question": question.message},
+        }
+        receipts = task.metadata.setdefault("v3_resumption_evidence", [])
+        if not any(item.get("evidence_ref") == receipt["evidence_ref"] for item in receipts):
+            receipts.append(receipt)
+        if phase.get("phase_id"):
+            history = task.metadata.setdefault("v3_phase_history", [])
+            source_phase = next((item for item in reversed(history)
+                                 if (item.get("phase") or {}).get("phase_id") == phase["phase_id"]), None)
+            if source_phase is None:
+                # Preserve the checkpoint's actual source scope even when the
+                # answer races the parked-phase history write. This is an
+                # evidence receipt, not an invented terminal phase outcome.
+                source_phase = {"phase": dict(phase), "record_kind": "question_answer_receipt",
+                                "evidence": {"entries": []}}
+                history.append(source_phase)
+            entries = source_phase.setdefault("evidence", {}).setdefault("entries", [])
+            if not any(item.get("evidence_ref") == receipt["evidence_ref"] for item in entries):
+                entries.append(dict(receipt))
     for index in range(len(calls) - 1, -1, -1):
         call = calls[index]
         if not isinstance(call, dict):

@@ -1,0 +1,1574 @@
+{
+  "synthetic": true,
+  "qualifying_rollout_run": false,
+  "independent_human_review": "pending",
+  "default_rollout_changed": false,
+  "durable_extraction_evaluated": false,
+  "comparability": "Exploratory attempts across code, adapter and corpus revisions. Do not pool into a success rate or claim paired performance improvement.",
+  "missing_attempts": [
+    {
+      "trial": "anniversary-attempt1",
+      "status": "aborted",
+      "reason": "Network-restricted provider could not complete; own process terminated, no report produced and no production effects."
+    }
+  ],
+  "trials": [
+    {
+      "trial": "anniversary-attempt2",
+      "file": "household-anniversary-attempt2.json.gz",
+      "raw_sha256": "c772c0de9d6e5e637e53bb5cfacfa4fb94990c98a4165c79f89f333a294208aa",
+      "compressed_sha256": "94e82fe713a4bd72a21a2f691f9657ff25577b3d871f1b2352cf8280e29d1b3b",
+      "case_id": "anniversary-recall",
+      "arm": "candidate",
+      "adapter_version": "unrecorded",
+      "task_status": "completed",
+      "runtime_error": null,
+      "outcome": {
+        "status": "success",
+        "reason": "Verified phase evidence satisfies all required acceptance criteria.",
+        "phase_id": "anniversary-recall"
+      },
+      "mechanical_pass": true,
+      "checks": {
+        "no_runtime_exception": true,
+        "necessary_history_delivered": true,
+        "answer_returned": true,
+        "answer_fragments_present": true,
+        "private_source_excluded": true,
+        "task_completed": true
+      },
+      "answer": "We went to Casa del Lago in Chapultepec for dinner.",
+      "model_calls": 6,
+      "jev_calls": 30,
+      "model_usage": {
+        "reported_totals": {
+          "input_tokens": 62032,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 1250,
+          "reasoning_output_tokens": 86
+        },
+        "calls_without_usage": 0
+      },
+      "jev_usage": {
+        "reported_totals": {
+          "input_tokens": 59159,
+          "output_tokens": 1707
+        },
+        "calls_without_usage": 0
+      },
+      "latency_ms": 99268.18,
+      "corpus_sha256": null,
+      "runtime_source_sha256": null,
+      "disposition": "Recall succeeded beyond the recent window.",
+      "independent_human_review": "pending"
+    },
+    {
+      "trial": "recovery-before",
+      "file": "household-recovery-before.json.gz",
+      "raw_sha256": "cfe407afe974e1f67a290377947775608e7ff32eabf88589f481cb32344f7e3c",
+      "compressed_sha256": "a75772f1549e413ad003f34181782653cac91e146058d76e57b182aab42aa065",
+      "case_id": "sensor-recovery",
+      "arm": "candidate",
+      "adapter_version": "unrecorded",
+      "task_status": "completed",
+      "runtime_error": null,
+      "outcome": {
+        "status": "success",
+        "reason": "Verified phase evidence satisfies all required acceptance criteria.",
+        "phase_id": "study-temperature-backup-read"
+      },
+      "mechanical_pass": false,
+      "checks": {
+        "no_runtime_exception": true,
+        "necessary_history_delivered": true,
+        "answer_returned": true,
+        "answer_fragments_present": false,
+        "private_source_excluded": true,
+        "alternative_attempted": true,
+        "task_completed": true,
+        "fresh_read_obtained": true
+      },
+      "answer": "I don’t have a current study temperature reading yet. The sensor help showed live primary and backup routes, but no read operation was attempted, so I can’t report a value.",
+      "model_calls": 9,
+      "jev_calls": 28,
+      "model_usage": {
+        "reported_totals": {
+          "input_tokens": 80862,
+          "cached_input_tokens": 3456,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 2103,
+          "reasoning_output_tokens": 233
+        },
+        "calls_without_usage": 0
+      },
+      "jev_usage": {
+        "reported_totals": {
+          "input_tokens": 48695,
+          "output_tokens": 2347
+        },
+        "calls_without_usage": 0
+      },
+      "latency_ms": 130669.94,
+      "corpus_sha256": null,
+      "runtime_source_sha256": null,
+      "disposition": "Fresh measurement obtained but an obsolete no-reading reply survived; product defect.",
+      "independent_human_review": "pending"
+    },
+    {
+      "trial": "recovery-after",
+      "file": "household-recovery-after.json.gz",
+      "raw_sha256": "1954194eb3b32a61bb68d90cfee3c3a8be23ce09a47924ca2c4b7d41fd997621",
+      "compressed_sha256": "19acd06cf95ecee8ca8e599dcebbe508f5d36131ce7f6474c55bfb2a2f728aa0",
+      "case_id": "sensor-recovery",
+      "arm": "candidate",
+      "adapter_version": "unrecorded",
+      "task_status": "completed",
+      "runtime_error": null,
+      "outcome": {
+        "status": "success",
+        "reason": "Verified phase evidence satisfies all required acceptance criteria.",
+        "phase_id": "read-study-temperature-backup"
+      },
+      "mechanical_pass": true,
+      "checks": {
+        "no_runtime_exception": true,
+        "necessary_history_delivered": true,
+        "answer_returned": true,
+        "answer_fragments_present": true,
+        "private_source_excluded": true,
+        "alternative_attempted": true,
+        "task_completed": true,
+        "fresh_read_obtained": true
+      },
+      "answer": "The study temperature is 24 °C, from a fresh reading via the backup route. The primary route was unavailable.",
+      "model_calls": 7,
+      "jev_calls": 21,
+      "model_usage": {
+        "reported_totals": {
+          "input_tokens": 62438,
+          "cached_input_tokens": 10368,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 1391,
+          "reasoning_output_tokens": 71
+        },
+        "calls_without_usage": 0
+      },
+      "jev_usage": {
+        "reported_totals": {
+          "input_tokens": 34221,
+          "output_tokens": 1763
+        },
+        "calls_without_usage": 0
+      },
+      "latency_ms": 101400.3,
+      "corpus_sha256": null,
+      "runtime_source_sha256": null,
+      "disposition": "Recovery returned the verified fresh measurement after response freshness repairs.",
+      "independent_human_review": "pending"
+    },
+    {
+      "trial": "reminder-before",
+      "file": "household-reminder-before.json.gz",
+      "raw_sha256": "bfb162e715148cf0f4869ae49ad69388c61468ed17b5151fd28de78975bcb3d0",
+      "compressed_sha256": "47652b81160e71ccfd8e2d5639fe0e8a497836d8499ba8d5c77c5fc8e6e61cc0",
+      "case_id": "mother-medication-reminder",
+      "arm": "candidate",
+      "adapter_version": "unrecorded",
+      "task_status": "waiting_user",
+      "runtime_error": null,
+      "outcome": null,
+      "mechanical_pass": false,
+      "checks": {
+        "no_runtime_exception": true,
+        "necessary_history_delivered": true,
+        "answer_returned": false,
+        "answer_fragments_present": true,
+        "private_source_excluded": true,
+        "correct_recipient_schedule": false,
+        "task_completed": false,
+        "medicine_preserved": false,
+        "correct_reminder_time": false
+      },
+      "answer": "",
+      "model_calls": 4,
+      "jev_calls": 23,
+      "model_usage": {
+        "reported_totals": {
+          "input_tokens": 39368,
+          "cached_input_tokens": 3456,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 1242,
+          "reasoning_output_tokens": 346
+        },
+        "calls_without_usage": 0
+      },
+      "jev_usage": {
+        "reported_totals": {
+          "input_tokens": 31157,
+          "output_tokens": 1264
+        },
+        "calls_without_usage": 0
+      },
+      "latency_ms": 68942.8,
+      "corpus_sha256": null,
+      "runtime_source_sha256": null,
+      "disposition": "Missing recipient targeting prevented completing the delegation.",
+      "independent_human_review": "pending"
+    },
+    {
+      "trial": "reminder-after",
+      "file": "household-reminder-after.json.gz",
+      "raw_sha256": "5abf68a57cc725e4d88478d61c9fa0f51802e3ac0e4900da19ec79f957eca373",
+      "compressed_sha256": "615be655b434cebc1e5c37387525b29a3a69daf1a046afac6b356a6ae546cec8",
+      "case_id": "mother-medication-reminder",
+      "arm": "candidate",
+      "adapter_version": "unrecorded",
+      "task_status": "running",
+      "runtime_error": "JSONDecodeError",
+      "outcome": null,
+      "mechanical_pass": false,
+      "checks": {
+        "no_runtime_exception": false,
+        "necessary_history_delivered": true,
+        "answer_returned": false,
+        "answer_fragments_present": true,
+        "private_source_excluded": true,
+        "correct_recipient_schedule": true,
+        "task_completed": false,
+        "medicine_preserved": true,
+        "correct_reminder_time": true
+      },
+      "answer": "",
+      "model_calls": 5,
+      "jev_calls": 26,
+      "model_usage": {
+        "reported_totals": {
+          "input_tokens": 40787,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 1166,
+          "reasoning_output_tokens": 69
+        },
+        "calls_without_usage": 1
+      },
+      "jev_usage": {
+        "reported_totals": {
+          "input_tokens": 33697,
+          "output_tokens": 1365
+        },
+        "calls_without_usage": 0
+      },
+      "latency_ms": 90207.13,
+      "corpus_sha256": null,
+      "runtime_source_sha256": null,
+      "disposition": "Schedule persisted, then provider JSON parsing failed; preserve the partial effect.",
+      "independent_human_review": "pending"
+    },
+    {
+      "trial": "reminder-final",
+      "file": "household-reminder-final.json.gz",
+      "raw_sha256": "6488d6b48d3a743525af9751d7dfcd4fb438354dac0b81794819ddada6d43bf4",
+      "compressed_sha256": "91a3b0b32ecaff49a84c3e8941132ff68f6c9cb2619dd8a19d9e08286c3c229b",
+      "case_id": "mother-medication-reminder",
+      "arm": "candidate",
+      "adapter_version": "unrecorded",
+      "task_status": "waiting_user",
+      "runtime_error": null,
+      "outcome": null,
+      "mechanical_pass": false,
+      "checks": {
+        "no_runtime_exception": true,
+        "necessary_history_delivered": true,
+        "answer_returned": false,
+        "answer_fragments_present": true,
+        "private_source_excluded": true,
+        "correct_recipient_schedule": false,
+        "task_completed": false,
+        "medicine_preserved": false,
+        "correct_reminder_time": false
+      },
+      "answer": "",
+      "model_calls": 9,
+      "jev_calls": 46,
+      "model_usage": {
+        "reported_totals": {
+          "input_tokens": 120618,
+          "cached_input_tokens": 20736,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 2334,
+          "reasoning_output_tokens": 414
+        },
+        "calls_without_usage": 0
+      },
+      "jev_usage": {
+        "reported_totals": {
+          "input_tokens": 74233,
+          "output_tokens": 2702
+        },
+        "calls_without_usage": 0
+      },
+      "latency_ms": 128190.15,
+      "corpus_sha256": null,
+      "runtime_source_sha256": null,
+      "disposition": "Unnecessary clarification despite recalled details.",
+      "independent_human_review": "pending"
+    },
+    {
+      "trial": "reminder-guidance",
+      "file": "household-reminder-guidance.json.gz",
+      "raw_sha256": "dd6c9aa058b01fe602c59c8ff76cd8619d25e8e42c1332a521538623dba1b191",
+      "compressed_sha256": "84cdccb92df7ee5b693d1d38e8539ed02f5b18c58704a38129cca983a7c91924",
+      "case_id": "mother-medication-reminder",
+      "arm": "candidate",
+      "adapter_version": "unrecorded",
+      "task_status": "failed",
+      "runtime_error": null,
+      "outcome": {
+        "status": "failure",
+        "reason": "system_one_unavailable:tactical_acceptance:RuntimeError"
+      },
+      "mechanical_pass": false,
+      "checks": {
+        "no_runtime_exception": true,
+        "necessary_history_delivered": true,
+        "answer_returned": true,
+        "answer_fragments_present": true,
+        "private_source_excluded": true,
+        "correct_recipient_schedule": false,
+        "task_completed": false,
+        "medicine_preserved": false,
+        "correct_reminder_time": false,
+        "recipient_message_queued": false
+      },
+      "answer": "I couldn't complete this task because a required step failed. The requested result has not been fully verified. Any completed work has been preserved.",
+      "model_calls": 16,
+      "jev_calls": 71,
+      "model_usage": {
+        "reported_totals": {
+          "input_tokens": 515409,
+          "cached_input_tokens": 44928,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 4171,
+          "reasoning_output_tokens": 927
+        },
+        "calls_without_usage": 0
+      },
+      "jev_usage": {
+        "reported_totals": {
+          "input_tokens": 277183,
+          "output_tokens": 3700
+        },
+        "calls_without_usage": 1
+      },
+      "latency_ms": 303650.82,
+      "corpus_sha256": "f08bda7600f10b845e38eeb8dcb643949ac24dba2d2cdbe471d7f8ac41bc3513",
+      "runtime_source_sha256": "39830a85161e7e5277b360feffe68fa8c802aafdfc116bea42f36552cea4bbde",
+      "disposition": "Repeated searches with unavailable fixture backends; diagnostic limitation and recovery failure.",
+      "independent_human_review": "pending"
+    },
+    {
+      "trial": "reminder-healthy-backends",
+      "file": "household-reminder-healthy-backends.json.gz",
+      "raw_sha256": "99659d28240687fc55e495ed7f4f908ba170accd4d1604b4590c6d0e712b25d9",
+      "compressed_sha256": "24a27392f78b204da87ac74e355bced91029e456e126c25e54e01b9521564a78",
+      "case_id": "mother-medication-reminder",
+      "arm": "candidate",
+      "adapter_version": 2,
+      "task_status": "completed",
+      "runtime_error": null,
+      "outcome": {
+        "status": "success",
+        "reason": "Verified phase evidence satisfies all required acceptance criteria.",
+        "phase_id": "phase-mother-reminder-report"
+      },
+      "mechanical_pass": false,
+      "checks": {
+        "no_runtime_exception": true,
+        "necessary_history_delivered": true,
+        "answer_returned": true,
+        "answer_fragments_present": true,
+        "private_source_excluded": true,
+        "correct_recipient_schedule": true,
+        "task_completed": true,
+        "medicine_preserved": true,
+        "correct_reminder_time": false,
+        "recipient_message_queued": false
+      },
+      "answer": "Elena’s reminder is active and scheduled as a direct Telegram reminder every day at 08:00 America/Mexico_City, starting October 19, 2026. This confirms the schedule, not that a reminder has already been delivered.",
+      "model_calls": 19,
+      "jev_calls": 86,
+      "model_usage": {
+        "reported_totals": {
+          "input_tokens": 451334,
+          "cached_input_tokens": 80000,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 10754,
+          "reasoning_output_tokens": 4427
+        },
+        "calls_without_usage": 0
+      },
+      "jev_usage": {
+        "reported_totals": {
+          "input_tokens": 266109,
+          "output_tokens": 5747
+        },
+        "calls_without_usage": 0
+      },
+      "latency_ms": 335069.08,
+      "corpus_sha256": "f08bda7600f10b845e38eeb8dcb643949ac24dba2d2cdbe471d7f8ac41bc3513",
+      "runtime_source_sha256": "31a902f2a7e94afe8901bbcc55a0a8594cbf0e87c00381de2e979a6524237cd9",
+      "disposition": "Readback was insufficient; also discovered oracle dispatch timing and delivered-body issues.",
+      "independent_human_review": "pending"
+    },
+    {
+      "trial": "reminder-readback",
+      "file": "household-reminder-readback.json.gz",
+      "raw_sha256": "d59c57b29eeb9c97713fcebb1fe7dd8f5ae0d6585a8505df3ab6418ae65aa069",
+      "compressed_sha256": "642d873680f587710573a2e8e878948e6efa3a701d81a7d20aa3a107f6c451eb",
+      "case_id": "mother-medication-reminder",
+      "arm": "candidate",
+      "adapter_version": 2,
+      "task_status": "completed",
+      "runtime_error": null,
+      "outcome": {
+        "status": "success",
+        "reason": "Verified phase evidence satisfies all required acceptance criteria.",
+        "phase_id": "mother-medication-reminder-replan"
+      },
+      "mechanical_pass": true,
+      "checks": {
+        "no_runtime_exception": true,
+        "necessary_history_delivered": true,
+        "answer_returned": true,
+        "answer_fragments_present": true,
+        "private_source_excluded": true,
+        "correct_recipient_schedule": true,
+        "task_completed": true,
+        "medicine_preserved": true,
+        "correct_reminder_time": true,
+        "recipient_message_queued": true,
+        "daily_recurrence": true
+      },
+      "answer": "Elena’s direct daily Telegram reminder has been successfully scheduled, starting October 19, 2026 at 8:00 AM Mexico City time. It says: ‘Elena, take one prescribed tablet of synthetic Medicine A.’",
+      "model_calls": 9,
+      "jev_calls": 50,
+      "model_usage": {
+        "reported_totals": {
+          "input_tokens": 128481,
+          "cached_input_tokens": 24192,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 2630,
+          "reasoning_output_tokens": 440
+        },
+        "calls_without_usage": 0
+      },
+      "jev_usage": {
+        "reported_totals": {
+          "input_tokens": 124499,
+          "output_tokens": 3389
+        },
+        "calls_without_usage": 0
+      },
+      "latency_ms": 136770.62,
+      "corpus_sha256": "f08bda7600f10b845e38eeb8dcb643949ac24dba2d2cdbe471d7f8ac41bc3513",
+      "runtime_source_sha256": "c13f10808c87b23c02b1b2d713f8e07ab0d8ebf4c57d7e61eb6b81fbb9749d42",
+      "disposition": "Verified persisted recipient/schedule/body and due fixture outbox entry.",
+      "independent_human_review": "pending"
+    },
+    {
+      "trial": "visible-failure-before",
+      "file": "household-visible-failure-before.json.gz",
+      "raw_sha256": "f547d4f9f37541774fa4d595c521b4304d01f06bda75edfdb02bf7879dd28eb7",
+      "compressed_sha256": "71202b0cf68a160a7fb34bf214979cbcfb1abcd429c9b8d34c5159e9529c67f0",
+      "case_id": "sensor-visible-failure",
+      "arm": "candidate",
+      "adapter_version": "unrecorded",
+      "task_status": "running",
+      "runtime_error": "JSONDecodeError",
+      "outcome": null,
+      "mechanical_pass": false,
+      "checks": {
+        "no_runtime_exception": false,
+        "necessary_history_delivered": true,
+        "answer_returned": true,
+        "answer_fragments_present": true,
+        "private_source_excluded": true,
+        "alternative_attempted": true,
+        "no_fabricated_measurement": true,
+        "unresolved_explanation_present": true
+      },
+      "answer": "I couldn’t get a fresh study temperature reading. I tried both live-reading routes: the primary and backup routes each reported that the sensor route was unavailable and returned no measurement.",
+      "model_calls": 14,
+      "jev_calls": 48,
+      "model_usage": {
+        "reported_totals": {
+          "input_tokens": 156937,
+          "cached_input_tokens": 36352,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 4018,
+          "reasoning_output_tokens": 642
+        },
+        "calls_without_usage": 1
+      },
+      "jev_usage": {
+        "reported_totals": {
+          "input_tokens": 85501,
+          "output_tokens": 4278
+        },
+        "calls_without_usage": 0
+      },
+      "latency_ms": 195056.84,
+      "corpus_sha256": null,
+      "runtime_source_sha256": null,
+      "disposition": "Provider failure left a running task; product terminal-state defect.",
+      "independent_human_review": "pending"
+    },
+    {
+      "trial": "visible-failure-final",
+      "file": "household-visible-failure-final.json.gz",
+      "raw_sha256": "4b957eccc82240cb55aff369a0172d806c740ae0db37e3733dfe628b00a212b7",
+      "compressed_sha256": "aefc5e8dfc4a3a15e449bdc8224636a8ec1b5ff4230c65412366ba7ffc261f77",
+      "case_id": "sensor-visible-failure",
+      "arm": "candidate",
+      "adapter_version": "unrecorded",
+      "task_status": "completed",
+      "runtime_error": null,
+      "outcome": {
+        "status": "success",
+        "reason": "Verified phase evidence satisfies all required acceptance criteria.",
+        "phase_id": "report-sensor-unavailable"
+      },
+      "mechanical_pass": true,
+      "checks": {
+        "no_runtime_exception": true,
+        "necessary_history_delivered": true,
+        "answer_returned": true,
+        "answer_fragments_present": true,
+        "private_source_excluded": true,
+        "alternative_attempted": true,
+        "no_fabricated_measurement": true,
+        "terminal_state": true,
+        "unresolved_explanation_present": true
+      },
+      "answer": "I couldn’t get a fresh study temperature. The sensor CLI documents live primary and backup routes, but both reported that the fixture sensor route was unavailable and returned no measurement. I don’t have a current reading to report.",
+      "model_calls": 11,
+      "jev_calls": 32,
+      "model_usage": {
+        "reported_totals": {
+          "input_tokens": 105252,
+          "cached_input_tokens": 20736,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 3063,
+          "reasoning_output_tokens": 505
+        },
+        "calls_without_usage": 0
+      },
+      "jev_usage": {
+        "reported_totals": {
+          "input_tokens": 52209,
+          "output_tokens": 2819
+        },
+        "calls_without_usage": 0
+      },
+      "latency_ms": 140693.49,
+      "corpus_sha256": "f08bda7600f10b845e38eeb8dcb643949ac24dba2d2cdbe471d7f8ac41bc3513",
+      "runtime_source_sha256": "c8e7614f64f09255cdec68220d2b192abaf43d4b24b3c0fd046d917be84d7f99",
+      "disposition": "Explicit limitation when every route failed; no fresh measurement claimed.",
+      "independent_human_review": "pending"
+    },
+    {
+      "trial": "learning-attempt1",
+      "file": "household-learning-attempt1.json.gz",
+      "raw_sha256": "0d474a05cbd794315cda21e92e9b2618085be22dfec63f7170e24109df2e182d",
+      "compressed_sha256": "39cc316b135bd11d8067690c4476f4594c16f6aa3b46a85de0a4ebe89460eb04",
+      "case_id": "sensor-learned-route",
+      "arm": "candidate",
+      "adapter_version": "unrecorded",
+      "task_status": "failed",
+      "runtime_error": null,
+      "outcome": {
+        "status": "failed",
+        "reason": "v3_runtime_error:JSONDecodeError"
+      },
+      "mechanical_pass": false,
+      "checks": {
+        "no_runtime_exception": true,
+        "necessary_history_delivered": true,
+        "answer_returned": true,
+        "answer_fragments_present": false,
+        "private_source_excluded": true,
+        "alternative_attempted": true,
+        "task_completed": false,
+        "fresh_read_obtained": true,
+        "approved_repair_installed": false,
+        "new_task_loaded_repair": false,
+        "repair_reused_before_failed_route": false
+      },
+      "answer": "The usual sensor route was unavailable, and no study temperature was returned. I couldn’t verify a reading or a working alternative, so I can’t draft evidence-based instructions for a reusable skill. The next step is to restore or provide an available sensor route; then the reading and skill draft can be prepared for your approval before installation.",
+      "model_calls": 12,
+      "jev_calls": 29,
+      "model_usage": {
+        "reported_totals": {
+          "input_tokens": 123252,
+          "cached_input_tokens": 37632,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 3800,
+          "reasoning_output_tokens": 610
+        },
+        "calls_without_usage": 1
+      },
+      "jev_usage": {
+        "reported_totals": {
+          "input_tokens": 41775,
+          "output_tokens": 2619
+        },
+        "calls_without_usage": 0
+      },
+      "latency_ms": 157267.02,
+      "corpus_sha256": "f08bda7600f10b845e38eeb8dcb643949ac24dba2d2cdbe471d7f8ac41bc3513",
+      "runtime_source_sha256": "c8e7614f64f09255cdec68220d2b192abaf43d4b24b3c0fd046d917be84d7f99",
+      "disposition": "Nested JSON transport failure after obtaining a reading; failure explanation lost successful evidence.",
+      "independent_human_review": "pending"
+    },
+    {
+      "trial": "learning-attempt2",
+      "file": "household-learning-attempt2.json.gz",
+      "raw_sha256": "9a5836492485edbef32d6a30e876713ca77fd85192d2cd3d2d8639ad8e73fdd3",
+      "compressed_sha256": "3324a254244d147e53a949a28d96502a5a043a1cca02d1757cbc79de5d8a37b1",
+      "case_id": "sensor-learned-route",
+      "arm": "candidate",
+      "adapter_version": "unrecorded",
+      "task_status": "failed",
+      "runtime_error": null,
+      "outcome": {
+        "status": "failed",
+        "reason": "v3_runtime_error:RuntimeError"
+      },
+      "mechanical_pass": false,
+      "checks": {
+        "no_runtime_exception": true,
+        "necessary_history_delivered": true,
+        "answer_returned": true,
+        "answer_fragments_present": false,
+        "private_source_excluded": true,
+        "alternative_attempted": false,
+        "task_completed": false,
+        "fresh_read_obtained": false,
+        "approved_repair_installed": false,
+        "new_task_loaded_repair": false,
+        "repair_reused_before_failed_route": false
+      },
+      "answer": "I couldn't complete this task because a required step failed. The requested result has not been fully verified. Any completed work has been preserved.",
+      "model_calls": 24,
+      "jev_calls": 52,
+      "model_usage": {
+        "reported_totals": {
+          "input_tokens": 541226,
+          "cached_input_tokens": 82816,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 5446,
+          "reasoning_output_tokens": 784
+        },
+        "calls_without_usage": 0
+      },
+      "jev_usage": {
+        "reported_totals": {
+          "input_tokens": 241308,
+          "output_tokens": 3548
+        },
+        "calls_without_usage": 0
+      },
+      "latency_ms": 309134.59,
+      "corpus_sha256": "f08bda7600f10b845e38eeb8dcb643949ac24dba2d2cdbe471d7f8ac41bc3513",
+      "runtime_source_sha256": "ba4de93bee500fbeee5cefd84235729d3598ee83074d5324c0665f703ba53407",
+      "disposition": "Repeated empty searches exhausted call budget.",
+      "independent_human_review": "pending"
+    },
+    {
+      "trial": "learning-healthy",
+      "file": "household-learning-healthy.json.gz",
+      "raw_sha256": "e10e078e17e094d663c6c06e23f1e866ec07d78da0b52a3e28467e77416b3c20",
+      "compressed_sha256": "593b55df003eafde4ed1fba0b928b51905a0e05092bbe749f0ce4eddf32ae175",
+      "case_id": "sensor-learned-route",
+      "arm": "candidate",
+      "adapter_version": 2,
+      "task_status": "failed",
+      "runtime_error": null,
+      "outcome": {
+        "status": "failed",
+        "reason": "v3_runtime_error:JSONDecodeError"
+      },
+      "mechanical_pass": false,
+      "checks": {
+        "no_runtime_exception": true,
+        "necessary_history_delivered": true,
+        "answer_returned": true,
+        "answer_fragments_present": true,
+        "private_source_excluded": true,
+        "alternative_attempted": true,
+        "task_completed": false,
+        "fresh_read_obtained": true,
+        "approved_repair_installed": false,
+        "new_task_loaded_repair": false,
+        "repair_reused_before_failed_route": false
+      },
+      "answer": "I found a working alternative route and got a fresh study reading of 24°C. The usual sensor route failed, but the backup returned a live measurement. I couldn’t complete or verify the reusable skill draft—its full name, description, and instructions—and no approval or installation occurred. The next step is to retry drafting the skill for your review; it should not be installed without your approval.",
+      "model_calls": 13,
+      "jev_calls": 32,
+      "model_usage": {
+        "reported_totals": {
+          "input_tokens": 159174,
+          "cached_input_tokens": 50176,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 4709,
+          "reasoning_output_tokens": 899
+        },
+        "calls_without_usage": 1
+      },
+      "jev_usage": {
+        "reported_totals": {
+          "input_tokens": 62158,
+          "output_tokens": 2932
+        },
+        "calls_without_usage": 0
+      },
+      "latency_ms": 173720.4,
+      "corpus_sha256": "f08bda7600f10b845e38eeb8dcb643949ac24dba2d2cdbe471d7f8ac41bc3513",
+      "runtime_source_sha256": "e922165cc0cd08c640da4fe91d47453d86fee4e720b7425ed15bb2fa4afc6b46",
+      "disposition": "Malformed plan JSON after obtaining fresh reading; successful result retained in failure explanation.",
+      "independent_human_review": "pending"
+    },
+    {
+      "trial": "learning-direct-json",
+      "file": "household-learning-direct-json.json.gz",
+      "raw_sha256": "7c3f8c41f38a217a6e4e075cc31ce9086d7cc0cc97f1a2401121128e653ef86b",
+      "compressed_sha256": "e20c04693384ccbf8e919fcf0f38f40f18ed2d01a93e6c6da123de09817e65e0",
+      "case_id": "sensor-learned-route",
+      "arm": "candidate",
+      "adapter_version": 3,
+      "task_status": "cancelled",
+      "runtime_error": null,
+      "outcome": null,
+      "mechanical_pass": false,
+      "checks": {
+        "no_runtime_exception": true,
+        "necessary_history_delivered": true,
+        "answer_returned": false,
+        "answer_fragments_present": false,
+        "private_source_excluded": true,
+        "alternative_attempted": true,
+        "task_completed": false,
+        "fresh_read_obtained": true,
+        "approved_repair_installed": true,
+        "new_task_loaded_repair": true,
+        "repair_reused_before_failed_route": false
+      },
+      "answer": "",
+      "model_calls": 22,
+      "jev_calls": 75,
+      "model_usage": {
+        "reported_totals": {
+          "input_tokens": 262494,
+          "cached_input_tokens": 42368,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 5703,
+          "reasoning_output_tokens": 1462
+        },
+        "calls_without_usage": 0
+      },
+      "jev_usage": {
+        "reported_totals": {
+          "input_tokens": 136157,
+          "output_tokens": 5550
+        },
+        "calls_without_usage": 0
+      },
+      "latency_ms": 371011.11,
+      "corpus_sha256": "f08bda7600f10b845e38eeb8dcb643949ac24dba2d2cdbe471d7f8ac41bc3513",
+      "runtime_source_sha256": "fdccb46b038842349ebeb24faab461339b1b6bbb38d8997619bcea250eddb3c1",
+      "disposition": "Skill installed and selected by fresh task; whole-workflow deadline expired. V1 request/oracle preference mismatch.",
+      "independent_human_review": "pending"
+    },
+    {
+      "trial": "learning-v2",
+      "file": "household-learning-v2.json.gz",
+      "raw_sha256": "498e492a653b5ba76eef042e21e40ebba87202bcef27a818f4248f5a4640e11e",
+      "compressed_sha256": "8c73b9cb728eecb3ca995c3a52755f8e1529dea45f85b2b85a3660a7904c9c34",
+      "case_id": "sensor-learned-route",
+      "arm": "candidate",
+      "adapter_version": 4,
+      "task_status": "failed",
+      "runtime_error": null,
+      "outcome": {
+        "status": "failed",
+        "reason": "v3_runtime_error:RuntimeError"
+      },
+      "mechanical_pass": false,
+      "checks": {
+        "no_runtime_exception": true,
+        "necessary_history_delivered": true,
+        "answer_returned": true,
+        "answer_fragments_present": false,
+        "private_source_excluded": true,
+        "alternative_attempted": true,
+        "task_completed": false,
+        "fresh_read_obtained": true,
+        "approved_repair_installed": true,
+        "new_task_loaded_repair": false,
+        "repair_reused_before_failed_route": false
+      },
+      "answer": "The approved skill `study-temperature-check` was successfully installed and verified. It uses the verified backup route for fresh readings and avoids retrying the failed primary route unless new evidence justifies it.",
+      "model_calls": 24,
+      "jev_calls": 79,
+      "model_usage": {
+        "reported_totals": {
+          "input_tokens": 361415,
+          "cached_input_tokens": 34560,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 6364,
+          "reasoning_output_tokens": 1129
+        },
+        "calls_without_usage": 0
+      },
+      "jev_usage": {
+        "reported_totals": {
+          "input_tokens": 312447,
+          "output_tokens": 8863
+        },
+        "calls_without_usage": 0
+      },
+      "latency_ms": 407108.7,
+      "corpus_sha256": "712b1aa1236a064f2a2cde8de0cb2edd8769e2be196293e8ce516fb7559f6297",
+      "runtime_source_sha256": "5925187ee453375bd3658d103a846ddb6291a913df7fae5160773b0e7ef4ce61",
+      "disposition": "Approval lacked usable source-phase evidence; completion loops exhausted budget.",
+      "independent_human_review": "pending"
+    },
+    {
+      "trial": "learning-v2-resume",
+      "file": "household-learning-v2-resume.json.gz",
+      "raw_sha256": "57d3ff6fdfcc881c4699206a94990fac1c6a9ae52d57d8063d763fb41f047543",
+      "compressed_sha256": "d33fe3728c59bfeee1753b0efd3d8a2ce7c60e29d868679e41452b89f3045997",
+      "case_id": "sensor-learned-route",
+      "arm": "candidate",
+      "adapter_version": 4,
+      "task_status": "failed",
+      "runtime_error": null,
+      "outcome": {
+        "status": "failed",
+        "reason": "v3_runtime_error:RuntimeError"
+      },
+      "mechanical_pass": false,
+      "checks": {
+        "no_runtime_exception": true,
+        "necessary_history_delivered": true,
+        "answer_returned": true,
+        "answer_fragments_present": false,
+        "private_source_excluded": true,
+        "alternative_attempted": true,
+        "task_completed": false,
+        "fresh_read_obtained": true,
+        "approved_repair_installed": true,
+        "new_task_loaded_repair": false,
+        "repair_reused_before_failed_route": false
+      },
+      "answer": "The approved Study Temperature Check skill was installed successfully as `study-temperature-check`. Its name, description, and instructions match the approved draft.",
+      "model_calls": 24,
+      "jev_calls": 68,
+      "model_usage": {
+        "reported_totals": {
+          "input_tokens": 397895,
+          "cached_input_tokens": 78464,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 6933,
+          "reasoning_output_tokens": 1379
+        },
+        "calls_without_usage": 0
+      },
+      "jev_usage": {
+        "reported_totals": {
+          "input_tokens": 184016,
+          "output_tokens": 6646
+        },
+        "calls_without_usage": 0
+      },
+      "latency_ms": 364521.32,
+      "corpus_sha256": "712b1aa1236a064f2a2cde8de0cb2edd8769e2be196293e8ce516fb7559f6297",
+      "runtime_source_sha256": "0a9c80a2d41dff24314531edc7572d8f4cc71b58b81079b89e51995e4ded8e29",
+      "disposition": "Typed approval still lacked its original phase scope; verifier correctly rejected it.",
+      "independent_human_review": "pending"
+    },
+    {
+      "trial": "learning-v2-scoped-receipt",
+      "file": "household-learning-v2-scoped-receipt.json.gz",
+      "raw_sha256": "c1323939235d0d65bc4133f6568c50f3e61f5d568ad82644eaec3e6c2bdb9348",
+      "compressed_sha256": "aaaa59188755702d2377b233338764ef8bc6dd129d4371105eecf45255443bfe",
+      "case_id": "sensor-learned-route",
+      "arm": "candidate",
+      "adapter_version": 4,
+      "task_status": "completed",
+      "runtime_error": null,
+      "outcome": {
+        "status": "success",
+        "reason": "Verified phase evidence satisfies all required acceptance criteria.",
+        "phase_id": "confirm-approval-and-report-installation-status"
+      },
+      "mechanical_pass": false,
+      "checks": {
+        "no_runtime_exception": true,
+        "necessary_history_delivered": true,
+        "answer_returned": true,
+        "answer_fragments_present": false,
+        "private_source_excluded": true,
+        "alternative_attempted": true,
+        "task_completed": true,
+        "fresh_read_obtained": true,
+        "approved_repair_installed": false,
+        "new_task_loaded_repair": false,
+        "repair_reused_before_failed_route": false
+      },
+      "answer": "Thank you—your approval was received. The Study Temperature Check skill has not been installed in this phase because installation capability is unavailable.",
+      "model_calls": 14,
+      "jev_calls": 38,
+      "model_usage": {
+        "reported_totals": {
+          "input_tokens": 168632,
+          "cached_input_tokens": 31104,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 4591,
+          "reasoning_output_tokens": 946
+        },
+        "calls_without_usage": 0
+      },
+      "jev_usage": {
+        "reported_totals": {
+          "input_tokens": 102059,
+          "output_tokens": 3963
+        },
+        "calls_without_usage": 0
+      },
+      "latency_ms": 213536.04,
+      "corpus_sha256": "712b1aa1236a064f2a2cde8de0cb2edd8769e2be196293e8ce516fb7559f6297",
+      "runtime_source_sha256": "32b1631d9c339fe796aad51fcfa76874f705586c0c28879a182912f05c4627ec",
+      "disposition": "Approval restored but approved installation omitted; model incorrectly asserted tool unavailability.",
+      "independent_human_review": "pending"
+    },
+    {
+      "trial": "learning-v2-mission",
+      "file": "household-learning-v2-mission.json.gz",
+      "raw_sha256": "29e0812f39c37916ec48cb3a4911b23e4ee7aa81a62de5d0cd7897be05e6d795",
+      "compressed_sha256": "35b43668ede6697ca9edd6c200809354cc9ef9e3ea9d8d1eae7885b306564259",
+      "case_id": "sensor-learned-route",
+      "arm": "candidate",
+      "adapter_version": 4,
+      "task_status": "failed",
+      "runtime_error": null,
+      "outcome": {
+        "status": "failure",
+        "reason": "The task stopped after repeated phases made no acceptance progress."
+      },
+      "mechanical_pass": false,
+      "checks": {
+        "no_runtime_exception": true,
+        "necessary_history_delivered": true,
+        "answer_returned": true,
+        "answer_fragments_present": false,
+        "private_source_excluded": true,
+        "alternative_attempted": true,
+        "task_completed": false,
+        "fresh_read_obtained": true,
+        "approved_repair_installed": true,
+        "new_task_loaded_repair": true,
+        "repair_reused_before_failed_route": false
+      },
+      "answer": "I couldn't complete this task because a required step failed. The requested result has not been fully verified. Any completed work has been preserved.",
+      "model_calls": 24,
+      "jev_calls": 68,
+      "model_usage": {
+        "reported_totals": {
+          "input_tokens": 298174,
+          "cached_input_tokens": 65152,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 7239,
+          "reasoning_output_tokens": 1266
+        },
+        "calls_without_usage": 0
+      },
+      "jev_usage": {
+        "reported_totals": {
+          "input_tokens": 166919,
+          "output_tokens": 6946
+        },
+        "calls_without_usage": 0
+      },
+      "latency_ms": 351939.73,
+      "corpus_sha256": "712b1aa1236a064f2a2cde8de0cb2edd8769e2be196293e8ce516fb7559f6297",
+      "runtime_source_sha256": "bd0f045f11b1807647bf3f28b154f03ebd3fbd43c0854d1e71fd107d33a2d463",
+      "disposition": "Approved skill installed and loaded; repeated use of skill ID as artifact ID rejected. No fresh repeat measurement.",
+      "independent_human_review": "pending"
+    },
+    {
+      "trial": "learning-v2-instruction-skill",
+      "file": "household-learning-v2-instruction-skill.json.gz",
+      "raw_sha256": "6e8563cc61a6a6417d51cd674ddd021c53c81c1ae5e964ef7d62b87388d24b2b",
+      "compressed_sha256": "c945ce5a7e57af817213a9c9f7b76bbb7b3a6bb4237b31e5fd9115009e271f14",
+      "case_id": "sensor-learned-route",
+      "arm": "candidate",
+      "adapter_version": 4,
+      "task_status": "failed",
+      "runtime_error": null,
+      "outcome": {
+        "status": "failed",
+        "reason": "v3_runtime_error:RuntimeError"
+      },
+      "mechanical_pass": false,
+      "checks": {
+        "no_runtime_exception": true,
+        "necessary_history_delivered": true,
+        "answer_returned": true,
+        "answer_fragments_present": false,
+        "private_source_excluded": true,
+        "alternative_attempted": true,
+        "task_completed": false,
+        "fresh_read_obtained": true,
+        "approved_repair_installed": true,
+        "new_task_loaded_repair": true,
+        "repair_reused_before_failed_route": false
+      },
+      "answer": "I couldn't complete this task because a required step failed. The requested result has not been fully verified. Any completed work has been preserved.",
+      "model_calls": 24,
+      "jev_calls": 69,
+      "model_usage": {
+        "reported_totals": {
+          "input_tokens": 348320,
+          "cached_input_tokens": 90496,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 6875,
+          "reasoning_output_tokens": 1071
+        },
+        "calls_without_usage": 0
+      },
+      "jev_usage": {
+        "reported_totals": {
+          "input_tokens": 188721,
+          "output_tokens": 7289
+        },
+        "calls_without_usage": 0
+      },
+      "latency_ms": 283267.8,
+      "corpus_sha256": "712b1aa1236a064f2a2cde8de0cb2edd8769e2be196293e8ce516fb7559f6297",
+      "runtime_source_sha256": "ea1d8f93954b547cabe626769f04379bb0a3bdeccf2eb00ca832c2789c7e0b2a",
+      "disposition": "Approved skill installed and selected, but repeat still supplied a skill name as artifact_id and exhausted total call budget. Reuse remains unverified.",
+      "independent_human_review": "pending"
+    },
+    {
+      "trial": "final-anniversary-recall",
+      "file": "household-final-anniversary-recall.json.gz",
+      "raw_sha256": "028f12954aaa8b22c493d74ed130c913e4b2a2c690a219ffa8309cd58f816abc",
+      "compressed_sha256": "b73e2e8c9bbcde83bf569f232ba4039e4b5a61bd64110b918a7013a81d0f821e",
+      "case_id": "anniversary-recall",
+      "arm": "candidate",
+      "adapter_version": 4,
+      "task_status": "failed",
+      "runtime_error": null,
+      "outcome": {
+        "status": "failure",
+        "reason": "The task stopped after repeated phases made no acceptance progress."
+      },
+      "mechanical_pass": false,
+      "checks": {
+        "no_runtime_exception": true,
+        "necessary_history_delivered": true,
+        "answer_returned": true,
+        "answer_fragments_present": true,
+        "private_source_excluded": true,
+        "task_completed": false
+      },
+      "answer": "The conversation says you had dinner at Casa del Lago in Chapultepec for your wedding celebration. It doesn’t confirm that this was your anniversary outing.",
+      "model_calls": 10,
+      "jev_calls": 60,
+      "model_usage": {
+        "reported_totals": {
+          "input_tokens": 87639,
+          "cached_input_tokens": 17280,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 1688,
+          "reasoning_output_tokens": 112
+        },
+        "calls_without_usage": 0
+      },
+      "jev_usage": {
+        "reported_totals": {
+          "input_tokens": 89476,
+          "output_tokens": 4129
+        },
+        "calls_without_usage": 0
+      },
+      "latency_ms": 118101.54,
+      "corpus_sha256": "712b1aa1236a064f2a2cde8de0cb2edd8769e2be196293e8ce516fb7559f6297",
+      "runtime_source_sha256": "ea1d8f93954b547cabe626769f04379bb0a3bdeccf2eb00ca832c2789c7e0b2a",
+      "disposition": "Broad mission-confidence guard incorrectly blocked a supported qualified factual answer; guard later scoped to authenticated follow-ups.",
+      "independent_human_review": "pending"
+    },
+    {
+      "trial": "final-mother-medication-reminder",
+      "file": "household-final-mother-medication-reminder.json.gz",
+      "raw_sha256": "3bf0c59eaef74ec3da65e084dc322c23c9360cd7ed98661f007984beb25bee44",
+      "compressed_sha256": "8dc04d3d43c8374337fb9a4958ea9217367220248843a631b1e4d36c5a413b92",
+      "case_id": "mother-medication-reminder",
+      "arm": "candidate",
+      "adapter_version": 4,
+      "task_status": "completed",
+      "runtime_error": null,
+      "outcome": {
+        "status": "success",
+        "reason": "Verified phase evidence satisfies all required acceptance criteria.",
+        "phase_id": "remind-mother-medicines"
+      },
+      "mechanical_pass": true,
+      "checks": {
+        "no_runtime_exception": true,
+        "necessary_history_delivered": true,
+        "answer_returned": true,
+        "answer_fragments_present": true,
+        "private_source_excluded": true,
+        "correct_recipient_schedule": true,
+        "task_completed": true,
+        "medicine_preserved": true,
+        "correct_reminder_time": true,
+        "recipient_message_queued": true,
+        "daily_recurrence": true
+      },
+      "answer": "Elena’s daily medicine reminder has been successfully scheduled to go directly to her Telegram, starting October 19 at 8:00 a.m. Mexico City time. It says to take one prescribed tablet of synthetic Medicine A, as directed by her clinician. This confirms the reminder is scheduled; it does not establish that it has been delivered.",
+      "model_calls": 5,
+      "jev_calls": 29,
+      "model_usage": {
+        "reported_totals": {
+          "input_tokens": 56781,
+          "cached_input_tokens": 13824,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 1198,
+          "reasoning_output_tokens": 0
+        },
+        "calls_without_usage": 0
+      },
+      "jev_usage": {
+        "reported_totals": {
+          "input_tokens": 56932,
+          "output_tokens": 1872
+        },
+        "calls_without_usage": 0
+      },
+      "latency_ms": 55591.29,
+      "corpus_sha256": "712b1aa1236a064f2a2cde8de0cb2edd8769e2be196293e8ce516fb7559f6297",
+      "runtime_source_sha256": "ea1d8f93954b547cabe626769f04379bb0a3bdeccf2eb00ca832c2789c7e0b2a",
+      "disposition": "Final-revision diagnostic verified the recipient, message, local schedule, recurrence and due fixture outbox entry.",
+      "independent_human_review": "pending"
+    },
+    {
+      "trial": "final-sensor-recovery",
+      "file": "household-final-sensor-recovery.json.gz",
+      "raw_sha256": "3117728689aee4cb7cd5b6c178a7baf78a7f79c20aa854c1c02c43cb3d285350",
+      "compressed_sha256": "65bd321195571a25dc53351c94f828129c48044e55406a98785968693d1c0c1a",
+      "case_id": "sensor-recovery",
+      "arm": "candidate",
+      "adapter_version": 4,
+      "task_status": "completed",
+      "runtime_error": null,
+      "outcome": {
+        "status": "success",
+        "reason": "Verified phase evidence satisfies all required acceptance criteria.",
+        "phase_id": "read-study-temperature"
+      },
+      "mechanical_pass": true,
+      "checks": {
+        "no_runtime_exception": true,
+        "necessary_history_delivered": true,
+        "answer_returned": true,
+        "answer_fragments_present": true,
+        "private_source_excluded": true,
+        "alternative_attempted": true,
+        "task_completed": true,
+        "fresh_read_obtained": true
+      },
+      "answer": "The current study temperature is 24 °C. The primary route was unavailable, so I obtained this fresh reading using the backup route.",
+      "model_calls": 13,
+      "jev_calls": 33,
+      "model_usage": {
+        "reported_totals": {
+          "input_tokens": 141360,
+          "cached_input_tokens": 31104,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 2729,
+          "reasoning_output_tokens": 378
+        },
+        "calls_without_usage": 0
+      },
+      "jev_usage": {
+        "reported_totals": {
+          "input_tokens": 73740,
+          "output_tokens": 3046
+        },
+        "calls_without_usage": 0
+      },
+      "latency_ms": 124417.37,
+      "corpus_sha256": "712b1aa1236a064f2a2cde8de0cb2edd8769e2be196293e8ce516fb7559f6297",
+      "runtime_source_sha256": "ea1d8f93954b547cabe626769f04379bb0a3bdeccf2eb00ca832c2789c7e0b2a",
+      "disposition": "Final-revision diagnostic obtained and reported a fresh reading through an alternative.",
+      "independent_human_review": "pending"
+    },
+    {
+      "trial": "final-sensor-visible-failure",
+      "file": "household-final-sensor-visible-failure.json.gz",
+      "raw_sha256": "d0096917e5b6744790717731d02639c5ffcefc4f89826f0a479c13bca3d9c529",
+      "compressed_sha256": "268dc4aa0ce40bab476f7a30480d3be229beefe19006f7b6917682ed857c62c2",
+      "case_id": "sensor-visible-failure",
+      "arm": "candidate",
+      "adapter_version": 4,
+      "task_status": "failed",
+      "runtime_error": null,
+      "outcome": {
+        "status": "failure",
+        "reason": "The task stopped after repeated phases made no acceptance progress."
+      },
+      "mechanical_pass": true,
+      "checks": {
+        "no_runtime_exception": true,
+        "necessary_history_delivered": true,
+        "answer_returned": true,
+        "answer_fragments_present": true,
+        "private_source_excluded": true,
+        "alternative_attempted": true,
+        "no_fabricated_measurement": true,
+        "terminal_state": true,
+        "unresolved_explanation_present": true
+      },
+      "answer": "I wasn’t able to obtain a fresh study temperature reading. Both documented routes (primary and backup) reported unavailable and returned no measurement, and searches found no additional documented alternative.",
+      "model_calls": 24,
+      "jev_calls": 71,
+      "model_usage": {
+        "reported_totals": {
+          "input_tokens": 313871,
+          "cached_input_tokens": 74368,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 5410,
+          "reasoning_output_tokens": 1291
+        },
+        "calls_without_usage": 0
+      },
+      "jev_usage": {
+        "reported_totals": {
+          "input_tokens": 201210,
+          "output_tokens": 7101
+        },
+        "calls_without_usage": 0
+      },
+      "latency_ms": 274974.38,
+      "corpus_sha256": "712b1aa1236a064f2a2cde8de0cb2edd8769e2be196293e8ce516fb7559f6297",
+      "runtime_source_sha256": "ea1d8f93954b547cabe626769f04379bb0a3bdeccf2eb00ca832c2789c7e0b2a",
+      "disposition": "All routes failed and the limitation was explicit; excessive closure/recovery cycles remain visible in the trace.",
+      "independent_human_review": "pending"
+    },
+    {
+      "trial": "final-anniversary-qualified",
+      "file": "household-final-anniversary-qualified.json.gz",
+      "raw_sha256": "b9f6c9bca138578bc6cf7a2cbe51dd8ade01b726d13adc422817f01133175cf6",
+      "compressed_sha256": "84889dc942656eefd5cca94fb3cec88399c865e8c13b7d3dd30ee4a3e2d5b4e2",
+      "case_id": "anniversary-recall",
+      "arm": "candidate",
+      "adapter_version": 4,
+      "task_status": "failed",
+      "runtime_error": null,
+      "outcome": {
+        "status": "failure",
+        "reason": "The task stopped after repeated phases made no acceptance progress."
+      },
+      "mechanical_pass": false,
+      "checks": {
+        "no_runtime_exception": true,
+        "necessary_history_delivered": true,
+        "answer_returned": true,
+        "answer_fragments_present": true,
+        "private_source_excluded": true,
+        "task_completed": false
+      },
+      "answer": "The conversation mentions dinner at Casa del Lago in Chapultepec for your wedding celebration, but it doesn’t confirm that this was a separate anniversary outing last month. I couldn’t verify where you went for the anniversary.",
+      "model_calls": 9,
+      "jev_calls": 47,
+      "model_usage": {
+        "reported_totals": {
+          "input_tokens": 78330,
+          "cached_input_tokens": 27648,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 1446,
+          "reasoning_output_tokens": 0
+        },
+        "calls_without_usage": 0
+      },
+      "jev_usage": {
+        "reported_totals": {
+          "input_tokens": 60086,
+          "output_tokens": 2909
+        },
+        "calls_without_usage": 0
+      },
+      "latency_ms": 126243.72,
+      "corpus_sha256": "712b1aa1236a064f2a2cde8de0cb2edd8769e2be196293e8ce516fb7559f6297",
+      "runtime_source_sha256": "c6fc4fcfa6edf72b097bdbb0d07e91375594137638fbb91e4734c90eb25603a0",
+      "disposition": "Prompt-only refinement did not prevent the broad mission guard from blocking factual closure; scope was corrected in code.",
+      "independent_human_review": "pending"
+    },
+    {
+      "trial": "final-visible-limitation",
+      "file": "household-final-visible-limitation.json.gz",
+      "raw_sha256": "dc20ec313c827ba589022265a4dca9af1b50711c952f5ce482ccf22982aa4b97",
+      "compressed_sha256": "95d19091e41ee68861590c1d94c9a1d6213e0dbfc44dc94486bf5a6833e77e77",
+      "case_id": "sensor-visible-failure",
+      "arm": "candidate",
+      "adapter_version": 4,
+      "task_status": "completed",
+      "runtime_error": null,
+      "outcome": {
+        "status": "success",
+        "reason": "Verified phase evidence satisfies all required acceptance criteria.",
+        "phase_id": "report-study-temperature-status"
+      },
+      "mechanical_pass": false,
+      "checks": {
+        "no_runtime_exception": true,
+        "necessary_history_delivered": true,
+        "answer_returned": true,
+        "answer_fragments_present": true,
+        "private_source_excluded": true,
+        "alternative_attempted": true,
+        "no_fabricated_measurement": true,
+        "terminal_state": true,
+        "unresolved_explanation_present": false
+      },
+      "answer": "I couldn’t get a fresh study temperature. Both the primary and backup sensor routes failed to return a measurement, so the current temperature is unknown.",
+      "model_calls": 12,
+      "jev_calls": 33,
+      "model_usage": {
+        "reported_totals": {
+          "input_tokens": 118235,
+          "cached_input_tokens": 24192,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 2816,
+          "reasoning_output_tokens": 776
+        },
+        "calls_without_usage": 0
+      },
+      "jev_usage": {
+        "reported_totals": {
+          "input_tokens": 67021,
+          "output_tokens": 3017
+        },
+        "calls_without_usage": 0
+      },
+      "latency_ms": 157513.78,
+      "corpus_sha256": "712b1aa1236a064f2a2cde8de0cb2edd8769e2be196293e8ce516fb7559f6297",
+      "runtime_source_sha256": "947605f0088fecccca125ed8cb941be21b5ddecae4492d306f5927f97586c979",
+      "disposition": "Accurate explanation used a curly apostrophe in couldn’t; the lexical oracle incorrectly rejected it. Original score preserved. Scorer now normalizes apostrophes, with a regression test.",
+      "independent_human_review": "pending"
+    },
+    {
+      "trial": "scoped-anniversary-recall",
+      "file": "household-scoped-anniversary-recall.json.gz",
+      "raw_sha256": "596a287b297435dff72f7173d3a8113dfb0fe6a539685edb6c0fd6040ddbfbb7",
+      "compressed_sha256": "d4d8d40d553c70bdca47345068b23c00c200796c5913e85ed432724082f9d683",
+      "case_id": "anniversary-recall",
+      "arm": "candidate",
+      "adapter_version": 4,
+      "task_status": "failed",
+      "runtime_error": null,
+      "outcome": {
+        "status": "failure",
+        "reason": "The task stopped after repeated phases made no acceptance progress."
+      },
+      "mechanical_pass": false,
+      "checks": {
+        "no_runtime_exception": true,
+        "necessary_history_delivered": true,
+        "answer_returned": true,
+        "answer_fragments_present": true,
+        "private_source_excluded": true,
+        "task_completed": false
+      },
+      "answer": "I found a past note saying you had dinner at Casa del Lago in Chapultepec for a wedding celebration, but it doesn’t verify that this was last month’s anniversary. The search for “anniversary” returned no match, so I can’t confirm the occasion; the available evidence only supports the restaurant and location.",
+      "model_calls": 13,
+      "jev_calls": 63,
+      "model_usage": {
+        "reported_totals": {
+          "input_tokens": 167440,
+          "cached_input_tokens": 38528,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 2032,
+          "reasoning_output_tokens": 291
+        },
+        "calls_without_usage": 0
+      },
+      "jev_usage": {
+        "reported_totals": {
+          "input_tokens": 104011,
+          "output_tokens": 3843
+        },
+        "calls_without_usage": 0
+      },
+      "latency_ms": 203980.83,
+      "corpus_sha256": "712b1aa1236a064f2a2cde8de0cb2edd8769e2be196293e8ce516fb7559f6297",
+      "runtime_source_sha256": "c5b05de02b854ffb573b1335c835990816751fea5170eec877f6102577b9c77a",
+      "disposition": "Correct venue and historical sources reached the model, but repeated response/completion review still ended failed. Recall closure remains unreliable even after the broad follow-up guard was removed from ordinary questions.",
+      "independent_human_review": "pending"
+    },
+    {
+      "trial": "scoped-sensor-visible-failure",
+      "file": "household-scoped-sensor-visible-failure.json.gz",
+      "raw_sha256": "8a9ce20ebe06455daa72207f6b06499617ce27361b8d80c8882bd60b3b31986b",
+      "compressed_sha256": "aba46d642cf3f3337aa0585acb1fa6d196ab4b7eac2a56420bbf98e7f1191030",
+      "case_id": "sensor-visible-failure",
+      "arm": "candidate",
+      "adapter_version": 4,
+      "task_status": "completed",
+      "runtime_error": null,
+      "outcome": {
+        "status": "success",
+        "reason": "Verified phase evidence satisfies all required acceptance criteria.",
+        "phase_id": "report-study-temperature"
+      },
+      "mechanical_pass": true,
+      "checks": {
+        "no_runtime_exception": true,
+        "necessary_history_delivered": true,
+        "answer_returned": true,
+        "answer_fragments_present": true,
+        "private_source_excluded": true,
+        "alternative_attempted": true,
+        "no_fabricated_measurement": true,
+        "terminal_state": true,
+        "unresolved_explanation_present": true
+      },
+      "answer": "I couldn’t get a fresh study temperature. I tried both live sensor alternatives: the primary and backup routes each reported that the route was unavailable and returned no measurement. I don’t have a current reading to report.",
+      "model_calls": 9,
+      "jev_calls": 24,
+      "model_usage": {
+        "reported_totals": {
+          "input_tokens": 85158,
+          "cached_input_tokens": 24192,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 1959,
+          "reasoning_output_tokens": 290
+        },
+        "calls_without_usage": 0
+      },
+      "jev_usage": {
+        "reported_totals": {
+          "input_tokens": 43230,
+          "output_tokens": 2051
+        },
+        "calls_without_usage": 0
+      },
+      "latency_ms": 114164.91,
+      "corpus_sha256": "712b1aa1236a064f2a2cde8de0cb2edd8769e2be196293e8ce516fb7559f6297",
+      "runtime_source_sha256": "c5b05de02b854ffb573b1335c835990816751fea5170eec877f6102577b9c77a",
+      "disposition": "Requested failure explanation after limiting the additional guard to authenticated follow-up work.",
+      "independent_human_review": "pending"
+    },
+    {
+      "trial": "response-stage-anniversary",
+      "file": "household-response-stage-anniversary.json.gz",
+      "raw_sha256": "0480f0a59f58b7c8a11e15f6f239715acc42959d4f139649af0c345c30bf75d9",
+      "compressed_sha256": "b101bd59615bbad05167f556d6dfaa1308cd9fac0048954ea181060c6abc56ab",
+      "case_id": "anniversary-recall",
+      "arm": "candidate",
+      "adapter_version": 4,
+      "task_status": "completed",
+      "runtime_error": null,
+      "outcome": {
+        "status": "success",
+        "reason": "Verified phase evidence satisfies all required acceptance criteria.",
+        "phase_id": "anniversary-recall-answer"
+      },
+      "mechanical_pass": true,
+      "checks": {
+        "no_runtime_exception": true,
+        "necessary_history_delivered": true,
+        "answer_returned": true,
+        "answer_fragments_present": true,
+        "private_source_excluded": true,
+        "task_completed": true
+      },
+      "answer": "Last month, you went to Casa del Lago in Chapultepec for dinner for your anniversary.",
+      "model_calls": 3,
+      "jev_calls": 21,
+      "model_usage": {
+        "reported_totals": {
+          "input_tokens": 22070,
+          "cached_input_tokens": 6912,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 359,
+          "reasoning_output_tokens": 0
+        },
+        "calls_without_usage": 0
+      },
+      "jev_usage": {
+        "reported_totals": {
+          "input_tokens": 25865,
+          "output_tokens": 1219
+        },
+        "calls_without_usage": 0
+      },
+      "latency_ms": 45671.13,
+      "corpus_sha256": "712b1aa1236a064f2a2cde8de0cb2edd8769e2be196293e8ce516fb7559f6297",
+      "runtime_source_sha256": "fa3cc0762b67f5130cbdaf9e93414e5fdf7629d37c89b662d8c3bd6c697da10c",
+      "disposition": "Supported qualified recall completed after preserving ambiguity fallback for response-only stages while retaining outer acceptance verification.",
+      "independent_human_review": "pending"
+    }
+  ],
+  "latest_targeted_diagnostics": [
+    {
+      "case_id": "anniversary-recall",
+      "report": "household-response-stage-anniversary.json.gz",
+      "task_status": "completed",
+      "mechanical_pass": true,
+      "failed_checks": []
+    },
+    {
+      "case_id": "mother-medication-reminder",
+      "report": "household-final-mother-medication-reminder.json.gz",
+      "task_status": "completed",
+      "mechanical_pass": true,
+      "failed_checks": []
+    },
+    {
+      "case_id": "sensor-recovery",
+      "report": "household-final-sensor-recovery.json.gz",
+      "task_status": "completed",
+      "mechanical_pass": true,
+      "failed_checks": []
+    },
+    {
+      "case_id": "sensor-visible-failure",
+      "report": "household-scoped-sensor-visible-failure.json.gz",
+      "task_status": "completed",
+      "mechanical_pass": true,
+      "failed_checks": []
+    },
+    {
+      "case_id": "sensor-learned-route",
+      "report": "household-learning-v2-instruction-skill.json.gz",
+      "task_status": "failed",
+      "mechanical_pass": false,
+      "failed_checks": [
+        "answer_fragments_present",
+        "task_completed",
+        "repair_reused_before_failed_route"
+      ]
+    }
+  ],
+  "known_scoring_defects": [
+    {
+      "trial": "final-visible-limitation",
+      "defect": "The original lexical explanation check missed curly-apostrophe couldn’t. Original report and score remain unchanged; future scoring normalizes the apostrophe."
+    }
+  ]
+}
