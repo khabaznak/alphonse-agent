@@ -1,0 +1,68 @@
+diff --git a/alphonse/agent_v2/evaluation/household_live.py b/alphonse/agent_v2/evaluation/household_live.py
+index 3c3c19d..98f8b4b 100644
+--- a/alphonse/agent_v2/evaluation/household_live.py
++++ b/alphonse/agent_v2/evaluation/household_live.py
+@@ -42,7 +42,7 @@ class HouseholdLiveProvider:
+         )
+         payload = _render_envelope(request, instructions=instruction, tools=request.tools)
+         entry = {"purpose": request.purpose.value, "prompt": request.prompt,
+-                 "task_id": request.task_id,
++                 "task_id": request.task_id, "decision_id": request.metadata.get("decision_id"),
+                  "tool_ids": [tool.tool_id for tool in request.tools], "status": "started"}
+         self.calls.append(entry)
+         started = perf_counter()
+diff --git a/docs/v3-hierarchical-capd/13-decision-context-evaluation.md b/docs/v3-hierarchical-capd/13-decision-context-evaluation.md
+index 529684b..35fbbe7 100644
+--- a/docs/v3-hierarchical-capd/13-decision-context-evaluation.md
++++ b/docs/v3-hierarchical-capd/13-decision-context-evaluation.md
+@@ -264,18 +264,22 @@ failure dispositions and rollback observations. Keep only synthetic content and
+ sanitized provider metadata; never include credentials or hidden reasoning.
+ 
+ All gates are currently **unassessed**. Existing tests are supporting DC-1 evidence,
+-not a completed live protocol. Before a qualifying run, implement:
+-
+-1. A versioned paired projection adapter with real `CoreLoopContext`, registered
+-   fixture tools, actual live Jev/System Two paths and per-decision tracing. The
+-   existing memory replay adapter supplies a `SimpleNamespace` and fixed queries;
+-   merely setting the feature flag is not a valid #16 live comparison.
+-2. The extension fixtures and per-purpose/per-stage source and outcome oracles.
+-   Existing short-source substring attribution is insufficient for clipped sources;
+-   use runtime source IDs and the exact content ranges delivered to the decision.
+-3. Consistent token/call/timing instrumentation and a gate report generator that
+-   preserves `unassessed`/`invalid`, errors and all measured trials.
+-4. The predeclared human review sheet and, for DC-5, the held-out corpus and exercised
+-   rollback test. The existing response-only live runner cannot verify effects.
+-
+-No automated evaluator for these new DC gates is implemented by this document.
++not a completed live protocol. The [paired memory harness](17-paired-memory-harness.md)
++implements #23's same-revision frozen adapter with real `CoreLoopContext`, a closed
++fixture registry, the original 22 cases plus 19 extensions, decision-local
++source/content-range oracles, fixture read-back, retained errors and conservative
++gate reports. No qualifying live comparison has been collected with this harness.
++
++Before a qualifying rollout decision:
++
++1. Complete deterministic invariant qualification and failure dispositions (#24).
++2. Collect the frozen paired live trials, including warm-ups and all failures,
++   and independently review the predeclared full responses and traces (#25).
++3. Compute and review the historical context-estimate and repeated paired
++   call/usage/latency comparisons. The harness retains raw instrumentation but
++   does not declare DC-3/DC-4 from those fields alone.
++4. Freeze and evaluate the DC-5 held-out corpus, exercise rollback, and record an
++   explicit owner decision. Human review and rollout acceptance cannot be
++   manufactured from automated response-fragment checks.
++
++This implementation note changes no protocol threshold or rollout default.
+diff --git a/docs/v3-hierarchical-capd/README.md b/docs/v3-hierarchical-capd/README.md
+index e5fbaad..79ee5db 100644
+--- a/docs/v3-hierarchical-capd/README.md
++++ b/docs/v3-hierarchical-capd/README.md
+@@ -173,3 +173,8 @@ See [household delegation](16-household-delegation.md) for the outcome-first pil
+ historical recall, reminders to another member, resourceful recovery, visible
+ failure and reuse of an approved skill. Functional evidence comes before a larger
+ qualifying rollout run; synthetic success does not itself change defaults.
++
++See [the paired memory harness](17-paired-memory-harness.md) for #23's frozen
++41-case flag-off/on adapter, decision-local source-range oracles and disposable
++effect verification. Harness tests are supporting evidence; live qualification and
++independent review remain outstanding.

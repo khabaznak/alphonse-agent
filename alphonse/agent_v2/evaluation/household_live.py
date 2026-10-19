@@ -19,6 +19,10 @@ class HouseholdLiveProvider:
         self.model = configured_model()
         self.max_calls = max_calls
         self.calls = []
+        self.fixture_clock = None
+
+    def configure_fixture_clock(self, clock, timezone):
+        self.fixture_clock = {"local_time": clock, "timezone": timezone}
 
     def generate_markdown(self, request):
         return self._generate(request, structured=False)
@@ -42,7 +46,8 @@ class HouseholdLiveProvider:
         )
         payload = _render_envelope(request, instructions=instruction, tools=request.tools)
         entry = {"purpose": request.purpose.value, "prompt": request.prompt,
-                 "task_id": request.task_id,
+                 "task_id": request.task_id, "decision_id": request.metadata.get("decision_id"),
+                 "fixture_clock": self.fixture_clock,
                  "tool_ids": [tool.tool_id for tool in request.tools], "status": "started"}
         self.calls.append(entry)
         started = perf_counter()
@@ -57,6 +62,7 @@ class HouseholdLiveProvider:
                     "Follow the supplied runtime prompt. Return only the requested structured output. "
                     "You cannot execute tools: Alphonse validates and executes composed calls from its fixture registry. "
                     "Use supplied task and resource paths only; your transport directory is not a task resource. "
+                    + ("The simulation clock for every decision and response is " + json.dumps(self.fixture_clock) + ". Interpret all relative dates against this simulation clock. " if self.fixture_clock else "")
                     + instruction
                 )
                 schema = root / "schema.json"

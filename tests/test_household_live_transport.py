@@ -60,3 +60,22 @@ def test_private_fixture_sentinel_is_rejected_before_any_provider_request(monkey
         instance.generate_json(InferenceRequest(prompt="PRIVATE_SENTINEL", purpose=InferencePurpose.TACTICAL_ACTION))
     assert commands == []
     assert instance.calls[0]["status"] == "failed"
+
+
+def test_simulated_clock_reaches_provider_system_instructions(monkeypatch, tmp_path):
+    instance, _ = provider(monkeypatch, tmp_path, [
+        {'type': 'item.completed', 'item': {'type': 'agent_message', 'text': '{"content":"Synthetic response"}'}},
+        {'type': 'turn.completed', 'usage': {'input_tokens': 42, 'output_tokens': 12}},
+    ])
+    instance.configure_fixture_clock('2026-02-11T08:00:00-06:00', 'America/Mexico_City')
+    run = household_live.subprocess.run
+    seen = []
+    def inspect(command, **kwargs):
+        from pathlib import Path
+        seen.append((Path(kwargs['cwd']) / 'instructions.txt').read_text())
+        return run(command, **kwargs)
+    monkeypatch.setattr(household_live.subprocess, 'run', inspect)
+    instance.generate_markdown(InferenceRequest(prompt='Explain a completed or failed task.', purpose=InferencePurpose.FINAL_RESPONSE))
+    assert '2026-02-11T08:00:00-06:00' in seen[0]
+    assert 'America/Mexico_City' in seen[0]
+    assert instance.calls[0]['fixture_clock']['local_time'] == '2026-02-11T08:00:00-06:00'

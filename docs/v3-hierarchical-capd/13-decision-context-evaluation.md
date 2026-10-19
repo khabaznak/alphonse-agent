@@ -264,18 +264,22 @@ failure dispositions and rollback observations. Keep only synthetic content and
 sanitized provider metadata; never include credentials or hidden reasoning.
 
 All gates are currently **unassessed**. Existing tests are supporting DC-1 evidence,
-not a completed live protocol. Before a qualifying run, implement:
+not a completed live protocol. The [paired memory harness](17-paired-memory-harness.md)
+implements #23's same-revision frozen adapter with real `CoreLoopContext`, a closed
+fixture registry, the original 22 cases plus 19 extensions, decision-local
+source/content-range oracles, fixture read-back, retained errors and conservative
+gate reports. No qualifying live comparison has been collected with this harness.
 
-1. A versioned paired projection adapter with real `CoreLoopContext`, registered
-   fixture tools, actual live Jev/System Two paths and per-decision tracing. The
-   existing memory replay adapter supplies a `SimpleNamespace` and fixed queries;
-   merely setting the feature flag is not a valid #16 live comparison.
-2. The extension fixtures and per-purpose/per-stage source and outcome oracles.
-   Existing short-source substring attribution is insufficient for clipped sources;
-   use runtime source IDs and the exact content ranges delivered to the decision.
-3. Consistent token/call/timing instrumentation and a gate report generator that
-   preserves `unassessed`/`invalid`, errors and all measured trials.
-4. The predeclared human review sheet and, for DC-5, the held-out corpus and exercised
-   rollback test. The existing response-only live runner cannot verify effects.
+Before a qualifying rollout decision:
 
-No automated evaluator for these new DC gates is implemented by this document.
+1. Complete deterministic invariant qualification and failure dispositions (#24).
+2. Collect the frozen paired live trials, including warm-ups and all failures,
+   and independently review the predeclared full responses and traces (#25).
+3. Compute and review the historical context-estimate and repeated paired
+   call/usage/latency comparisons. The harness retains raw instrumentation but
+   does not declare DC-3/DC-4 from those fields alone.
+4. Freeze and evaluate the DC-5 held-out corpus, exercise rollback, and record an
+   explicit owner decision. Human review and rollout acceptance cannot be
+   manufactured from automated response-fragment checks.
+
+This implementation note changes no protocol threshold or rollout default.

@@ -1,0 +1,104 @@
+{
+  "issue": 23,
+  "date": "2026-10-19",
+  "evidence_kind": "Harness implementation verification, not rollout acceptance",
+  "source_revision": "95666c4b06f5e8d23ade55641e6eea6514665455",
+  "focused": {
+    "passed": 118,
+    "failed": 0
+  },
+  "full_suite": {
+    "passed": 905,
+    "failed": 36
+  },
+  "baseline": {
+    "passed": 833,
+    "failed": 36,
+    "method": "Run the same Python environment against a disposable git archive of the starting HEAD."
+  },
+  "new_failure_identities": [],
+  "retained_baseline_failure_identities": [
+    "tests/test_agent_v2_acceptance_contract.py::test_interactive_completion_requires_prepared_response",
+    "tests/test_agent_v2_do_node.py::test_silent_successful_bash_requires_model_authored_response_before_completion",
+    "tests/test_agent_v2_ipc.py::test_desktop_project_ipc_uses_the_daemon_owned_store",
+    "tests/test_agent_v2_ipc.py::test_desktop_task_progress_a2ui_renders_v3_capd_work_log",
+    "tests/test_agent_v2_ipc.py::test_system_one_settings_request_uses_validation_timeout",
+    "tests/test_agent_v2_ipc.py::test_v3_task_progress_projects_hierarchical_actions_without_private_reasoning",
+    "tests/test_agent_v2_memory_sessions.py::test_router_stamps_selected_session_before_queueing_and_supports_commands",
+    "tests/test_agent_v2_native_respond_tool.py::test_respond_descriptor_and_schema_are_visible_to_plan_prompt",
+    "tests/test_agent_v2_openai_codex_capd.py::test_act_node_uses_codex_provider_for_acceptance_criteria",
+    "tests/test_agent_v2_openai_codex_capd.py::test_check_node_uses_codex_provider_for_criteria_review",
+    "tests/test_agent_v2_pdca_graph.py::test_act_route_after_wip_incomplete_criteria_can_continue_to_plan",
+    "tests/test_agent_v2_pdca_graph.py::test_pdca_act_node_returns_task_state",
+    "tests/test_agent_v2_pdca_graph.py::test_run_pdca_once_executes_planned_tool_and_returns_to_check",
+    "tests/test_agent_v2_pdca_graph.py::test_run_pdca_once_marks_mission_success_after_check_completes_criteria",
+    "tests/test_agent_v2_pdca_graph.py::test_run_pdca_once_passes_context_tools_to_plan",
+    "tests/test_agent_v2_pdca_processor.py::test_core_loop_can_use_pdca_processor_snapshot_metadata",
+    "tests/test_agent_v2_pdca_processor.py::test_pdca_processor_runs_graph_and_returns_completed_result",
+    "tests/test_agent_v2_pdca_processor.py::test_pdca_processor_snapshot_includes_final_act_outcome",
+    "tests/test_agent_v2_pdca_processor.py::test_pdca_processor_snapshot_includes_planned_tool_call_when_present",
+    "tests/test_agent_v2_projects.py::test_capd_prompt_uses_the_project_attached_to_each_new_task",
+    "tests/test_agent_v2_projects.py::test_capd_prompts_keep_user_and_project_contexts_isolated",
+    "tests/test_agent_v2_projects.py::test_project_store_archives_restores_and_updates_metadata",
+    "tests/test_agent_v2_projects.py::test_project_store_creates_directory_and_context_file",
+    "tests/test_agent_v2_projects.py::test_project_store_filters_private_and_shared_projects",
+    "tests/test_agent_v2_projects.py::test_prompt_render_paths_include_project_context",
+    "tests/test_agent_v2_projects.py::test_tui_project_selection_routes_future_messages",
+    "tests/test_agent_v2_system_one.py::test_jev_admission_and_context_curation_share_one_evaluation",
+    "tests/test_agent_v2_system_one.py::test_jev_request_curation_receives_plan_instructions_and_bounded_context",
+    "tests/test_agent_v2_system_one.py::test_jev_triages_each_plan_message_with_choice_and_relevance_fuse",
+    "tests/test_agent_v2_users.py::test_non_admin_profile_projects_and_membership_are_isolated",
+    "tests/test_agent_v3_admission.py::test_context_curation_separates_invariants_from_optional_candidates",
+    "tests/test_agent_v3_admission.py::test_direct_reply_receives_cross_project_history_global_and_selected_project_context",
+    "tests/test_agent_v3_engine_rollout.py::test_v3_phase_planner_receives_project_context_and_durable_memory",
+    "tests/test_agent_v3_plan_intake.py::test_plan_intake_batches_eligible_messages_and_consumes_only_jev_selected_ids",
+    "tests/test_project_provenance_waiting.py::test_independent_message_receives_exact_turns_ahead_notice",
+    "tests/test_project_provenance_waiting.py::test_new_conversation_creates_protected_home_project"
+  ],
+  "runtime_paths_by_arm": {
+    "legacy": {
+      "admission": true,
+      "planning": true,
+      "completion": true,
+      "routing": true,
+      "execution": true,
+      "recall": true
+    },
+    "candidate": {
+      "admission": true,
+      "planning": true,
+      "completion": true,
+      "routing": true,
+      "execution": true,
+      "recall": true
+    }
+  },
+  "positive_fixture_checks": {
+    "fresh_sensor": {
+      "attempt": 3,
+      "both_arms": true
+    },
+    "qualified_source_expansion": {
+      "attempt": 4,
+      "both_arms": true
+    },
+    "model_composed_followup": {
+      "attempt": 5,
+      "both_arms": true
+    }
+  },
+  "provider_clock": {
+    "attempt": 6,
+    "all_jev_calls_record_fixture_clock": true,
+    "all_system_two_calls_record_fixture_clock": true
+  },
+  "remaining_observations": [
+    "Zero-history and irrelevant-history oracles flag delivered Jev recall-selection inputs.",
+    "Verified Spanish reminder state can be followed by closure phases where native.respond is not revealed, ending with no-progress failure.",
+    "The final candidate completed with an English reminder body, failing the frozen Spanish-content oracle.",
+    "A prior provider rate limit after schedule creation remains retained."
+  ],
+  "scope": "#23 supplies the harness and boundary suite. #24 owns deterministic runtime-invariant qualification; #25 owns repeated measurements and independent human review.",
+  "independent_human_review": "unassessed",
+  "rollout_accepted": false
+}

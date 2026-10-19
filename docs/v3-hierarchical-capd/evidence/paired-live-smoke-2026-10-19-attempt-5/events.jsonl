@@ -1,0 +1,4 @@
+{"trial_id": "follow-up-query:smoke:legacy", "case_id": "follow-up-query", "repetition": 1, "warmup": false, "arm": "legacy", "event": "started"}
+{"trial_id": "follow-up-query:smoke:candidate", "case_id": "follow-up-query", "repetition": 1, "warmup": false, "arm": "candidate", "event": "started"}
+{"trial_id": "spanish-relative-date:smoke:legacy", "case_id": "spanish-relative-date", "repetition": 1, "warmup": false, "arm": "legacy", "event": "started"}
+{"trial_id": "spanish-relative-date:smoke:candidate", "case_id": "spanish-relative-date", "repetition": 1, "warmup": false, "arm": "candidate", "event": "started"}

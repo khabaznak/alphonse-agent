@@ -1,0 +1,735 @@
+{
+  "issue": 23,
+  "evidence_kind": "Frozen per-experiment diagnostic harness smoke trials; not a qualifying DC-2/DC-3/DC-4 comparison.",
+  "source_revision": "95666c4b06f5e8d23ade55641e6eea6514665455",
+  "independent_human_review": "unassessed",
+  "rollout_accepted": false,
+  "aggregation_policy": "Experiments use distinct frozen source/corpus manifests. Do not pool them into a success rate or claim gate acceptance.",
+  "experiments": {
+    "paired-live-smoke-2026-10-19-attempt-1": {
+      "manifest_sha256": "391007dc3964c3822610ae727f0b7d97908fbe0ffa70e3f28ef909b594b76a85",
+      "corpus_version": "paired-boundaries-v1",
+      "expected_arm_runs": 4,
+      "rows": [
+        {
+          "trial_id": "current-state:smoke:legacy",
+          "status": "returned",
+          "task_status": "failed",
+          "runtime_error": "SystemOneUnavailableError",
+          "effect_pass": false,
+          "necessary_source_delivery": true,
+          "full_delivery_pass": false,
+          "historical_instances": 2,
+          "irrelevant_instances": 2,
+          "source_checks": [],
+          "violations": [],
+          "provider_errors": [
+            "system_one_connection_failed",
+            "system_one_connection_failed",
+            "system_one_connection_failed",
+            "system_one_connection_failed"
+          ],
+          "retained_decisions": 1,
+          "retained_model_calls": 0,
+          "retained_jev_calls": 4,
+          "retained_tools": 0,
+          "schedule_readback": []
+        },
+        {
+          "trial_id": "current-state:smoke:candidate",
+          "status": "aborted",
+          "task_status": null,
+          "runtime_error": null,
+          "effect_pass": null,
+          "necessary_source_delivery": null,
+          "full_delivery_pass": null,
+          "historical_instances": null,
+          "irrelevant_instances": null,
+          "source_checks": null,
+          "violations": [],
+          "provider_errors": [],
+          "retained_decisions": 0,
+          "retained_model_calls": 0,
+          "retained_jev_calls": 0,
+          "retained_tools": 0,
+          "schedule_readback": []
+        }
+      ]
+    },
+    "paired-live-smoke-2026-10-19-attempt-2": {
+      "manifest_sha256": "391007dc3964c3822610ae727f0b7d97908fbe0ffa70e3f28ef909b594b76a85",
+      "corpus_version": "paired-boundaries-v1",
+      "expected_arm_runs": 4,
+      "rows": [
+        {
+          "trial_id": "current-state:smoke:legacy",
+          "status": "returned",
+          "task_status": "completed",
+          "runtime_error": null,
+          "effect_pass": false,
+          "necessary_source_delivery": true,
+          "full_delivery_pass": false,
+          "historical_instances": 14,
+          "irrelevant_instances": 14,
+          "source_checks": [],
+          "violations": [],
+          "provider_errors": [],
+          "retained_decisions": 9,
+          "retained_model_calls": 3,
+          "retained_jev_calls": 6,
+          "retained_tools": 1,
+          "schedule_readback": []
+        },
+        {
+          "trial_id": "current-state:smoke:candidate",
+          "status": "returned",
+          "task_status": "completed",
+          "runtime_error": null,
+          "effect_pass": true,
+          "necessary_source_delivery": true,
+          "full_delivery_pass": false,
+          "historical_instances": 14,
+          "irrelevant_instances": 14,
+          "source_checks": [],
+          "violations": [],
+          "provider_errors": [],
+          "retained_decisions": 27,
+          "retained_model_calls": 5,
+          "retained_jev_calls": 22,
+          "retained_tools": 3,
+          "schedule_readback": []
+        },
+        {
+          "trial_id": "older-explicit-recall:smoke:legacy",
+          "status": "returned",
+          "task_status": "completed",
+          "runtime_error": null,
+          "effect_pass": false,
+          "necessary_source_delivery": true,
+          "full_delivery_pass": false,
+          "historical_instances": 46,
+          "irrelevant_instances": 45,
+          "source_checks": [
+            {
+              "oracle": {
+                "source_id": "old-filter",
+                "start_char": 0,
+                "end_char": 34,
+                "purposes": [
+                  "response_composition"
+                ]
+              },
+              "decision_count": 1,
+              "passed": true
+            }
+          ],
+          "violations": [],
+          "provider_errors": [],
+          "retained_decisions": 18,
+          "retained_model_calls": 7,
+          "retained_jev_calls": 11,
+          "retained_tools": 3,
+          "schedule_readback": []
+        },
+        {
+          "trial_id": "older-explicit-recall:smoke:candidate",
+          "status": "returned",
+          "task_status": "completed",
+          "runtime_error": null,
+          "effect_pass": true,
+          "necessary_source_delivery": true,
+          "full_delivery_pass": false,
+          "historical_instances": 14,
+          "irrelevant_instances": 9,
+          "source_checks": [
+            {
+              "oracle": {
+                "source_id": "old-filter",
+                "start_char": 0,
+                "end_char": 34,
+                "purposes": [
+                  "response_composition"
+                ]
+              },
+              "decision_count": 1,
+              "passed": true
+            }
+          ],
+          "violations": [],
+          "provider_errors": [],
+          "retained_decisions": 11,
+          "retained_model_calls": 1,
+          "retained_jev_calls": 10,
+          "retained_tools": 3,
+          "schedule_readback": []
+        }
+      ]
+    },
+    "paired-live-smoke-2026-10-19-attempt-3": {
+      "manifest_sha256": "97f867ee8abd11f779ca563563e4613037700fa7ad5b0a7dac7dad762bee4c37",
+      "corpus_version": "paired-boundaries-v1",
+      "expected_arm_runs": 4,
+      "rows": [
+        {
+          "trial_id": "current-state:smoke:legacy",
+          "status": "returned",
+          "task_status": "completed",
+          "runtime_error": null,
+          "effect_pass": true,
+          "necessary_source_delivery": true,
+          "full_delivery_pass": false,
+          "historical_instances": 22,
+          "irrelevant_instances": 22,
+          "source_checks": [],
+          "violations": [],
+          "provider_errors": [],
+          "retained_decisions": 16,
+          "retained_model_calls": 6,
+          "retained_jev_calls": 10,
+          "retained_tools": 4,
+          "schedule_readback": []
+        },
+        {
+          "trial_id": "current-state:smoke:candidate",
+          "status": "returned",
+          "task_status": "completed",
+          "runtime_error": null,
+          "effect_pass": true,
+          "necessary_source_delivery": true,
+          "full_delivery_pass": false,
+          "historical_instances": 14,
+          "irrelevant_instances": 14,
+          "source_checks": [],
+          "violations": [],
+          "provider_errors": [],
+          "retained_decisions": 27,
+          "retained_model_calls": 5,
+          "retained_jev_calls": 22,
+          "retained_tools": 3,
+          "schedule_readback": []
+        },
+        {
+          "trial_id": "older-explicit-recall:smoke:legacy",
+          "status": "returned",
+          "task_status": "completed",
+          "runtime_error": null,
+          "effect_pass": true,
+          "necessary_source_delivery": true,
+          "full_delivery_pass": false,
+          "historical_instances": 38,
+          "irrelevant_instances": 37,
+          "source_checks": [
+            {
+              "oracle": {
+                "source_id": "old-filter",
+                "start_char": 0,
+                "end_char": 34,
+                "purposes": [
+                  "response_composition"
+                ]
+              },
+              "decision_count": 1,
+              "passed": true
+            }
+          ],
+          "violations": [],
+          "provider_errors": [],
+          "retained_decisions": 15,
+          "retained_model_calls": 6,
+          "retained_jev_calls": 9,
+          "retained_tools": 2,
+          "schedule_readback": []
+        },
+        {
+          "trial_id": "older-explicit-recall:smoke:candidate",
+          "status": "returned",
+          "task_status": "completed",
+          "runtime_error": null,
+          "effect_pass": true,
+          "necessary_source_delivery": true,
+          "full_delivery_pass": false,
+          "historical_instances": 14,
+          "irrelevant_instances": 9,
+          "source_checks": [
+            {
+              "oracle": {
+                "source_id": "old-filter",
+                "start_char": 0,
+                "end_char": 34,
+                "purposes": [
+                  "response_composition"
+                ]
+              },
+              "decision_count": 1,
+              "passed": true
+            }
+          ],
+          "violations": [],
+          "provider_errors": [],
+          "retained_decisions": 11,
+          "retained_model_calls": 1,
+          "retained_jev_calls": 10,
+          "retained_tools": 3,
+          "schedule_readback": []
+        }
+      ]
+    },
+    "paired-live-smoke-2026-10-19-attempt-4": {
+      "manifest_sha256": "5e31be5b876470d72c5e0cb59f9624ec8142468ae2281601c6f54f1f1ef52ffd",
+      "corpus_version": "paired-boundaries-v2",
+      "expected_arm_runs": 6,
+      "rows": [
+        {
+          "trial_id": "current-state:smoke:legacy",
+          "status": "returned",
+          "task_status": "completed",
+          "runtime_error": null,
+          "effect_pass": true,
+          "necessary_source_delivery": true,
+          "full_delivery_pass": false,
+          "historical_instances": 24,
+          "irrelevant_instances": 24,
+          "source_checks": [],
+          "violations": [],
+          "provider_errors": [],
+          "retained_decisions": 17,
+          "retained_model_calls": 7,
+          "retained_jev_calls": 10,
+          "retained_tools": 3,
+          "schedule_readback": []
+        },
+        {
+          "trial_id": "current-state:smoke:candidate",
+          "status": "returned",
+          "task_status": "completed",
+          "runtime_error": null,
+          "effect_pass": true,
+          "necessary_source_delivery": true,
+          "full_delivery_pass": false,
+          "historical_instances": 14,
+          "irrelevant_instances": 14,
+          "source_checks": [],
+          "violations": [],
+          "provider_errors": [],
+          "retained_decisions": 28,
+          "retained_model_calls": 5,
+          "retained_jev_calls": 23,
+          "retained_tools": 3,
+          "schedule_readback": []
+        },
+        {
+          "trial_id": "clipped-source-expansion:smoke:legacy",
+          "status": "returned",
+          "task_status": "completed",
+          "runtime_error": null,
+          "effect_pass": true,
+          "necessary_source_delivery": true,
+          "full_delivery_pass": true,
+          "historical_instances": 67,
+          "irrelevant_instances": 62,
+          "source_checks": [
+            {
+              "oracle": {
+                "source_id": "long",
+                "start_char": 3987,
+                "end_char": 4043,
+                "purposes": [
+                  "response_composition"
+                ]
+              },
+              "decision_count": 1,
+              "passed": true
+            }
+          ],
+          "violations": [],
+          "provider_errors": [],
+          "retained_decisions": 22,
+          "retained_model_calls": 9,
+          "retained_jev_calls": 13,
+          "retained_tools": 5,
+          "schedule_readback": []
+        },
+        {
+          "trial_id": "clipped-source-expansion:smoke:candidate",
+          "status": "returned",
+          "task_status": "completed",
+          "runtime_error": null,
+          "effect_pass": true,
+          "necessary_source_delivery": true,
+          "full_delivery_pass": true,
+          "historical_instances": 76,
+          "irrelevant_instances": 48,
+          "source_checks": [
+            {
+              "oracle": {
+                "source_id": "long",
+                "start_char": 3987,
+                "end_char": 4043,
+                "purposes": [
+                  "response_composition"
+                ]
+              },
+              "decision_count": 2,
+              "passed": true
+            }
+          ],
+          "violations": [],
+          "provider_errors": [],
+          "retained_decisions": 67,
+          "retained_model_calls": 10,
+          "retained_jev_calls": 57,
+          "retained_tools": 18,
+          "schedule_readback": []
+        },
+        {
+          "trial_id": "follow-up-query:smoke:legacy",
+          "status": "returned",
+          "task_status": "failed",
+          "runtime_error": null,
+          "effect_pass": false,
+          "necessary_source_delivery": true,
+          "full_delivery_pass": true,
+          "historical_instances": 202,
+          "irrelevant_instances": 172,
+          "source_checks": [
+            {
+              "oracle": {
+                "source_id": "replacement",
+                "start_char": 0,
+                "end_char": 36,
+                "purposes": [
+                  "response_composition"
+                ]
+              },
+              "decision_count": 1,
+              "passed": true
+            },
+            {
+              "oracle": {
+                "source_id": "query-lead",
+                "start_char": 0,
+                "end_char": 38,
+                "purposes": [
+                  "phase_planning"
+                ]
+              },
+              "decision_count": 3,
+              "passed": true
+            }
+          ],
+          "violations": [],
+          "provider_errors": [],
+          "retained_decisions": 30,
+          "retained_model_calls": 14,
+          "retained_jev_calls": 16,
+          "retained_tools": 9,
+          "schedule_readback": []
+        },
+        {
+          "trial_id": "follow-up-query:smoke:candidate",
+          "status": "aborted",
+          "task_status": "running",
+          "runtime_error": "KeyboardInterrupt",
+          "effect_pass": false,
+          "necessary_source_delivery": false,
+          "full_delivery_pass": false,
+          "historical_instances": 41,
+          "irrelevant_instances": 23,
+          "source_checks": [
+            {
+              "oracle": {
+                "source_id": "replacement",
+                "start_char": 0,
+                "end_char": 36,
+                "purposes": [
+                  "response_composition"
+                ]
+              },
+              "decision_count": 0,
+              "passed": false
+            },
+            {
+              "oracle": {
+                "source_id": "query-lead",
+                "start_char": 0,
+                "end_char": 38,
+                "purposes": [
+                  "phase_planning"
+                ]
+              },
+              "decision_count": 1,
+              "passed": true
+            }
+          ],
+          "violations": [],
+          "provider_errors": [],
+          "retained_decisions": 26,
+          "retained_model_calls": 4,
+          "retained_jev_calls": 22,
+          "retained_tools": 7,
+          "schedule_readback": []
+        }
+      ]
+    },
+    "paired-live-smoke-2026-10-19-attempt-5": {
+      "manifest_sha256": "09096fad709c8b26a4430a0ca1230012873c8c61d049ec4c5595de05ae8460d3",
+      "corpus_version": "paired-boundaries-v3",
+      "expected_arm_runs": 4,
+      "rows": [
+        {
+          "trial_id": "follow-up-query:smoke:legacy",
+          "status": "returned",
+          "task_status": "completed",
+          "runtime_error": null,
+          "effect_pass": true,
+          "necessary_source_delivery": true,
+          "full_delivery_pass": true,
+          "historical_instances": 76,
+          "irrelevant_instances": 60,
+          "source_checks": [
+            {
+              "oracle": {
+                "source_id": "replacement",
+                "start_char": 0,
+                "end_char": 35,
+                "purposes": [
+                  "response_composition"
+                ]
+              },
+              "decision_count": 1,
+              "passed": true
+            },
+            {
+              "oracle": {
+                "source_id": "query-lead",
+                "start_char": 0,
+                "end_char": 38,
+                "purposes": [
+                  "phase_planning"
+                ]
+              },
+              "decision_count": 2,
+              "passed": true
+            }
+          ],
+          "violations": [],
+          "provider_errors": [],
+          "retained_decisions": 22,
+          "retained_model_calls": 9,
+          "retained_jev_calls": 13,
+          "retained_tools": 5,
+          "schedule_readback": []
+        },
+        {
+          "trial_id": "follow-up-query:smoke:candidate",
+          "status": "returned",
+          "task_status": "completed",
+          "runtime_error": null,
+          "effect_pass": true,
+          "necessary_source_delivery": true,
+          "full_delivery_pass": true,
+          "historical_instances": 161,
+          "irrelevant_instances": 119,
+          "source_checks": [
+            {
+              "oracle": {
+                "source_id": "replacement",
+                "start_char": 0,
+                "end_char": 35,
+                "purposes": [
+                  "response_composition"
+                ]
+              },
+              "decision_count": 1,
+              "passed": true
+            },
+            {
+              "oracle": {
+                "source_id": "query-lead",
+                "start_char": 0,
+                "end_char": 38,
+                "purposes": [
+                  "phase_planning"
+                ]
+              },
+              "decision_count": 2,
+              "passed": true
+            }
+          ],
+          "violations": [],
+          "provider_errors": [],
+          "retained_decisions": 59,
+          "retained_model_calls": 9,
+          "retained_jev_calls": 50,
+          "retained_tools": 18,
+          "schedule_readback": []
+        },
+        {
+          "trial_id": "spanish-relative-date:smoke:legacy",
+          "status": "returned",
+          "task_status": "failed",
+          "runtime_error": "RuntimeError",
+          "effect_pass": false,
+          "necessary_source_delivery": true,
+          "full_delivery_pass": true,
+          "historical_instances": 0,
+          "irrelevant_instances": 0,
+          "source_checks": [],
+          "violations": [],
+          "provider_errors": [
+            "household_provider_exit:1:rate_limit"
+          ],
+          "retained_decisions": 9,
+          "retained_model_calls": 5,
+          "retained_jev_calls": 4,
+          "retained_tools": 1,
+          "schedule_readback": [
+            {
+              "owner_user_id": "member-a",
+              "name": "Regar las plantas del balcón",
+              "description": "Riega las plantas del balcón.",
+              "schedule": {
+                "kind": "once",
+                "run_at": "2026-02-12T15:00:00+00:00"
+              },
+              "status": "active",
+              "timezone": "America/Mexico_City",
+              "next_run_at": "2026-02-12T15:00:00+00:00",
+              "origin_channel": {
+                "alphonse_user_id": "member-a",
+                "channel_target": "member-a-chat",
+                "integration_id": "fixture-telegram",
+                "provider_key": "telegram"
+              },
+              "delivery_mode": "direct"
+            }
+          ]
+        },
+        {
+          "trial_id": "spanish-relative-date:smoke:candidate",
+          "status": "returned",
+          "task_status": "failed",
+          "runtime_error": null,
+          "effect_pass": false,
+          "necessary_source_delivery": true,
+          "full_delivery_pass": true,
+          "historical_instances": 0,
+          "irrelevant_instances": 0,
+          "source_checks": [],
+          "violations": [],
+          "provider_errors": [],
+          "retained_decisions": 64,
+          "retained_model_calls": 16,
+          "retained_jev_calls": 48,
+          "retained_tools": 8,
+          "schedule_readback": [
+            {
+              "owner_user_id": "member-a",
+              "name": "Regar las plantas del balcón",
+              "description": "Regar las plantas del balcón",
+              "schedule": {
+                "kind": "once",
+                "run_at": "2026-02-12T15:00:00+00:00"
+              },
+              "status": "active",
+              "timezone": "America/Mexico_City",
+              "next_run_at": "2026-02-12T15:00:00+00:00",
+              "origin_channel": {
+                "alphonse_user_id": "member-a",
+                "channel_target": "member-a-chat",
+                "integration_id": "fixture-telegram",
+                "provider_key": "telegram"
+              },
+              "delivery_mode": "direct"
+            }
+          ]
+        }
+      ]
+    },
+    "paired-live-smoke-2026-10-19-attempt-6": {
+      "manifest_sha256": "4430a48d7ed481f3ced0d526fa308bb1a88ffb11c574935b0e67b0a7ab66857f",
+      "corpus_version": "paired-boundaries-v3",
+      "expected_arm_runs": 2,
+      "rows": [
+        {
+          "trial_id": "spanish-relative-date:smoke:legacy",
+          "status": "returned",
+          "task_status": "failed",
+          "runtime_error": null,
+          "effect_pass": false,
+          "necessary_source_delivery": true,
+          "full_delivery_pass": true,
+          "historical_instances": 0,
+          "irrelevant_instances": 0,
+          "source_checks": [],
+          "violations": [],
+          "provider_errors": [],
+          "retained_decisions": 37,
+          "retained_model_calls": 15,
+          "retained_jev_calls": 22,
+          "retained_tools": 6,
+          "schedule_readback": [
+            {
+              "owner_user_id": "member-a",
+              "name": "Regar las plantas del balcón",
+              "description": "Regar las plantas del balcón",
+              "schedule": {
+                "kind": "once",
+                "run_at": "2026-02-12T15:00:00+00:00"
+              },
+              "status": "active",
+              "timezone": "America/Mexico_City",
+              "next_run_at": "2026-02-12T15:00:00+00:00",
+              "origin_channel": {
+                "alphonse_user_id": "member-a",
+                "channel_target": "member-a-chat",
+                "integration_id": "fixture-telegram",
+                "provider_key": "telegram"
+              },
+              "delivery_mode": "direct"
+            }
+          ]
+        },
+        {
+          "trial_id": "spanish-relative-date:smoke:candidate",
+          "status": "returned",
+          "task_status": "completed",
+          "runtime_error": null,
+          "effect_pass": false,
+          "necessary_source_delivery": true,
+          "full_delivery_pass": true,
+          "historical_instances": 0,
+          "irrelevant_instances": 0,
+          "source_checks": [],
+          "violations": [],
+          "provider_errors": [],
+          "retained_decisions": 36,
+          "retained_model_calls": 9,
+          "retained_jev_calls": 27,
+          "retained_tools": 4,
+          "schedule_readback": [
+            {
+              "owner_user_id": "member-a",
+              "name": "Water balcony plants",
+              "description": "Reminder: water the balcony plants.",
+              "schedule": {
+                "kind": "once",
+                "run_at": "2026-02-12T15:00:00+00:00"
+              },
+              "status": "active",
+              "timezone": "America/Mexico_City",
+              "next_run_at": "2026-02-12T15:00:00+00:00",
+              "origin_channel": {
+                "alphonse_user_id": "member-a",
+                "channel_target": "member-a-chat",
+                "integration_id": "fixture-telegram",
+                "provider_key": "telegram"
+              },
+              "delivery_mode": "direct"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

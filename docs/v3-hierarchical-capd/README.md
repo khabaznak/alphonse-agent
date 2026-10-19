@@ -173,3 +173,8 @@ See [household delegation](16-household-delegation.md) for the outcome-first pil
 historical recall, reminders to another member, resourceful recovery, visible
 failure and reuse of an approved skill. Functional evidence comes before a larger
 qualifying rollout run; synthetic success does not itself change defaults.
+
+See [the paired memory harness](17-paired-memory-harness.md) for #23's frozen
+41-case flag-off/on adapter, decision-local source-range oracles and disposable
+effect verification. Harness tests are supporting evidence; live qualification and
+independent review remain outstanding.

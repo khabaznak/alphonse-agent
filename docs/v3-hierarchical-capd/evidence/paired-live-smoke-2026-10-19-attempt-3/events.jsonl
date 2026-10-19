@@ -1,0 +1,4 @@
+{"trial_id": "current-state:smoke:legacy", "case_id": "current-state", "repetition": 1, "warmup": false, "arm": "legacy", "event": "started"}
+{"trial_id": "current-state:smoke:candidate", "case_id": "current-state", "repetition": 1, "warmup": false, "arm": "candidate", "event": "started"}
+{"trial_id": "older-explicit-recall:smoke:legacy", "case_id": "older-explicit-recall", "repetition": 1, "warmup": false, "arm": "legacy", "event": "started"}
+{"trial_id": "older-explicit-recall:smoke:candidate", "case_id": "older-explicit-recall", "repetition": 1, "warmup": false, "arm": "candidate", "event": "started"}
