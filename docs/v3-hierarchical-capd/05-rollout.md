@@ -79,6 +79,12 @@ numeric memory rollout thresholds are documented in
 [Memory context evaluation](07-memory-evaluation.md). These supplement the
 end-to-end engine replay; offline context scores do not establish answer quality.
 
+The additive, versioned memory migration, read-only dry run, WAL-aware backup and
+restore drill are documented in [Memory migration and recovery](15-memory-migration.md).
+These are supporting issue #18 evidence only. The decision-context default remains
+disabled pending DC-0 through DC-5; neither the migration tests nor a restore into
+a recovery copy establishes interrupted-task feature rollback or live recall quality.
+
 ## Rollout gates
 
 ### Gate A: developer opt-in

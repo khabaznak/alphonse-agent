@@ -8,7 +8,6 @@ import tempfile
 from pathlib import Path
 from threading import Lock, RLock
 from typing import Any, Callable
-from uuid import uuid4
 
 from alphonse.agent_v2.memory_settings import MemorySettings
 from alphonse.agent_v2.memory_settings import SQLiteMemorySettingsStore
@@ -245,19 +244,13 @@ class LedgerMemory:
         return _truncate_tokens(rendered, budget)[0]
 
     def migrate_project_legacy(self, *, user_id: str, project_id: str) -> int:
-        """Archive legacy task audits without creating project narrative memory."""
-        root = self._project_memory_dir(user_id, project_id)
-        ledgers = sorted(root.glob("ledger-*.md"))
-        if not ledgers:
-            return 0
-        archive = root / "legacy"
-        archive.mkdir(parents=True, exist_ok=True)
-        for source in ledgers:
-            target = archive / source.name
-            if target.exists():
-                target = archive / f"{source.stem}-{uuid4().hex[:8]}{source.suffix}"
-            source.replace(target)
-        return len(ledgers)
+        """Preserve originals and copy audits with a versioned retry receipt."""
+        from .migration import migrate_scope
+
+        with self._scope_lock(user_id, project_id):
+            report = migrate_scope(self._project_memory_dir(user_id, project_id),
+                                   owner=user_id, project=project_id, apply=True)
+        return report["copied_audits"]
 
     def _bounded_context(self, task: Any) -> tuple[str, dict[str, Any]]:
         budget = self._settings_store.get().memory_context_token_budget
