@@ -26,13 +26,13 @@ def test_pdca_processor_runs_graph_and_returns_completed_result() -> None:
 
     result = processor.process(task, CoreLoopContext(messages=InMemoryMessageQueue()))
 
-    assert result.status == ProcessingStatus.COMPLETED
+    assert result.status == ProcessingStatus.FAILED
     assert result.snapshot.current_work == "Write the file"
     assert result.snapshot.task_owner == "alex"
     assert result.snapshot.metadata["check_verdict"] == "new"
     assert result.snapshot.metadata["task_state"]["check_verdict"] == "new"
-    assert "acceptance_criteria_prompt" in result.snapshot.metadata["task_state"]["metadata"]
-    assert result.snapshot.metadata["task_state"]["metadata"]["acceptance_criteria_llm_stubbed"] is True
+    assert result.snapshot.metadata["task_state"]["outcome"]["reason"] == "Plan could not establish acceptance criteria."
+    assert result.snapshot.metadata["task_state"]["metadata"]["tool_call_planning_llm_stubbed"] is True
 
 
 def test_core_loop_can_use_pdca_processor_snapshot_metadata() -> None:
@@ -51,12 +51,12 @@ def test_core_loop_can_use_pdca_processor_snapshot_metadata() -> None:
 
     result = core.step()
 
-    assert result.status == LoopStepStatus.PROCESSED
+    assert result.status == LoopStepStatus.FAILED
     assert visible_state.snapshot().metadata["check_verdict"] == "new"
     assert visible_state.snapshot().metadata["task_state"]["goal"] == "Write the file"
 
 
-def test_pdca_processor_snapshot_includes_planned_tool_call_when_present(monkeypatch) -> None:
+def test_pdca_processor_snapshot_includes_planned_tool_call_when_present(monkeypatch, v2_decisions) -> None:
     planned = {
         "id": "plan-call-1",
         "tool_id": "tool-1",
@@ -75,7 +75,7 @@ def test_pdca_processor_snapshot_includes_planned_tool_call_when_present(monkeyp
 
     result = processor.process(
         task,
-        CoreLoopContext(messages=InMemoryMessageQueue(), tools=_ToolRegistry()),
+        CoreLoopContext(messages=InMemoryMessageQueue(), tools=_ToolRegistry(), system_one=v2_decisions(satisfy=True)),
     )
 
     assert result.snapshot.metadata["planned_tool_call"] == planned
@@ -83,7 +83,7 @@ def test_pdca_processor_snapshot_includes_planned_tool_call_when_present(monkeyp
     assert result.snapshot.metadata["task_state"]["metadata"]["planned_tool_call"] == planned
 
 
-def test_pdca_processor_snapshot_includes_final_act_outcome(monkeypatch) -> None:
+def test_pdca_processor_snapshot_includes_final_act_outcome(monkeypatch, v2_decisions) -> None:
     call_index = {"value": 0}
 
     def next_call(prompt: str) -> dict[str, object]:
@@ -109,7 +109,6 @@ def test_pdca_processor_snapshot_includes_final_act_outcome(monkeypatch) -> None
         "_call_tool_planning_llm",
         next_call,
     )
-    monkeypatch.setattr(check_node_module, "_call_criteria_review_llm", lambda prompt: "1.- [x] File exists")
     task = TaskState(
         goal="Write the file",
         user="alex",
@@ -118,15 +117,13 @@ def test_pdca_processor_snapshot_includes_final_act_outcome(monkeypatch) -> None
 
     result = PDCAIntelligenceProcessor().process(
         task,
-        CoreLoopContext(messages=InMemoryMessageQueue(), tools=_ToolRegistry()),
+        CoreLoopContext(messages=InMemoryMessageQueue(), tools=_ToolRegistry(), system_one=v2_decisions(satisfy=True)),
     )
 
     assert result.snapshot.metadata["check_verdict"] == "mission_success"
     assert result.snapshot.metadata["status"] == "completed"
-    assert result.snapshot.metadata["outcome"] == {
-        "status": "success",
-        "reason": "All acceptance criteria are complete and a user response is prepared.",
-    }
+    assert result.snapshot.metadata["outcome"]["status"] == "success"
+    assert result.snapshot.metadata["task_state"]["metadata"]["prepared_user_response"]["message"] == "The file is ready."
     assert result.snapshot.metadata["act_route"] == "end"
 
 

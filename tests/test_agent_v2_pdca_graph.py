@@ -34,7 +34,7 @@ def test_pdca_plan_node_returns_task_state() -> None:
 
 
 def test_pdca_act_node_returns_task_state() -> None:
-    state = TaskState(goal="Review this request")
+    state = TaskState(goal="Review this request", check_verdict="new")
 
     assert act_node(state) is state
 
@@ -95,12 +95,12 @@ def test_run_pdca_once_preserves_task_state_container() -> None:
     assert result.user == "alex"
 
 
-def test_run_pdca_once_passes_context_tools_to_plan() -> None:
+def test_run_pdca_once_passes_context_tools_to_plan(v2_decisions) -> None:
     state = TaskState(task_id="task-1", goal="Review this request", user="alex", acceptance_criteria_md="1.- [ ] Done")
 
     result = run_pdca_once(
         state,
-        context=CoreLoopContext(messages=InMemoryMessageQueue(), tools=_ToolRegistry()),
+        context=CoreLoopContext(messages=InMemoryMessageQueue(), tools=_ToolRegistry(), system_one=v2_decisions(satisfy=True)),
     )
 
     assert "tool_call_plan_prompt" in result.metadata
@@ -108,7 +108,7 @@ def test_run_pdca_once_passes_context_tools_to_plan() -> None:
     assert result.metadata["act_route"] == "end"
 
 
-def test_run_pdca_once_executes_planned_tool_and_returns_to_check(monkeypatch) -> None:
+def test_run_pdca_once_executes_planned_tool_and_returns_to_check(monkeypatch, v2_decisions) -> None:
     plan_node_module = _plan_node_module()
     call_index = {"value": 0}
 
@@ -132,18 +132,18 @@ def test_run_pdca_once_executes_planned_tool_and_returns_to_check(monkeypatch) -
 
     result = run_pdca_once(
         state,
-        context=CoreLoopContext(messages=InMemoryMessageQueue(), tools=tools),
+        context=CoreLoopContext(messages=InMemoryMessageQueue(), tools=tools, system_one=v2_decisions()),
     )
 
     assert tools.calls == [("tool-1", {"path": "a.txt"})] * 10
-    assert result.check_verdict == "wip"
+    assert result.check_verdict == "mission_failed"
     assert result.pdca_cycle_count == 10
     assert result.metadata["act_route"] == "end"
-    assert result.metadata["act_stop_reason"] == "temporary_cycle_limit"
+    assert result.status == "failed"
     assert '"status": "success"' in result.plan_json
 
 
-def test_run_pdca_once_marks_mission_success_after_check_completes_criteria(monkeypatch) -> None:
+def test_run_pdca_once_marks_mission_success_after_check_completes_criteria(monkeypatch, v2_decisions) -> None:
     call_index = {"value": 0}
 
     def next_call(prompt: str) -> dict[str, Any]:
@@ -169,28 +169,24 @@ def test_run_pdca_once_marks_mission_success_after_check_completes_criteria(monk
         "_call_tool_planning_llm",
         next_call,
     )
-    monkeypatch.setattr(
-        _check_node_module(),
-        "_call_criteria_review_llm",
-        lambda prompt: "1.- [x] Done",
-    )
     state = TaskState(task_id="task-1", goal="Review this request", user="alex", acceptance_criteria_md="1.- [ ] Done")
 
     result = run_pdca_once(
         state,
-        context=CoreLoopContext(messages=InMemoryMessageQueue(), tools=_ToolRegistry()),
+        context=CoreLoopContext(messages=InMemoryMessageQueue(), tools=_ToolRegistry(), system_one=v2_decisions(satisfy=True)),
     )
 
     assert result.check_verdict == "mission_success"
     assert result.status == "completed"
-    assert result.outcome == {"status": "success", "reason": "All acceptance criteria are complete and a user response is prepared."}
+    assert result.outcome["status"] == "success"
+    assert result.has_prepared_user_response()
     assert result.metadata["act_route"] == "end"
 
 
-def test_act_route_after_wip_incomplete_criteria_can_continue_to_plan() -> None:
+def test_act_route_after_wip_incomplete_criteria_can_continue_to_plan(v2_decisions) -> None:
     state = TaskState(check_verdict="wip", acceptance_criteria_md="1.- [ ] Done")
 
-    act_node(state)
+    act_node(state, context=CoreLoopContext(messages=InMemoryMessageQueue(), system_one=v2_decisions()))
 
     assert state.metadata["act_route"] == "plan"
     assert _route_after_act(state) == PLAN_NODE

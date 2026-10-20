@@ -588,8 +588,8 @@ def test_v3_phase_planner_receives_project_context_and_durable_memory(tmp_path: 
         name="Calisthenics", description="Workout coaching and tracking",
         root_path=str(root), owner_user_id="alex",
     )
-    projects.write_project_context(
-        project.project_id, "Keep a dated workout journal.", requester_user_id="alex",
+    projects.write_project_config(
+        project.project_id, {"scope": "Keep a dated workout journal."}, requester_user_id="alex",
     )
     task = TaskState(
         goal="Update today's workout",
@@ -597,11 +597,12 @@ def test_v3_phase_planner_receives_project_context_and_durable_memory(tmp_path: 
         project_id=project.project_id,
         memory_context_md=(
             "# Durable Project Memory\n"
-            f"Primary journal path: {root / 'calisthenics_journal.md'}\n"
+            f"- [memory:journal; active] Primary journal path: {root / 'calisthenics_journal.md'}\n"
             "Never duplicate a same-date entry.\n"
-            + ("archived context " * 900)
-            + "\n# Recent Session Events\nLatest workout correction remains active."
+            + "\n- [memory:archive; active] " + ("archived context " * 900)
+            + "\n- [memory:correction; active] Latest workout correction remains active."
         ),
+        metadata={"v3_context_selection": {"selected_context_ids": ["project:" + project.project_id]}},
         recent_conversation_md='- alex: "I completed 5 sets of push-ups"',
     )
     task.set_acceptance_contract_from_markdown("1.- [ ] Today's workout is recorded")
@@ -630,11 +631,11 @@ def test_v3_phase_planner_receives_project_context_and_durable_memory(tmp_path: 
     )
 
     request = next(item for item in provider.requests if item.purpose == InferencePurpose.PHASE_PLANNING)
-    assert f"Project Directory: {root}" in request.prompt
+    assert "Project — Calisthenics" in request.prompt
     assert "Keep a dated workout journal." in request.prompt
     assert str(root / "calisthenics_journal.md") in request.prompt
     assert "Latest workout correction remains active." in request.prompt
-    assert "context truncated" in request.prompt
+    assert "memory omitted" in request.prompt
     assert 'I completed 5 sets of push-ups' in request.prompt
     assert "never mutation targets" in request.prompt
     assert "Do not ask the requester for a file location already present" in request.prompt

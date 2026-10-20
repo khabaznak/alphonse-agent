@@ -402,7 +402,7 @@ class ProjectInboundRouter:
         binding = self._memory_binding_key(key, project.project_id)
         active = self._active_memory_session(key, project)
         if not arguments:
-            return f"Active session: {active.name} ({active.session_id})."
+            return f"Session for explicitly scoped project tasks: {active.name} ({active.session_id}). Ordinary conversation remains projectless."
         if arguments.casefold() == "close":
             if self.memory is None:
                 return "Session closing is unavailable."
@@ -421,13 +421,13 @@ class ProjectInboundRouter:
             if not name: return "Usage: /session new <name>"
             created = self.memory_sessions.create(project_id=project.project_id, name=name, created_by_user_id=key.alphonse_user_id)
             self.memory_sessions.bind(binding, created)
-            return f"Created and activated session: {created.name}."
+            return f"Created session for explicitly scoped project tasks: {created.name}. Ordinary conversation remains projectless."
         try:
             selected = self.memory_sessions.resolve_open(project.project_id, arguments)
         except LookupError as exc:
             return str(exc)
         self.memory_sessions.bind(binding, selected)
-        return f"Active session: {selected.name}."
+        return f"Session for explicitly scoped project tasks: {selected.name}. Ordinary conversation remains projectless."
 
     def _memory_session_has_work(self, session_id: str) -> bool:
         pending = getattr(self.channel.messages, "has_pending_memory_session", None)

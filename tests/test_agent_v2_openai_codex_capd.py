@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import pytest
 from types import SimpleNamespace
 
 from alphonse.agent_v2.core.core import CoreLoopContext
@@ -31,11 +32,16 @@ def test_act_node_uses_codex_provider_for_acceptance_criteria(monkeypatch) -> No
     task = TaskState(goal="Write the file", user="alex", check_verdict="new")
     act_node(task, context=CoreLoopContext(messages=InMemoryMessageQueue(), inference=router))
 
-    assert task.acceptance_criteria_md == "1.- [ ] File exists"
-    assert task.metadata["acceptance_criteria_llm_stubbed"] is False
-    envelope = json.loads(captured["input"])
-    assert envelope["purpose"] == "acceptance_criteria"
-    assert "tools" not in envelope
+    # Plan now establishes acceptance criteria; Act only routes a new task.
+    assert task.acceptance_criteria_md == '- (none)'
+    assert task.metadata['act_route'] == 'plan'
+    assert captured == {}
+    from alphonse.agent_v2.core.intelligence.acceptance_planning import plan_acceptance_contract
+    assert plan_acceptance_contract(task, CoreLoopContext(messages=InMemoryMessageQueue(), inference=router))
+    assert task.acceptance_criteria_md == '1.- [ ] File exists'
+    envelope = json.loads(captured['input'])
+    assert envelope['purpose'] == 'acceptance_criteria'
+    assert 'tools' not in envelope
 
 
 def test_check_node_uses_codex_provider_for_criteria_review(monkeypatch) -> None:
@@ -79,13 +85,12 @@ def test_check_node_uses_codex_provider_for_criteria_review(monkeypatch) -> None
         }
     )
 
-    check_node(task, context=CoreLoopContext(messages=InMemoryMessageQueue(), inference=router))
-
-    assert task.acceptance_criteria_md == "1.- [x] File exists"
-    assert task.metadata["criteria_review_llm_stubbed"] is False
-    envelope = json.loads(captured["input"])
-    assert envelope["purpose"] == "criteria_review"
-    assert "tools" not in envelope
+    from alphonse.agent_v2.system_one import SystemOneUnavailableError
+    # Bounded evidence classification belongs to Jev; missing Jev fails closed.
+    with pytest.raises(SystemOneUnavailableError, match='check_criteria_review_unavailable'):
+        check_node(task, context=CoreLoopContext(messages=InMemoryMessageQueue(), inference=router))
+    assert task.acceptance_criteria_md == '1.- [ ] File exists'
+    assert captured == {}
 
 
 def test_plan_node_uses_codex_provider_with_exposed_tools(monkeypatch) -> None:

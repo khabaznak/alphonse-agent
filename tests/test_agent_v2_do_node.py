@@ -102,7 +102,7 @@ def test_do_node_does_not_judge_acceptance_criteria() -> None:
     assert task.check_verdict == "wip"
 
 
-def test_silent_successful_bash_requires_model_authored_response_before_completion() -> None:
+def test_silent_successful_bash_requires_model_authored_response_before_completion(v2_decisions) -> None:
     task = TaskState(acceptance_criteria_md="1.- [x] TODO item is added", check_verdict="wip")
     task.append_plan_call(_planned_call("bash-call", tool_id="native.bash", path="ignored"))
     tools = _ToolRegistry(result={"exit_code": 0, "stdout": "", "stderr": ""})
@@ -113,7 +113,8 @@ def test_silent_successful_bash_requires_model_authored_response_before_completi
     assert task.metadata["pending_silent_bash_confirmation"]["tool_call_id"] == "bash-call"
 
     from alphonse.agent_v2.core.intelligence.pdca.nodes import act_node
-    act_node(task)
+    context.system_one = v2_decisions()
+    act_node(task, context=context)
     assert task.metadata["act_route"] == "plan"
     assert task.status != "completed"
 
@@ -122,7 +123,7 @@ def test_silent_successful_bash_requires_model_authored_response_before_completi
     do_node(task, context=context)
 
     assert "pending_silent_bash_confirmation" not in task.metadata
-    act_node(task)
+    act_node(task, context=context)
     assert task.status == "completed"
 
 

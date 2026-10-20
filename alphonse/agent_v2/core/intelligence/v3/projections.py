@@ -1,7 +1,6 @@
 """Opt-in decision contexts. Sources are atomic; budget overflow never clips policy."""
 from __future__ import annotations
 
-from collections import Counter
 from dataclasses import dataclass
 import json
 import os
@@ -105,6 +104,9 @@ def project(task, context, *, purpose: str, selected_context_ids=()) -> str:
 
     if purpose not in PURPOSES:
         raise ValueError("invalid_context_purpose")
+    if context.is_cancelled():
+        raise SystemOneUnavailableError("v3_recall_cancelled")
+    budget = int(os.environ.get("ALPHONSE_V3_CONTEXT_TOKEN_BUDGET", "24000"))
     excluded_sources = set()
     omissions = []
     recall = {}
@@ -138,14 +140,18 @@ def project(task, context, *, purpose: str, selected_context_ids=()) -> str:
                 records.append(Record("global:" + heading.casefold(), heading, body, True))
     elif global_text:
         records.append(Record("global:policy", "Global instructions", global_text, True))
+    # Load entire selected guidance, including authorized artifact instructions.
+    # Treat it atomically: overflowing selected instructions fails explicitly.
+    skills, ids = selected_skill_guidance(task, context, max_chars=None)
+    records.append(Record("skills:selected", "Selected skill guidance", skills, True))
+    selection = task.metadata.get("v3_skill_selection")
+    if isinstance(selection, dict):
+        selection["loaded_skill_ids"] = ids
+        if set(selection.get("selected_skill_ids", [])) - set(ids):
+            raise SystemOneUnavailableError("v3_selected_skill_unavailable")
+    # Reject oversized immutable inputs before any relevance-provider call.
+    assemble(records, budget=budget)
     if purpose != "review":
-        # Load entire selected guidance, including authorized artifact instructions.
-        # Treat it atomically: overflowing selected instructions fails explicitly.
-        skills, ids = selected_skill_guidance(task, context, max_chars=None)
-        records.append(Record("skills:selected", "Selected skill guidance", skills, True))
-        selection = task.metadata.get("v3_skill_selection")
-        if isinstance(selection, dict):
-            selection["loaded_skill_ids"] = ids
         if purpose in {"admission", "planning", "execution", "curation", "response"}:
             from .context import _visible_active_projects, _project_candidate_for_record
             for candidate in _global_candidates(global_text, max_chars=None):
@@ -165,21 +171,12 @@ def project(task, context, *, purpose: str, selected_context_ids=()) -> str:
                 events = list(recent(owner_user_id=task.user, limit=30))
             except Exception:
                 events = []
-            copies = Counter(str(r.get("content") or "") for r in (task.conversation_records or []))
-            copies[task.goal] = max(1, copies[task.goal])
             history = []
             for event in reversed(events):
                 item = conversation_item(event, str(task.user))
                 if item is None or not item.visible_to(str(task.user)):
                     continue
                 if str(getattr(event, "source_message_id", "") or "") == str(task.message_id or "__missing__"):
-                    excluded_sources.add(item.source.source_id)
-                    omissions.append(_omission(item.source.source_id, "duplicate"))
-                    if copies[item.content]:
-                        copies[item.content] -= 1
-                    continue
-                if copies[item.content]:
-                    copies[item.content] -= 1
                     excluded_sources.add(item.source.source_id)
                     omissions.append(_omission(item.source.source_id, "duplicate"))
                     continue
@@ -216,12 +213,13 @@ def project(task, context, *, purpose: str, selected_context_ids=()) -> str:
             records.append(Record("task:" + key, "Task working facts (not verified effects)", str(getattr(task, key, "") or "")))
     # Review receives current acceptance/evidence via its existing typed arguments;
     # unrelated ledger and historical retrieval never enter its context projection.
-    budget = int(os.environ.get("ALPHONSE_V3_CONTEXT_TOKEN_BUDGET", "24000"))
+    if context.is_cancelled():
+        raise SystemOneUnavailableError("v3_recall_cancelled")
     text, manifest = assemble(records, budget=budget)
     manifest["records"].extend(omissions)
     manifest["records"].extend(recall.get("omissions", []))
     selection = task.metadata.get('v3_skill_selection')
-    manifest['selected_skill_ids'] = list(selection.get('selected_skill_ids', ids)) if isinstance(selection, dict) and purpose != 'review' else list(ids)
+    manifest['selected_skill_ids'] = list(selection.get('selected_skill_ids', ids)) if isinstance(selection, dict) else list(ids)
     manifest['loaded_skill_ids'] = list(ids)
     manifest['records'].extend(dict(record) for record in getattr(skills, 'records', []) if record['status'] == 'omitted')
     manifest["recall"] = {k: recall[k] for k in ("status", "coverage", "next_offset", "further_search_required") if k in recall}
@@ -323,7 +321,12 @@ def retrieve(task, context) -> dict:
             selected = judge(request=task.goal, candidates=hits) if callable(judge) and hits else None
         except Exception:
             selected = None
-        if isinstance(selected, list):
+        if context.is_cancelled():
+            raise SystemOneUnavailableError("v3_recall_cancelled")
+        valid = (isinstance(selected, list)
+                 and all(isinstance(item, str) for item in selected)
+                 and set(selected) <= {hit["source_id"] for hit in hits})
+        if valid:
             omissions = [_omission(hit["source_id"], "irrelevant") for hit in hits if hit["source_id"] not in selected]
             hits = [hit for hit in hits if hit["source_id"] in selected]
         return {"status": result.get("status", "unavailable"), "coverage": result.get("coverage", {}),

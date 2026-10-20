@@ -517,3 +517,131 @@ def test_system_one_confident_updates_survive_partial_ambiguity_and_response_is_
     assert [item.purpose for item in provider.requests] == [InferencePurpose.PHASE_REVIEW]
     assert "The response contains a routine" not in provider.requests[0].prompt
     assert "The response contains safety guidance" in provider.requests[0].prompt
+
+
+@pytest.mark.parametrize('during_review', [False, True])
+def test_dc1_cancellation_prevents_terminal_success(during_review):
+    from alphonse.agent_v2.core.intelligence.v3.outer import review_phase
+    task = _task()
+    state = _completed_state()
+    cancelled = {'value': not during_review}
+    context, _ = _context()
+    context.cancellation_checker = lambda: cancelled['value']
+    class Judge:
+        def evaluate(self, **kwargs):
+            cancelled['value'] = True
+            return SystemOneReviewResult(updates=({'criterion_id': 'ac-1', 'status': 'satisfied', 'evidence_refs': ['tactical-action:edit']},), ambiguous_criterion_ids=())
+    context.system_one = Judge()
+    review = review_phase(task, state, PhaseOutcome(state.phase.phase_id, PhaseStatus.PHASE_COMPLETE), context)
+    assert review.status == PhaseReviewStatus.CANCELLED
+    assert task.status != 'completed'
+
+
+def test_dc1_review_budget_failure_never_falls_back_to_inference(monkeypatch):
+    from alphonse.agent_v2.core.intelligence.v3.outer import review_phase
+    from alphonse.agent_v2.core.intelligence.v3.projections import ContextBudgetExceeded
+    monkeypatch.setenv('ALPHONSE_V3_CONTEXT_PROJECTIONS', '1')
+    monkeypatch.setenv('ALPHONSE_V3_CONTEXT_TOKEN_BUDGET', '1')
+    task, state = _task(), _completed_state()
+    context, provider = _context()
+    class Judge:
+        def evaluate(self, **kwargs):
+            pytest.fail('Oversized required context reached Jev')
+    context.system_one = Judge()
+    with pytest.raises(ContextBudgetExceeded):
+        review_phase(task, state, PhaseOutcome(state.phase.phase_id, PhaseStatus.PHASE_COMPLETE), context)
+    assert provider.requests == []
+
+
+@pytest.mark.parametrize('provider', ['jev', 'system_two'])
+def test_dc1_failed_or_historical_evidence_cannot_satisfy_contract(monkeypatch, provider):
+    import copy
+    from types import SimpleNamespace
+    from alphonse.agent_v2.core.intelligence.v3.outer import review_phase
+    monkeypatch.setenv('ALPHONSE_V3_CONTEXT_PROJECTIONS', '1')
+    task, state = _task(), _completed_state()
+    original = copy.deepcopy(task.ensure_acceptance_contract())
+    task.memory_context_md = 'HISTORICAL_SUCCESS_SENTINEL'
+    state.evidence.entries[0]['status'] = 'failed'
+    updates = [{'criterion_id': 'ac-1', 'status': 'satisfied', 'evidence_refs': ['tactical-action:edit', 'historical:write'], 'reason': 'Untrusted success judgment'}]
+    captured = []
+    context = CoreLoopContext(messages=InMemoryMessageQueue())
+    if provider == 'jev':
+        def evaluate(**kwargs):
+            captured.append(kwargs)
+            assert kwargs['contract'] == original
+            assert kwargs['evidence'] == state.evidence.to_dict()
+            return SystemOneReviewResult(updates=tuple(updates), ambiguous_criterion_ids=())
+        context.system_one = SimpleNamespace(evaluate=evaluate)
+    else:
+        def generate(request):
+            captured.append(request.prompt)
+            assert 'failed' in request.prompt
+            assert 'Solar project is complete' in request.prompt
+            return SimpleNamespace(json_value={'updates': updates})
+        context.inference = SimpleNamespace(generate_json=generate)
+    review = review_phase(task, state, PhaseOutcome(state.phase.phase_id, PhaseStatus.PHASE_COMPLETE), context)
+    assert 'HISTORICAL_SUCCESS_SENTINEL' not in str(captured)
+    assert review.status == PhaseReviewStatus.PHASE_VERIFIED_TASK_INCOMPLETE
+    assert task.acceptance_contract == original
+
+
+@pytest.mark.parametrize('has_jev', [False, True])
+def test_dc1_fallback_review_receives_required_context_before_inference(monkeypatch, has_jev):
+    from types import SimpleNamespace
+    from alphonse.agent_v2.core.intelligence.v3.outer import review_phase
+    from alphonse.agent_v2.core.intelligence.v3.projections import ContextBudgetExceeded
+    monkeypatch.setenv('ALPHONSE_V3_CONTEXT_PROJECTIONS', '1')
+    task, state = _task(), _completed_state()
+    task.append_conversation_message('alex', 'STEERING_TAIL: Do not contact anyone.')
+    calls = []
+    def generate(request):
+        calls.append(request)
+        assert request.prompt.count(task.goal) == 1
+        assert 'STEERING_TAIL' in request.prompt
+        return SimpleNamespace(json_value={'updates': []})
+    def fail(**kwargs):
+        raise OSError('synthetic provider outage')
+    context = CoreLoopContext(messages=InMemoryMessageQueue(), inference=SimpleNamespace(generate_json=generate),
+                              system_one=SimpleNamespace(evaluate=fail) if has_jev else None)
+    review_phase(task, state, PhaseOutcome(state.phase.phase_id, PhaseStatus.PHASE_COMPLETE), context)
+    assert len(calls) == 1
+    calls.clear()
+    monkeypatch.setenv('ALPHONSE_V3_CONTEXT_TOKEN_BUDGET', '1')
+    with pytest.raises(ContextBudgetExceeded):
+        review_phase(task, state, PhaseOutcome(state.phase.phase_id, PhaseStatus.PHASE_COMPLETE), context)
+    assert calls == []
+
+
+@pytest.mark.parametrize('closure_only', [False, True])
+def test_dc1_cancellation_cannot_be_overridden_by_closure_or_act(closure_only):
+    from types import SimpleNamespace
+    task, state = _task(), _completed_state()
+    context, _ = _context()
+    cancelled = {'value': closure_only}
+    context.cancellation_checker = lambda: cancelled['value']
+    if closure_only:
+        task.metadata['act_directive'] = {'closure_only': True, 'terminal_outcome': 'success'}
+        task.metadata['prepared_user_response'] = {'message': 'Synthetic reply'}
+    else:
+        def recommend_act(**kwargs):
+            cancelled['value'] = True
+            return SystemOneActRecommendation('complete', 1.0, True, 'Synthetic late cancellation')
+        context.system_one = SimpleNamespace(recommend_act=recommend_act)
+    review, decision = V3OuterController().review_and_route(task, state, PhaseOutcome(state.phase.phase_id, PhaseStatus.PHASE_COMPLETE), context)
+    assert review.status == PhaseReviewStatus.CANCELLED
+    assert task.status == 'cancelled'
+    assert decision.action == StrategicAction.FAIL
+
+
+def test_dc1_closure_directive_cannot_turn_failed_verification_into_success():
+    task, state = _task(), _completed_state(affected_path='outside-authorized-scope.md')
+    task.metadata['act_directive'] = {'closure_only': True, 'terminal_outcome': 'success'}
+    # The response matches the current evidence so freshness cannot mask the guard.
+    task.metadata['prepared_user_response'] = {'message': 'Synthetic reply', 'work_evidence_refs': ['tactical-action:edit']}
+    context, provider = _context()
+    review, decision = V3OuterController().review_and_route(task, state, PhaseOutcome(state.phase.phase_id, PhaseStatus.PHASE_COMPLETE), context)
+    assert review.status == PhaseReviewStatus.VERIFICATION_FAILED
+    assert task.status != 'completed'
+    assert decision.action == StrategicAction.REPLAN
+    assert provider.requests == []

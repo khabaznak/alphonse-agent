@@ -299,6 +299,8 @@ class HierarchicalCAPDProcessor:
             tools=(),
             cancel_checker=context.is_cancelled if context.cancellation_checker is not None else None,
         ))
+        if context.is_cancelled():
+            raise SystemOneUnavailableError("v3_direct_response_cancelled")
         message = str(result.content or "").strip()
         if not message:
             raise ValueError("v3_direct_response_empty")

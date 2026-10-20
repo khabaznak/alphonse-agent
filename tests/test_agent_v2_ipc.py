@@ -205,7 +205,7 @@ def test_system_one_settings_request_uses_validation_timeout(monkeypatch) -> Non
     monkeypatch.setattr("alphonse.agent_v2.ipc.V2DaemonClient.request", fake_request)
     client.save_system_one_settings(actor_user_id="admin", values={"enabled": True})
 
-    assert captured == {"timeout": 35.0, "method": "save_system_one_settings"}
+    assert captured == {"timeout": 105.0, "method": "save_system_one_settings"}
 
 
 def test_daemon_ipc_reads_and_saves_agent_configuration(tmp_path) -> None:
@@ -665,21 +665,25 @@ def test_v3_task_progress_projects_hierarchical_actions_without_private_reasonin
 
     progress = _task_progress_snapshot(task)
 
-    assert progress["tool_name"] == "native.respond"
+    assert progress["tool_name"] == "Respond"
     assert progress["tool_status"] == "failed"
     assert progress["tool_result"] == {"error": "Response delivery failed."}
     assert progress["intention"] == "Read the current device status"
     assert progress["steps"] == [
         {
+            "action": None,
+            "attempt": 1,
             "intention": "Read the current device status",
-            "tool_name": "native.device_status",
+            "tool_name": "Device Status",
             "arguments": {"device_id": "studio", "api_token": "[redacted]"},
             "status": "success",
             "result": {"temperature_c": 23, "access_token": "[redacted]"},
         },
         {
+            "action": None,
+            "attempt": 2,
             "intention": "Read the current device status",
-            "tool_name": "native.respond",
+            "tool_name": "Respond",
             "arguments": {"message": "The studio is 23 C."},
             "status": "failed",
             "result": {"error": "Response delivery failed."},
@@ -746,7 +750,7 @@ def test_desktop_task_progress_a2ui_renders_v3_capd_work_log(tmp_path) -> None:
     rendered = str(envelopes)
 
     assert "task-progress:v3-desktop-progress" in rendered
-    assert "native.device_status · success" in rendered
+    assert "Device Status · success" in rendered
     assert "Intention: Read the current device status" in rendered
     assert "device_id" in rendered
     assert "temperature_c" in rendered
@@ -923,13 +927,13 @@ def test_desktop_project_ipc_uses_the_daemon_owned_store(tmp_path) -> None:
         }
     )["project"]
     daemon.ipc._dispatch(
-        {"method": "save_project_context", "params": {"user": "alex", "project_id": created["project_id"], "content": "Focus here."}}
+        {"method": "save_project_config", "params": {"user": "alex", "project_id": created["project_id"], "config": {"scope": "Focus here."}}}
     )
 
     assert daemon.ipc._dispatch({"method": "projects", "params": {"user": "alex"}})["projects"][0]["project_id"] == created["project_id"]
     assert daemon.ipc._dispatch(
-        {"method": "project_context", "params": {"user": "alex", "project_id": created["project_id"]}}
-    )["content"] == "Focus here."
+        {"method": "project_config", "params": {"user": "alex", "project_id": created["project_id"]}}
+    )["config"]["scope"] == "Focus here."
 
 
 def test_project_recent_files_ipc_lists_newest_visible_direct_children(tmp_path) -> None:

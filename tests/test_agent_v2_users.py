@@ -130,12 +130,13 @@ def test_non_admin_profile_projects_and_membership_are_isolated(tmp_path: Path) 
     projects = ProjectStore(tmp_path / "projects.sqlite3")
     project = projects.create_project(name="Health", root_path=str(store.managed_project_root(gaby.user_id) / "health"), owner_user_id=gaby.user_id)
 
-    assert Path(project.context_path).exists()
+    assert Path(project.config_path).exists()
     assert projects.get_project(project.project_id, requester_user_id=admin.user_id) is None
+    projects.update_project(project.project_id, name=project.name, description="", visibility="shared", requester_user_id=gaby.user_id)
     projects.add_member(project.project_id, admin.user_id)
     assert projects.get_project(project.project_id, requester_user_id=admin.user_id) is not None
     with pytest.raises(PermissionError):
-        projects.write_project_context(project.project_id, "cannot edit", requester_user_id=admin.user_id)
+        projects.write_project_config(project.project_id, {"scope": "cannot edit"}, requester_user_id=admin.user_id)
 
 
 def test_onboarding_migrates_legacy_local_projects(tmp_path: Path) -> None:

@@ -809,3 +809,28 @@ def test_response_uncertainty_does_not_replace_operational_or_outer_verification
     result, _, _ = PhaseExecutor()._completion_review(TaskState(user="alex"), state, subgoal, action,
         CoreLoopContext(messages=InMemoryMessageQueue(), system_one=jev))
     assert result is expected
+
+
+def test_dc1_cross_channel_checkpoint_does_not_repeat_completed_mutation():
+    import json
+    calls = ['edit']  # The synthetic verified effect already happened before restart.
+    task = TaskState(user='alex', project_id='home', metadata={'channel': {'provider_key': 'telegram'}})
+    state = new_tactical_state(_phase())
+    state.status = PhaseStatus.RUNNING
+    state.completed_subgoal_ids = ['locate', 'update']
+    state.active_subgoal_id = 'verify'
+    state.bind_subgoal_output('locate', 'record_reference', {'path': 'mejoras_hogar/backlog.md'})
+    state.bind_subgoal_output('update', 'verified_mutation', {'verification': {'status': 'verified'}})
+    state.evidence.append({'evidence_ref': 'tactical-action:prior-edit', 'subgoal_id': 'update',
+                           'status': 'success', 'result': {'verification': {'status': 'verified'}}})
+    state.revealed_tool_ids = ['native.exact_text_edit', 'native.read']
+    task.hierarchical_state = state.to_dict()
+    task = TaskState.from_dict(json.loads(json.dumps(task.to_checkpoint_dict())))
+    restored = TacticalState.from_dict(task.hierarchical_state)
+    task.metadata['channel'] = {'provider_key': 'desktop'}
+    outcome = PhaseExecutor(action_selector=_selector([
+        {'tool_id': 'native.read', 'arguments': {'path': 'mejoras_hogar/backlog.md'}},
+    ])).run(task, restored, CoreLoopContext(messages=InMemoryMessageQueue(), tools=_registry(calls), system_one=_accept_successful_actions()))
+    assert outcome.status == PhaseStatus.PHASE_COMPLETE
+    assert calls == ['edit', 'read']
+    assert restored.evidence.entries[0]['evidence_ref'] == 'tactical-action:prior-edit'

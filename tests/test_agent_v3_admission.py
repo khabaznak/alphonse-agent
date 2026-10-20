@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+import json
 
 from alphonse.agent_v2.conversations import SQLiteConversationStore
 from alphonse.agent_v2.core.core import CoreLoopContext
@@ -86,16 +87,16 @@ def test_direct_reply_receives_cross_project_history_global_and_selected_project
     )
     config = AgentConfigStore(tmp_path / "agent-config")
     config.save(GLOBAL_CONTEXT_FILE, "Household language preference: Spanish.")
-    project = type("Project", (), {"context_path": str(tmp_path / "project_context.md"), "name": "Recovery"})()
-    (tmp_path / "project_context.md").write_text("Goal: return to activity gradually.", encoding="utf-8")
+    project = type("Project", (), {"config_path": str(tmp_path / "project_config.json"), "project_id": "home", "name": "Recovery"})()
+    (tmp_path / "project_config.json").write_text(json.dumps({"schema_version": 1, "scope": "Goal: return to activity gradually."}), encoding="utf-8")
     projects = type("Projects", (), {
         "get_project": lambda self, project_id, **kwargs: project if project_id == "home" else None,
-        "list_visible_projects": lambda self, user_id: [type("VisibleProject", (), {"project_id": "another-project"})()],
+        "list_visible_projects": lambda self, user_id: [project],
     })()
     inference = _DirectInference("Descansa y sigue las indicaciones recibidas.")
     context = CoreLoopContext(
         messages=InMemoryMessageQueue(), inference=inference,
-        system_one=_AdmissionJev(SystemOneAdmissionDecision(False, 0.04, True, model="test-jev")),
+        system_one=_AdmissionJev(SystemOneAdmissionDecision(False, 0.04, True, model="test-jev", selected_context_ids=("project:home",))),
         prompts=AgentConfigPromptLoader.from_store(config), project_store=projects,
         conversation_store=conversations,
     )
@@ -126,15 +127,15 @@ def test_context_curation_separates_invariants_from_optional_candidates(tmp_path
     optional_root = tmp_path / "optional"
     selected_root.mkdir()
     optional_root.mkdir()
-    (selected_root / "project_context.md").write_text("Selected goal context", encoding="utf-8")
-    (optional_root / "project_context.md").write_text("Optional project context", encoding="utf-8")
+    (selected_root / "project_config.json").write_text(json.dumps({"schema_version": 1, "scope": "Selected goal context"}), encoding="utf-8")
+    (optional_root / "project_config.json").write_text(json.dumps({"schema_version": 1, "scope": "Optional project context"}), encoding="utf-8")
     selected_project = type("Project", (), {
         "project_id": "selected", "name": "Selected", "description": "Current effort",
-        "context_path": str(selected_root / "project_context.md"),
+        "config_path": str(selected_root / "project_config.json"),
     })()
     optional_project = type("Project", (), {
         "project_id": "optional", "name": "Optional", "description": "Another active effort",
-        "context_path": str(optional_root / "project_context.md"),
+        "config_path": str(optional_root / "project_config.json"),
     })()
     project_store = type("Projects", (), {
         "get_project": lambda self, project_id, **kwargs: selected_project if project_id == "selected" else None,
@@ -152,11 +153,12 @@ def test_context_curation_separates_invariants_from_optional_candidates(tmp_path
     )
 
     assert "Member A is a parent" in invariant
-    assert "Selected goal context" in invariant
+    assert "Selected goal context" not in invariant
+    assert "Selected goal context" in next(item["content"] for item in candidates if item["id"] == "project:selected")
     assert "The household prefers shared meals" not in invariant
     assert "Optional project context" not in invariant
     assert "REMOVAL_SENTINEL" not in invariant
-    assert {item["id"] for item in candidates} == {"global:household-norms", "project:optional"}
+    assert {item["id"] for item in candidates} == {"global:household-norms", "project:selected", "project:optional"}
 
 
 def test_direct_reply_uses_only_the_context_candidates_selected_at_admission(tmp_path) -> None:

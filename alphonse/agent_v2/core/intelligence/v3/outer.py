@@ -77,8 +77,9 @@ class V3OuterController:
         )
         act_directive = task.metadata.get("act_directive")
         act_directive = act_directive if isinstance(act_directive, dict) else {}
-        if act_directive.get("closure_only") and task.has_prepared_user_response():
-            desired = str(act_directive.get("terminal_outcome") or "failed")
+        desired = str(act_directive.get("terminal_outcome") or "failed")
+        closure_allowed = desired == "failed" or review.status == PhaseReviewStatus.PHASE_VERIFIED_TASK_COMPLETE
+        if review.status != PhaseReviewStatus.CANCELLED and closure_allowed and act_directive.get("closure_only") and task.has_prepared_user_response():
             decision = StrategicDecision(
                 StrategicAction.FAIL if desired == "failed" else StrategicAction.COMPLETE,
                 "Act's final explanation was delivered; closing with the previously selected outcome.",
@@ -118,6 +119,14 @@ class V3OuterController:
                 decision = decide_next_action(review)
         else:
             decision = decide_next_action(review)
+        if context.is_cancelled():
+            review = PhaseReview(state.phase.phase_id, PhaseReviewStatus.CANCELLED, "Task cancelled.")
+            decision = decide_next_action(review)
+            task.status = "cancelled"
+            task.metadata["v3_route"] = "end"
+            task.metadata["v3_phase_review"] = _review_dict(review)
+            task.metadata["v3_strategic_decision"] = {"action": decision.action.value, "reason": decision.reason}
+            return review, decision
         if recommendation is not None:
             task.metadata["system_one_act_recommendation"] = recommendation.to_metadata()
         if (
@@ -197,6 +206,8 @@ def review_phase(
     outcome: PhaseOutcome,
     context: "CoreLoopContext",
 ) -> PhaseReview:
+    if context.is_cancelled():
+        return PhaseReview(state.phase.phase_id, PhaseReviewStatus.CANCELLED, "Task cancelled.")
     violations = _invariant_violations(task, state)
     evidence_refs = _successful_evidence_refs(state)
     if violations:
@@ -221,6 +232,8 @@ def review_phase(
             evidence_refs,
         )
     _review_acceptance_statuses(task, state, evidence_refs, context)
+    if context.is_cancelled():
+        return PhaseReview(state.phase.phase_id, PhaseReviewStatus.CANCELLED, "Task cancelled.", evidence_refs)
     if task.acceptance_criteria_all_complete():
         return PhaseReview(
             state.phase.phase_id,
@@ -354,6 +367,9 @@ def _review_acceptance_statuses(
 ) -> None:
     system_one_result = None
     system_one = context.system_one
+    # Validate required context outside provider recovery: budget/cancellation
+    # failures must not be mistaken for an unavailable judgment service.
+    task_context = _task_context(task, context)
     if system_one is not None and callable(getattr(system_one, "evaluate", None)):
         try:
             system_one_result = _evaluate_system_one_with_context(
@@ -361,10 +377,12 @@ def _review_acceptance_statuses(
                 contract=task.ensure_acceptance_contract(),
                 phase=state.phase.to_dict(),
                 evidence=state.evidence.to_dict(),
-                task_context=_task_context(task, context),
+                task_context=task_context,
             )
         except Exception:
             system_one_result = None
+    if context.is_cancelled():
+        return
     if system_one_result is None:
         payload = _system_two_acceptance_review(task, state, context)
         updates = payload.get("updates")
@@ -520,6 +538,7 @@ def _system_two_acceptance_review(
 ) -> dict[str, Any]:
     if context.inference is None:
         raise SystemOneUnavailableError("acceptance_review_unavailable")
+    shared_context = _task_context(task, context) if projections_enabled() else ""
     review_contract = contract or task.ensure_acceptance_contract()
     valid_refs = _successful_evidence_refs(state)
     schema = {
@@ -546,6 +565,7 @@ def _system_two_acceptance_review(
             "action's output, then cite that action's reference. A receipt alone cannot verify extraction or external effects. "
             "Use the actual image-to-asset mapping supplied with this inference request. If the image or successful action "
             "does not support a criterion, leave it pending. Never require an OCR or Bash call to read attached images.\n\n"
+            + (f"Required decision context:\n{shared_context}\n" if shared_context else "") +
             f"Valid evidence references: {json.dumps(valid_refs, ensure_ascii=False)}\n"
             f"Response JSON Schema: {json.dumps(schema, ensure_ascii=False)}\n"
             f"Acceptance contract: {json.dumps(review_contract, ensure_ascii=False)}\n"
@@ -553,6 +573,7 @@ def _system_two_acceptance_review(
             f"Verified evidence: {json.dumps(state.evidence.to_dict(), ensure_ascii=False)}"
     )
     review_parts = [
+        shared_context,
         source('Acceptance contract: ' + json.dumps(review_contract, ensure_ascii=False), 'task:' + str(task.task_id) + ':contract', 'acceptance_contract'),
         source('Phase: ' + json.dumps(state.phase.to_dict(), ensure_ascii=False), 'phase:' + state.phase.phase_id, 'strategic_plan'),
         source('Verified evidence: ' + json.dumps(state.evidence.to_dict(), ensure_ascii=False), 'phase:' + state.phase.phase_id + ':evidence', 'execution_evidence'),

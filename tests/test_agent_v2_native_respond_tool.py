@@ -42,7 +42,7 @@ def test_respond_descriptor_and_schema_are_visible_to_plan_prompt() -> None:
     assert RESPOND_TOOL_ID in prompt
     assert RESPOND_TOOL_NAME in prompt
     assert "Use `native.respond` for greetings" in prompt
-    assert "Use `native.bash` for local commands and all project-file operations" in prompt
+    assert "Use `native.bash` for local commands and project-file operations" in prompt
     assert "create or edit files" in prompt
 
 

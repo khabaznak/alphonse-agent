@@ -412,7 +412,7 @@ class ProjectStore:
         if project.description:
             lines.append(f"- Description: {project.description}")
         try:
-            config = self.read_project_config(project.project_id, requester_user_id=requester_user_id, requester_is_admin=requester_is_admin)
+            config = self.read_project_config(project.project_id, requester_user_id=requester_user_id)
         except (KeyError, ValueError, OSError):
             config = {}
         lines.extend(["", json.dumps(config, ensure_ascii=False, indent=2)])

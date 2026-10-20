@@ -263,8 +263,12 @@ aggregate gate decisions with numerators, denominators and exact thresholds;
 failure dispositions and rollback observations. Keep only synthetic content and
 sanitized provider metadata; never include credentials or hidden reasoning.
 
-All gates are currently **unassessed**. Existing tests are supporting DC-1 evidence,
-not a completed live protocol. The [paired memory harness](17-paired-memory-harness.md)
+The [2026-10-20 DC-1 report](evidence/dc1-2026-10-20/README.md) records passing
+deterministic invariant fixtures, failure injection and per-identity baseline
+dispositions without invariant exceptions. Two unrelated baseline project/queue
+tests remain failing; the full suite is not green. DC-2 through DC-5 remain
+**unassessed**, and deterministic tests are not a completed live protocol.
+The [paired memory harness](17-paired-memory-harness.md)
 implements #23's same-revision frozen adapter with real `CoreLoopContext`, a closed
 fixture registry, the original 22 cases plus 19 extensions, decision-local
 source/content-range oracles, fixture read-back, retained errors and conservative

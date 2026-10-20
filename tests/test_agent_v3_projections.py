@@ -9,7 +9,7 @@ from alphonse.agent_v2.core.messages import InMemoryMessageQueue
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.intelligence.v3.context import task_context_for_decision
 from alphonse.agent_v2.core.intelligence.v3.projections import (
-    Record, assemble, token_count, ContextBudgetExceeded, project, retrieve,
+    Record, assemble, token_count, ContextBudgetExceeded, project, retrieve, PURPOSES,
 )
 from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry
 from alphonse.agent_v2.core.tools.registry.native.memory import build_search_memory_tool_definition, build_read_memory_source_tool_definition
@@ -108,11 +108,12 @@ def test_required_steering_policy_and_skill_instructions_not_clipped(setup, monk
         project(task, context, purpose='planning')
 
 
-def test_flag_off_keeps_legacy_ledger(setup, monkeypatch):
+@pytest.mark.parametrize("purpose", sorted(PURPOSES))
+def test_flag_off_keeps_legacy_ledger(setup, monkeypatch, purpose):
     task, context = setup
     task.memory_context_md = 'LEGACY_TAIL'
     monkeypatch.delenv('ALPHONSE_V3_CONTEXT_PROJECTIONS')
-    assert 'LEGACY_TAIL' in task_context_for_decision(task, context)
+    assert 'LEGACY_TAIL' in task_context_for_decision(task, context, purpose=purpose)
 
 
 @pytest.mark.parametrize('answer', [None, float('nan'), True, -1, 2, 'yes'])
@@ -269,3 +270,170 @@ def test_history_selection_respects_cancellation_before_and_after_jev(setup, can
     with pytest.raises(SystemOneUnavailableError, match='cancelled'):
         project(task, context, purpose='execution')
     assert state['calls'] == int(cancel_during_judgment)
+
+
+@pytest.mark.parametrize('purpose', sorted(PURPOSES))
+def test_dc1_required_integrity_and_failure_before_any_provider(setup, monkeypatch, tmp_path, purpose):
+    from alphonse.agent_v2.agent_config import AgentConfigStore, AgentConfigPromptLoader, GLOBAL_CONTEXT_FILE
+    task, context = setup
+    task.acceptance_contract = {'criteria': [{'id': 'ac-1', 'statement': 'CONTRACT_TAIL'}]}
+    task.append_conversation_message('alex', task.goal)
+    task.append_conversation_message('alex', 'STEERING_TAIL')
+    task.metadata['user_constraints'] = {'forbidden': 'CONSTRAINT_TAIL'}
+    config = AgentConfigStore(tmp_path / 'config')
+    config.save(GLOBAL_CONTEXT_FILE, '## Privacy and sharing boundaries\nPOLICY_TAIL')
+    context.prompts = AgentConfigPromptLoader.from_store(config)
+    skill = SimpleNamespace(skill_id='skill:fixture', name='Fixture', description='Synthetic', directory='/fixture', instructions='SKILL_HEAD\n' + 'x' * 2000 + 'SKILL_TAIL')
+    context.skill_store = SimpleNamespace(get=lambda identity: skill)
+    task.metadata['v3_skill_selection'] = {'selected_skill_ids': [skill.skill_id]}
+    calls = []
+    context.system_one.judge_recall = lambda **kw: calls.append(kw) or False
+    text = project(task, context, purpose=purpose)
+    manifest = task.metadata['v3_context_projections'][purpose]
+    assert len(manifest['source_ids']) == len(set(manifest['source_ids']))
+    assert manifest['source_ids'].count('request:message') == 1
+    for tail in ('CONTRACT_TAIL', 'STEERING_TAIL', 'CONSTRAINT_TAIL', 'POLICY_TAIL', 'SKILL_TAIL'):
+        assert tail in text
+    assert manifest['tokens'] == token_count(text) <= manifest['budget']
+    assert manifest['tokenizer'] == 'conservative_utf8_bytes'
+    calls.clear()
+    monkeypatch.setenv('ALPHONSE_V3_CONTEXT_TOKEN_BUDGET', '100')
+    with pytest.raises(ContextBudgetExceeded):
+        project(task, context, purpose=purpose)
+    assert calls == []
+
+
+@pytest.mark.parametrize('purpose', ['admission', 'curation', 'planning', 'execution', 'response'])
+def test_dc1_identical_historical_text_keeps_distinct_event_identity(setup, purpose):
+    task, context = setup
+    task.goal = 'Repeated historical request'
+    old = record(context, task.goal, message='old-message')
+    current = record(context, task.goal, message=task.message_id)
+    task.append_conversation_message('alex', task.goal)
+    text = project(task, context, purpose=purpose)
+    ids = task.metadata['v3_context_projections'][purpose]['source_ids']
+    assert f'conversation:{old.event_id}' in ids
+    assert f'conversation:{current.event_id}' not in ids
+    assert text.count(task.goal) == 2
+
+
+@pytest.mark.parametrize('answer', [['unknown'], [None], [{}], 'unknown', True])
+def test_dc1_malformed_recall_selection_retains_hits(setup, answer):
+    task, context = setup
+    event = record(context, 'thermostat timeout yesterday')
+    context.system_one.judge_recall = lambda **kw: answer if kw['candidates'] else True
+    result = retrieve(task, context)
+    assert f'conversation:{event.event_id}' in {hit['source_id'] for hit in result['results']}
+
+
+@pytest.mark.parametrize('purpose', ['admission', 'curation', 'planning', 'execution', 'review', 'response'])
+def test_dc1_cancellation_and_unavailable_required_skill_fail_explicitly(setup, purpose):
+    from alphonse.agent_v2.system_one import SystemOneUnavailableError
+    task, context = setup
+    task.metadata['v3_skill_selection'] = {'selected_skill_ids': ['skill:missing']}
+    with pytest.raises(SystemOneUnavailableError, match='selected_skill_unavailable'):
+        project(task, context, purpose=purpose)
+    context.cancellation_checker = lambda: True
+    with pytest.raises(SystemOneUnavailableError, match='cancelled'):
+        project(task, context, purpose=purpose)
+
+
+def test_dc1_cancellation_during_final_recall_judgment_is_not_success(setup):
+    from alphonse.agent_v2.system_one import SystemOneUnavailableError
+    task, context = setup
+    record(context, 'thermostat timeout yesterday')
+    state = {'cancelled': False}
+    context.cancellation_checker = lambda: state['cancelled']
+    def judge(**kw):
+        if kw['candidates']:
+            state['cancelled'] = True
+            return []
+        return True
+    context.system_one.judge_recall = judge
+    with pytest.raises(SystemOneUnavailableError, match='cancelled'):
+        retrieve(task, context)
+
+
+@pytest.mark.parametrize('purpose', sorted(PURPOSES))
+def test_dc1_visibility_rechecked_at_every_decision(setup, purpose):
+    import sqlite3
+    task, context = setup
+    store = context.conversation_store
+    store.record(owner_user_id='other', content='PRIVATE thermostat sentinel', role='user', source='fixture', source_message_id='private')
+    shared = store.record(owner_user_id='other', content='SHARED thermostat sentinel', role='user', source='fixture', source_message_id='shared', visibility='shared', shared_with=('alex',))
+    owned = record(context, 'OWNED thermostat sentinel')
+    provider_inputs = []
+    def judge(**kw):
+        provider_inputs.append(str(kw))
+        return True if not kw['candidates'] else [hit['source_id'] for hit in kw['candidates']]
+    context.system_one.judge_recall = judge
+    first = project(task, context, purpose=purpose)
+    assert 'PRIVATE thermostat sentinel' not in first + str(provider_inputs)
+    if purpose != 'review':
+        assert 'SHARED thermostat sentinel' in first
+        assert 'OWNED thermostat sentinel' in first
+    # Revoke a shared source in the disposable backend, delete an owned source,
+    # and resume on another channel. Cached projection metadata must not leak.
+    with sqlite3.connect(store.db_path) as connection:
+        connection.execute("UPDATE v2_conversation_events SET shared_with='[]' WHERE event_id=?", (shared.event_id,))
+    store.delete(event_id=owned.event_id, owner_user_id='alex')
+    task.metadata['channel'] = {'provider_key': 'telegram'}
+    provider_inputs.clear()
+    second = project(task, context, purpose=purpose)
+    assert 'SHARED thermostat sentinel' not in second + str(provider_inputs)
+    assert 'OWNED thermostat sentinel' not in second + str(provider_inputs)
+    record(context, 'ALEX_ONLY thermostat sentinel')
+    task.user = 'new-member'
+    provider_inputs.clear()
+    third = project(task, context, purpose=purpose)
+    assert 'ALEX_ONLY thermostat sentinel' not in third + str(provider_inputs)
+
+
+@pytest.mark.parametrize('status', ['empty', 'partial', 'unavailable', 'failed'])
+def test_dc1_recall_statuses_survive_projection_without_success(setup, monkeypatch, status):
+    task, context = setup
+    from alphonse.agent_v2.core.tools.invocation import ToolInvocationService
+    monkeypatch.setattr(ToolInvocationService, 'execute_or_raise', lambda *a, **kw: {
+        'status': status, 'coverage': {'conversation': status}, 'results': []})
+    text = project(task, context, purpose='planning')
+    assert f'"status": "{status}"' in text
+    manifest = task.metadata['v3_context_projections']['planning']
+    assert manifest['recall']['status'] == status
+    assert manifest['recall']['further_search_required']
+    assert task.status != 'completed'
+
+
+def test_dc1_exact_utf8_budget_boundary_counts_labels_and_separators():
+    records = [Record('request:1', 'Current request', '温度🌡', True), Record('policy:1', 'Policy', 'Keep all bytes.', True)]
+    expected = '\n\n'.join(row.render() for row in records)
+    size = len(expected.encode('utf-8'))
+    text, manifest = assemble(records, budget=size)
+    assert text == expected and manifest['tokens'] == size
+    assert manifest['separator_tokens'] == 2
+    with pytest.raises(ContextBudgetExceeded):
+        assemble(records, budget=size - 1)
+
+
+def test_dc1_direct_response_cannot_complete_when_provider_cancels(setup):
+    from alphonse.agent_v2.core.intelligence.v3.processor import HierarchicalCAPDProcessor
+    from alphonse.agent_v2.system_one import SystemOneUnavailableError
+    task, context = setup
+    state = {'cancelled': False}
+    context.cancellation_checker = lambda: state['cancelled']
+    def generate(request):
+        state['cancelled'] = True
+        return SimpleNamespace(content='Synthetic reply')
+    context.inference = SimpleNamespace(generate_markdown=generate)
+    with pytest.raises(SystemOneUnavailableError, match='cancelled'):
+        HierarchicalCAPDProcessor._complete_direct_response(task, context)
+    assert task.status != 'completed'
+    assert 'prepared_user_response' not in task.metadata
+
+
+def test_dc1_recall_preservation_does_not_bypass_phase_policy(setup):
+    from alphonse.agent_v2.core.intelligence.v3 import PhasePlan, PhaseSubgoal, ToolRevealPolicy, new_tactical_state
+    task, context = setup
+    subgoal = PhaseSubgoal('reply', 'Reply only', 'text', allowed_capabilities=('direct_response',))
+    phase = PhasePlan('reply-phase', 'Reply', (subgoal,), authorized_capabilities=('direct_response',))
+    result = ToolRevealPolicy().reveal(task, new_tactical_state(phase), subgoal, context.tools.list())
+    assert result.tools == ()
