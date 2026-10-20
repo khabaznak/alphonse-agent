@@ -101,7 +101,11 @@ def execute_scheduled_task_delivery(
     channel = address.to_dict()
     if channel not in channels:
         origin["delivery_channels"] = [*channels, channel]
-        scheduled = context.schedule_store.update_task(task_id, origin_channel=origin)
+    additional = list(origin.get("reminder_additional_integration_ids") or [])
+    if address.integration_id not in additional:
+        additional.append(address.integration_id)
+    origin["reminder_additional_integration_ids"] = additional
+    scheduled = context.schedule_store.update_task(task_id, origin_channel=origin)
     return {
         "scheduled_task_id": scheduled.scheduled_task_id,
         "name": scheduled.name,

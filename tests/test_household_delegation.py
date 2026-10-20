@@ -290,3 +290,98 @@ def test_runtime_service_error_is_retained_without_fabricating_an_answer(monkeyp
     assert report["task_status"] == "failed"
     assert report["score"]["answer"]
     assert not report["score"]["mechanical_pass"]
+
+
+@pytest.mark.parametrize("user_id", ["fixture-admin", "fixture-mother"])
+@pytest.mark.parametrize("source", ["desktop", "fixture-telegram"])
+@pytest.mark.parametrize("legacy", [False, True])
+def test_self_reminder_uses_current_preference_for_every_role_and_origin(tmp_path, user_id, source, legacy):
+    from datetime import datetime
+    from alphonse.agent_v2.core.io.outbox import SQLiteOutboundStore
+    from alphonse.agent_v2.daemon import V2Daemon
+
+    fixture = make_fixture(tmp_path, "mother-medication-reminder")
+    fixture.task.user = user_id
+    fixture.task.project_id = ""
+    fixture.task.goal = "Remind me about the TV program"
+    fixture.task.metadata["channel"] = {
+        "integration_id": source, "provider_key": source, "channel_target": "origin-chat",
+        "alphonse_user_id": user_id,
+    }
+    result = ToolInvocationService(context=fixture.context, task=fixture.task).execute_or_raise("native.scheduled_task", {
+        "name": "TV program", "prompt": "Leave for the TV program", "description": "Leave now",
+        "schedule_kind": "once", "run_at": "2026-10-21T18:40:00-06:00", "delivery_mode": "direct",
+    })
+    assert result["recipient_user_id"] == user_id
+    assert result["delivery_channels"][0]["channel_target"] == user_id + "-chat"
+    scheduled = fixture.schedules.get_task(result["scheduled_task_id"])
+    assert scheduled.origin_channel["reminder_recipient_integration_id"] == ""
+    if legacy:
+        scheduled = fixture.schedules.update_task(scheduled.scheduled_task_id,
+                                                  origin_channel=dict(fixture.task.metadata["channel"]))
+    # A later change of preference must be honored by an already saved reminder.
+    fixture.users.bind_address(user_id=user_id, integration_id="email", provider_key="email",
+                               provider_user_id=user_id, channel_target=user_id + "@example.test")
+    occurrence = fixture.schedules.claim_due_occurrences(worker_id="fixture-worker", now=datetime.fromisoformat(scheduled.next_run_at))[0]
+    outbox = SQLiteOutboundStore()
+    daemon = SimpleNamespace(runtime=SimpleNamespace(identity_resolver=fixture.context.identity_resolver,
+        outbox=outbox, conversation_store=fixture.store))
+    V2Daemon._deliver_scheduled_reminder(daemon, occurrence)
+    V2Daemon._deliver_scheduled_reminder(daemon, occurrence)
+    assert len(outbox.list()) == 1
+    outbound = outbox.list()[0]
+    assert outbound.channel_target == user_id + "@example.test"
+    assert outbound.audience_user_id == user_id
+    assert outbound.message == "Reminder: Leave now"
+
+
+def test_explicit_provider_for_self_needs_no_recipient_and_additional_channel_is_delivered(tmp_path):
+    from datetime import datetime
+    from alphonse.agent_v2.core.io.outbox import SQLiteOutboundStore
+    from alphonse.agent_v2.daemon import V2Daemon
+
+    fixture = make_fixture(tmp_path, "mother-medication-reminder")
+    fixture.task.project_id = ""
+    fixture.users.bind_address(user_id="fixture-admin", integration_id="email", provider_key="email",
+                               provider_user_id="admin", channel_target="admin@example.test")
+    invoke = ToolInvocationService(context=fixture.context, task=fixture.task)
+    result = invoke.execute_or_raise("native.scheduled_task", {
+        "name": "TV", "prompt": "TV", "schedule_kind": "once", "run_at": "2026-10-21T18:40:00-06:00",
+        "recipient_provider_key": "telegram",
+    })
+    assert result["recipient_user_id"] == "fixture-admin"
+    assert result["delivery_channels"][0]["integration_id"] == "fixture-telegram"
+    # Another reminder defaults to email and can explicitly add Telegram.
+    fixture.task.message_id = "another-message"
+    result = invoke.execute_or_raise("native.scheduled_task", {
+        "name": "TV email", "prompt": "TV", "schedule_kind": "once", "run_at": "2026-10-21T18:40:00-06:00",
+        "delivery_mode": "direct",
+    })
+    invoke.execute_or_raise("native.scheduled_task_delivery", {
+        "operation": "add_delivery_channel", "scheduled_task_id": result["scheduled_task_id"], "provider_key": "telegram",
+    })
+    scheduled = fixture.schedules.get_task(result["scheduled_task_id"])
+    occurrences = fixture.schedules.claim_due_occurrences(worker_id="fixture-worker", now=datetime.fromisoformat(scheduled.next_run_at))
+    occurrence = next(item for item in occurrences if item.task.scheduled_task_id == scheduled.scheduled_task_id)
+    outbox = SQLiteOutboundStore()
+    daemon = SimpleNamespace(runtime=SimpleNamespace(identity_resolver=fixture.context.identity_resolver,
+        outbox=outbox, conversation_store=fixture.store))
+    explicit_occurrence = next(item for item in occurrences if item.task.scheduled_task_id != scheduled.scheduled_task_id)
+    V2Daemon._deliver_scheduled_reminder(daemon, explicit_occurrence)
+    assert len(outbox.list()) == 1
+    assert outbox.list()[0].channel_target == "fixture-admin-chat"
+    outbox = daemon.runtime.outbox = SQLiteOutboundStore()
+    V2Daemon._deliver_scheduled_reminder(daemon, occurrence)
+    assert {item.channel_target for item in outbox.list()} == {"admin@example.test", "fixture-admin-chat"}
+
+
+def test_self_reminder_without_registered_address_creates_no_schedule(tmp_path):
+    fixture = make_fixture(tmp_path, "mother-medication-reminder")
+    fixture.users.create_user(display_name="Unconfigured", user_id="unconfigured")
+    fixture.task.user = "unconfigured"
+    with pytest.raises(ValueError, match="recipient_unresolved"):
+        ToolInvocationService(context=fixture.context, task=fixture.task).execute_or_raise("native.scheduled_task", {
+            "name": "TV", "prompt": "TV", "schedule_kind": "once", "run_at": "2026-10-21T18:40:00-06:00",
+            "delivery_mode": "direct",
+        })
+    assert fixture.schedules.list_tasks() == []

@@ -28,6 +28,18 @@ from alphonse.agent_v2.core.tools.registry.native.scheduled_task_delivery import
 from alphonse.agent_v2.interfaces.tui import _latest_tool_result_response
 
 
+
+def _reminder_identity(tmp_path):
+    from alphonse.agent_v2.core.io.identity import V2IdentityResolver
+    from alphonse.agent_v2.users import V2UserStore
+
+    users = V2UserStore()
+    users.set_users_root(tmp_path / "users")
+    users.create_user(display_name="Alex", user_id="alex")
+    users.bind_address(user_id="alex", integration_id="telegram", provider_key="telegram", provider_user_id="123")
+    return V2IdentityResolver(user_store=users)
+
+
 def test_store_creates_one_off_task_and_lists_by_owner_and_project() -> None:
     store = ScheduledTaskStore()
     run_at = "2026-07-10T09:00:00-06:00"
@@ -200,12 +212,12 @@ def test_native_scheduled_task_uses_the_configured_user_timezone_by_default() ->
     assert stored.next_run_at == "2026-07-11T02:30:00+00:00"
 
 
-def test_native_scheduled_task_resolves_relative_duration_at_execution_time() -> None:
+def test_native_scheduled_task_resolves_relative_duration_at_execution_time(tmp_path) -> None:
     store = ScheduledTaskStore()
     context = ToolExecutionContext(
         task=TaskState(user="alex", project_id="home", goal="Remind me to drink water in 3min"),
         messages=InMemoryMessageQueue(),
-        schedule_store=store,
+        schedule_store=store, identity_resolver=_reminder_identity(tmp_path),
     )
     before = datetime.now(timezone.utc)
 
@@ -302,7 +314,7 @@ def test_do_node_records_scheduled_task_result_in_execution_result_not_metadata(
     assert task.metadata["terminal_after_do"] is True
 
 
-def test_scheduled_task_is_idempotent_and_plain_reminders_use_direct_delivery() -> None:
+def test_scheduled_task_is_idempotent_and_plain_reminders_use_direct_delivery(tmp_path) -> None:
     store = ScheduledTaskStore()
     task = TaskState(
         user="alex",
@@ -310,7 +322,7 @@ def test_scheduled_task_is_idempotent_and_plain_reminders_use_direct_delivery() 
         message_id="message-1",
         goal="Recuérdame en 10 min enviar un mensaje a mi jefa.",
     )
-    context = ToolExecutionContext(task=task, messages=InMemoryMessageQueue(), schedule_store=store)
+    context = ToolExecutionContext(task=task, messages=InMemoryMessageQueue(), schedule_store=store, identity_resolver=_reminder_identity(tmp_path))
     arguments = {
         "name": "Mensaje a mi jefa",
         "prompt": "Recordar a Alex enviar un mensaje a su jefa.",
@@ -431,7 +443,7 @@ def test_tool_planning_prompt_exposes_scheduled_task_tool() -> None:
     assert "Do not pass natural-language dates" in prompt
 
 
-def test_stub_inference_can_select_scheduled_task_tool() -> None:
+def test_stub_inference_can_select_scheduled_task_tool(tmp_path) -> None:
     router = InferenceRouter(
         provider=StubInferenceProvider(
             markdown_by_purpose={
@@ -461,7 +473,7 @@ def test_stub_inference_can_select_scheduled_task_tool() -> None:
     )
     do_node(
         task,
-        context=CoreLoopContext(messages=InMemoryMessageQueue(), tools=build_native_tool_registry(), schedule_store=store),
+        context=CoreLoopContext(messages=InMemoryMessageQueue(), tools=build_native_tool_registry(), schedule_store=store, identity_resolver=_reminder_identity(tmp_path)),
     )
 
     execution = json.loads(task.plan_json)[0]["execution"]
