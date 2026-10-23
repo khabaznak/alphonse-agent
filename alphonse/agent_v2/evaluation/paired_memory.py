@@ -104,10 +104,16 @@ def trial_schedule(corpus, repetitions, smoke_cases=()):
     return schedule
 
 
-def freeze(configuration, *, repetitions=20, smoke_cases=()):
+def freeze(configuration, *, repetitions=20, smoke_cases=(), corpus_kind='boundary'):
     if repetitions < 1:
         raise ValueError('positive_repetitions_required')
-    corpus = load_boundaries()
+    if corpus_kind not in {'boundary', 'heldout'}:
+        raise ValueError('unknown_corpus_kind')
+    if corpus_kind == 'heldout':
+        from .heldout_memory import load_heldout
+        corpus = load_heldout()
+    else:
+        corpus = load_boundaries()
     if len(set(smoke_cases)) != len(smoke_cases) or not set(smoke_cases) <= {c['id'] for c in corpus['cases']}:
         raise ValueError('invalid_smoke_cases')
     schedule = trial_schedule(corpus, repetitions, smoke_cases)
@@ -120,7 +126,8 @@ def freeze(configuration, *, repetitions=20, smoke_cases=()):
         'source': source, 'arms': arms, 'configuration': configuration, 'corpus': corpus,
         'corpus_sha256': digest(corpus), 'rubric_sha256': digest(corpus['rubric']),
         'repetitions': repetitions, 'schedule': schedule, 'smoke_cases': list(smoke_cases),
-        'experiment_kind': 'harness_smoke' if smoke_cases else 'boundary_comparison',
+        'experiment_kind': 'harness_smoke' if smoke_cases else corpus_kind + '_comparison',
+        'corpus_kind': corpus_kind,
         'human_review_repetitions': [1, 10, 20], 'cache_conditions': 'fresh ephemeral transport/session and fixture state; remote cache unknown',
         'cost_boundary': 'admission through final response and fixture read-back; all model/tool calls including bootstrap, retries and errors',
         'historical_v1': 'Retained separately; no historical result rewritten. DC-4 context-estimate comparison remains unassessed.',
@@ -136,7 +143,12 @@ def validate_manifest(manifest, configuration):
         raise ValueError('frozen_source_or_configuration_changed')
     if manifest['schedule'] != trial_schedule(manifest['corpus'], manifest['repetitions'], manifest.get('smoke_cases', ())):
         raise ValueError('frozen_schedule_changed')
-    if manifest['corpus'] != load_boundaries():
+    if manifest.get('corpus_kind') == 'heldout':
+        from .heldout_memory import load_heldout
+        current_corpus = load_heldout()
+    else:
+        current_corpus = load_boundaries()
+    if manifest['corpus'] != current_corpus:
         raise ValueError('frozen_corpus_changed')
 
 
@@ -162,13 +174,17 @@ def report(manifest, rows, *, invalid=None):
     hard_violation = any(r.get('violations') or any(
         r.get('outcome', {}).get('checks', {}).get(key) is False
         for key in ('no_duplicate_writes', 'no_unplanned_schedules', 'schedule_audience', 'no_duplicate_schedules', 'schedule_once')) for r in rows)
+    if manifest.get('corpus_kind') == 'heldout':
+        hard_violation = hard_violation or any(
+            r.get('delivery', {}).get('duplicate_source_ids') or r.get('delivery', {}).get('forbidden_source_delivery')
+            or r.get('outcome', {}).get('checks', {}).get('no_forbidden_effects') is False for r in rows)
     candidate_failures = [identity for identity in failed if scheduled.get(identity, {}).get('arm') == 'candidate']
     gates = {'DC-0': 'invalid' if contaminated else 'pass', 'DC-1': 'fail' if hard_violation else 'unassessed',
              'DC-2': 'fail' if hard_violation else 'invalid' if contaminated or not complete else 'fail' if candidate_failures or (instances and irrelevant / instances > .05) else 'unassessed',
              'DC-3': 'unassessed', 'DC-4': 'unassessed', 'DC-5': 'unassessed'}
     if manifest.get('smoke_cases'):
         gates['DC-2'] = 'fail' if hard_violation else 'invalid' if contaminated or not complete else 'unassessed'
-    return {'experiment_kind': manifest.get('experiment_kind', 'boundary_comparison'), 'gates': gates, 'invalid_reason': invalid, 'complete': complete, 'expected_arm_runs': len(scheduled),
+    result = {'experiment_kind': manifest.get('experiment_kind', 'boundary_comparison'), 'gates': gates, 'invalid_reason': invalid, 'complete': complete, 'expected_arm_runs': len(scheduled),
             'recorded_arm_runs': len(rows), 'measured_arm_runs': len(measured), 'failures_including_warmup': failed, 'candidate_failures_including_warmup': candidate_failures,
             'historical_instances': instances, 'irrelevant_instances': irrelevant,
             'independent_human_review': 'unassessed', 'rollout_accepted': False,
@@ -178,6 +194,15 @@ def report(manifest, rows, *, invalid=None):
             'limits': ['DC-2 requires independent full-response/trace review; regex diagnostics cannot pass it.',
                        'DC-1 qualification belongs to #24; repeated comparisons and human review belong to #25.',
                        'Provider usage is retained per call; missing usage is unavailable, never zero.']}
+    if manifest.get('corpus_kind') == 'heldout':
+        from .heldout_memory import assess
+        result['heldout'] = assess(manifest, measured)
+        # Held-out trials cannot qualify the independent boundary corpus.
+        gates['DC-2'] = 'fail' if hard_violation else 'unassessed'
+        gates['DC-5'] = ('fail' if hard_violation else 'invalid' if contaminated or not complete
+                         else 'unassessed' if manifest.get('smoke_cases') else
+                         'fail' if candidate_failures or result['heldout']['threshold_breaches'] else 'unassessed')
+    return result
 
 
 def execute(manifest, directory, provider_factory, jev_factory, *, configuration):
@@ -241,6 +266,7 @@ def main():
     prepare = commands.add_parser('freeze')
     prepare.add_argument('--output', type=Path, required=True)
     prepare.add_argument('--repetitions', type=int, default=20)
+    prepare.add_argument('--corpus', choices=('boundary', 'heldout'), default='boundary')
     prepare.add_argument('--smoke-case', action='append', default=[], help='Predeclared diagnostic subset; full corpus and oracles remain frozen.')
     run = commands.add_parser('run')
     run.add_argument('--manifest', type=Path, required=True)
@@ -248,7 +274,7 @@ def main():
     args = parser.parse_args()
     configuration = live_configuration()
     if args.command == 'freeze':
-        manifest = freeze(configuration, repetitions=args.repetitions, smoke_cases=args.smoke_case)
+        manifest = freeze(configuration, repetitions=args.repetitions, smoke_cases=args.smoke_case, corpus_kind=args.corpus)
         with args.output.open('x') as stream:
             stream.write(json.dumps(manifest, ensure_ascii=False, indent=2) + '\n')
     else:

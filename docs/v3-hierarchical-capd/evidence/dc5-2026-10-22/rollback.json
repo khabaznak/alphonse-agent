@@ -1,0 +1,4519 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-22",
+  "kind": "deterministic_crash_restart",
+  "result": "pass",
+  "observations": [
+    {
+      "resume_before_off": false,
+      "checkpoints": [
+        {
+          "stage": "interrupted",
+          "returncode": 73,
+          "readback": {
+            "events": [
+              {
+                "sequence": 1,
+                "event_id": "906ba24e-977a-43b7-bf11-f505972bdddc",
+                "owner_user_id": "rollback-fixture",
+                "project_id": "",
+                "memory_session_id": "",
+                "role": "user",
+                "content": "The household storage label for original is R-original.",
+                "source": "synthetic",
+                "source_message_id": "original",
+                "created_at": "2026-10-22T12:00:00+00:00",
+                "schema_version": 1,
+                "recorded_at": "2026-10-22T16:10:27.977883+00:00",
+                "observed_at": "2026-10-22T12:00:00+00:00",
+                "speaker_id": "rollback-fixture",
+                "visibility": "private",
+                "shared_with": [],
+                "provenance": "recorded"
+              },
+              {
+                "sequence": 2,
+                "event_id": "96326432-c2fb-4567-a80d-3741620fa4a6",
+                "owner_user_id": "rollback-fixture",
+                "project_id": "",
+                "memory_session_id": "",
+                "role": "user",
+                "content": "The household storage label for interrupted is R-interrupted.",
+                "source": "synthetic",
+                "source_message_id": "interrupted",
+                "created_at": "2026-10-22T12:00:00+00:00",
+                "schema_version": 1,
+                "recorded_at": "2026-10-22T16:10:28.315683+00:00",
+                "observed_at": "2026-10-22T12:00:00+00:00",
+                "speaker_id": "rollback-fixture",
+                "visibility": "private",
+                "shared_with": [],
+                "provenance": "recorded"
+              }
+            ],
+            "knowledge": [
+              {
+                "memory_id": "memory:7158422e027358b1de34596e5e1c27d9c7c6eb06586aed15fa4d0b3349d7f25a",
+                "content": "The household storage label for interrupted is R-interrupted.",
+                "access": {
+                  "owner_user_id": "rollback-fixture",
+                  "visibility": "private",
+                  "shared_with": []
+                },
+                "sources": [
+                  {
+                    "source_id": "conversation:96326432-c2fb-4567-a80d-3741620fa4a6",
+                    "kind": "conversation",
+                    "access": {
+                      "owner_user_id": "rollback-fixture",
+                      "visibility": "private",
+                      "shared_with": []
+                    },
+                    "sequence": 2,
+                    "speaker_id": "rollback-fixture",
+                    "role": "user",
+                    "channel": "synthetic",
+                    "recorded_at": "2026-10-22T16:10:28.315683+00:00",
+                    "observed_at": "2026-10-22T12:00:00+00:00",
+                    "provenance": "recorded",
+                    "schema_version": 1
+                  }
+                ],
+                "recorded_at": "2026-10-22T16:10:28.316892+00:00",
+                "kind": "fact",
+                "subjects": [
+                  "interrupted",
+                  "rollback-fixture"
+                ],
+                "claim_key": "rollback-fixture.interrupted",
+                "basis": "user_report",
+                "quotes": [
+                  "The household storage label for interrupted is R-interrupted."
+                ],
+                "persistence": "contextual",
+                "status": "active",
+                "observed_at": "2026-10-22T12:00:00+00:00",
+                "valid_from": null,
+                "valid_until": null,
+                "supersedes": null,
+                "conflicts_with": [],
+                "project_id": "",
+                "task_id": null,
+                "schedule_id": null,
+                "commitment_state": null,
+                "dependencies": [],
+                "schema_version": 3
+              },
+              {
+                "memory_id": "memory:8eeb389304d783091b5ac46138e866579f01f6b6715503b74515f1a5826c2b17",
+                "content": "The household storage label for original is R-original.",
+                "access": {
+                  "owner_user_id": "rollback-fixture",
+                  "visibility": "private",
+                  "shared_with": []
+                },
+                "sources": [
+                  {
+                    "source_id": "conversation:906ba24e-977a-43b7-bf11-f505972bdddc",
+                    "kind": "conversation",
+                    "access": {
+                      "owner_user_id": "rollback-fixture",
+                      "visibility": "private",
+                      "shared_with": []
+                    },
+                    "sequence": 1,
+                    "speaker_id": "rollback-fixture",
+                    "role": "user",
+                    "channel": "synthetic",
+                    "recorded_at": "2026-10-22T16:10:27.977883+00:00",
+                    "observed_at": "2026-10-22T12:00:00+00:00",
+                    "provenance": "recorded",
+                    "schema_version": 1
+                  }
+                ],
+                "recorded_at": "2026-10-22T16:10:27.978820+00:00",
+                "kind": "fact",
+                "subjects": [
+                  "original",
+                  "rollback-fixture"
+                ],
+                "claim_key": "rollback-fixture.original",
+                "basis": "user_report",
+                "quotes": [
+                  "The household storage label for original is R-original."
+                ],
+                "persistence": "contextual",
+                "status": "active",
+                "observed_at": "2026-10-22T12:00:00+00:00",
+                "valid_from": null,
+                "valid_until": null,
+                "supersedes": null,
+                "conflicts_with": [],
+                "project_id": "",
+                "task_id": null,
+                "schedule_id": null,
+                "commitment_state": null,
+                "dependencies": [],
+                "schema_version": 3
+              }
+            ],
+            "task": {
+              "task_id": "rollback-task",
+              "message_id": "rollback-request",
+              "user": "rollback-fixture",
+              "project_id": "",
+              "memory_session_id": "",
+              "tag": "",
+              "correlation_id": "",
+              "goal": "Update two fixture fields and verify them.",
+              "facts_md": "- (none)",
+              "recent_conversation_md": "- rollback-fixture: \"Only update fixture.txt; preserve the original and do not send messages.\"",
+              "conversation_records": [
+                {
+                  "content": "Only update fixture.txt; preserve the original and do not send messages.",
+                  "speaker": "rollback-fixture"
+                }
+              ],
+              "conversation_history_md": "- (none)",
+              "memory_context_md": "- (none)",
+              "plan_json": "[\n  {\n    \"arguments\": {\n      \"question\": \"Which fixture file should I update?\",\n      \"question_kind\": \"open_text\"\n    },\n    \"execution\": {\n      \"exception\": \"\",\n      \"finished_at\": \"2026-10-22T16:10:28.314024+00:00\",\n      \"result\": {\n        \"answer\": {\n          \"text\": \"fixture.txt; keep both constraints.\"\n        },\n        \"answered_by\": \"rollback-fixture\",\n        \"question_id\": \"65a0fc2e-0b45-4b28-9ff4-f236692ef1ee\",\n        \"question_kind\": \"open_text\"\n      },\n      \"started_at\": \"2026-10-22T16:10:28.314024+00:00\",\n      \"status\": \"success\"\n    },\n    \"id\": \"question-answer-65a0fc2e-0b45-4b28-9ff4-f236692ef1ee\",\n    \"internal_state\": \"Question answer received.\",\n    \"tool_id\": \"native.ask_question\",\n    \"tool_name\": \"ask_question\"\n  }\n]",
+              "acceptance_criteria_md": "Only update fixture.txt; preserve the original and do not send messages.",
+              "acceptance_contract": {},
+              "memory_facts_md": "- (none)",
+              "updates_md": "- Task parked waiting for answer to question 65a0fc2e-0b45-4b28-9ff4-f236692ef1ee.\n- Question 65a0fc2e-0b45-4b28-9ff4-f236692ef1ee answered; task resumed.",
+              "status": "running",
+              "outcome": null,
+              "check_verdict": null,
+              "check_reason": "",
+              "check_confidence": 0.0,
+              "check_evidence_refs": [],
+              "evidence_journal": [],
+              "check_new_message_count": 0,
+              "pdca_cycle_count": 0,
+              "intelligence_engine": "hierarchical_v3",
+              "intelligence_schema_version": 3,
+              "hierarchical_state": {
+                "actions": [
+                  {
+                    "acceptance_questions": [
+                      {
+                        "criteria": {
+                          "false": "The result is missing, failed, ambiguous, or does not establish the condition.",
+                          "true": "The observed result establishes the stage completion condition."
+                        },
+                        "instructions": "Does the tool result satisfy the current stage completion condition?",
+                        "question_id": "stage_result_satisfies_completion",
+                        "type": "noul"
+                      }
+                    ],
+                    "action_id": "action-d7501d2a-db19-4d94-ae4f-42928f155070",
+                    "arguments": {
+                      "path": "fixture.txt",
+                      "step": "first"
+                    },
+                    "error": "",
+                    "result": {
+                      "affected_paths": [
+                        "fixture.txt"
+                      ],
+                      "source_ref": "fixture:effect:first",
+                      "verification": {
+                        "status": "verified"
+                      }
+                    },
+                    "status": "success",
+                    "subgoal_id": "first",
+                    "tool_id": "native.exact_text_edit"
+                  }
+                ],
+                "active_subgoal_id": "second",
+                "bindings": {
+                  "verified_first": {
+                    "output_type": "verified_first",
+                    "subgoal_id": "first",
+                    "value": {
+                      "affected_paths": [
+                        "fixture.txt"
+                      ],
+                      "source_ref": "fixture:effect:first",
+                      "verification": {
+                        "status": "verified"
+                      }
+                    }
+                  }
+                },
+                "cancellation_pending": false,
+                "completed_subgoal_ids": [
+                  "first"
+                ],
+                "evidence": {
+                  "entries": [
+                    {
+                      "acceptance_questions": [
+                        {
+                          "criteria": {
+                            "false": "The result is missing, failed, ambiguous, or does not establish the condition.",
+                            "true": "The observed result establishes the stage completion condition."
+                          },
+                          "instructions": "Does the tool result satisfy the current stage completion condition?",
+                          "question_id": "stage_result_satisfies_completion",
+                          "type": "noul"
+                        }
+                      ],
+                      "arguments": {
+                        "path": "fixture.txt",
+                        "step": "first"
+                      },
+                      "error": "",
+                      "evidence_ref": "tactical-action:action-d7501d2a-db19-4d94-ae4f-42928f155070",
+                      "phase_id": "rollback-phase",
+                      "progress_review": {
+                        "answers": {},
+                        "complete": true,
+                        "confidence": 0.99,
+                        "confident": true,
+                        "retry_approved": false
+                      },
+                      "result": {
+                        "affected_paths": [
+                          "fixture.txt"
+                        ],
+                        "source_ref": "fixture:effect:first",
+                        "verification": {
+                          "status": "verified"
+                        }
+                      },
+                      "retry_attempt": 0,
+                      "status": "success",
+                      "subgoal_id": "first",
+                      "tool_id": "native.exact_text_edit"
+                    }
+                  ]
+                },
+                "phase": {
+                  "acceptance_criteria": [],
+                  "authorized_capabilities": [
+                    "native.exact_text_edit",
+                    "native.read"
+                  ],
+                  "created_at": "2026-10-22T16:10:27.979979+00:00",
+                  "criterion_ids": [],
+                  "curated_tool_ids": [],
+                  "mutation_scope": {
+                    "allow_external_effects": false,
+                    "allowed_paths": [
+                      "fixture.txt"
+                    ]
+                  },
+                  "objective": "Update two fixture fields and verify them.",
+                  "originating_decision": "",
+                  "phase_id": "rollback-phase",
+                  "schema_version": 3,
+                  "subgoals": [
+                    {
+                      "allowed_capabilities": [
+                        "native.exact_text_edit"
+                      ],
+                      "allowed_side_effects": [
+                        "project_mutation"
+                      ],
+                      "completion": {
+                        "expected": "verified",
+                        "field": "verification.status",
+                        "kind": "field_equals",
+                        "output_type": ""
+                      },
+                      "depends_on": [],
+                      "failure_policy": "stop",
+                      "objective": "Update fixture first",
+                      "required_output_type": "verified_first",
+                      "subgoal_id": "first"
+                    },
+                    {
+                      "allowed_capabilities": [
+                        "native.exact_text_edit"
+                      ],
+                      "allowed_side_effects": [
+                        "project_mutation"
+                      ],
+                      "completion": {
+                        "expected": "verified",
+                        "field": "verification.status",
+                        "kind": "field_equals",
+                        "output_type": ""
+                      },
+                      "depends_on": [
+                        "first"
+                      ],
+                      "failure_policy": "stop",
+                      "objective": "Update fixture second",
+                      "required_output_type": "verified_second",
+                      "subgoal_id": "second"
+                    },
+                    {
+                      "allowed_capabilities": [
+                        "native.read"
+                      ],
+                      "allowed_side_effects": [
+                        "read_only"
+                      ],
+                      "completion": {
+                        "expected": true,
+                        "field": "verified",
+                        "kind": "field_equals",
+                        "output_type": ""
+                      },
+                      "depends_on": [
+                        "second"
+                      ],
+                      "failure_policy": "stop",
+                      "objective": "Read both fields",
+                      "required_output_type": "observation",
+                      "subgoal_id": "verify"
+                    }
+                  ],
+                  "tool_curation_status": ""
+                },
+                "revealed_capabilities": [],
+                "revealed_tool_ids": [],
+                "status": "running",
+                "steering_pending": false,
+                "system_one_relevant_tool_ids": [],
+                "system_one_tool_registry_status": ""
+              },
+              "metadata": {
+                "memory_context_estimated_tokens": 89,
+                "memory_context_token_budget": 4096,
+                "memory_context_truncated": false,
+                "question_interrupt": {
+                  "answer": {
+                    "text": "fixture.txt; keep both constraints."
+                  },
+                  "choices": [],
+                  "created_at": "2026-10-22T16:10:27.980035+00:00",
+                  "expires_at": "2026-10-23T16:10:27.980035+00:00",
+                  "kind": "open_text",
+                  "message": "Which fixture file should I update?",
+                  "metadata": {
+                    "delivery": {}
+                  },
+                  "originator_user_id": "rollback-fixture",
+                  "project_id": "",
+                  "question_id": "65a0fc2e-0b45-4b28-9ff4-f236692ef1ee",
+                  "respondent_user_id": "rollback-fixture",
+                  "response_schema": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "text": {
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "text"
+                    ],
+                    "type": "object"
+                  },
+                  "run_id": "rollback-request",
+                  "status": "answered",
+                  "task_id": "rollback-task",
+                  "thread_id": "rollback-task",
+                  "updated_at": "2026-10-22T16:10:27.980035+00:00"
+                },
+                "system_one_tactical_reviews": [
+                  {
+                    "action_id": "action-d7501d2a-db19-4d94-ae4f-42928f155070",
+                    "answers": {},
+                    "complete": true,
+                    "confidence": 0.99,
+                    "confident": true,
+                    "duration_ms": 0,
+                    "model": "",
+                    "phase_id": "rollback-phase",
+                    "retry_approved": false,
+                    "status": "used",
+                    "subgoal_id": "first",
+                    "usage": {}
+                  }
+                ],
+                "v3_context_projections": {
+                  "execution": {
+                    "budget": 24000,
+                    "loaded_skill_ids": [],
+                    "omitted_source_ids": [],
+                    "purpose": "execution",
+                    "recall": {
+                      "further_search_required": true,
+                      "result_count": 0,
+                      "status": "unavailable"
+                    },
+                    "records": [
+                      {
+                        "input_range": {
+                          "end_char": 86,
+                          "start_char": 0
+                        },
+                        "reason": "required",
+                        "source_id": "request:rollback-request",
+                        "source_type": "request",
+                        "status": "included",
+                        "tokens": 86,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 945,
+                          "start_char": 88
+                        },
+                        "reason": "required",
+                        "source_id": "policy:recall",
+                        "source_type": "policy",
+                        "status": "included",
+                        "tokens": 857,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 1058,
+                          "start_char": 947
+                        },
+                        "reason": "required",
+                        "source_id": "task:contract",
+                        "source_type": "task",
+                        "status": "included",
+                        "tokens": 111,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 1219,
+                          "start_char": 1060
+                        },
+                        "reason": "required",
+                        "source_id": "steering:0",
+                        "source_type": "steering",
+                        "status": "included",
+                        "tokens": 159,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 2011,
+                          "start_char": 1221
+                        },
+                        "reason": "required",
+                        "source_id": "task:question_interrupt",
+                        "source_type": "task",
+                        "status": "included",
+                        "tokens": 790,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 2746,
+                          "start_char": 2117
+                        },
+                        "reason": "selected_relevant",
+                        "source_id": "conversation:96326432-c2fb-4567-a80d-3741620fa4a6",
+                        "source_type": "conversation",
+                        "status": "included",
+                        "tokens": 629,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 3371,
+                          "start_char": 2748
+                        },
+                        "reason": "selected_relevant",
+                        "source_id": "conversation:906ba24e-977a-43b7-bf11-f505972bdddc",
+                        "source_type": "conversation",
+                        "status": "included",
+                        "tokens": 623,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 2115,
+                          "start_char": 2013
+                        },
+                        "reason": "required",
+                        "source_id": "recall:status",
+                        "source_type": "recall",
+                        "status": "included",
+                        "tokens": 102,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 3440,
+                          "start_char": 3373
+                        },
+                        "reason": "selected_relevant",
+                        "source_id": "task:facts_md",
+                        "source_type": "task",
+                        "status": "included",
+                        "tokens": 67,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 3516,
+                          "start_char": 3442
+                        },
+                        "reason": "selected_relevant",
+                        "source_id": "task:memory_facts_md",
+                        "source_type": "task",
+                        "status": "included",
+                        "tokens": 74,
+                        "truncated": false
+                      },
+                      {
+                        "reason": "unavailable",
+                        "source_id": "recall:backend",
+                        "source_type": "recall",
+                        "status": "omitted",
+                        "tokens": 0
+                      }
+                    ],
+                    "selected_skill_ids": [],
+                    "separator_tokens": 18,
+                    "source_ids": [
+                      "request:rollback-request",
+                      "policy:recall",
+                      "task:contract",
+                      "steering:0",
+                      "task:question_interrupt",
+                      "recall:status",
+                      "conversation:96326432-c2fb-4567-a80d-3741620fa4a6",
+                      "conversation:906ba24e-977a-43b7-bf11-f505972bdddc",
+                      "task:facts_md",
+                      "task:memory_facts_md"
+                    ],
+                    "tokenizer": "conservative_utf8_bytes",
+                    "tokens": 3516
+                  },
+                  "review": {
+                    "budget": 24000,
+                    "loaded_skill_ids": [],
+                    "omitted_source_ids": [],
+                    "purpose": "review",
+                    "recall": {
+                      "result_count": 0
+                    },
+                    "records": [
+                      {
+                        "input_range": {
+                          "end_char": 86,
+                          "start_char": 0
+                        },
+                        "reason": "required",
+                        "source_id": "request:rollback-request",
+                        "source_type": "request",
+                        "status": "included",
+                        "tokens": 86,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 945,
+                          "start_char": 88
+                        },
+                        "reason": "required",
+                        "source_id": "policy:recall",
+                        "source_type": "policy",
+                        "status": "included",
+                        "tokens": 857,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 1058,
+                          "start_char": 947
+                        },
+                        "reason": "required",
+                        "source_id": "task:contract",
+                        "source_type": "task",
+                        "status": "included",
+                        "tokens": 111,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 1219,
+                          "start_char": 1060
+                        },
+                        "reason": "required",
+                        "source_id": "steering:0",
+                        "source_type": "steering",
+                        "status": "included",
+                        "tokens": 159,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 2011,
+                          "start_char": 1221
+                        },
+                        "reason": "required",
+                        "source_id": "task:question_interrupt",
+                        "source_type": "task",
+                        "status": "included",
+                        "tokens": 790,
+                        "truncated": false
+                      }
+                    ],
+                    "selected_skill_ids": [],
+                    "separator_tokens": 8,
+                    "source_ids": [
+                      "request:rollback-request",
+                      "policy:recall",
+                      "task:contract",
+                      "steering:0",
+                      "task:question_interrupt"
+                    ],
+                    "tokenizer": "conservative_utf8_bytes",
+                    "tokens": 2011
+                  }
+                },
+                "v3_history_selection": {
+                  "selected_exchange_ids": [
+                    "exchange:conversation:906ba24e-977a-43b7-bf11-f505972bdddc",
+                    "exchange:conversation:96326432-c2fb-4567-a80d-3741620fa4a6"
+                  ],
+                  "status": "ambiguous_or_unavailable"
+                }
+              }
+            },
+            "effects": [
+              [
+                "first",
+                "fixture.txt",
+                "done"
+              ]
+            ],
+            "integrity": "ok"
+          }
+        },
+        {
+          "stage": "off",
+          "returncode": 0,
+          "readback": {
+            "events": [
+              {
+                "sequence": 1,
+                "event_id": "906ba24e-977a-43b7-bf11-f505972bdddc",
+                "owner_user_id": "rollback-fixture",
+                "project_id": "",
+                "memory_session_id": "",
+                "role": "user",
+                "content": "The household storage label for original is R-original.",
+                "source": "synthetic",
+                "source_message_id": "original",
+                "created_at": "2026-10-22T12:00:00+00:00",
+                "schema_version": 1,
+                "recorded_at": "2026-10-22T16:10:27.977883+00:00",
+                "observed_at": "2026-10-22T12:00:00+00:00",
+                "speaker_id": "rollback-fixture",
+                "visibility": "private",
+                "shared_with": [],
+                "provenance": "recorded"
+              },
+              {
+                "sequence": 2,
+                "event_id": "96326432-c2fb-4567-a80d-3741620fa4a6",
+                "owner_user_id": "rollback-fixture",
+                "project_id": "",
+                "memory_session_id": "",
+                "role": "user",
+                "content": "The household storage label for interrupted is R-interrupted.",
+                "source": "synthetic",
+                "source_message_id": "interrupted",
+                "created_at": "2026-10-22T12:00:00+00:00",
+                "schema_version": 1,
+                "recorded_at": "2026-10-22T16:10:28.315683+00:00",
+                "observed_at": "2026-10-22T12:00:00+00:00",
+                "speaker_id": "rollback-fixture",
+                "visibility": "private",
+                "shared_with": [],
+                "provenance": "recorded"
+              },
+              {
+                "sequence": 3,
+                "event_id": "305229ef-9353-4f8b-974b-40b8c0039b8a",
+                "owner_user_id": "rollback-fixture",
+                "project_id": "",
+                "memory_session_id": "",
+                "role": "user",
+                "content": "The household storage label for off is R-off.",
+                "source": "synthetic",
+                "source_message_id": "off",
+                "created_at": "2026-10-22T12:00:00+00:00",
+                "schema_version": 1,
+                "recorded_at": "2026-10-22T16:10:28.675681+00:00",
+                "observed_at": "2026-10-22T12:00:00+00:00",
+                "speaker_id": "rollback-fixture",
+                "visibility": "private",
+                "shared_with": [],
+                "provenance": "recorded"
+              }
+            ],
+            "knowledge": [
+              {
+                "memory_id": "memory:0753dd0db2a6e337ff7d45ce0bd87b762d453d1945a8e2087b6506cb5c57c9e8",
+                "content": "The household storage label for off is R-off.",
+                "access": {
+                  "owner_user_id": "rollback-fixture",
+                  "visibility": "private",
+                  "shared_with": []
+                },
+                "sources": [
+                  {
+                    "source_id": "conversation:305229ef-9353-4f8b-974b-40b8c0039b8a",
+                    "kind": "conversation",
+                    "access": {
+                      "owner_user_id": "rollback-fixture",
+                      "visibility": "private",
+                      "shared_with": []
+                    },
+                    "sequence": 3,
+                    "speaker_id": "rollback-fixture",
+                    "role": "user",
+                    "channel": "synthetic",
+                    "recorded_at": "2026-10-22T16:10:28.675681+00:00",
+                    "observed_at": "2026-10-22T12:00:00+00:00",
+                    "provenance": "recorded",
+                    "schema_version": 1
+                  }
+                ],
+                "recorded_at": "2026-10-22T16:10:28.677447+00:00",
+                "kind": "fact",
+                "subjects": [
+                  "off",
+                  "rollback-fixture"
+                ],
+                "claim_key": "rollback-fixture.off",
+                "basis": "user_report",
+                "quotes": [
+                  "The household storage label for off is R-off."
+                ],
+                "persistence": "contextual",
+                "status": "active",
+                "observed_at": "2026-10-22T12:00:00+00:00",
+                "valid_from": null,
+                "valid_until": null,
+                "supersedes": null,
+                "conflicts_with": [],
+                "project_id": "",
+                "task_id": null,
+                "schedule_id": null,
+                "commitment_state": null,
+                "dependencies": [],
+                "schema_version": 3
+              },
+              {
+                "memory_id": "memory:7158422e027358b1de34596e5e1c27d9c7c6eb06586aed15fa4d0b3349d7f25a",
+                "content": "The household storage label for interrupted is R-interrupted.",
+                "access": {
+                  "owner_user_id": "rollback-fixture",
+                  "visibility": "private",
+                  "shared_with": []
+                },
+                "sources": [
+                  {
+                    "source_id": "conversation:96326432-c2fb-4567-a80d-3741620fa4a6",
+                    "kind": "conversation",
+                    "access": {
+                      "owner_user_id": "rollback-fixture",
+                      "visibility": "private",
+                      "shared_with": []
+                    },
+                    "sequence": 2,
+                    "speaker_id": "rollback-fixture",
+                    "role": "user",
+                    "channel": "synthetic",
+                    "recorded_at": "2026-10-22T16:10:28.315683+00:00",
+                    "observed_at": "2026-10-22T12:00:00+00:00",
+                    "provenance": "recorded",
+                    "schema_version": 1
+                  }
+                ],
+                "recorded_at": "2026-10-22T16:10:28.316892+00:00",
+                "kind": "fact",
+                "subjects": [
+                  "interrupted",
+                  "rollback-fixture"
+                ],
+                "claim_key": "rollback-fixture.interrupted",
+                "basis": "user_report",
+                "quotes": [
+                  "The household storage label for interrupted is R-interrupted."
+                ],
+                "persistence": "contextual",
+                "status": "active",
+                "observed_at": "2026-10-22T12:00:00+00:00",
+                "valid_from": null,
+                "valid_until": null,
+                "supersedes": null,
+                "conflicts_with": [],
+                "project_id": "",
+                "task_id": null,
+                "schedule_id": null,
+                "commitment_state": null,
+                "dependencies": [],
+                "schema_version": 3
+              },
+              {
+                "memory_id": "memory:8eeb389304d783091b5ac46138e866579f01f6b6715503b74515f1a5826c2b17",
+                "content": "The household storage label for original is R-original.",
+                "access": {
+                  "owner_user_id": "rollback-fixture",
+                  "visibility": "private",
+                  "shared_with": []
+                },
+                "sources": [
+                  {
+                    "source_id": "conversation:906ba24e-977a-43b7-bf11-f505972bdddc",
+                    "kind": "conversation",
+                    "access": {
+                      "owner_user_id": "rollback-fixture",
+                      "visibility": "private",
+                      "shared_with": []
+                    },
+                    "sequence": 1,
+                    "speaker_id": "rollback-fixture",
+                    "role": "user",
+                    "channel": "synthetic",
+                    "recorded_at": "2026-10-22T16:10:27.977883+00:00",
+                    "observed_at": "2026-10-22T12:00:00+00:00",
+                    "provenance": "recorded",
+                    "schema_version": 1
+                  }
+                ],
+                "recorded_at": "2026-10-22T16:10:27.978820+00:00",
+                "kind": "fact",
+                "subjects": [
+                  "original",
+                  "rollback-fixture"
+                ],
+                "claim_key": "rollback-fixture.original",
+                "basis": "user_report",
+                "quotes": [
+                  "The household storage label for original is R-original."
+                ],
+                "persistence": "contextual",
+                "status": "active",
+                "observed_at": "2026-10-22T12:00:00+00:00",
+                "valid_from": null,
+                "valid_until": null,
+                "supersedes": null,
+                "conflicts_with": [],
+                "project_id": "",
+                "task_id": null,
+                "schedule_id": null,
+                "commitment_state": null,
+                "dependencies": [],
+                "schema_version": 3
+              }
+            ],
+            "task": {
+              "task_id": "rollback-task",
+              "message_id": "rollback-request",
+              "user": "rollback-fixture",
+              "project_id": "",
+              "memory_session_id": "",
+              "tag": "",
+              "correlation_id": "",
+              "goal": "Update two fixture fields and verify them.",
+              "facts_md": "- (none)",
+              "recent_conversation_md": "- rollback-fixture: \"Only update fixture.txt; preserve the original and do not send messages.\"",
+              "conversation_records": [
+                {
+                  "content": "Only update fixture.txt; preserve the original and do not send messages.",
+                  "speaker": "rollback-fixture"
+                }
+              ],
+              "conversation_history_md": "- (none)",
+              "memory_context_md": "- (none)",
+              "plan_json": "[\n  {\n    \"arguments\": {\n      \"question\": \"Which fixture file should I update?\",\n      \"question_kind\": \"open_text\"\n    },\n    \"execution\": {\n      \"exception\": \"\",\n      \"finished_at\": \"2026-10-22T16:10:28.314024+00:00\",\n      \"result\": {\n        \"answer\": {\n          \"text\": \"fixture.txt; keep both constraints.\"\n        },\n        \"answered_by\": \"rollback-fixture\",\n        \"question_id\": \"65a0fc2e-0b45-4b28-9ff4-f236692ef1ee\",\n        \"question_kind\": \"open_text\"\n      },\n      \"started_at\": \"2026-10-22T16:10:28.314024+00:00\",\n      \"status\": \"success\"\n    },\n    \"id\": \"question-answer-65a0fc2e-0b45-4b28-9ff4-f236692ef1ee\",\n    \"internal_state\": \"Question answer received.\",\n    \"tool_id\": \"native.ask_question\",\n    \"tool_name\": \"ask_question\"\n  }\n]",
+              "acceptance_criteria_md": "Only update fixture.txt; preserve the original and do not send messages.",
+              "acceptance_contract": {},
+              "memory_facts_md": "- (none)",
+              "updates_md": "- Task parked waiting for answer to question 65a0fc2e-0b45-4b28-9ff4-f236692ef1ee.\n- Question 65a0fc2e-0b45-4b28-9ff4-f236692ef1ee answered; task resumed.",
+              "status": "running",
+              "outcome": null,
+              "check_verdict": null,
+              "check_reason": "",
+              "check_confidence": 0.0,
+              "check_evidence_refs": [],
+              "evidence_journal": [],
+              "check_new_message_count": 0,
+              "pdca_cycle_count": 0,
+              "intelligence_engine": "hierarchical_v3",
+              "intelligence_schema_version": 3,
+              "hierarchical_state": {
+                "actions": [
+                  {
+                    "acceptance_questions": [
+                      {
+                        "criteria": {
+                          "false": "The result is missing, failed, ambiguous, or does not establish the condition.",
+                          "true": "The observed result establishes the stage completion condition."
+                        },
+                        "instructions": "Does the tool result satisfy the current stage completion condition?",
+                        "question_id": "stage_result_satisfies_completion",
+                        "type": "noul"
+                      }
+                    ],
+                    "action_id": "action-d7501d2a-db19-4d94-ae4f-42928f155070",
+                    "arguments": {
+                      "path": "fixture.txt",
+                      "step": "first"
+                    },
+                    "error": "",
+                    "result": {
+                      "affected_paths": [
+                        "fixture.txt"
+                      ],
+                      "source_ref": "fixture:effect:first",
+                      "verification": {
+                        "status": "verified"
+                      }
+                    },
+                    "status": "success",
+                    "subgoal_id": "first",
+                    "tool_id": "native.exact_text_edit"
+                  },
+                  {
+                    "acceptance_questions": [
+                      {
+                        "criteria": {
+                          "false": "The result is missing, failed, ambiguous, or does not establish the condition.",
+                          "true": "The observed result establishes the stage completion condition."
+                        },
+                        "instructions": "Does the tool result satisfy the current stage completion condition?",
+                        "question_id": "stage_result_satisfies_completion",
+                        "type": "noul"
+                      }
+                    ],
+                    "action_id": "action-f531a8c8-e55f-484b-8f16-6654d1758b23",
+                    "arguments": {
+                      "path": "fixture.txt",
+                      "step": "second"
+                    },
+                    "error": "",
+                    "result": {
+                      "affected_paths": [
+                        "fixture.txt"
+                      ],
+                      "source_ref": "fixture:effect:second",
+                      "verification": {
+                        "status": "verified"
+                      }
+                    },
+                    "status": "success",
+                    "subgoal_id": "second",
+                    "tool_id": "native.exact_text_edit"
+                  },
+                  {
+                    "acceptance_questions": [
+                      {
+                        "criteria": {
+                          "false": "The result is missing, failed, ambiguous, or does not establish the condition.",
+                          "true": "The observed result establishes the stage completion condition."
+                        },
+                        "instructions": "Does the tool result satisfy the current stage completion condition?",
+                        "question_id": "stage_result_satisfies_completion",
+                        "type": "noul"
+                      }
+                    ],
+                    "action_id": "action-2522426d-f926-431b-b3a6-441c74eaaace",
+                    "arguments": {
+                      "path": "fixture.txt"
+                    },
+                    "error": "",
+                    "result": {
+                      "source_ref": "fixture:readback",
+                      "values": [
+                        [
+                          "first",
+                          "fixture.txt",
+                          "done"
+                        ],
+                        [
+                          "second",
+                          "fixture.txt",
+                          "done"
+                        ]
+                      ],
+                      "verified": true
+                    },
+                    "status": "success",
+                    "subgoal_id": "verify",
+                    "tool_id": "native.read"
+                  }
+                ],
+                "active_subgoal_id": "verify",
+                "bindings": {
+                  "observation": {
+                    "output_type": "observation",
+                    "subgoal_id": "verify",
+                    "value": {
+                      "source_ref": "fixture:readback",
+                      "values": [
+                        [
+                          "first",
+                          "fixture.txt",
+                          "done"
+                        ],
+                        [
+                          "second",
+                          "fixture.txt",
+                          "done"
+                        ]
+                      ],
+                      "verified": true
+                    }
+                  },
+                  "verified_first": {
+                    "output_type": "verified_first",
+                    "subgoal_id": "first",
+                    "value": {
+                      "affected_paths": [
+                        "fixture.txt"
+                      ],
+                      "source_ref": "fixture:effect:first",
+                      "verification": {
+                        "status": "verified"
+                      }
+                    }
+                  },
+                  "verified_second": {
+                    "output_type": "verified_second",
+                    "subgoal_id": "second",
+                    "value": {
+                      "affected_paths": [
+                        "fixture.txt"
+                      ],
+                      "source_ref": "fixture:effect:second",
+                      "verification": {
+                        "status": "verified"
+                      }
+                    }
+                  }
+                },
+                "cancellation_pending": false,
+                "completed_subgoal_ids": [
+                  "first",
+                  "second",
+                  "verify"
+                ],
+                "evidence": {
+                  "entries": [
+                    {
+                      "acceptance_questions": [
+                        {
+                          "criteria": {
+                            "false": "The result is missing, failed, ambiguous, or does not establish the condition.",
+                            "true": "The observed result establishes the stage completion condition."
+                          },
+                          "instructions": "Does the tool result satisfy the current stage completion condition?",
+                          "question_id": "stage_result_satisfies_completion",
+                          "type": "noul"
+                        }
+                      ],
+                      "arguments": {
+                        "path": "fixture.txt",
+                        "step": "first"
+                      },
+                      "error": "",
+                      "evidence_ref": "tactical-action:action-d7501d2a-db19-4d94-ae4f-42928f155070",
+                      "phase_id": "rollback-phase",
+                      "progress_review": {
+                        "answers": {},
+                        "complete": true,
+                        "confidence": 0.99,
+                        "confident": true,
+                        "retry_approved": false
+                      },
+                      "result": {
+                        "affected_paths": [
+                          "fixture.txt"
+                        ],
+                        "source_ref": "fixture:effect:first",
+                        "verification": {
+                          "status": "verified"
+                        }
+                      },
+                      "retry_attempt": 0,
+                      "status": "success",
+                      "subgoal_id": "first",
+                      "tool_id": "native.exact_text_edit"
+                    },
+                    {
+                      "acceptance_questions": [
+                        {
+                          "criteria": {
+                            "false": "The result is missing, failed, ambiguous, or does not establish the condition.",
+                            "true": "The observed result establishes the stage completion condition."
+                          },
+                          "instructions": "Does the tool result satisfy the current stage completion condition?",
+                          "question_id": "stage_result_satisfies_completion",
+                          "type": "noul"
+                        }
+                      ],
+                      "arguments": {
+                        "path": "fixture.txt",
+                        "step": "second"
+                      },
+                      "error": "",
+                      "evidence_ref": "tactical-action:action-f531a8c8-e55f-484b-8f16-6654d1758b23",
+                      "phase_id": "rollback-phase",
+                      "progress_review": {
+                        "answers": {},
+                        "complete": true,
+                        "confidence": 0.99,
+                        "confident": true,
+                        "retry_approved": false
+                      },
+                      "result": {
+                        "affected_paths": [
+                          "fixture.txt"
+                        ],
+                        "source_ref": "fixture:effect:second",
+                        "verification": {
+                          "status": "verified"
+                        }
+                      },
+                      "retry_attempt": 0,
+                      "status": "success",
+                      "subgoal_id": "second",
+                      "tool_id": "native.exact_text_edit"
+                    },
+                    {
+                      "acceptance_questions": [
+                        {
+                          "criteria": {
+                            "false": "The result is missing, failed, ambiguous, or does not establish the condition.",
+                            "true": "The observed result establishes the stage completion condition."
+                          },
+                          "instructions": "Does the tool result satisfy the current stage completion condition?",
+                          "question_id": "stage_result_satisfies_completion",
+                          "type": "noul"
+                        }
+                      ],
+                      "arguments": {
+                        "path": "fixture.txt"
+                      },
+                      "error": "",
+                      "evidence_ref": "tactical-action:action-2522426d-f926-431b-b3a6-441c74eaaace",
+                      "phase_id": "rollback-phase",
+                      "progress_review": {
+                        "answers": {},
+                        "complete": true,
+                        "confidence": 0.99,
+                        "confident": true,
+                        "retry_approved": false
+                      },
+                      "result": {
+                        "source_ref": "fixture:readback",
+                        "values": [
+                          [
+                            "first",
+                            "fixture.txt",
+                            "done"
+                          ],
+                          [
+                            "second",
+                            "fixture.txt",
+                            "done"
+                          ]
+                        ],
+                        "verified": true
+                      },
+                      "retry_attempt": 0,
+                      "status": "success",
+                      "subgoal_id": "verify",
+                      "tool_id": "native.read"
+                    }
+                  ]
+                },
+                "phase": {
+                  "acceptance_criteria": [],
+                  "authorized_capabilities": [
+                    "native.exact_text_edit",
+                    "native.read"
+                  ],
+                  "created_at": "2026-10-22T16:10:27.979979+00:00",
+                  "criterion_ids": [],
+                  "curated_tool_ids": [],
+                  "mutation_scope": {
+                    "allow_external_effects": false,
+                    "allowed_paths": [
+                      "fixture.txt"
+                    ]
+                  },
+                  "objective": "Update two fixture fields and verify them.",
+                  "originating_decision": "",
+                  "phase_id": "rollback-phase",
+                  "schema_version": 3,
+                  "subgoals": [
+                    {
+                      "allowed_capabilities": [
+                        "native.exact_text_edit"
+                      ],
+                      "allowed_side_effects": [
+                        "project_mutation"
+                      ],
+                      "completion": {
+                        "expected": "verified",
+                        "field": "verification.status",
+                        "kind": "field_equals",
+                        "output_type": ""
+                      },
+                      "depends_on": [],
+                      "failure_policy": "stop",
+                      "objective": "Update fixture first",
+                      "required_output_type": "verified_first",
+                      "subgoal_id": "first"
+                    },
+                    {
+                      "allowed_capabilities": [
+                        "native.exact_text_edit"
+                      ],
+                      "allowed_side_effects": [
+                        "project_mutation"
+                      ],
+                      "completion": {
+                        "expected": "verified",
+                        "field": "verification.status",
+                        "kind": "field_equals",
+                        "output_type": ""
+                      },
+                      "depends_on": [
+                        "first"
+                      ],
+                      "failure_policy": "stop",
+                      "objective": "Update fixture second",
+                      "required_output_type": "verified_second",
+                      "subgoal_id": "second"
+                    },
+                    {
+                      "allowed_capabilities": [
+                        "native.read"
+                      ],
+                      "allowed_side_effects": [
+                        "read_only"
+                      ],
+                      "completion": {
+                        "expected": true,
+                        "field": "verified",
+                        "kind": "field_equals",
+                        "output_type": ""
+                      },
+                      "depends_on": [
+                        "second"
+                      ],
+                      "failure_policy": "stop",
+                      "objective": "Read both fields",
+                      "required_output_type": "observation",
+                      "subgoal_id": "verify"
+                    }
+                  ],
+                  "tool_curation_status": ""
+                },
+                "revealed_capabilities": [],
+                "revealed_tool_ids": [
+                  "native.exact_text_edit",
+                  "native.read"
+                ],
+                "status": "phase_complete",
+                "steering_pending": false,
+                "system_one_relevant_tool_ids": [],
+                "system_one_tool_registry_status": ""
+              },
+              "metadata": {
+                "active_continuity_projection": {
+                  "omitted_records": [],
+                  "reserved_overflow": false,
+                  "schema_version": 1,
+                  "task_id": "rollback-task"
+                },
+                "conversation_projection": {
+                  "current_records_omitted": 0,
+                  "history_unavailable": false,
+                  "included_current_record_ids": [
+                    "task-working:rollback-task:conversation:0"
+                  ],
+                  "max_chars": 9000,
+                  "omitted": [],
+                  "omitted_current_record_ids": [],
+                  "requires_recall": false,
+                  "schema_version": 1,
+                  "window_may_have_earlier_events": false
+                },
+                "conversation_sources": [
+                  {
+                    "access": {
+                      "owner_user_id": "rollback-fixture",
+                      "shared_with": [],
+                      "visibility": "private"
+                    },
+                    "channel": "synthetic",
+                    "kind": "conversation",
+                    "observed_at": "2026-10-22T12:00:00+00:00",
+                    "provenance": "recorded",
+                    "recorded_at": "2026-10-22T16:10:27.977883+00:00",
+                    "role": "user",
+                    "schema_version": 1,
+                    "sequence": 1,
+                    "source_id": "conversation:906ba24e-977a-43b7-bf11-f505972bdddc",
+                    "speaker_id": "rollback-fixture"
+                  },
+                  {
+                    "access": {
+                      "owner_user_id": "rollback-fixture",
+                      "shared_with": [],
+                      "visibility": "private"
+                    },
+                    "channel": "synthetic",
+                    "kind": "conversation",
+                    "observed_at": "2026-10-22T12:00:00+00:00",
+                    "provenance": "recorded",
+                    "recorded_at": "2026-10-22T16:10:28.315683+00:00",
+                    "role": "user",
+                    "schema_version": 1,
+                    "sequence": 2,
+                    "source_id": "conversation:96326432-c2fb-4567-a80d-3741620fa4a6",
+                    "speaker_id": "rollback-fixture"
+                  },
+                  {
+                    "access": {
+                      "owner_user_id": "rollback-fixture",
+                      "shared_with": [],
+                      "visibility": "private"
+                    },
+                    "channel": "synthetic",
+                    "kind": "conversation",
+                    "observed_at": "2026-10-22T12:00:00+00:00",
+                    "provenance": "recorded",
+                    "recorded_at": "2026-10-22T16:10:28.675681+00:00",
+                    "role": "user",
+                    "schema_version": 1,
+                    "sequence": 3,
+                    "source_id": "conversation:305229ef-9353-4f8b-974b-40b8c0039b8a",
+                    "speaker_id": "rollback-fixture"
+                  }
+                ],
+                "memory_context_estimated_tokens": 89,
+                "memory_context_token_budget": 4096,
+                "memory_context_truncated": false,
+                "question_interrupt": {
+                  "answer": {
+                    "text": "fixture.txt; keep both constraints."
+                  },
+                  "choices": [],
+                  "created_at": "2026-10-22T16:10:27.980035+00:00",
+                  "expires_at": "2026-10-23T16:10:27.980035+00:00",
+                  "kind": "open_text",
+                  "message": "Which fixture file should I update?",
+                  "metadata": {
+                    "delivery": {}
+                  },
+                  "originator_user_id": "rollback-fixture",
+                  "project_id": "",
+                  "question_id": "65a0fc2e-0b45-4b28-9ff4-f236692ef1ee",
+                  "respondent_user_id": "rollback-fixture",
+                  "response_schema": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "text": {
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "text"
+                    ],
+                    "type": "object"
+                  },
+                  "run_id": "rollback-request",
+                  "status": "answered",
+                  "task_id": "rollback-task",
+                  "thread_id": "rollback-task",
+                  "updated_at": "2026-10-22T16:10:27.980035+00:00"
+                },
+                "system_one_tactical_reviews": [
+                  {
+                    "action_id": "action-d7501d2a-db19-4d94-ae4f-42928f155070",
+                    "answers": {},
+                    "complete": true,
+                    "confidence": 0.99,
+                    "confident": true,
+                    "duration_ms": 0,
+                    "model": "",
+                    "phase_id": "rollback-phase",
+                    "retry_approved": false,
+                    "status": "used",
+                    "subgoal_id": "first",
+                    "usage": {}
+                  },
+                  {
+                    "action_id": "action-f531a8c8-e55f-484b-8f16-6654d1758b23",
+                    "answers": {},
+                    "complete": true,
+                    "confidence": 0.99,
+                    "confident": true,
+                    "duration_ms": 0,
+                    "model": "",
+                    "phase_id": "rollback-phase",
+                    "retry_approved": false,
+                    "status": "used",
+                    "subgoal_id": "second",
+                    "usage": {}
+                  },
+                  {
+                    "action_id": "action-2522426d-f926-431b-b3a6-441c74eaaace",
+                    "answers": {},
+                    "complete": true,
+                    "confidence": 0.99,
+                    "confident": true,
+                    "duration_ms": 0,
+                    "model": "",
+                    "phase_id": "rollback-phase",
+                    "retry_approved": false,
+                    "status": "used",
+                    "subgoal_id": "verify",
+                    "usage": {}
+                  }
+                ],
+                "v3_context_projections": {
+                  "execution": {
+                    "budget": 24000,
+                    "loaded_skill_ids": [],
+                    "omitted_source_ids": [],
+                    "purpose": "execution",
+                    "recall": {
+                      "further_search_required": true,
+                      "result_count": 0,
+                      "status": "unavailable"
+                    },
+                    "records": [
+                      {
+                        "input_range": {
+                          "end_char": 86,
+                          "start_char": 0
+                        },
+                        "reason": "required",
+                        "source_id": "request:rollback-request",
+                        "source_type": "request",
+                        "status": "included",
+                        "tokens": 86,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 945,
+                          "start_char": 88
+                        },
+                        "reason": "required",
+                        "source_id": "policy:recall",
+                        "source_type": "policy",
+                        "status": "included",
+                        "tokens": 857,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 1058,
+                          "start_char": 947
+                        },
+                        "reason": "required",
+                        "source_id": "task:contract",
+                        "source_type": "task",
+                        "status": "included",
+                        "tokens": 111,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 1219,
+                          "start_char": 1060
+                        },
+                        "reason": "required",
+                        "source_id": "steering:0",
+                        "source_type": "steering",
+                        "status": "included",
+                        "tokens": 159,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 2011,
+                          "start_char": 1221
+                        },
+                        "reason": "required",
+                        "source_id": "task:question_interrupt",
+                        "source_type": "task",
+                        "status": "included",
+                        "tokens": 790,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 2746,
+                          "start_char": 2117
+                        },
+                        "reason": "selected_relevant",
+                        "source_id": "conversation:96326432-c2fb-4567-a80d-3741620fa4a6",
+                        "source_type": "conversation",
+                        "status": "included",
+                        "tokens": 629,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 3371,
+                          "start_char": 2748
+                        },
+                        "reason": "selected_relevant",
+                        "source_id": "conversation:906ba24e-977a-43b7-bf11-f505972bdddc",
+                        "source_type": "conversation",
+                        "status": "included",
+                        "tokens": 623,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 2115,
+                          "start_char": 2013
+                        },
+                        "reason": "required",
+                        "source_id": "recall:status",
+                        "source_type": "recall",
+                        "status": "included",
+                        "tokens": 102,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 3440,
+                          "start_char": 3373
+                        },
+                        "reason": "selected_relevant",
+                        "source_id": "task:facts_md",
+                        "source_type": "task",
+                        "status": "included",
+                        "tokens": 67,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 3516,
+                          "start_char": 3442
+                        },
+                        "reason": "selected_relevant",
+                        "source_id": "task:memory_facts_md",
+                        "source_type": "task",
+                        "status": "included",
+                        "tokens": 74,
+                        "truncated": false
+                      },
+                      {
+                        "reason": "unavailable",
+                        "source_id": "recall:backend",
+                        "source_type": "recall",
+                        "status": "omitted",
+                        "tokens": 0
+                      }
+                    ],
+                    "selected_skill_ids": [],
+                    "separator_tokens": 18,
+                    "source_ids": [
+                      "request:rollback-request",
+                      "policy:recall",
+                      "task:contract",
+                      "steering:0",
+                      "task:question_interrupt",
+                      "recall:status",
+                      "conversation:96326432-c2fb-4567-a80d-3741620fa4a6",
+                      "conversation:906ba24e-977a-43b7-bf11-f505972bdddc",
+                      "task:facts_md",
+                      "task:memory_facts_md"
+                    ],
+                    "tokenizer": "conservative_utf8_bytes",
+                    "tokens": 3516
+                  },
+                  "review": {
+                    "budget": 24000,
+                    "loaded_skill_ids": [],
+                    "omitted_source_ids": [],
+                    "purpose": "review",
+                    "recall": {
+                      "result_count": 0
+                    },
+                    "records": [
+                      {
+                        "input_range": {
+                          "end_char": 86,
+                          "start_char": 0
+                        },
+                        "reason": "required",
+                        "source_id": "request:rollback-request",
+                        "source_type": "request",
+                        "status": "included",
+                        "tokens": 86,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 945,
+                          "start_char": 88
+                        },
+                        "reason": "required",
+                        "source_id": "policy:recall",
+                        "source_type": "policy",
+                        "status": "included",
+                        "tokens": 857,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 1058,
+                          "start_char": 947
+                        },
+                        "reason": "required",
+                        "source_id": "task:contract",
+                        "source_type": "task",
+                        "status": "included",
+                        "tokens": 111,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 1219,
+                          "start_char": 1060
+                        },
+                        "reason": "required",
+                        "source_id": "steering:0",
+                        "source_type": "steering",
+                        "status": "included",
+                        "tokens": 159,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 2011,
+                          "start_char": 1221
+                        },
+                        "reason": "required",
+                        "source_id": "task:question_interrupt",
+                        "source_type": "task",
+                        "status": "included",
+                        "tokens": 790,
+                        "truncated": false
+                      }
+                    ],
+                    "selected_skill_ids": [],
+                    "separator_tokens": 8,
+                    "source_ids": [
+                      "request:rollback-request",
+                      "policy:recall",
+                      "task:contract",
+                      "steering:0",
+                      "task:question_interrupt"
+                    ],
+                    "tokenizer": "conservative_utf8_bytes",
+                    "tokens": 2011
+                  }
+                },
+                "v3_history_selection": {
+                  "selected_exchange_ids": [
+                    "exchange:conversation:906ba24e-977a-43b7-bf11-f505972bdddc",
+                    "exchange:conversation:96326432-c2fb-4567-a80d-3741620fa4a6"
+                  ],
+                  "status": "ambiguous_or_unavailable"
+                }
+              }
+            },
+            "effects": [
+              [
+                "first",
+                "fixture.txt",
+                "done"
+              ],
+              [
+                "second",
+                "fixture.txt",
+                "done"
+              ]
+            ],
+            "integrity": "ok"
+          }
+        }
+      ],
+      "checks": {
+        "exactly_once_completed_effects": true,
+        "integrity": true,
+        "original_events_preserved": true,
+        "original_knowledge_preserved": true,
+        "events_preserved:interrupted": true,
+        "knowledge_preserved:interrupted": true,
+        "events_preserved:off": true,
+        "knowledge_preserved:off": true,
+        "provenance_resolves": true,
+        "compatible_writes_preserved": true,
+        "constraints_preserved": true,
+        "all_subgoals_completed": true,
+        "answered_question_preserved": true,
+        "original_ledger_prefixes_preserved": true,
+        "no_original_file_deletion": true,
+        "legacy_path_available": true,
+        "same_fixture_store": true
+      }
+    },
+    {
+      "resume_before_off": true,
+      "checkpoints": [
+        {
+          "stage": "interrupted",
+          "returncode": 73,
+          "readback": {
+            "events": [
+              {
+                "sequence": 1,
+                "event_id": "8f12806f-035a-4fda-84c9-048189b345bb",
+                "owner_user_id": "rollback-fixture",
+                "project_id": "",
+                "memory_session_id": "",
+                "role": "user",
+                "content": "The household storage label for original is R-original.",
+                "source": "synthetic",
+                "source_message_id": "original",
+                "created_at": "2026-10-22T12:00:00+00:00",
+                "schema_version": 1,
+                "recorded_at": "2026-10-22T16:10:28.745427+00:00",
+                "observed_at": "2026-10-22T12:00:00+00:00",
+                "speaker_id": "rollback-fixture",
+                "visibility": "private",
+                "shared_with": [],
+                "provenance": "recorded"
+              },
+              {
+                "sequence": 2,
+                "event_id": "7f4285c8-0f57-41ec-aec1-4463bc87cdf3",
+                "owner_user_id": "rollback-fixture",
+                "project_id": "",
+                "memory_session_id": "",
+                "role": "user",
+                "content": "The household storage label for interrupted is R-interrupted.",
+                "source": "synthetic",
+                "source_message_id": "interrupted",
+                "created_at": "2026-10-22T12:00:00+00:00",
+                "schema_version": 1,
+                "recorded_at": "2026-10-22T16:10:29.083128+00:00",
+                "observed_at": "2026-10-22T12:00:00+00:00",
+                "speaker_id": "rollback-fixture",
+                "visibility": "private",
+                "shared_with": [],
+                "provenance": "recorded"
+              }
+            ],
+            "knowledge": [
+              {
+                "memory_id": "memory:f6949c35873a0cad05b6cb37f37c21a273b10a5b907aca1f11e2a994e51329c4",
+                "content": "The household storage label for interrupted is R-interrupted.",
+                "access": {
+                  "owner_user_id": "rollback-fixture",
+                  "visibility": "private",
+                  "shared_with": []
+                },
+                "sources": [
+                  {
+                    "source_id": "conversation:7f4285c8-0f57-41ec-aec1-4463bc87cdf3",
+                    "kind": "conversation",
+                    "access": {
+                      "owner_user_id": "rollback-fixture",
+                      "visibility": "private",
+                      "shared_with": []
+                    },
+                    "sequence": 2,
+                    "speaker_id": "rollback-fixture",
+                    "role": "user",
+                    "channel": "synthetic",
+                    "recorded_at": "2026-10-22T16:10:29.083128+00:00",
+                    "observed_at": "2026-10-22T12:00:00+00:00",
+                    "provenance": "recorded",
+                    "schema_version": 1
+                  }
+                ],
+                "recorded_at": "2026-10-22T16:10:29.084358+00:00",
+                "kind": "fact",
+                "subjects": [
+                  "interrupted",
+                  "rollback-fixture"
+                ],
+                "claim_key": "rollback-fixture.interrupted",
+                "basis": "user_report",
+                "quotes": [
+                  "The household storage label for interrupted is R-interrupted."
+                ],
+                "persistence": "contextual",
+                "status": "active",
+                "observed_at": "2026-10-22T12:00:00+00:00",
+                "valid_from": null,
+                "valid_until": null,
+                "supersedes": null,
+                "conflicts_with": [],
+                "project_id": "",
+                "task_id": null,
+                "schedule_id": null,
+                "commitment_state": null,
+                "dependencies": [],
+                "schema_version": 3
+              },
+              {
+                "memory_id": "memory:7e73c948ab1a2e21a70e35c667bd408a25021ec6176accc26dab8276c413808c",
+                "content": "The household storage label for original is R-original.",
+                "access": {
+                  "owner_user_id": "rollback-fixture",
+                  "visibility": "private",
+                  "shared_with": []
+                },
+                "sources": [
+                  {
+                    "source_id": "conversation:8f12806f-035a-4fda-84c9-048189b345bb",
+                    "kind": "conversation",
+                    "access": {
+                      "owner_user_id": "rollback-fixture",
+                      "visibility": "private",
+                      "shared_with": []
+                    },
+                    "sequence": 1,
+                    "speaker_id": "rollback-fixture",
+                    "role": "user",
+                    "channel": "synthetic",
+                    "recorded_at": "2026-10-22T16:10:28.745427+00:00",
+                    "observed_at": "2026-10-22T12:00:00+00:00",
+                    "provenance": "recorded",
+                    "schema_version": 1
+                  }
+                ],
+                "recorded_at": "2026-10-22T16:10:28.746201+00:00",
+                "kind": "fact",
+                "subjects": [
+                  "original",
+                  "rollback-fixture"
+                ],
+                "claim_key": "rollback-fixture.original",
+                "basis": "user_report",
+                "quotes": [
+                  "The household storage label for original is R-original."
+                ],
+                "persistence": "contextual",
+                "status": "active",
+                "observed_at": "2026-10-22T12:00:00+00:00",
+                "valid_from": null,
+                "valid_until": null,
+                "supersedes": null,
+                "conflicts_with": [],
+                "project_id": "",
+                "task_id": null,
+                "schedule_id": null,
+                "commitment_state": null,
+                "dependencies": [],
+                "schema_version": 3
+              }
+            ],
+            "task": {
+              "task_id": "rollback-task",
+              "message_id": "rollback-request",
+              "user": "rollback-fixture",
+              "project_id": "",
+              "memory_session_id": "",
+              "tag": "",
+              "correlation_id": "",
+              "goal": "Update two fixture fields and verify them.",
+              "facts_md": "- (none)",
+              "recent_conversation_md": "- rollback-fixture: \"Only update fixture.txt; preserve the original and do not send messages.\"",
+              "conversation_records": [
+                {
+                  "content": "Only update fixture.txt; preserve the original and do not send messages.",
+                  "speaker": "rollback-fixture"
+                }
+              ],
+              "conversation_history_md": "- (none)",
+              "memory_context_md": "- (none)",
+              "plan_json": "[\n  {\n    \"arguments\": {\n      \"question\": \"Which fixture file should I update?\",\n      \"question_kind\": \"open_text\"\n    },\n    \"execution\": {\n      \"exception\": \"\",\n      \"finished_at\": \"2026-10-22T16:10:29.081403+00:00\",\n      \"result\": {\n        \"answer\": {\n          \"text\": \"fixture.txt; keep both constraints.\"\n        },\n        \"answered_by\": \"rollback-fixture\",\n        \"question_id\": \"09b66883-2d00-4f97-bca7-63434e001b23\",\n        \"question_kind\": \"open_text\"\n      },\n      \"started_at\": \"2026-10-22T16:10:29.081403+00:00\",\n      \"status\": \"success\"\n    },\n    \"id\": \"question-answer-09b66883-2d00-4f97-bca7-63434e001b23\",\n    \"internal_state\": \"Question answer received.\",\n    \"tool_id\": \"native.ask_question\",\n    \"tool_name\": \"ask_question\"\n  }\n]",
+              "acceptance_criteria_md": "Only update fixture.txt; preserve the original and do not send messages.",
+              "acceptance_contract": {},
+              "memory_facts_md": "- (none)",
+              "updates_md": "- Task parked waiting for answer to question 09b66883-2d00-4f97-bca7-63434e001b23.\n- Question 09b66883-2d00-4f97-bca7-63434e001b23 answered; task resumed.",
+              "status": "running",
+              "outcome": null,
+              "check_verdict": null,
+              "check_reason": "",
+              "check_confidence": 0.0,
+              "check_evidence_refs": [],
+              "evidence_journal": [],
+              "check_new_message_count": 0,
+              "pdca_cycle_count": 0,
+              "intelligence_engine": "hierarchical_v3",
+              "intelligence_schema_version": 3,
+              "hierarchical_state": {
+                "actions": [
+                  {
+                    "acceptance_questions": [
+                      {
+                        "criteria": {
+                          "false": "The result is missing, failed, ambiguous, or does not establish the condition.",
+                          "true": "The observed result establishes the stage completion condition."
+                        },
+                        "instructions": "Does the tool result satisfy the current stage completion condition?",
+                        "question_id": "stage_result_satisfies_completion",
+                        "type": "noul"
+                      }
+                    ],
+                    "action_id": "action-e5975590-e331-46fb-aa09-351b92d41ab9",
+                    "arguments": {
+                      "path": "fixture.txt",
+                      "step": "first"
+                    },
+                    "error": "",
+                    "result": {
+                      "affected_paths": [
+                        "fixture.txt"
+                      ],
+                      "source_ref": "fixture:effect:first",
+                      "verification": {
+                        "status": "verified"
+                      }
+                    },
+                    "status": "success",
+                    "subgoal_id": "first",
+                    "tool_id": "native.exact_text_edit"
+                  }
+                ],
+                "active_subgoal_id": "second",
+                "bindings": {
+                  "verified_first": {
+                    "output_type": "verified_first",
+                    "subgoal_id": "first",
+                    "value": {
+                      "affected_paths": [
+                        "fixture.txt"
+                      ],
+                      "source_ref": "fixture:effect:first",
+                      "verification": {
+                        "status": "verified"
+                      }
+                    }
+                  }
+                },
+                "cancellation_pending": false,
+                "completed_subgoal_ids": [
+                  "first"
+                ],
+                "evidence": {
+                  "entries": [
+                    {
+                      "acceptance_questions": [
+                        {
+                          "criteria": {
+                            "false": "The result is missing, failed, ambiguous, or does not establish the condition.",
+                            "true": "The observed result establishes the stage completion condition."
+                          },
+                          "instructions": "Does the tool result satisfy the current stage completion condition?",
+                          "question_id": "stage_result_satisfies_completion",
+                          "type": "noul"
+                        }
+                      ],
+                      "arguments": {
+                        "path": "fixture.txt",
+                        "step": "first"
+                      },
+                      "error": "",
+                      "evidence_ref": "tactical-action:action-e5975590-e331-46fb-aa09-351b92d41ab9",
+                      "phase_id": "rollback-phase",
+                      "progress_review": {
+                        "answers": {},
+                        "complete": true,
+                        "confidence": 0.99,
+                        "confident": true,
+                        "retry_approved": false
+                      },
+                      "result": {
+                        "affected_paths": [
+                          "fixture.txt"
+                        ],
+                        "source_ref": "fixture:effect:first",
+                        "verification": {
+                          "status": "verified"
+                        }
+                      },
+                      "retry_attempt": 0,
+                      "status": "success",
+                      "subgoal_id": "first",
+                      "tool_id": "native.exact_text_edit"
+                    }
+                  ]
+                },
+                "phase": {
+                  "acceptance_criteria": [],
+                  "authorized_capabilities": [
+                    "native.exact_text_edit",
+                    "native.read"
+                  ],
+                  "created_at": "2026-10-22T16:10:28.747796+00:00",
+                  "criterion_ids": [],
+                  "curated_tool_ids": [],
+                  "mutation_scope": {
+                    "allow_external_effects": false,
+                    "allowed_paths": [
+                      "fixture.txt"
+                    ]
+                  },
+                  "objective": "Update two fixture fields and verify them.",
+                  "originating_decision": "",
+                  "phase_id": "rollback-phase",
+                  "schema_version": 3,
+                  "subgoals": [
+                    {
+                      "allowed_capabilities": [
+                        "native.exact_text_edit"
+                      ],
+                      "allowed_side_effects": [
+                        "project_mutation"
+                      ],
+                      "completion": {
+                        "expected": "verified",
+                        "field": "verification.status",
+                        "kind": "field_equals",
+                        "output_type": ""
+                      },
+                      "depends_on": [],
+                      "failure_policy": "stop",
+                      "objective": "Update fixture first",
+                      "required_output_type": "verified_first",
+                      "subgoal_id": "first"
+                    },
+                    {
+                      "allowed_capabilities": [
+                        "native.exact_text_edit"
+                      ],
+                      "allowed_side_effects": [
+                        "project_mutation"
+                      ],
+                      "completion": {
+                        "expected": "verified",
+                        "field": "verification.status",
+                        "kind": "field_equals",
+                        "output_type": ""
+                      },
+                      "depends_on": [
+                        "first"
+                      ],
+                      "failure_policy": "stop",
+                      "objective": "Update fixture second",
+                      "required_output_type": "verified_second",
+                      "subgoal_id": "second"
+                    },
+                    {
+                      "allowed_capabilities": [
+                        "native.read"
+                      ],
+                      "allowed_side_effects": [
+                        "read_only"
+                      ],
+                      "completion": {
+                        "expected": true,
+                        "field": "verified",
+                        "kind": "field_equals",
+                        "output_type": ""
+                      },
+                      "depends_on": [
+                        "second"
+                      ],
+                      "failure_policy": "stop",
+                      "objective": "Read both fields",
+                      "required_output_type": "observation",
+                      "subgoal_id": "verify"
+                    }
+                  ],
+                  "tool_curation_status": ""
+                },
+                "revealed_capabilities": [],
+                "revealed_tool_ids": [],
+                "status": "running",
+                "steering_pending": false,
+                "system_one_relevant_tool_ids": [],
+                "system_one_tool_registry_status": ""
+              },
+              "metadata": {
+                "memory_context_estimated_tokens": 89,
+                "memory_context_token_budget": 4096,
+                "memory_context_truncated": false,
+                "question_interrupt": {
+                  "answer": {
+                    "text": "fixture.txt; keep both constraints."
+                  },
+                  "choices": [],
+                  "created_at": "2026-10-22T16:10:28.747870+00:00",
+                  "expires_at": "2026-10-23T16:10:28.747870+00:00",
+                  "kind": "open_text",
+                  "message": "Which fixture file should I update?",
+                  "metadata": {
+                    "delivery": {}
+                  },
+                  "originator_user_id": "rollback-fixture",
+                  "project_id": "",
+                  "question_id": "09b66883-2d00-4f97-bca7-63434e001b23",
+                  "respondent_user_id": "rollback-fixture",
+                  "response_schema": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "text": {
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "text"
+                    ],
+                    "type": "object"
+                  },
+                  "run_id": "rollback-request",
+                  "status": "answered",
+                  "task_id": "rollback-task",
+                  "thread_id": "rollback-task",
+                  "updated_at": "2026-10-22T16:10:28.747870+00:00"
+                },
+                "system_one_tactical_reviews": [
+                  {
+                    "action_id": "action-e5975590-e331-46fb-aa09-351b92d41ab9",
+                    "answers": {},
+                    "complete": true,
+                    "confidence": 0.99,
+                    "confident": true,
+                    "duration_ms": 0,
+                    "model": "",
+                    "phase_id": "rollback-phase",
+                    "retry_approved": false,
+                    "status": "used",
+                    "subgoal_id": "first",
+                    "usage": {}
+                  }
+                ],
+                "v3_context_projections": {
+                  "execution": {
+                    "budget": 24000,
+                    "loaded_skill_ids": [],
+                    "omitted_source_ids": [],
+                    "purpose": "execution",
+                    "recall": {
+                      "further_search_required": true,
+                      "result_count": 0,
+                      "status": "unavailable"
+                    },
+                    "records": [
+                      {
+                        "input_range": {
+                          "end_char": 86,
+                          "start_char": 0
+                        },
+                        "reason": "required",
+                        "source_id": "request:rollback-request",
+                        "source_type": "request",
+                        "status": "included",
+                        "tokens": 86,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 945,
+                          "start_char": 88
+                        },
+                        "reason": "required",
+                        "source_id": "policy:recall",
+                        "source_type": "policy",
+                        "status": "included",
+                        "tokens": 857,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 1058,
+                          "start_char": 947
+                        },
+                        "reason": "required",
+                        "source_id": "task:contract",
+                        "source_type": "task",
+                        "status": "included",
+                        "tokens": 111,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 1219,
+                          "start_char": 1060
+                        },
+                        "reason": "required",
+                        "source_id": "steering:0",
+                        "source_type": "steering",
+                        "status": "included",
+                        "tokens": 159,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 2011,
+                          "start_char": 1221
+                        },
+                        "reason": "required",
+                        "source_id": "task:question_interrupt",
+                        "source_type": "task",
+                        "status": "included",
+                        "tokens": 790,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 2746,
+                          "start_char": 2117
+                        },
+                        "reason": "selected_relevant",
+                        "source_id": "conversation:7f4285c8-0f57-41ec-aec1-4463bc87cdf3",
+                        "source_type": "conversation",
+                        "status": "included",
+                        "tokens": 629,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 3371,
+                          "start_char": 2748
+                        },
+                        "reason": "selected_relevant",
+                        "source_id": "conversation:8f12806f-035a-4fda-84c9-048189b345bb",
+                        "source_type": "conversation",
+                        "status": "included",
+                        "tokens": 623,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 2115,
+                          "start_char": 2013
+                        },
+                        "reason": "required",
+                        "source_id": "recall:status",
+                        "source_type": "recall",
+                        "status": "included",
+                        "tokens": 102,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 3440,
+                          "start_char": 3373
+                        },
+                        "reason": "selected_relevant",
+                        "source_id": "task:facts_md",
+                        "source_type": "task",
+                        "status": "included",
+                        "tokens": 67,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 3516,
+                          "start_char": 3442
+                        },
+                        "reason": "selected_relevant",
+                        "source_id": "task:memory_facts_md",
+                        "source_type": "task",
+                        "status": "included",
+                        "tokens": 74,
+                        "truncated": false
+                      },
+                      {
+                        "reason": "unavailable",
+                        "source_id": "recall:backend",
+                        "source_type": "recall",
+                        "status": "omitted",
+                        "tokens": 0
+                      }
+                    ],
+                    "selected_skill_ids": [],
+                    "separator_tokens": 18,
+                    "source_ids": [
+                      "request:rollback-request",
+                      "policy:recall",
+                      "task:contract",
+                      "steering:0",
+                      "task:question_interrupt",
+                      "recall:status",
+                      "conversation:7f4285c8-0f57-41ec-aec1-4463bc87cdf3",
+                      "conversation:8f12806f-035a-4fda-84c9-048189b345bb",
+                      "task:facts_md",
+                      "task:memory_facts_md"
+                    ],
+                    "tokenizer": "conservative_utf8_bytes",
+                    "tokens": 3516
+                  },
+                  "review": {
+                    "budget": 24000,
+                    "loaded_skill_ids": [],
+                    "omitted_source_ids": [],
+                    "purpose": "review",
+                    "recall": {
+                      "result_count": 0
+                    },
+                    "records": [
+                      {
+                        "input_range": {
+                          "end_char": 86,
+                          "start_char": 0
+                        },
+                        "reason": "required",
+                        "source_id": "request:rollback-request",
+                        "source_type": "request",
+                        "status": "included",
+                        "tokens": 86,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 945,
+                          "start_char": 88
+                        },
+                        "reason": "required",
+                        "source_id": "policy:recall",
+                        "source_type": "policy",
+                        "status": "included",
+                        "tokens": 857,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 1058,
+                          "start_char": 947
+                        },
+                        "reason": "required",
+                        "source_id": "task:contract",
+                        "source_type": "task",
+                        "status": "included",
+                        "tokens": 111,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 1219,
+                          "start_char": 1060
+                        },
+                        "reason": "required",
+                        "source_id": "steering:0",
+                        "source_type": "steering",
+                        "status": "included",
+                        "tokens": 159,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 2011,
+                          "start_char": 1221
+                        },
+                        "reason": "required",
+                        "source_id": "task:question_interrupt",
+                        "source_type": "task",
+                        "status": "included",
+                        "tokens": 790,
+                        "truncated": false
+                      }
+                    ],
+                    "selected_skill_ids": [],
+                    "separator_tokens": 8,
+                    "source_ids": [
+                      "request:rollback-request",
+                      "policy:recall",
+                      "task:contract",
+                      "steering:0",
+                      "task:question_interrupt"
+                    ],
+                    "tokenizer": "conservative_utf8_bytes",
+                    "tokens": 2011
+                  }
+                },
+                "v3_history_selection": {
+                  "selected_exchange_ids": [
+                    "exchange:conversation:8f12806f-035a-4fda-84c9-048189b345bb",
+                    "exchange:conversation:7f4285c8-0f57-41ec-aec1-4463bc87cdf3"
+                  ],
+                  "status": "ambiguous_or_unavailable"
+                }
+              }
+            },
+            "effects": [
+              [
+                "first",
+                "fixture.txt",
+                "done"
+              ]
+            ],
+            "integrity": "ok"
+          }
+        },
+        {
+          "stage": "resumed",
+          "returncode": 73,
+          "readback": {
+            "events": [
+              {
+                "sequence": 1,
+                "event_id": "8f12806f-035a-4fda-84c9-048189b345bb",
+                "owner_user_id": "rollback-fixture",
+                "project_id": "",
+                "memory_session_id": "",
+                "role": "user",
+                "content": "The household storage label for original is R-original.",
+                "source": "synthetic",
+                "source_message_id": "original",
+                "created_at": "2026-10-22T12:00:00+00:00",
+                "schema_version": 1,
+                "recorded_at": "2026-10-22T16:10:28.745427+00:00",
+                "observed_at": "2026-10-22T12:00:00+00:00",
+                "speaker_id": "rollback-fixture",
+                "visibility": "private",
+                "shared_with": [],
+                "provenance": "recorded"
+              },
+              {
+                "sequence": 2,
+                "event_id": "7f4285c8-0f57-41ec-aec1-4463bc87cdf3",
+                "owner_user_id": "rollback-fixture",
+                "project_id": "",
+                "memory_session_id": "",
+                "role": "user",
+                "content": "The household storage label for interrupted is R-interrupted.",
+                "source": "synthetic",
+                "source_message_id": "interrupted",
+                "created_at": "2026-10-22T12:00:00+00:00",
+                "schema_version": 1,
+                "recorded_at": "2026-10-22T16:10:29.083128+00:00",
+                "observed_at": "2026-10-22T12:00:00+00:00",
+                "speaker_id": "rollback-fixture",
+                "visibility": "private",
+                "shared_with": [],
+                "provenance": "recorded"
+              },
+              {
+                "sequence": 3,
+                "event_id": "984f0f3b-12c1-46f4-8c81-1bafd6ee0be4",
+                "owner_user_id": "rollback-fixture",
+                "project_id": "",
+                "memory_session_id": "",
+                "role": "user",
+                "content": "The household storage label for resumed is R-resumed.",
+                "source": "synthetic",
+                "source_message_id": "resumed",
+                "created_at": "2026-10-22T12:00:00+00:00",
+                "schema_version": 1,
+                "recorded_at": "2026-10-22T16:10:29.424520+00:00",
+                "observed_at": "2026-10-22T12:00:00+00:00",
+                "speaker_id": "rollback-fixture",
+                "visibility": "private",
+                "shared_with": [],
+                "provenance": "recorded"
+              }
+            ],
+            "knowledge": [
+              {
+                "memory_id": "memory:2ee8485180bbd4e93c3d95fa9f1462a74075f93436e38cdee92a9ccc238ed507",
+                "content": "The household storage label for resumed is R-resumed.",
+                "access": {
+                  "owner_user_id": "rollback-fixture",
+                  "visibility": "private",
+                  "shared_with": []
+                },
+                "sources": [
+                  {
+                    "source_id": "conversation:984f0f3b-12c1-46f4-8c81-1bafd6ee0be4",
+                    "kind": "conversation",
+                    "access": {
+                      "owner_user_id": "rollback-fixture",
+                      "visibility": "private",
+                      "shared_with": []
+                    },
+                    "sequence": 3,
+                    "speaker_id": "rollback-fixture",
+                    "role": "user",
+                    "channel": "synthetic",
+                    "recorded_at": "2026-10-22T16:10:29.424520+00:00",
+                    "observed_at": "2026-10-22T12:00:00+00:00",
+                    "provenance": "recorded",
+                    "schema_version": 1
+                  }
+                ],
+                "recorded_at": "2026-10-22T16:10:29.426266+00:00",
+                "kind": "fact",
+                "subjects": [
+                  "resumed",
+                  "rollback-fixture"
+                ],
+                "claim_key": "rollback-fixture.resumed",
+                "basis": "user_report",
+                "quotes": [
+                  "The household storage label for resumed is R-resumed."
+                ],
+                "persistence": "contextual",
+                "status": "active",
+                "observed_at": "2026-10-22T12:00:00+00:00",
+                "valid_from": null,
+                "valid_until": null,
+                "supersedes": null,
+                "conflicts_with": [],
+                "project_id": "",
+                "task_id": null,
+                "schedule_id": null,
+                "commitment_state": null,
+                "dependencies": [],
+                "schema_version": 3
+              },
+              {
+                "memory_id": "memory:f6949c35873a0cad05b6cb37f37c21a273b10a5b907aca1f11e2a994e51329c4",
+                "content": "The household storage label for interrupted is R-interrupted.",
+                "access": {
+                  "owner_user_id": "rollback-fixture",
+                  "visibility": "private",
+                  "shared_with": []
+                },
+                "sources": [
+                  {
+                    "source_id": "conversation:7f4285c8-0f57-41ec-aec1-4463bc87cdf3",
+                    "kind": "conversation",
+                    "access": {
+                      "owner_user_id": "rollback-fixture",
+                      "visibility": "private",
+                      "shared_with": []
+                    },
+                    "sequence": 2,
+                    "speaker_id": "rollback-fixture",
+                    "role": "user",
+                    "channel": "synthetic",
+                    "recorded_at": "2026-10-22T16:10:29.083128+00:00",
+                    "observed_at": "2026-10-22T12:00:00+00:00",
+                    "provenance": "recorded",
+                    "schema_version": 1
+                  }
+                ],
+                "recorded_at": "2026-10-22T16:10:29.084358+00:00",
+                "kind": "fact",
+                "subjects": [
+                  "interrupted",
+                  "rollback-fixture"
+                ],
+                "claim_key": "rollback-fixture.interrupted",
+                "basis": "user_report",
+                "quotes": [
+                  "The household storage label for interrupted is R-interrupted."
+                ],
+                "persistence": "contextual",
+                "status": "active",
+                "observed_at": "2026-10-22T12:00:00+00:00",
+                "valid_from": null,
+                "valid_until": null,
+                "supersedes": null,
+                "conflicts_with": [],
+                "project_id": "",
+                "task_id": null,
+                "schedule_id": null,
+                "commitment_state": null,
+                "dependencies": [],
+                "schema_version": 3
+              },
+              {
+                "memory_id": "memory:7e73c948ab1a2e21a70e35c667bd408a25021ec6176accc26dab8276c413808c",
+                "content": "The household storage label for original is R-original.",
+                "access": {
+                  "owner_user_id": "rollback-fixture",
+                  "visibility": "private",
+                  "shared_with": []
+                },
+                "sources": [
+                  {
+                    "source_id": "conversation:8f12806f-035a-4fda-84c9-048189b345bb",
+                    "kind": "conversation",
+                    "access": {
+                      "owner_user_id": "rollback-fixture",
+                      "visibility": "private",
+                      "shared_with": []
+                    },
+                    "sequence": 1,
+                    "speaker_id": "rollback-fixture",
+                    "role": "user",
+                    "channel": "synthetic",
+                    "recorded_at": "2026-10-22T16:10:28.745427+00:00",
+                    "observed_at": "2026-10-22T12:00:00+00:00",
+                    "provenance": "recorded",
+                    "schema_version": 1
+                  }
+                ],
+                "recorded_at": "2026-10-22T16:10:28.746201+00:00",
+                "kind": "fact",
+                "subjects": [
+                  "original",
+                  "rollback-fixture"
+                ],
+                "claim_key": "rollback-fixture.original",
+                "basis": "user_report",
+                "quotes": [
+                  "The household storage label for original is R-original."
+                ],
+                "persistence": "contextual",
+                "status": "active",
+                "observed_at": "2026-10-22T12:00:00+00:00",
+                "valid_from": null,
+                "valid_until": null,
+                "supersedes": null,
+                "conflicts_with": [],
+                "project_id": "",
+                "task_id": null,
+                "schedule_id": null,
+                "commitment_state": null,
+                "dependencies": [],
+                "schema_version": 3
+              }
+            ],
+            "task": {
+              "task_id": "rollback-task",
+              "message_id": "rollback-request",
+              "user": "rollback-fixture",
+              "project_id": "",
+              "memory_session_id": "",
+              "tag": "",
+              "correlation_id": "",
+              "goal": "Update two fixture fields and verify them.",
+              "facts_md": "- (none)",
+              "recent_conversation_md": "- rollback-fixture: \"Only update fixture.txt; preserve the original and do not send messages.\"",
+              "conversation_records": [
+                {
+                  "content": "Only update fixture.txt; preserve the original and do not send messages.",
+                  "speaker": "rollback-fixture"
+                }
+              ],
+              "conversation_history_md": "- (none)",
+              "memory_context_md": "- (none)",
+              "plan_json": "[\n  {\n    \"arguments\": {\n      \"question\": \"Which fixture file should I update?\",\n      \"question_kind\": \"open_text\"\n    },\n    \"execution\": {\n      \"exception\": \"\",\n      \"finished_at\": \"2026-10-22T16:10:29.081403+00:00\",\n      \"result\": {\n        \"answer\": {\n          \"text\": \"fixture.txt; keep both constraints.\"\n        },\n        \"answered_by\": \"rollback-fixture\",\n        \"question_id\": \"09b66883-2d00-4f97-bca7-63434e001b23\",\n        \"question_kind\": \"open_text\"\n      },\n      \"started_at\": \"2026-10-22T16:10:29.081403+00:00\",\n      \"status\": \"success\"\n    },\n    \"id\": \"question-answer-09b66883-2d00-4f97-bca7-63434e001b23\",\n    \"internal_state\": \"Question answer received.\",\n    \"tool_id\": \"native.ask_question\",\n    \"tool_name\": \"ask_question\"\n  }\n]",
+              "acceptance_criteria_md": "Only update fixture.txt; preserve the original and do not send messages.",
+              "acceptance_contract": {},
+              "memory_facts_md": "- (none)",
+              "updates_md": "- Task parked waiting for answer to question 09b66883-2d00-4f97-bca7-63434e001b23.\n- Question 09b66883-2d00-4f97-bca7-63434e001b23 answered; task resumed.",
+              "status": "running",
+              "outcome": null,
+              "check_verdict": null,
+              "check_reason": "",
+              "check_confidence": 0.0,
+              "check_evidence_refs": [],
+              "evidence_journal": [],
+              "check_new_message_count": 0,
+              "pdca_cycle_count": 0,
+              "intelligence_engine": "hierarchical_v3",
+              "intelligence_schema_version": 3,
+              "hierarchical_state": {
+                "actions": [
+                  {
+                    "acceptance_questions": [
+                      {
+                        "criteria": {
+                          "false": "The result is missing, failed, ambiguous, or does not establish the condition.",
+                          "true": "The observed result establishes the stage completion condition."
+                        },
+                        "instructions": "Does the tool result satisfy the current stage completion condition?",
+                        "question_id": "stage_result_satisfies_completion",
+                        "type": "noul"
+                      }
+                    ],
+                    "action_id": "action-e5975590-e331-46fb-aa09-351b92d41ab9",
+                    "arguments": {
+                      "path": "fixture.txt",
+                      "step": "first"
+                    },
+                    "error": "",
+                    "result": {
+                      "affected_paths": [
+                        "fixture.txt"
+                      ],
+                      "source_ref": "fixture:effect:first",
+                      "verification": {
+                        "status": "verified"
+                      }
+                    },
+                    "status": "success",
+                    "subgoal_id": "first",
+                    "tool_id": "native.exact_text_edit"
+                  },
+                  {
+                    "acceptance_questions": [
+                      {
+                        "criteria": {
+                          "false": "The result is missing, failed, ambiguous, or does not establish the condition.",
+                          "true": "The observed result establishes the stage completion condition."
+                        },
+                        "instructions": "Does the tool result satisfy the current stage completion condition?",
+                        "question_id": "stage_result_satisfies_completion",
+                        "type": "noul"
+                      }
+                    ],
+                    "action_id": "action-aeedf521-d925-4c65-8370-e3c92d0a40be",
+                    "arguments": {
+                      "path": "fixture.txt",
+                      "step": "second"
+                    },
+                    "error": "",
+                    "result": {
+                      "affected_paths": [
+                        "fixture.txt"
+                      ],
+                      "source_ref": "fixture:effect:second",
+                      "verification": {
+                        "status": "verified"
+                      }
+                    },
+                    "status": "success",
+                    "subgoal_id": "second",
+                    "tool_id": "native.exact_text_edit"
+                  }
+                ],
+                "active_subgoal_id": "verify",
+                "bindings": {
+                  "verified_first": {
+                    "output_type": "verified_first",
+                    "subgoal_id": "first",
+                    "value": {
+                      "affected_paths": [
+                        "fixture.txt"
+                      ],
+                      "source_ref": "fixture:effect:first",
+                      "verification": {
+                        "status": "verified"
+                      }
+                    }
+                  },
+                  "verified_second": {
+                    "output_type": "verified_second",
+                    "subgoal_id": "second",
+                    "value": {
+                      "affected_paths": [
+                        "fixture.txt"
+                      ],
+                      "source_ref": "fixture:effect:second",
+                      "verification": {
+                        "status": "verified"
+                      }
+                    }
+                  }
+                },
+                "cancellation_pending": false,
+                "completed_subgoal_ids": [
+                  "first",
+                  "second"
+                ],
+                "evidence": {
+                  "entries": [
+                    {
+                      "acceptance_questions": [
+                        {
+                          "criteria": {
+                            "false": "The result is missing, failed, ambiguous, or does not establish the condition.",
+                            "true": "The observed result establishes the stage completion condition."
+                          },
+                          "instructions": "Does the tool result satisfy the current stage completion condition?",
+                          "question_id": "stage_result_satisfies_completion",
+                          "type": "noul"
+                        }
+                      ],
+                      "arguments": {
+                        "path": "fixture.txt",
+                        "step": "first"
+                      },
+                      "error": "",
+                      "evidence_ref": "tactical-action:action-e5975590-e331-46fb-aa09-351b92d41ab9",
+                      "phase_id": "rollback-phase",
+                      "progress_review": {
+                        "answers": {},
+                        "complete": true,
+                        "confidence": 0.99,
+                        "confident": true,
+                        "retry_approved": false
+                      },
+                      "result": {
+                        "affected_paths": [
+                          "fixture.txt"
+                        ],
+                        "source_ref": "fixture:effect:first",
+                        "verification": {
+                          "status": "verified"
+                        }
+                      },
+                      "retry_attempt": 0,
+                      "status": "success",
+                      "subgoal_id": "first",
+                      "tool_id": "native.exact_text_edit"
+                    },
+                    {
+                      "acceptance_questions": [
+                        {
+                          "criteria": {
+                            "false": "The result is missing, failed, ambiguous, or does not establish the condition.",
+                            "true": "The observed result establishes the stage completion condition."
+                          },
+                          "instructions": "Does the tool result satisfy the current stage completion condition?",
+                          "question_id": "stage_result_satisfies_completion",
+                          "type": "noul"
+                        }
+                      ],
+                      "arguments": {
+                        "path": "fixture.txt",
+                        "step": "second"
+                      },
+                      "error": "",
+                      "evidence_ref": "tactical-action:action-aeedf521-d925-4c65-8370-e3c92d0a40be",
+                      "phase_id": "rollback-phase",
+                      "progress_review": {
+                        "answers": {},
+                        "complete": true,
+                        "confidence": 0.99,
+                        "confident": true,
+                        "retry_approved": false
+                      },
+                      "result": {
+                        "affected_paths": [
+                          "fixture.txt"
+                        ],
+                        "source_ref": "fixture:effect:second",
+                        "verification": {
+                          "status": "verified"
+                        }
+                      },
+                      "retry_attempt": 0,
+                      "status": "success",
+                      "subgoal_id": "second",
+                      "tool_id": "native.exact_text_edit"
+                    }
+                  ]
+                },
+                "phase": {
+                  "acceptance_criteria": [],
+                  "authorized_capabilities": [
+                    "native.exact_text_edit",
+                    "native.read"
+                  ],
+                  "created_at": "2026-10-22T16:10:28.747796+00:00",
+                  "criterion_ids": [],
+                  "curated_tool_ids": [],
+                  "mutation_scope": {
+                    "allow_external_effects": false,
+                    "allowed_paths": [
+                      "fixture.txt"
+                    ]
+                  },
+                  "objective": "Update two fixture fields and verify them.",
+                  "originating_decision": "",
+                  "phase_id": "rollback-phase",
+                  "schema_version": 3,
+                  "subgoals": [
+                    {
+                      "allowed_capabilities": [
+                        "native.exact_text_edit"
+                      ],
+                      "allowed_side_effects": [
+                        "project_mutation"
+                      ],
+                      "completion": {
+                        "expected": "verified",
+                        "field": "verification.status",
+                        "kind": "field_equals",
+                        "output_type": ""
+                      },
+                      "depends_on": [],
+                      "failure_policy": "stop",
+                      "objective": "Update fixture first",
+                      "required_output_type": "verified_first",
+                      "subgoal_id": "first"
+                    },
+                    {
+                      "allowed_capabilities": [
+                        "native.exact_text_edit"
+                      ],
+                      "allowed_side_effects": [
+                        "project_mutation"
+                      ],
+                      "completion": {
+                        "expected": "verified",
+                        "field": "verification.status",
+                        "kind": "field_equals",
+                        "output_type": ""
+                      },
+                      "depends_on": [
+                        "first"
+                      ],
+                      "failure_policy": "stop",
+                      "objective": "Update fixture second",
+                      "required_output_type": "verified_second",
+                      "subgoal_id": "second"
+                    },
+                    {
+                      "allowed_capabilities": [
+                        "native.read"
+                      ],
+                      "allowed_side_effects": [
+                        "read_only"
+                      ],
+                      "completion": {
+                        "expected": true,
+                        "field": "verified",
+                        "kind": "field_equals",
+                        "output_type": ""
+                      },
+                      "depends_on": [
+                        "second"
+                      ],
+                      "failure_policy": "stop",
+                      "objective": "Read both fields",
+                      "required_output_type": "observation",
+                      "subgoal_id": "verify"
+                    }
+                  ],
+                  "tool_curation_status": ""
+                },
+                "revealed_capabilities": [],
+                "revealed_tool_ids": [],
+                "status": "running",
+                "steering_pending": false,
+                "system_one_relevant_tool_ids": [],
+                "system_one_tool_registry_status": ""
+              },
+              "metadata": {
+                "memory_context_estimated_tokens": 89,
+                "memory_context_token_budget": 4096,
+                "memory_context_truncated": false,
+                "question_interrupt": {
+                  "answer": {
+                    "text": "fixture.txt; keep both constraints."
+                  },
+                  "choices": [],
+                  "created_at": "2026-10-22T16:10:28.747870+00:00",
+                  "expires_at": "2026-10-23T16:10:28.747870+00:00",
+                  "kind": "open_text",
+                  "message": "Which fixture file should I update?",
+                  "metadata": {
+                    "delivery": {}
+                  },
+                  "originator_user_id": "rollback-fixture",
+                  "project_id": "",
+                  "question_id": "09b66883-2d00-4f97-bca7-63434e001b23",
+                  "respondent_user_id": "rollback-fixture",
+                  "response_schema": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "text": {
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "text"
+                    ],
+                    "type": "object"
+                  },
+                  "run_id": "rollback-request",
+                  "status": "answered",
+                  "task_id": "rollback-task",
+                  "thread_id": "rollback-task",
+                  "updated_at": "2026-10-22T16:10:28.747870+00:00"
+                },
+                "system_one_tactical_reviews": [
+                  {
+                    "action_id": "action-e5975590-e331-46fb-aa09-351b92d41ab9",
+                    "answers": {},
+                    "complete": true,
+                    "confidence": 0.99,
+                    "confident": true,
+                    "duration_ms": 0,
+                    "model": "",
+                    "phase_id": "rollback-phase",
+                    "retry_approved": false,
+                    "status": "used",
+                    "subgoal_id": "first",
+                    "usage": {}
+                  },
+                  {
+                    "action_id": "action-aeedf521-d925-4c65-8370-e3c92d0a40be",
+                    "answers": {},
+                    "complete": true,
+                    "confidence": 0.99,
+                    "confident": true,
+                    "duration_ms": 0,
+                    "model": "",
+                    "phase_id": "rollback-phase",
+                    "retry_approved": false,
+                    "status": "used",
+                    "subgoal_id": "second",
+                    "usage": {}
+                  }
+                ],
+                "v3_context_projections": {
+                  "execution": {
+                    "budget": 24000,
+                    "loaded_skill_ids": [],
+                    "omitted_source_ids": [],
+                    "purpose": "execution",
+                    "recall": {
+                      "further_search_required": true,
+                      "result_count": 0,
+                      "status": "unavailable"
+                    },
+                    "records": [
+                      {
+                        "input_range": {
+                          "end_char": 86,
+                          "start_char": 0
+                        },
+                        "reason": "required",
+                        "source_id": "request:rollback-request",
+                        "source_type": "request",
+                        "status": "included",
+                        "tokens": 86,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 945,
+                          "start_char": 88
+                        },
+                        "reason": "required",
+                        "source_id": "policy:recall",
+                        "source_type": "policy",
+                        "status": "included",
+                        "tokens": 857,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 1058,
+                          "start_char": 947
+                        },
+                        "reason": "required",
+                        "source_id": "task:contract",
+                        "source_type": "task",
+                        "status": "included",
+                        "tokens": 111,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 1219,
+                          "start_char": 1060
+                        },
+                        "reason": "required",
+                        "source_id": "steering:0",
+                        "source_type": "steering",
+                        "status": "included",
+                        "tokens": 159,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 2011,
+                          "start_char": 1221
+                        },
+                        "reason": "required",
+                        "source_id": "task:question_interrupt",
+                        "source_type": "task",
+                        "status": "included",
+                        "tokens": 790,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 2738,
+                          "start_char": 2117
+                        },
+                        "reason": "selected_relevant",
+                        "source_id": "conversation:984f0f3b-12c1-46f4-8c81-1bafd6ee0be4",
+                        "source_type": "conversation",
+                        "status": "included",
+                        "tokens": 621,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 3369,
+                          "start_char": 2740
+                        },
+                        "reason": "selected_relevant",
+                        "source_id": "conversation:7f4285c8-0f57-41ec-aec1-4463bc87cdf3",
+                        "source_type": "conversation",
+                        "status": "included",
+                        "tokens": 629,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 3994,
+                          "start_char": 3371
+                        },
+                        "reason": "selected_relevant",
+                        "source_id": "conversation:8f12806f-035a-4fda-84c9-048189b345bb",
+                        "source_type": "conversation",
+                        "status": "included",
+                        "tokens": 623,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 2115,
+                          "start_char": 2013
+                        },
+                        "reason": "required",
+                        "source_id": "recall:status",
+                        "source_type": "recall",
+                        "status": "included",
+                        "tokens": 102,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 4063,
+                          "start_char": 3996
+                        },
+                        "reason": "selected_relevant",
+                        "source_id": "task:facts_md",
+                        "source_type": "task",
+                        "status": "included",
+                        "tokens": 67,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 4139,
+                          "start_char": 4065
+                        },
+                        "reason": "selected_relevant",
+                        "source_id": "task:memory_facts_md",
+                        "source_type": "task",
+                        "status": "included",
+                        "tokens": 74,
+                        "truncated": false
+                      },
+                      {
+                        "reason": "unavailable",
+                        "source_id": "recall:backend",
+                        "source_type": "recall",
+                        "status": "omitted",
+                        "tokens": 0
+                      }
+                    ],
+                    "selected_skill_ids": [],
+                    "separator_tokens": 20,
+                    "source_ids": [
+                      "request:rollback-request",
+                      "policy:recall",
+                      "task:contract",
+                      "steering:0",
+                      "task:question_interrupt",
+                      "recall:status",
+                      "conversation:984f0f3b-12c1-46f4-8c81-1bafd6ee0be4",
+                      "conversation:7f4285c8-0f57-41ec-aec1-4463bc87cdf3",
+                      "conversation:8f12806f-035a-4fda-84c9-048189b345bb",
+                      "task:facts_md",
+                      "task:memory_facts_md"
+                    ],
+                    "tokenizer": "conservative_utf8_bytes",
+                    "tokens": 4139
+                  },
+                  "review": {
+                    "budget": 24000,
+                    "loaded_skill_ids": [],
+                    "omitted_source_ids": [],
+                    "purpose": "review",
+                    "recall": {
+                      "result_count": 0
+                    },
+                    "records": [
+                      {
+                        "input_range": {
+                          "end_char": 86,
+                          "start_char": 0
+                        },
+                        "reason": "required",
+                        "source_id": "request:rollback-request",
+                        "source_type": "request",
+                        "status": "included",
+                        "tokens": 86,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 945,
+                          "start_char": 88
+                        },
+                        "reason": "required",
+                        "source_id": "policy:recall",
+                        "source_type": "policy",
+                        "status": "included",
+                        "tokens": 857,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 1058,
+                          "start_char": 947
+                        },
+                        "reason": "required",
+                        "source_id": "task:contract",
+                        "source_type": "task",
+                        "status": "included",
+                        "tokens": 111,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 1219,
+                          "start_char": 1060
+                        },
+                        "reason": "required",
+                        "source_id": "steering:0",
+                        "source_type": "steering",
+                        "status": "included",
+                        "tokens": 159,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 2011,
+                          "start_char": 1221
+                        },
+                        "reason": "required",
+                        "source_id": "task:question_interrupt",
+                        "source_type": "task",
+                        "status": "included",
+                        "tokens": 790,
+                        "truncated": false
+                      }
+                    ],
+                    "selected_skill_ids": [],
+                    "separator_tokens": 8,
+                    "source_ids": [
+                      "request:rollback-request",
+                      "policy:recall",
+                      "task:contract",
+                      "steering:0",
+                      "task:question_interrupt"
+                    ],
+                    "tokenizer": "conservative_utf8_bytes",
+                    "tokens": 2011
+                  }
+                },
+                "v3_history_selection": {
+                  "selected_exchange_ids": [
+                    "exchange:conversation:8f12806f-035a-4fda-84c9-048189b345bb",
+                    "exchange:conversation:7f4285c8-0f57-41ec-aec1-4463bc87cdf3",
+                    "exchange:conversation:984f0f3b-12c1-46f4-8c81-1bafd6ee0be4"
+                  ],
+                  "status": "ambiguous_or_unavailable"
+                }
+              }
+            },
+            "effects": [
+              [
+                "first",
+                "fixture.txt",
+                "done"
+              ],
+              [
+                "second",
+                "fixture.txt",
+                "done"
+              ]
+            ],
+            "integrity": "ok"
+          }
+        },
+        {
+          "stage": "off",
+          "returncode": 0,
+          "readback": {
+            "events": [
+              {
+                "sequence": 1,
+                "event_id": "8f12806f-035a-4fda-84c9-048189b345bb",
+                "owner_user_id": "rollback-fixture",
+                "project_id": "",
+                "memory_session_id": "",
+                "role": "user",
+                "content": "The household storage label for original is R-original.",
+                "source": "synthetic",
+                "source_message_id": "original",
+                "created_at": "2026-10-22T12:00:00+00:00",
+                "schema_version": 1,
+                "recorded_at": "2026-10-22T16:10:28.745427+00:00",
+                "observed_at": "2026-10-22T12:00:00+00:00",
+                "speaker_id": "rollback-fixture",
+                "visibility": "private",
+                "shared_with": [],
+                "provenance": "recorded"
+              },
+              {
+                "sequence": 2,
+                "event_id": "7f4285c8-0f57-41ec-aec1-4463bc87cdf3",
+                "owner_user_id": "rollback-fixture",
+                "project_id": "",
+                "memory_session_id": "",
+                "role": "user",
+                "content": "The household storage label for interrupted is R-interrupted.",
+                "source": "synthetic",
+                "source_message_id": "interrupted",
+                "created_at": "2026-10-22T12:00:00+00:00",
+                "schema_version": 1,
+                "recorded_at": "2026-10-22T16:10:29.083128+00:00",
+                "observed_at": "2026-10-22T12:00:00+00:00",
+                "speaker_id": "rollback-fixture",
+                "visibility": "private",
+                "shared_with": [],
+                "provenance": "recorded"
+              },
+              {
+                "sequence": 3,
+                "event_id": "984f0f3b-12c1-46f4-8c81-1bafd6ee0be4",
+                "owner_user_id": "rollback-fixture",
+                "project_id": "",
+                "memory_session_id": "",
+                "role": "user",
+                "content": "The household storage label for resumed is R-resumed.",
+                "source": "synthetic",
+                "source_message_id": "resumed",
+                "created_at": "2026-10-22T12:00:00+00:00",
+                "schema_version": 1,
+                "recorded_at": "2026-10-22T16:10:29.424520+00:00",
+                "observed_at": "2026-10-22T12:00:00+00:00",
+                "speaker_id": "rollback-fixture",
+                "visibility": "private",
+                "shared_with": [],
+                "provenance": "recorded"
+              },
+              {
+                "sequence": 4,
+                "event_id": "846b3d4e-e5d0-4ec9-8269-98f1c9017af8",
+                "owner_user_id": "rollback-fixture",
+                "project_id": "",
+                "memory_session_id": "",
+                "role": "user",
+                "content": "The household storage label for off is R-off.",
+                "source": "synthetic",
+                "source_message_id": "off",
+                "created_at": "2026-10-22T12:00:00+00:00",
+                "schema_version": 1,
+                "recorded_at": "2026-10-22T16:10:29.765620+00:00",
+                "observed_at": "2026-10-22T12:00:00+00:00",
+                "speaker_id": "rollback-fixture",
+                "visibility": "private",
+                "shared_with": [],
+                "provenance": "recorded"
+              }
+            ],
+            "knowledge": [
+              {
+                "memory_id": "memory:c9efb00e3ee41500bd1b73b3ede7d59a667f74e9d0dea8054e3acfdb46a8ab67",
+                "content": "The household storage label for off is R-off.",
+                "access": {
+                  "owner_user_id": "rollback-fixture",
+                  "visibility": "private",
+                  "shared_with": []
+                },
+                "sources": [
+                  {
+                    "source_id": "conversation:846b3d4e-e5d0-4ec9-8269-98f1c9017af8",
+                    "kind": "conversation",
+                    "access": {
+                      "owner_user_id": "rollback-fixture",
+                      "visibility": "private",
+                      "shared_with": []
+                    },
+                    "sequence": 4,
+                    "speaker_id": "rollback-fixture",
+                    "role": "user",
+                    "channel": "synthetic",
+                    "recorded_at": "2026-10-22T16:10:29.765620+00:00",
+                    "observed_at": "2026-10-22T12:00:00+00:00",
+                    "provenance": "recorded",
+                    "schema_version": 1
+                  }
+                ],
+                "recorded_at": "2026-10-22T16:10:29.767842+00:00",
+                "kind": "fact",
+                "subjects": [
+                  "off",
+                  "rollback-fixture"
+                ],
+                "claim_key": "rollback-fixture.off",
+                "basis": "user_report",
+                "quotes": [
+                  "The household storage label for off is R-off."
+                ],
+                "persistence": "contextual",
+                "status": "active",
+                "observed_at": "2026-10-22T12:00:00+00:00",
+                "valid_from": null,
+                "valid_until": null,
+                "supersedes": null,
+                "conflicts_with": [],
+                "project_id": "",
+                "task_id": null,
+                "schedule_id": null,
+                "commitment_state": null,
+                "dependencies": [],
+                "schema_version": 3
+              },
+              {
+                "memory_id": "memory:2ee8485180bbd4e93c3d95fa9f1462a74075f93436e38cdee92a9ccc238ed507",
+                "content": "The household storage label for resumed is R-resumed.",
+                "access": {
+                  "owner_user_id": "rollback-fixture",
+                  "visibility": "private",
+                  "shared_with": []
+                },
+                "sources": [
+                  {
+                    "source_id": "conversation:984f0f3b-12c1-46f4-8c81-1bafd6ee0be4",
+                    "kind": "conversation",
+                    "access": {
+                      "owner_user_id": "rollback-fixture",
+                      "visibility": "private",
+                      "shared_with": []
+                    },
+                    "sequence": 3,
+                    "speaker_id": "rollback-fixture",
+                    "role": "user",
+                    "channel": "synthetic",
+                    "recorded_at": "2026-10-22T16:10:29.424520+00:00",
+                    "observed_at": "2026-10-22T12:00:00+00:00",
+                    "provenance": "recorded",
+                    "schema_version": 1
+                  }
+                ],
+                "recorded_at": "2026-10-22T16:10:29.426266+00:00",
+                "kind": "fact",
+                "subjects": [
+                  "resumed",
+                  "rollback-fixture"
+                ],
+                "claim_key": "rollback-fixture.resumed",
+                "basis": "user_report",
+                "quotes": [
+                  "The household storage label for resumed is R-resumed."
+                ],
+                "persistence": "contextual",
+                "status": "active",
+                "observed_at": "2026-10-22T12:00:00+00:00",
+                "valid_from": null,
+                "valid_until": null,
+                "supersedes": null,
+                "conflicts_with": [],
+                "project_id": "",
+                "task_id": null,
+                "schedule_id": null,
+                "commitment_state": null,
+                "dependencies": [],
+                "schema_version": 3
+              },
+              {
+                "memory_id": "memory:f6949c35873a0cad05b6cb37f37c21a273b10a5b907aca1f11e2a994e51329c4",
+                "content": "The household storage label for interrupted is R-interrupted.",
+                "access": {
+                  "owner_user_id": "rollback-fixture",
+                  "visibility": "private",
+                  "shared_with": []
+                },
+                "sources": [
+                  {
+                    "source_id": "conversation:7f4285c8-0f57-41ec-aec1-4463bc87cdf3",
+                    "kind": "conversation",
+                    "access": {
+                      "owner_user_id": "rollback-fixture",
+                      "visibility": "private",
+                      "shared_with": []
+                    },
+                    "sequence": 2,
+                    "speaker_id": "rollback-fixture",
+                    "role": "user",
+                    "channel": "synthetic",
+                    "recorded_at": "2026-10-22T16:10:29.083128+00:00",
+                    "observed_at": "2026-10-22T12:00:00+00:00",
+                    "provenance": "recorded",
+                    "schema_version": 1
+                  }
+                ],
+                "recorded_at": "2026-10-22T16:10:29.084358+00:00",
+                "kind": "fact",
+                "subjects": [
+                  "interrupted",
+                  "rollback-fixture"
+                ],
+                "claim_key": "rollback-fixture.interrupted",
+                "basis": "user_report",
+                "quotes": [
+                  "The household storage label for interrupted is R-interrupted."
+                ],
+                "persistence": "contextual",
+                "status": "active",
+                "observed_at": "2026-10-22T12:00:00+00:00",
+                "valid_from": null,
+                "valid_until": null,
+                "supersedes": null,
+                "conflicts_with": [],
+                "project_id": "",
+                "task_id": null,
+                "schedule_id": null,
+                "commitment_state": null,
+                "dependencies": [],
+                "schema_version": 3
+              },
+              {
+                "memory_id": "memory:7e73c948ab1a2e21a70e35c667bd408a25021ec6176accc26dab8276c413808c",
+                "content": "The household storage label for original is R-original.",
+                "access": {
+                  "owner_user_id": "rollback-fixture",
+                  "visibility": "private",
+                  "shared_with": []
+                },
+                "sources": [
+                  {
+                    "source_id": "conversation:8f12806f-035a-4fda-84c9-048189b345bb",
+                    "kind": "conversation",
+                    "access": {
+                      "owner_user_id": "rollback-fixture",
+                      "visibility": "private",
+                      "shared_with": []
+                    },
+                    "sequence": 1,
+                    "speaker_id": "rollback-fixture",
+                    "role": "user",
+                    "channel": "synthetic",
+                    "recorded_at": "2026-10-22T16:10:28.745427+00:00",
+                    "observed_at": "2026-10-22T12:00:00+00:00",
+                    "provenance": "recorded",
+                    "schema_version": 1
+                  }
+                ],
+                "recorded_at": "2026-10-22T16:10:28.746201+00:00",
+                "kind": "fact",
+                "subjects": [
+                  "original",
+                  "rollback-fixture"
+                ],
+                "claim_key": "rollback-fixture.original",
+                "basis": "user_report",
+                "quotes": [
+                  "The household storage label for original is R-original."
+                ],
+                "persistence": "contextual",
+                "status": "active",
+                "observed_at": "2026-10-22T12:00:00+00:00",
+                "valid_from": null,
+                "valid_until": null,
+                "supersedes": null,
+                "conflicts_with": [],
+                "project_id": "",
+                "task_id": null,
+                "schedule_id": null,
+                "commitment_state": null,
+                "dependencies": [],
+                "schema_version": 3
+              }
+            ],
+            "task": {
+              "task_id": "rollback-task",
+              "message_id": "rollback-request",
+              "user": "rollback-fixture",
+              "project_id": "",
+              "memory_session_id": "",
+              "tag": "",
+              "correlation_id": "",
+              "goal": "Update two fixture fields and verify them.",
+              "facts_md": "- (none)",
+              "recent_conversation_md": "- rollback-fixture: \"Only update fixture.txt; preserve the original and do not send messages.\"",
+              "conversation_records": [
+                {
+                  "content": "Only update fixture.txt; preserve the original and do not send messages.",
+                  "speaker": "rollback-fixture"
+                }
+              ],
+              "conversation_history_md": "- (none)",
+              "memory_context_md": "- (none)",
+              "plan_json": "[\n  {\n    \"arguments\": {\n      \"question\": \"Which fixture file should I update?\",\n      \"question_kind\": \"open_text\"\n    },\n    \"execution\": {\n      \"exception\": \"\",\n      \"finished_at\": \"2026-10-22T16:10:29.081403+00:00\",\n      \"result\": {\n        \"answer\": {\n          \"text\": \"fixture.txt; keep both constraints.\"\n        },\n        \"answered_by\": \"rollback-fixture\",\n        \"question_id\": \"09b66883-2d00-4f97-bca7-63434e001b23\",\n        \"question_kind\": \"open_text\"\n      },\n      \"started_at\": \"2026-10-22T16:10:29.081403+00:00\",\n      \"status\": \"success\"\n    },\n    \"id\": \"question-answer-09b66883-2d00-4f97-bca7-63434e001b23\",\n    \"internal_state\": \"Question answer received.\",\n    \"tool_id\": \"native.ask_question\",\n    \"tool_name\": \"ask_question\"\n  }\n]",
+              "acceptance_criteria_md": "Only update fixture.txt; preserve the original and do not send messages.",
+              "acceptance_contract": {},
+              "memory_facts_md": "- (none)",
+              "updates_md": "- Task parked waiting for answer to question 09b66883-2d00-4f97-bca7-63434e001b23.\n- Question 09b66883-2d00-4f97-bca7-63434e001b23 answered; task resumed.",
+              "status": "running",
+              "outcome": null,
+              "check_verdict": null,
+              "check_reason": "",
+              "check_confidence": 0.0,
+              "check_evidence_refs": [],
+              "evidence_journal": [],
+              "check_new_message_count": 0,
+              "pdca_cycle_count": 0,
+              "intelligence_engine": "hierarchical_v3",
+              "intelligence_schema_version": 3,
+              "hierarchical_state": {
+                "actions": [
+                  {
+                    "acceptance_questions": [
+                      {
+                        "criteria": {
+                          "false": "The result is missing, failed, ambiguous, or does not establish the condition.",
+                          "true": "The observed result establishes the stage completion condition."
+                        },
+                        "instructions": "Does the tool result satisfy the current stage completion condition?",
+                        "question_id": "stage_result_satisfies_completion",
+                        "type": "noul"
+                      }
+                    ],
+                    "action_id": "action-e5975590-e331-46fb-aa09-351b92d41ab9",
+                    "arguments": {
+                      "path": "fixture.txt",
+                      "step": "first"
+                    },
+                    "error": "",
+                    "result": {
+                      "affected_paths": [
+                        "fixture.txt"
+                      ],
+                      "source_ref": "fixture:effect:first",
+                      "verification": {
+                        "status": "verified"
+                      }
+                    },
+                    "status": "success",
+                    "subgoal_id": "first",
+                    "tool_id": "native.exact_text_edit"
+                  },
+                  {
+                    "acceptance_questions": [
+                      {
+                        "criteria": {
+                          "false": "The result is missing, failed, ambiguous, or does not establish the condition.",
+                          "true": "The observed result establishes the stage completion condition."
+                        },
+                        "instructions": "Does the tool result satisfy the current stage completion condition?",
+                        "question_id": "stage_result_satisfies_completion",
+                        "type": "noul"
+                      }
+                    ],
+                    "action_id": "action-aeedf521-d925-4c65-8370-e3c92d0a40be",
+                    "arguments": {
+                      "path": "fixture.txt",
+                      "step": "second"
+                    },
+                    "error": "",
+                    "result": {
+                      "affected_paths": [
+                        "fixture.txt"
+                      ],
+                      "source_ref": "fixture:effect:second",
+                      "verification": {
+                        "status": "verified"
+                      }
+                    },
+                    "status": "success",
+                    "subgoal_id": "second",
+                    "tool_id": "native.exact_text_edit"
+                  },
+                  {
+                    "acceptance_questions": [
+                      {
+                        "criteria": {
+                          "false": "The result is missing, failed, ambiguous, or does not establish the condition.",
+                          "true": "The observed result establishes the stage completion condition."
+                        },
+                        "instructions": "Does the tool result satisfy the current stage completion condition?",
+                        "question_id": "stage_result_satisfies_completion",
+                        "type": "noul"
+                      }
+                    ],
+                    "action_id": "action-52804b84-fbde-40af-94c8-49044bed613b",
+                    "arguments": {
+                      "path": "fixture.txt"
+                    },
+                    "error": "",
+                    "result": {
+                      "source_ref": "fixture:readback",
+                      "values": [
+                        [
+                          "first",
+                          "fixture.txt",
+                          "done"
+                        ],
+                        [
+                          "second",
+                          "fixture.txt",
+                          "done"
+                        ]
+                      ],
+                      "verified": true
+                    },
+                    "status": "success",
+                    "subgoal_id": "verify",
+                    "tool_id": "native.read"
+                  }
+                ],
+                "active_subgoal_id": "verify",
+                "bindings": {
+                  "observation": {
+                    "output_type": "observation",
+                    "subgoal_id": "verify",
+                    "value": {
+                      "source_ref": "fixture:readback",
+                      "values": [
+                        [
+                          "first",
+                          "fixture.txt",
+                          "done"
+                        ],
+                        [
+                          "second",
+                          "fixture.txt",
+                          "done"
+                        ]
+                      ],
+                      "verified": true
+                    }
+                  },
+                  "verified_first": {
+                    "output_type": "verified_first",
+                    "subgoal_id": "first",
+                    "value": {
+                      "affected_paths": [
+                        "fixture.txt"
+                      ],
+                      "source_ref": "fixture:effect:first",
+                      "verification": {
+                        "status": "verified"
+                      }
+                    }
+                  },
+                  "verified_second": {
+                    "output_type": "verified_second",
+                    "subgoal_id": "second",
+                    "value": {
+                      "affected_paths": [
+                        "fixture.txt"
+                      ],
+                      "source_ref": "fixture:effect:second",
+                      "verification": {
+                        "status": "verified"
+                      }
+                    }
+                  }
+                },
+                "cancellation_pending": false,
+                "completed_subgoal_ids": [
+                  "first",
+                  "second",
+                  "verify"
+                ],
+                "evidence": {
+                  "entries": [
+                    {
+                      "acceptance_questions": [
+                        {
+                          "criteria": {
+                            "false": "The result is missing, failed, ambiguous, or does not establish the condition.",
+                            "true": "The observed result establishes the stage completion condition."
+                          },
+                          "instructions": "Does the tool result satisfy the current stage completion condition?",
+                          "question_id": "stage_result_satisfies_completion",
+                          "type": "noul"
+                        }
+                      ],
+                      "arguments": {
+                        "path": "fixture.txt",
+                        "step": "first"
+                      },
+                      "error": "",
+                      "evidence_ref": "tactical-action:action-e5975590-e331-46fb-aa09-351b92d41ab9",
+                      "phase_id": "rollback-phase",
+                      "progress_review": {
+                        "answers": {},
+                        "complete": true,
+                        "confidence": 0.99,
+                        "confident": true,
+                        "retry_approved": false
+                      },
+                      "result": {
+                        "affected_paths": [
+                          "fixture.txt"
+                        ],
+                        "source_ref": "fixture:effect:first",
+                        "verification": {
+                          "status": "verified"
+                        }
+                      },
+                      "retry_attempt": 0,
+                      "status": "success",
+                      "subgoal_id": "first",
+                      "tool_id": "native.exact_text_edit"
+                    },
+                    {
+                      "acceptance_questions": [
+                        {
+                          "criteria": {
+                            "false": "The result is missing, failed, ambiguous, or does not establish the condition.",
+                            "true": "The observed result establishes the stage completion condition."
+                          },
+                          "instructions": "Does the tool result satisfy the current stage completion condition?",
+                          "question_id": "stage_result_satisfies_completion",
+                          "type": "noul"
+                        }
+                      ],
+                      "arguments": {
+                        "path": "fixture.txt",
+                        "step": "second"
+                      },
+                      "error": "",
+                      "evidence_ref": "tactical-action:action-aeedf521-d925-4c65-8370-e3c92d0a40be",
+                      "phase_id": "rollback-phase",
+                      "progress_review": {
+                        "answers": {},
+                        "complete": true,
+                        "confidence": 0.99,
+                        "confident": true,
+                        "retry_approved": false
+                      },
+                      "result": {
+                        "affected_paths": [
+                          "fixture.txt"
+                        ],
+                        "source_ref": "fixture:effect:second",
+                        "verification": {
+                          "status": "verified"
+                        }
+                      },
+                      "retry_attempt": 0,
+                      "status": "success",
+                      "subgoal_id": "second",
+                      "tool_id": "native.exact_text_edit"
+                    },
+                    {
+                      "acceptance_questions": [
+                        {
+                          "criteria": {
+                            "false": "The result is missing, failed, ambiguous, or does not establish the condition.",
+                            "true": "The observed result establishes the stage completion condition."
+                          },
+                          "instructions": "Does the tool result satisfy the current stage completion condition?",
+                          "question_id": "stage_result_satisfies_completion",
+                          "type": "noul"
+                        }
+                      ],
+                      "arguments": {
+                        "path": "fixture.txt"
+                      },
+                      "error": "",
+                      "evidence_ref": "tactical-action:action-52804b84-fbde-40af-94c8-49044bed613b",
+                      "phase_id": "rollback-phase",
+                      "progress_review": {
+                        "answers": {},
+                        "complete": true,
+                        "confidence": 0.99,
+                        "confident": true,
+                        "retry_approved": false
+                      },
+                      "result": {
+                        "source_ref": "fixture:readback",
+                        "values": [
+                          [
+                            "first",
+                            "fixture.txt",
+                            "done"
+                          ],
+                          [
+                            "second",
+                            "fixture.txt",
+                            "done"
+                          ]
+                        ],
+                        "verified": true
+                      },
+                      "retry_attempt": 0,
+                      "status": "success",
+                      "subgoal_id": "verify",
+                      "tool_id": "native.read"
+                    }
+                  ]
+                },
+                "phase": {
+                  "acceptance_criteria": [],
+                  "authorized_capabilities": [
+                    "native.exact_text_edit",
+                    "native.read"
+                  ],
+                  "created_at": "2026-10-22T16:10:28.747796+00:00",
+                  "criterion_ids": [],
+                  "curated_tool_ids": [],
+                  "mutation_scope": {
+                    "allow_external_effects": false,
+                    "allowed_paths": [
+                      "fixture.txt"
+                    ]
+                  },
+                  "objective": "Update two fixture fields and verify them.",
+                  "originating_decision": "",
+                  "phase_id": "rollback-phase",
+                  "schema_version": 3,
+                  "subgoals": [
+                    {
+                      "allowed_capabilities": [
+                        "native.exact_text_edit"
+                      ],
+                      "allowed_side_effects": [
+                        "project_mutation"
+                      ],
+                      "completion": {
+                        "expected": "verified",
+                        "field": "verification.status",
+                        "kind": "field_equals",
+                        "output_type": ""
+                      },
+                      "depends_on": [],
+                      "failure_policy": "stop",
+                      "objective": "Update fixture first",
+                      "required_output_type": "verified_first",
+                      "subgoal_id": "first"
+                    },
+                    {
+                      "allowed_capabilities": [
+                        "native.exact_text_edit"
+                      ],
+                      "allowed_side_effects": [
+                        "project_mutation"
+                      ],
+                      "completion": {
+                        "expected": "verified",
+                        "field": "verification.status",
+                        "kind": "field_equals",
+                        "output_type": ""
+                      },
+                      "depends_on": [
+                        "first"
+                      ],
+                      "failure_policy": "stop",
+                      "objective": "Update fixture second",
+                      "required_output_type": "verified_second",
+                      "subgoal_id": "second"
+                    },
+                    {
+                      "allowed_capabilities": [
+                        "native.read"
+                      ],
+                      "allowed_side_effects": [
+                        "read_only"
+                      ],
+                      "completion": {
+                        "expected": true,
+                        "field": "verified",
+                        "kind": "field_equals",
+                        "output_type": ""
+                      },
+                      "depends_on": [
+                        "second"
+                      ],
+                      "failure_policy": "stop",
+                      "objective": "Read both fields",
+                      "required_output_type": "observation",
+                      "subgoal_id": "verify"
+                    }
+                  ],
+                  "tool_curation_status": ""
+                },
+                "revealed_capabilities": [],
+                "revealed_tool_ids": [
+                  "native.exact_text_edit",
+                  "native.read"
+                ],
+                "status": "phase_complete",
+                "steering_pending": false,
+                "system_one_relevant_tool_ids": [],
+                "system_one_tool_registry_status": ""
+              },
+              "metadata": {
+                "active_continuity_projection": {
+                  "omitted_records": [],
+                  "reserved_overflow": false,
+                  "schema_version": 1,
+                  "task_id": "rollback-task"
+                },
+                "conversation_projection": {
+                  "current_records_omitted": 0,
+                  "history_unavailable": false,
+                  "included_current_record_ids": [
+                    "task-working:rollback-task:conversation:0"
+                  ],
+                  "max_chars": 9000,
+                  "omitted": [
+                    {
+                      "reason": "continuity_window",
+                      "source_id": "conversation:8f12806f-035a-4fda-84c9-048189b345bb"
+                    }
+                  ],
+                  "omitted_current_record_ids": [],
+                  "requires_recall": true,
+                  "schema_version": 1,
+                  "window_may_have_earlier_events": false
+                },
+                "conversation_sources": [
+                  {
+                    "access": {
+                      "owner_user_id": "rollback-fixture",
+                      "shared_with": [],
+                      "visibility": "private"
+                    },
+                    "channel": "synthetic",
+                    "kind": "conversation",
+                    "observed_at": "2026-10-22T12:00:00+00:00",
+                    "provenance": "recorded",
+                    "recorded_at": "2026-10-22T16:10:29.083128+00:00",
+                    "role": "user",
+                    "schema_version": 1,
+                    "sequence": 2,
+                    "source_id": "conversation:7f4285c8-0f57-41ec-aec1-4463bc87cdf3",
+                    "speaker_id": "rollback-fixture"
+                  },
+                  {
+                    "access": {
+                      "owner_user_id": "rollback-fixture",
+                      "shared_with": [],
+                      "visibility": "private"
+                    },
+                    "channel": "synthetic",
+                    "kind": "conversation",
+                    "observed_at": "2026-10-22T12:00:00+00:00",
+                    "provenance": "recorded",
+                    "recorded_at": "2026-10-22T16:10:29.424520+00:00",
+                    "role": "user",
+                    "schema_version": 1,
+                    "sequence": 3,
+                    "source_id": "conversation:984f0f3b-12c1-46f4-8c81-1bafd6ee0be4",
+                    "speaker_id": "rollback-fixture"
+                  },
+                  {
+                    "access": {
+                      "owner_user_id": "rollback-fixture",
+                      "shared_with": [],
+                      "visibility": "private"
+                    },
+                    "channel": "synthetic",
+                    "kind": "conversation",
+                    "observed_at": "2026-10-22T12:00:00+00:00",
+                    "provenance": "recorded",
+                    "recorded_at": "2026-10-22T16:10:29.765620+00:00",
+                    "role": "user",
+                    "schema_version": 1,
+                    "sequence": 4,
+                    "source_id": "conversation:846b3d4e-e5d0-4ec9-8269-98f1c9017af8",
+                    "speaker_id": "rollback-fixture"
+                  }
+                ],
+                "memory_context_estimated_tokens": 89,
+                "memory_context_token_budget": 4096,
+                "memory_context_truncated": false,
+                "question_interrupt": {
+                  "answer": {
+                    "text": "fixture.txt; keep both constraints."
+                  },
+                  "choices": [],
+                  "created_at": "2026-10-22T16:10:28.747870+00:00",
+                  "expires_at": "2026-10-23T16:10:28.747870+00:00",
+                  "kind": "open_text",
+                  "message": "Which fixture file should I update?",
+                  "metadata": {
+                    "delivery": {}
+                  },
+                  "originator_user_id": "rollback-fixture",
+                  "project_id": "",
+                  "question_id": "09b66883-2d00-4f97-bca7-63434e001b23",
+                  "respondent_user_id": "rollback-fixture",
+                  "response_schema": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "text": {
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "text"
+                    ],
+                    "type": "object"
+                  },
+                  "run_id": "rollback-request",
+                  "status": "answered",
+                  "task_id": "rollback-task",
+                  "thread_id": "rollback-task",
+                  "updated_at": "2026-10-22T16:10:28.747870+00:00"
+                },
+                "system_one_tactical_reviews": [
+                  {
+                    "action_id": "action-e5975590-e331-46fb-aa09-351b92d41ab9",
+                    "answers": {},
+                    "complete": true,
+                    "confidence": 0.99,
+                    "confident": true,
+                    "duration_ms": 0,
+                    "model": "",
+                    "phase_id": "rollback-phase",
+                    "retry_approved": false,
+                    "status": "used",
+                    "subgoal_id": "first",
+                    "usage": {}
+                  },
+                  {
+                    "action_id": "action-aeedf521-d925-4c65-8370-e3c92d0a40be",
+                    "answers": {},
+                    "complete": true,
+                    "confidence": 0.99,
+                    "confident": true,
+                    "duration_ms": 0,
+                    "model": "",
+                    "phase_id": "rollback-phase",
+                    "retry_approved": false,
+                    "status": "used",
+                    "subgoal_id": "second",
+                    "usage": {}
+                  },
+                  {
+                    "action_id": "action-52804b84-fbde-40af-94c8-49044bed613b",
+                    "answers": {},
+                    "complete": true,
+                    "confidence": 0.99,
+                    "confident": true,
+                    "duration_ms": 0,
+                    "model": "",
+                    "phase_id": "rollback-phase",
+                    "retry_approved": false,
+                    "status": "used",
+                    "subgoal_id": "verify",
+                    "usage": {}
+                  }
+                ],
+                "v3_context_projections": {
+                  "execution": {
+                    "budget": 24000,
+                    "loaded_skill_ids": [],
+                    "omitted_source_ids": [],
+                    "purpose": "execution",
+                    "recall": {
+                      "further_search_required": true,
+                      "result_count": 0,
+                      "status": "unavailable"
+                    },
+                    "records": [
+                      {
+                        "input_range": {
+                          "end_char": 86,
+                          "start_char": 0
+                        },
+                        "reason": "required",
+                        "source_id": "request:rollback-request",
+                        "source_type": "request",
+                        "status": "included",
+                        "tokens": 86,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 945,
+                          "start_char": 88
+                        },
+                        "reason": "required",
+                        "source_id": "policy:recall",
+                        "source_type": "policy",
+                        "status": "included",
+                        "tokens": 857,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 1058,
+                          "start_char": 947
+                        },
+                        "reason": "required",
+                        "source_id": "task:contract",
+                        "source_type": "task",
+                        "status": "included",
+                        "tokens": 111,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 1219,
+                          "start_char": 1060
+                        },
+                        "reason": "required",
+                        "source_id": "steering:0",
+                        "source_type": "steering",
+                        "status": "included",
+                        "tokens": 159,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 2011,
+                          "start_char": 1221
+                        },
+                        "reason": "required",
+                        "source_id": "task:question_interrupt",
+                        "source_type": "task",
+                        "status": "included",
+                        "tokens": 790,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 2738,
+                          "start_char": 2117
+                        },
+                        "reason": "selected_relevant",
+                        "source_id": "conversation:984f0f3b-12c1-46f4-8c81-1bafd6ee0be4",
+                        "source_type": "conversation",
+                        "status": "included",
+                        "tokens": 621,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 3369,
+                          "start_char": 2740
+                        },
+                        "reason": "selected_relevant",
+                        "source_id": "conversation:7f4285c8-0f57-41ec-aec1-4463bc87cdf3",
+                        "source_type": "conversation",
+                        "status": "included",
+                        "tokens": 629,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 3994,
+                          "start_char": 3371
+                        },
+                        "reason": "selected_relevant",
+                        "source_id": "conversation:8f12806f-035a-4fda-84c9-048189b345bb",
+                        "source_type": "conversation",
+                        "status": "included",
+                        "tokens": 623,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 2115,
+                          "start_char": 2013
+                        },
+                        "reason": "required",
+                        "source_id": "recall:status",
+                        "source_type": "recall",
+                        "status": "included",
+                        "tokens": 102,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 4063,
+                          "start_char": 3996
+                        },
+                        "reason": "selected_relevant",
+                        "source_id": "task:facts_md",
+                        "source_type": "task",
+                        "status": "included",
+                        "tokens": 67,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 4139,
+                          "start_char": 4065
+                        },
+                        "reason": "selected_relevant",
+                        "source_id": "task:memory_facts_md",
+                        "source_type": "task",
+                        "status": "included",
+                        "tokens": 74,
+                        "truncated": false
+                      },
+                      {
+                        "reason": "unavailable",
+                        "source_id": "recall:backend",
+                        "source_type": "recall",
+                        "status": "omitted",
+                        "tokens": 0
+                      }
+                    ],
+                    "selected_skill_ids": [],
+                    "separator_tokens": 20,
+                    "source_ids": [
+                      "request:rollback-request",
+                      "policy:recall",
+                      "task:contract",
+                      "steering:0",
+                      "task:question_interrupt",
+                      "recall:status",
+                      "conversation:984f0f3b-12c1-46f4-8c81-1bafd6ee0be4",
+                      "conversation:7f4285c8-0f57-41ec-aec1-4463bc87cdf3",
+                      "conversation:8f12806f-035a-4fda-84c9-048189b345bb",
+                      "task:facts_md",
+                      "task:memory_facts_md"
+                    ],
+                    "tokenizer": "conservative_utf8_bytes",
+                    "tokens": 4139
+                  },
+                  "review": {
+                    "budget": 24000,
+                    "loaded_skill_ids": [],
+                    "omitted_source_ids": [],
+                    "purpose": "review",
+                    "recall": {
+                      "result_count": 0
+                    },
+                    "records": [
+                      {
+                        "input_range": {
+                          "end_char": 86,
+                          "start_char": 0
+                        },
+                        "reason": "required",
+                        "source_id": "request:rollback-request",
+                        "source_type": "request",
+                        "status": "included",
+                        "tokens": 86,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 945,
+                          "start_char": 88
+                        },
+                        "reason": "required",
+                        "source_id": "policy:recall",
+                        "source_type": "policy",
+                        "status": "included",
+                        "tokens": 857,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 1058,
+                          "start_char": 947
+                        },
+                        "reason": "required",
+                        "source_id": "task:contract",
+                        "source_type": "task",
+                        "status": "included",
+                        "tokens": 111,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 1219,
+                          "start_char": 1060
+                        },
+                        "reason": "required",
+                        "source_id": "steering:0",
+                        "source_type": "steering",
+                        "status": "included",
+                        "tokens": 159,
+                        "truncated": false
+                      },
+                      {
+                        "input_range": {
+                          "end_char": 2011,
+                          "start_char": 1221
+                        },
+                        "reason": "required",
+                        "source_id": "task:question_interrupt",
+                        "source_type": "task",
+                        "status": "included",
+                        "tokens": 790,
+                        "truncated": false
+                      }
+                    ],
+                    "selected_skill_ids": [],
+                    "separator_tokens": 8,
+                    "source_ids": [
+                      "request:rollback-request",
+                      "policy:recall",
+                      "task:contract",
+                      "steering:0",
+                      "task:question_interrupt"
+                    ],
+                    "tokenizer": "conservative_utf8_bytes",
+                    "tokens": 2011
+                  }
+                },
+                "v3_history_selection": {
+                  "selected_exchange_ids": [
+                    "exchange:conversation:8f12806f-035a-4fda-84c9-048189b345bb",
+                    "exchange:conversation:7f4285c8-0f57-41ec-aec1-4463bc87cdf3",
+                    "exchange:conversation:984f0f3b-12c1-46f4-8c81-1bafd6ee0be4"
+                  ],
+                  "status": "ambiguous_or_unavailable"
+                }
+              }
+            },
+            "effects": [
+              [
+                "first",
+                "fixture.txt",
+                "done"
+              ],
+              [
+                "second",
+                "fixture.txt",
+                "done"
+              ]
+            ],
+            "integrity": "ok"
+          }
+        }
+      ],
+      "checks": {
+        "exactly_once_completed_effects": true,
+        "integrity": true,
+        "original_events_preserved": true,
+        "original_knowledge_preserved": true,
+        "events_preserved:interrupted": true,
+        "knowledge_preserved:interrupted": true,
+        "events_preserved:resumed": true,
+        "knowledge_preserved:resumed": true,
+        "events_preserved:off": true,
+        "knowledge_preserved:off": true,
+        "provenance_resolves": true,
+        "compatible_writes_preserved": true,
+        "constraints_preserved": true,
+        "all_subgoals_completed": true,
+        "answered_question_preserved": true,
+        "original_ledger_prefixes_preserved": true,
+        "no_original_file_deletion": true,
+        "legacy_path_available": true,
+        "same_fixture_store": true
+      }
+    }
+  ],
+  "DC-5": "unassessed",
+  "limits": [
+    "Scripted System One and action selection; no live inference or independent review.",
+    "Crash after committed checkpoint only. Crash between effect and checkpoint requires reconciliation; no exactly-once claim for that window.",
+    "Exercises PhaseExecutor and stored question-answer recovery, not daemon transport restart."
+  ]
+}

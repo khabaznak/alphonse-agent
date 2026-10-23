@@ -119,6 +119,13 @@ path remains available for new decisions. Validate this with interrupted/resumed
 fixture tasks under DC-5 before default rollout. The local tests below exercise
 data preservation and flag-off availability, not that entire runtime gate.
 
+The [2026-10-22 held-out and rollback work](18-heldout-memory-rollback.md)
+now exercises abrupt process loss, stored question-answer recovery, committed
+partial progress and flag-off continuation on the same fixture stores, preserving
+new compatible conversation/knowledge writes. Its deterministic evidence does not
+establish live held-out qualification, full daemon restart or recovery from a crash
+between an external effect and its checkpoint. DC-5 remains unassessed.
+
 A disaster restore is a separate offline operation: restore to a recovery copy and
 reconcile newer records before selecting it. This utility deliberately does not
 merge databases or overwrite an installation.

@@ -1,0 +1,57 @@
+{
+  "date": "2026-10-22",
+  "revision": "9eb8482ca76093fee839d647f09c0e0af2a8dff5",
+  "dirty_patch_sha256": "7f9ad1a7c3a56113c1fcd01817d2bfd08e5cfcf4f20c0e62a851cf8324a8d0e3",
+  "focused": {
+    "command": ".venv/bin/python -m pytest tests/test_heldout_memory.py tests/test_paired_memory.py tests/test_memory_migration.py -q",
+    "result": "196 passed in 5.82s"
+  },
+  "full_suite": {
+    "command": ".venv/bin/python -m pytest -q --tb=short",
+    "result": "2 failed, 1118 passed in 15.01s",
+    "failure_identities": [
+      "tests/test_project_provenance_waiting.py::test_new_conversation_creates_protected_home_project",
+      "tests/test_project_provenance_waiting.py::test_independent_message_receives_exact_turns_ahead_notice"
+    ],
+    "disposition": "Both identities are unchanged from evidence/dc1-2026-10-20/README.md: projectless ingress creates no protected home project; queue-notice assertion remains unreached. No new failures; neither counted as passed."
+  },
+  "rollback": {
+    "command": ".venv/bin/python -m alphonse.agent_v2.evaluation.memory_rollback --output docs/v3-hierarchical-capd/evidence/dc5-2026-10-22/rollback.json",
+    "result": "pass",
+    "crash_exit_code": 73,
+    "completed_effects_per_scenario": 2,
+    "scenarios": 2,
+    "scripted_decisions": true
+  },
+  "heldout": {
+    "distinct_tasks": 100,
+    "template_families": 10,
+    "repetitions_per_arm": 20,
+    "scheduled_measured_arm_runs": 4000,
+    "scheduled_warmups": 200,
+    "inference_collected": false,
+    "corpus_sha256": "547c0ce06c27d452fdb0f9760a533eead396f3a27d39548166c5d34d87d09fd4",
+    "manifest_sha256": "1ccc85484a702733aa088327c480fbed76ec801bdb979df88740a01e7f767fb5",
+    "source_validation": "pass"
+  },
+  "gates": {
+    "DC-5": "unassessed",
+    "owner_decision": "unassessed",
+    "rollout_accepted": false
+  },
+  "sha256": {
+    "alphonse/agent_v2/evaluation/heldout_memory.py": "28c710cffc536081fd3b7c301c73439feb66043f9b8b39eb422814fbb6248a96",
+    "alphonse/agent_v2/evaluation/memory_rollback.py": "cf4bb3aa131de4af777458491d92faf33fd004bc5896e401f94a0c5a3faf02a5",
+    "alphonse/agent_v2/evaluation/paired_fixture.py": "ce341d642802ff675c367b84338d870bf7c279e3bf8f9b8bb070c6b50be757bd",
+    "alphonse/agent_v2/evaluation/paired_memory.py": "8b65c075361108e7eeaecaf6236fbb1af9703ca142584575585dbe036e45aa1c",
+    "alphonse/agent_v2/evaluation/paired_oracles.py": "07797bfdef348ef8d5b57839198d23525044c9b4b572fc4e8661ebd4127acffa",
+    "tests/fixtures/memory_replay/heldout_v1.json": "1123424eff8b5b6f88bc133280c99b874275e6a891f148bab80b17ce064863e8",
+    "tests/fixtures/memory_replay/heldout_v1.sha256": "9b14cf0040bce60f068343a4ebd710f61cf3dd87af15309e2eb841d17985a238",
+    "tests/test_heldout_memory.py": "7a05700aed101404774c2ae26cc6c4b874b38bb3c8dccd07b1ea22aa7b56c799"
+  },
+  "preparation_failure_dispositions": [
+    "Private-source fixture ID collision corrected before inference or final corpus freeze.",
+    "Required missing schedule now explicitly fails common outcome helper; detailed schedule read-back remains in runner.",
+    "No failed live trials replaced or runtime tuned on held-out answers."
+  ]
+}

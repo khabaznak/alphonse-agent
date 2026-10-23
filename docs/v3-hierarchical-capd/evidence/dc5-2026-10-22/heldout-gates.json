@@ -1,0 +1,478 @@
+{
+  "experiment_kind": "heldout_comparison",
+  "gates": {
+    "DC-0": "invalid",
+    "DC-1": "unassessed",
+    "DC-2": "unassessed",
+    "DC-3": "unassessed",
+    "DC-4": "unassessed",
+    "DC-5": "invalid"
+  },
+  "invalid_reason": "no_provider_inference_collected",
+  "complete": false,
+  "expected_arm_runs": 4200,
+  "recorded_arm_runs": 0,
+  "measured_arm_runs": 0,
+  "failures_including_warmup": [],
+  "candidate_failures_including_warmup": [],
+  "historical_instances": 0,
+  "irrelevant_instances": 0,
+  "independent_human_review": "unassessed",
+  "rollout_accepted": false,
+  "usage": {
+    "system_two_calls": 0,
+    "jev_calls": 0,
+    "native_tool_calls": 0
+  },
+  "limits": [
+    "DC-2 requires independent full-response/trace review; regex diagnostics cannot pass it.",
+    "DC-1 qualification belongs to #24; repeated comparisons and human review belong to #25.",
+    "Provider usage is retained per call; missing usage is unavailable, never zero."
+  ],
+  "heldout": {
+    "arms": {
+      "legacy": {
+        "distinct_tasks": 100,
+        "measured_trials": 0,
+        "task_outcome_diagnostic": {
+          "passed": 0,
+          "total": 100,
+          "rate": 0.0,
+          "wilson95": [
+            3.469446951953614e-18,
+            0.03699349820698568
+          ]
+        },
+        "verified_effect_tasks": {
+          "passed": 0,
+          "total": 90,
+          "rate": 0.0,
+          "wilson95": [
+            0,
+            0.04093562556432678
+          ]
+        },
+        "safe_outcome_tasks": {
+          "passed": 0,
+          "total": 10,
+          "rate": 0.0,
+          "wilson95": [
+            0,
+            0.2775327998628892
+          ]
+        },
+        "source_recall": {
+          "passed": 0,
+          "total": 0,
+          "rate": null,
+          "wilson95": null
+        },
+        "recall_by_category": {
+          "access_boundaries": {
+            "passed": 0,
+            "total": 0,
+            "rate": null,
+            "wilson95": null
+          },
+          "backend_failure": {
+            "passed": 0,
+            "total": 0,
+            "rate": null,
+            "wilson95": null
+          },
+          "conflicting_evidence": {
+            "passed": 0,
+            "total": 0,
+            "rate": null,
+            "wilson95": null
+          },
+          "continuity": {
+            "passed": 0,
+            "total": 0,
+            "rate": null,
+            "wilson95": null
+          },
+          "current_evidence": {
+            "passed": 0,
+            "total": 0,
+            "rate": null,
+            "wilson95": null
+          },
+          "english": {
+            "passed": 0,
+            "total": 0,
+            "rate": null,
+            "wilson95": null
+          },
+          "explicit_recall": {
+            "passed": 0,
+            "total": 0,
+            "rate": null,
+            "wilson95": null
+          },
+          "implicit_recall": {
+            "passed": 0,
+            "total": 0,
+            "rate": null,
+            "wilson95": null
+          },
+          "spanish": {
+            "passed": 0,
+            "total": 0,
+            "rate": null,
+            "wilson95": null
+          },
+          "stale_evidence": {
+            "passed": 0,
+            "total": 0,
+            "rate": null,
+            "wilson95": null
+          }
+        },
+        "historical_instances": 0,
+        "irrelevant_instances": 0,
+        "irrelevant_fraction": 0,
+        "calls": {
+          "model_calls": null,
+          "jev_calls": null,
+          "tool_calls": null
+        },
+        "latency_samples_ms": [],
+        "instrumentation_complete": true,
+        "p95_ms": null,
+        "median_ms": null,
+        "per_case_p95_ms": {
+          "heldout-current_evidence-01": null,
+          "heldout-current_evidence-02": null,
+          "heldout-current_evidence-03": null,
+          "heldout-current_evidence-04": null,
+          "heldout-current_evidence-05": null,
+          "heldout-current_evidence-06": null,
+          "heldout-current_evidence-07": null,
+          "heldout-current_evidence-08": null,
+          "heldout-current_evidence-09": null,
+          "heldout-current_evidence-10": null,
+          "heldout-explicit_recall-01": null,
+          "heldout-explicit_recall-02": null,
+          "heldout-explicit_recall-03": null,
+          "heldout-explicit_recall-04": null,
+          "heldout-explicit_recall-05": null,
+          "heldout-explicit_recall-06": null,
+          "heldout-explicit_recall-07": null,
+          "heldout-explicit_recall-08": null,
+          "heldout-explicit_recall-09": null,
+          "heldout-explicit_recall-10": null,
+          "heldout-implicit_recall-01": null,
+          "heldout-implicit_recall-02": null,
+          "heldout-implicit_recall-03": null,
+          "heldout-implicit_recall-04": null,
+          "heldout-implicit_recall-05": null,
+          "heldout-implicit_recall-06": null,
+          "heldout-implicit_recall-07": null,
+          "heldout-implicit_recall-08": null,
+          "heldout-implicit_recall-09": null,
+          "heldout-implicit_recall-10": null,
+          "heldout-english-01": null,
+          "heldout-english-02": null,
+          "heldout-english-03": null,
+          "heldout-english-04": null,
+          "heldout-english-05": null,
+          "heldout-english-06": null,
+          "heldout-english-07": null,
+          "heldout-english-08": null,
+          "heldout-english-09": null,
+          "heldout-english-10": null,
+          "heldout-spanish-01": null,
+          "heldout-spanish-02": null,
+          "heldout-spanish-03": null,
+          "heldout-spanish-04": null,
+          "heldout-spanish-05": null,
+          "heldout-spanish-06": null,
+          "heldout-spanish-07": null,
+          "heldout-spanish-08": null,
+          "heldout-spanish-09": null,
+          "heldout-spanish-10": null,
+          "heldout-continuity-01": null,
+          "heldout-continuity-02": null,
+          "heldout-continuity-03": null,
+          "heldout-continuity-04": null,
+          "heldout-continuity-05": null,
+          "heldout-continuity-06": null,
+          "heldout-continuity-07": null,
+          "heldout-continuity-08": null,
+          "heldout-continuity-09": null,
+          "heldout-continuity-10": null,
+          "heldout-conflicting_evidence-01": null,
+          "heldout-conflicting_evidence-02": null,
+          "heldout-conflicting_evidence-03": null,
+          "heldout-conflicting_evidence-04": null,
+          "heldout-conflicting_evidence-05": null,
+          "heldout-conflicting_evidence-06": null,
+          "heldout-conflicting_evidence-07": null,
+          "heldout-conflicting_evidence-08": null,
+          "heldout-conflicting_evidence-09": null,
+          "heldout-conflicting_evidence-10": null,
+          "heldout-stale_evidence-01": null,
+          "heldout-stale_evidence-02": null,
+          "heldout-stale_evidence-03": null,
+          "heldout-stale_evidence-04": null,
+          "heldout-stale_evidence-05": null,
+          "heldout-stale_evidence-06": null,
+          "heldout-stale_evidence-07": null,
+          "heldout-stale_evidence-08": null,
+          "heldout-stale_evidence-09": null,
+          "heldout-stale_evidence-10": null,
+          "heldout-access_boundaries-01": null,
+          "heldout-access_boundaries-02": null,
+          "heldout-access_boundaries-03": null,
+          "heldout-access_boundaries-04": null,
+          "heldout-access_boundaries-05": null,
+          "heldout-access_boundaries-06": null,
+          "heldout-access_boundaries-07": null,
+          "heldout-access_boundaries-08": null,
+          "heldout-access_boundaries-09": null,
+          "heldout-access_boundaries-10": null,
+          "heldout-backend_failure-01": null,
+          "heldout-backend_failure-02": null,
+          "heldout-backend_failure-03": null,
+          "heldout-backend_failure-04": null,
+          "heldout-backend_failure-05": null,
+          "heldout-backend_failure-06": null,
+          "heldout-backend_failure-07": null,
+          "heldout-backend_failure-08": null,
+          "heldout-backend_failure-09": null,
+          "heldout-backend_failure-10": null
+        }
+      },
+      "candidate": {
+        "distinct_tasks": 100,
+        "measured_trials": 0,
+        "task_outcome_diagnostic": {
+          "passed": 0,
+          "total": 100,
+          "rate": 0.0,
+          "wilson95": [
+            3.469446951953614e-18,
+            0.03699349820698568
+          ]
+        },
+        "verified_effect_tasks": {
+          "passed": 0,
+          "total": 90,
+          "rate": 0.0,
+          "wilson95": [
+            0,
+            0.04093562556432678
+          ]
+        },
+        "safe_outcome_tasks": {
+          "passed": 0,
+          "total": 10,
+          "rate": 0.0,
+          "wilson95": [
+            0,
+            0.2775327998628892
+          ]
+        },
+        "source_recall": {
+          "passed": 0,
+          "total": 0,
+          "rate": null,
+          "wilson95": null
+        },
+        "recall_by_category": {
+          "access_boundaries": {
+            "passed": 0,
+            "total": 0,
+            "rate": null,
+            "wilson95": null
+          },
+          "backend_failure": {
+            "passed": 0,
+            "total": 0,
+            "rate": null,
+            "wilson95": null
+          },
+          "conflicting_evidence": {
+            "passed": 0,
+            "total": 0,
+            "rate": null,
+            "wilson95": null
+          },
+          "continuity": {
+            "passed": 0,
+            "total": 0,
+            "rate": null,
+            "wilson95": null
+          },
+          "current_evidence": {
+            "passed": 0,
+            "total": 0,
+            "rate": null,
+            "wilson95": null
+          },
+          "english": {
+            "passed": 0,
+            "total": 0,
+            "rate": null,
+            "wilson95": null
+          },
+          "explicit_recall": {
+            "passed": 0,
+            "total": 0,
+            "rate": null,
+            "wilson95": null
+          },
+          "implicit_recall": {
+            "passed": 0,
+            "total": 0,
+            "rate": null,
+            "wilson95": null
+          },
+          "spanish": {
+            "passed": 0,
+            "total": 0,
+            "rate": null,
+            "wilson95": null
+          },
+          "stale_evidence": {
+            "passed": 0,
+            "total": 0,
+            "rate": null,
+            "wilson95": null
+          }
+        },
+        "historical_instances": 0,
+        "irrelevant_instances": 0,
+        "irrelevant_fraction": 0,
+        "calls": {
+          "model_calls": null,
+          "jev_calls": null,
+          "tool_calls": null
+        },
+        "latency_samples_ms": [],
+        "instrumentation_complete": true,
+        "p95_ms": null,
+        "median_ms": null,
+        "per_case_p95_ms": {
+          "heldout-current_evidence-01": null,
+          "heldout-current_evidence-02": null,
+          "heldout-current_evidence-03": null,
+          "heldout-current_evidence-04": null,
+          "heldout-current_evidence-05": null,
+          "heldout-current_evidence-06": null,
+          "heldout-current_evidence-07": null,
+          "heldout-current_evidence-08": null,
+          "heldout-current_evidence-09": null,
+          "heldout-current_evidence-10": null,
+          "heldout-explicit_recall-01": null,
+          "heldout-explicit_recall-02": null,
+          "heldout-explicit_recall-03": null,
+          "heldout-explicit_recall-04": null,
+          "heldout-explicit_recall-05": null,
+          "heldout-explicit_recall-06": null,
+          "heldout-explicit_recall-07": null,
+          "heldout-explicit_recall-08": null,
+          "heldout-explicit_recall-09": null,
+          "heldout-explicit_recall-10": null,
+          "heldout-implicit_recall-01": null,
+          "heldout-implicit_recall-02": null,
+          "heldout-implicit_recall-03": null,
+          "heldout-implicit_recall-04": null,
+          "heldout-implicit_recall-05": null,
+          "heldout-implicit_recall-06": null,
+          "heldout-implicit_recall-07": null,
+          "heldout-implicit_recall-08": null,
+          "heldout-implicit_recall-09": null,
+          "heldout-implicit_recall-10": null,
+          "heldout-english-01": null,
+          "heldout-english-02": null,
+          "heldout-english-03": null,
+          "heldout-english-04": null,
+          "heldout-english-05": null,
+          "heldout-english-06": null,
+          "heldout-english-07": null,
+          "heldout-english-08": null,
+          "heldout-english-09": null,
+          "heldout-english-10": null,
+          "heldout-spanish-01": null,
+          "heldout-spanish-02": null,
+          "heldout-spanish-03": null,
+          "heldout-spanish-04": null,
+          "heldout-spanish-05": null,
+          "heldout-spanish-06": null,
+          "heldout-spanish-07": null,
+          "heldout-spanish-08": null,
+          "heldout-spanish-09": null,
+          "heldout-spanish-10": null,
+          "heldout-continuity-01": null,
+          "heldout-continuity-02": null,
+          "heldout-continuity-03": null,
+          "heldout-continuity-04": null,
+          "heldout-continuity-05": null,
+          "heldout-continuity-06": null,
+          "heldout-continuity-07": null,
+          "heldout-continuity-08": null,
+          "heldout-continuity-09": null,
+          "heldout-continuity-10": null,
+          "heldout-conflicting_evidence-01": null,
+          "heldout-conflicting_evidence-02": null,
+          "heldout-conflicting_evidence-03": null,
+          "heldout-conflicting_evidence-04": null,
+          "heldout-conflicting_evidence-05": null,
+          "heldout-conflicting_evidence-06": null,
+          "heldout-conflicting_evidence-07": null,
+          "heldout-conflicting_evidence-08": null,
+          "heldout-conflicting_evidence-09": null,
+          "heldout-conflicting_evidence-10": null,
+          "heldout-stale_evidence-01": null,
+          "heldout-stale_evidence-02": null,
+          "heldout-stale_evidence-03": null,
+          "heldout-stale_evidence-04": null,
+          "heldout-stale_evidence-05": null,
+          "heldout-stale_evidence-06": null,
+          "heldout-stale_evidence-07": null,
+          "heldout-stale_evidence-08": null,
+          "heldout-stale_evidence-09": null,
+          "heldout-stale_evidence-10": null,
+          "heldout-access_boundaries-01": null,
+          "heldout-access_boundaries-02": null,
+          "heldout-access_boundaries-03": null,
+          "heldout-access_boundaries-04": null,
+          "heldout-access_boundaries-05": null,
+          "heldout-access_boundaries-06": null,
+          "heldout-access_boundaries-07": null,
+          "heldout-access_boundaries-08": null,
+          "heldout-access_boundaries-09": null,
+          "heldout-access_boundaries-10": null,
+          "heldout-backend_failure-01": null,
+          "heldout-backend_failure-02": null,
+          "heldout-backend_failure-03": null,
+          "heldout-backend_failure-04": null,
+          "heldout-backend_failure-05": null,
+          "heldout-backend_failure-06": null,
+          "heldout-backend_failure-07": null,
+          "heldout-backend_failure-08": null,
+          "heldout-backend_failure-09": null,
+          "heldout-backend_failure-10": null
+        }
+      }
+    },
+    "template_families": 10,
+    "equal_repetitions": 20,
+    "threshold_breaches": [],
+    "performance_assessment": "unassessed",
+    "historical_v1_25_percent_target": "unassessed",
+    "actual_provider_usage_comparison": "unassessed",
+    "semantic_review": "unassessed",
+    "owner_decision": "unassessed",
+    "rollback": "separate evidence required",
+    "qualification": "unassessed",
+    "limitations": [
+      "Task scores require every declared repetition and fixture effects, but semantic human review is pending.",
+      "Wilson intervals describe observed counts; trials and template families are not independent population samples.",
+      "No recall denominator in self-contained/fault categories means not applicable, never perfect recall.",
+      "Frozen-v1 savings, DC-0 through DC-4, actual usage, rollback and owner acceptance remain separate requirements."
+    ]
+  }
+}

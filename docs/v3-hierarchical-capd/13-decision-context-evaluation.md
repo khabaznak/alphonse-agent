@@ -274,6 +274,13 @@ fixture registry, the original 22 cases plus 19 extensions, decision-local
 source/content-range oracles, fixture read-back, retained errors and conservative
 gate reports. No qualifying live comparison has been collected with this harness.
 
+The [2026-10-22 DC-5 preparation and rollback package](evidence/dc5-2026-10-22/README.md)
+freezes 100 held-out tasks across ten template families and exercises interrupted
+and resumed fixture rollback on the same current stores. Its source/effect oracles,
+equal-arm schedule and mechanical threshold report are described in
+[18-heldout-memory-rollback.md](18-heldout-memory-rollback.md). No held-out inference
+or independent semantic review has been collected; DC-5 remains unassessed.
+
 Before a qualifying rollout decision:
 
 1. Complete deterministic invariant qualification and failure dispositions (#24).

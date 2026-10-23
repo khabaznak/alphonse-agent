@@ -248,10 +248,12 @@ class BoundaryFixture(HouseholdFixture):
             raise PermissionError('outside_boundary_fixture')
         command = shlex.split(arguments.get('command', ''))
         if command == ['fixture-host', '--help']:
-            return {'exit_code': 0, 'stdout': 'Usage: fixture-host read sensor.study_temp|sensor.hall_7|sensor.guest_humidity|label; fixture-host write-label blue-bin. Reads query current fixture state.'}
+            extra = '|'.join(self.case.get('fixture_readings', {}))
+            return {'exit_code': 0, 'stdout': 'Usage: fixture-host read sensor.study_temp|sensor.hall_7|sensor.guest_humidity|label' + ('|' + extra if extra else '') + '; fixture-host write-label blue-bin. Reads query current fixture state.'}
         if len(command) == 3 and command[:2] == ['fixture-host', 'read']:
             values = {'sensor.study_temp': {'temperature_c': 24}, 'sensor.hall_7': {'battery_percent': 76},
                       'sensor.guest_humidity': {'humidity_percent': 47}, 'label': {'label': self.state['label']}}
+            values.update(self.case.get('fixture_readings', {}))
             if command[2] in values:
                 self.state['reads'].append(command[2])
                 return {'exit_code': 0, 'stdout': json.dumps({'entity_id': command[2], 'evidence_kind': 'fresh_fixture_read', **values[command[2]]})}
@@ -265,6 +267,10 @@ class BoundaryFixture(HouseholdFixture):
     def readback(self):
         state = deepcopy(self.state)
         state['schedules'] = [s.to_dict() for s in self.schedules.list_tasks(limit=100)]
+        if self.case.get('category'):
+            state['source_readback'] = {key: event.to_dict() if (event := self.store.read(
+                event_id=item['runtime_id'].removeprefix('conversation:'), requester_user_id=item['owner'])) else None
+                for key, item in self.sources.items() if item['runtime_id'].startswith('conversation:')}
         return state
 
     def guard(self, sections):
