@@ -2188,19 +2188,17 @@ class V2Daemon:
                 if not additional.resolved or additional.address is None or additional.address.alphonse_user_id != recipient:
                     raise RuntimeError("scheduled_reminder_recipient_unresolved")
                 origins.append(additional.address)
-        elif origins:
-            if origin is not None and origin not in origins:
-                origins.insert(0, origin)
-        elif not origins:
+        else:
             # Older self-reminders did not persist a recipient. Prefer the
-            # owner's current settings over the channel used to create them.
+            # owner's current settings even when they saved delivery channels.
+            # Keep explicitly saved destinations as additional copies.
             resolved = self.runtime.identity_resolver.resolve_outbound_address(
                 alphonse_user_id=task.owner_user_id,
             )
-            if resolved.resolved and resolved.address is not None:
-                origins.append(resolved.address)
-            elif origin is not None:
-                origins.append(origin)
+            if resolved.resolved and resolved.address is not None and resolved.address.alphonse_user_id == task.owner_user_id:
+                origins.insert(0, resolved.address)
+            elif origin is not None and origin not in origins:
+                origins.insert(0, origin)
         if not origins:
             raise RuntimeError("scheduled_reminder_delivery_unresolved")
         message = str(task.description or task.name or "Reminder").strip()

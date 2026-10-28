@@ -385,3 +385,42 @@ def test_self_reminder_without_registered_address_creates_no_schedule(tmp_path):
             "delivery_mode": "direct",
         })
     assert fixture.schedules.list_tasks() == []
+
+
+@pytest.mark.parametrize("user_id", ["fixture-admin", "fixture-mother"])
+def test_legacy_reminder_with_saved_destinations_also_uses_current_preference(tmp_path, user_id):
+    from datetime import datetime
+    from alphonse.agent_v2.core.io.outbox import SQLiteOutboundStore
+    from alphonse.agent_v2.daemon import V2Daemon
+
+    fixture = make_fixture(tmp_path, "mother-medication-reminder")
+    saved_address = fixture.context.identity_resolver.resolve_outbound_address(
+        alphonse_user_id=user_id,
+    ).address
+    scheduled = fixture.schedules.create_task(
+        owner_user_id=user_id, project_id="", name="TV", description="Leave now", prompt="TV",
+        schedule_kind="once", run_at="2026-10-21T18:40:00-06:00", delivery_mode="direct",
+        origin_channel={
+            "integration_id": "desktop", "provider_key": "desktop", "channel_target": user_id,
+            "alphonse_user_id": user_id, "delivery_channels": [saved_address.to_dict()],
+        },
+    )
+    fixture.users.bind_address(
+        user_id=user_id, integration_id="email", provider_key="email",
+        provider_user_id=user_id, channel_target=user_id + "@example.test",
+    )
+    occurrence = fixture.schedules.claim_due_occurrences(
+        worker_id="fixture-worker", now=datetime.fromisoformat(scheduled.next_run_at),
+    )[0]
+    outbox = SQLiteOutboundStore()
+    daemon = SimpleNamespace(runtime=SimpleNamespace(
+        identity_resolver=fixture.context.identity_resolver, outbox=outbox, conversation_store=fixture.store,
+    ))
+    first = V2Daemon._deliver_scheduled_reminder(daemon, occurrence)
+    assert first == V2Daemon._deliver_scheduled_reminder(daemon, occurrence)
+    messages = outbox.list()
+    assert len(messages) == 2
+    assert {message.channel_target for message in messages} == {
+        user_id + "@example.test", saved_address.channel_target,
+    }
+    assert all(message.audience_user_id == user_id for message in messages)
