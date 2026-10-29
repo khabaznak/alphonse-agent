@@ -20,7 +20,7 @@ class IntegrationConfigRecord:
     display_name: str
     enabled: bool
     config: dict[str, Any] = field(default_factory=dict)
-    secrets: dict[str, Any] = field(default_factory=dict)
+    secrets: dict[str, Any] = field(default_factory=dict, repr=False)
     created_at: str = ""
     updated_at: str = ""
 
