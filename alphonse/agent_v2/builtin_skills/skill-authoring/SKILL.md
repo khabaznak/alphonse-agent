@@ -54,7 +54,8 @@ Add resources only when they improve the actual workflow:
   reusable; completed household records belong outside the package.
 
 Use paths relative to the verified package root, independent of project or daemon
-cwd. See [resource authoring](references/resource-authoring.md) when adding code,
+cwd. Read supporting text with `native.skill_read` for the selected skill and its
+relative path. See [resource authoring](references/resource-authoring.md) when adding code,
 account/data access or changing an existing package's behavior.
 
 ## Review, validate and install

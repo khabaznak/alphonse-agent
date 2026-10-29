@@ -5,12 +5,13 @@ import re
 import pytest
 
 from alphonse.agent_v2.skills import SkillStore
-from alphonse.agent_v2.core.core import CoreLoopContext
+from alphonse.agent_v2.core.core import CoreLoopContext, ToolExecutionContext
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.intelligence.v3.context import (
     selected_skill_guidance, skill_candidates_for_curation,
 )
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
+from alphonse.agent_v2.skill_resources import read_resource
 
 
 STARTER_NAMES = {
@@ -51,13 +52,13 @@ def test_representative_selections_load_complete_composed_guidance(tmp_path, pro
     """Exercise activation with reviewed selection inputs, not a fake Jev classifier."""
     store = SkillStore(tmp_path / 'skills')
     context = CoreLoopContext(messages=InMemoryMessageQueue(), skill_store=store)
-    candidates = skill_candidates_for_curation(context)
+    task = TaskState(user='synthetic-member', project_id=None, goal=prompt)
+    candidates = skill_candidates_for_curation(context, task=task)
     assert {candidate['id'] for candidate in candidates} == {
         f'skill:{name}' for name in STARTER_NAMES
     }
     # Discovery provides concise activation descriptions, not full bodies/resources.
     assert all(c['description'] == store.get(c['id']).description for c in candidates)
-    task = TaskState(user='synthetic-member', project_id=None, goal=prompt)
     ids = [f'skill:{name}' for name in names]
     task.metadata['v3_skill_selection'] = {'selected_skill_ids': ids, 'primary_skill_ids': ids[:1]}
     guidance, loaded = selected_skill_guidance(task, context)
@@ -68,6 +69,16 @@ def test_representative_selections_load_complete_composed_guidance(tmp_path, pro
         assert record.directory in guidance
     if not ids:
         assert guidance == ''
+    if 'skill:skill-authoring' in ids:
+        relative = 'references/resource-authoring.md'
+        content = store.read_file('skill:skill-authoring', relative)
+        assert content not in guidance  # Supporting material is loaded on demand.
+        resource = read_resource(
+            {'skill_id': 'skill:skill-authoring', 'path': relative},
+            context=ToolExecutionContext(task=task, messages=context.messages), store=store,
+        )
+        assert resource['content'] == content
+        assert task.metadata['v3_skill_resource_reads']
 
 
 def test_third_party_package_roundtrip_without_registry_changes(tmp_path):
