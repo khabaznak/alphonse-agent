@@ -31,7 +31,7 @@ def test_installed_distribution_includes_nested_skill_resources(tmp_path):
     expected = {p.relative_to(fixture).as_posix(): p.read_bytes() for p in fixture.rglob('*') if p.is_file()}
     bundled = repository / 'alphonse/agent_v2/builtin_skills'
     starter_files = {p.relative_to(bundled).as_posix(): p.read_bytes() for p in bundled.rglob('*') if p.is_file()}
-    starter_names = {'family-coordination', 'meals-groceries', 'home-care',
+    starter_names = {'family-calendar', 'family-coordination', 'meals-groceries', 'home-care',
                      'household-administration', 'project-management', 'skill-authoring'}
     code = f'''
 from importlib.resources import files

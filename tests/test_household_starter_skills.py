@@ -15,7 +15,7 @@ from alphonse.agent_v2.skill_resources import read_resource
 
 
 STARTER_NAMES = {
-    'family-coordination', 'meals-groceries', 'home-care',
+    'family-calendar', 'family-coordination', 'meals-groceries', 'home-care',
     'household-administration', 'project-management', 'skill-authoring',
 }
 
@@ -46,6 +46,7 @@ def test_clean_store_validates_starters_and_linked_resources(tmp_path):
     ('Plan dinners around late practices.', ['meals-groceries', 'family-coordination']),
     ('Plan our kitchen renovation.', ['project-management', 'home-care']),
     ('Improve this upkeep skill with CSV import.', ['skill-authoring', 'home-care']),
+    ('Read our actual calendars before planning pickups.', ['family-calendar', 'family-coordination']),
     ('What is 2 + 2?', []),
 ])
 def test_representative_selections_load_complete_composed_guidance(tmp_path, prompt, names):
