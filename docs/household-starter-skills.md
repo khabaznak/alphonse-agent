@@ -1,9 +1,11 @@
 # Household starter skills
 
-A clean installation discovers six focused standard packages without an active
+A clean installation discovers seven focused standard packages without an active
 project or connected account. Product defaults live in
 `alphonse/agent_v2/builtin_skills/`:
 
+- **family-calendar:** configured Google Calendar events and availability, with
+  verified, explicitly authorized creation/update; see [setup and validation](family-calendar.md).
 - **family-coordination:** schedules, school logistics, chores and handoffs.
 - **meals-groceries:** practical menus, pantry-aware planning and shopping lists.
 - **home-care:** upkeep routines, safe observations and service preparation.
@@ -12,16 +14,16 @@ project or connected account. Product defaults live in
 - **skill-authoring:** reusable workflows and authorized package improvements,
   including scripts, references and assets without Artifact registration.
 
-The review boundary is deliberately small: these are reusable planning/workflow
-packages, not a general family persona or a promise of installed meal ordering,
-calendar, payment, AC-control or health-record services. All six provide activation
-descriptions, workflows, handling for missing information, examples and completion
-checks. Operational effects require an available native capability, intended member
-account/data selection, authorized effect scope and readback. No credentials, live
-household records, private preferences or machine-specific paths ship in them.
-See [ordinary AC skill acceptance](ac-skill-acceptance.md) for the disposable
-read/control scenario and optional real-device procedure. Health and Calendar
-execution acceptance remains in its separate issues.
+The initial six planning/workflow packages provide activation descriptions,
+workflows, missing-information handling, examples and completion checks.
+The explicitly adopted family-calendar package adds ordinary service scripts
+through the same standard package/binding/native execution facilities. Accounts
+still require trusted setup. Operational effects require an available native
+capability, intended member account/data selection, authorized effect scope and
+readback. No credentials, live household records, private preferences or
+machine-specific paths ship in these packages. See [ordinary AC skill acceptance](ac-skill-acceptance.md)
+for the disposable read/control scenario and optional real-device procedure. Meal
+ordering, payment and health-record execution remain separate workstreams.
 
 ## Add a third-party or household package
 
@@ -67,6 +69,8 @@ Jev makes bounded relevance judgments; System Two combines the selected guidance
 
 - “Plan next week's school pickups.” Family coordination; ask for actual dates,
   dismissal times, confirmed drivers and timezone before scheduling anything.
+- “Read our actual calendars before planning pickups.” Family calendar plus
+  family coordination; explicitly resolve actor/calendar access and dates first.
 - “Three quick dinners for four using rice.” Meals/groceries; clarify restrictions
   and usable stock, label assumptions and produce a menu plus consolidated list.
 - “Prepare an AC service visit and track its warranty.” Home care plus household
@@ -85,7 +89,7 @@ Jev makes bounded relevance judgments; System Two combines the selected guidance
   draft the list/checklist/invitation and identify the unavailable operation.
   Do not claim purchase, payment or notification.
 
-`tests/test_household_starter_skills.py` validates all six packages through the
+`tests/test_household_starter_skills.py` validates all seven packages through the
 store, verifies linked resources, activates representative single/composed
 selections without a project, and imports/exports a disposable third-party package
 without changing a registry. These deterministic tests check discovery/loading,
