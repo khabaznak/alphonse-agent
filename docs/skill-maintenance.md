@@ -115,3 +115,7 @@ Validation on the issue branch (baseline `fafe1216`):
   curation, obsolete Jev Choice triage, and the former combined admission/context
   call expectation. These unrelated baseline tests are preserved.
 - `git diff --check` passes. No live providers or household services were called.
+
+After integrating `main` at `41d5a63e` (issue #28 workflow reuse), the focused
+command above plus `tests/test_skill_reuse_acceptance.py` reports **246 passed,
+35 skipped**. The integration merge required no conflict resolution.
