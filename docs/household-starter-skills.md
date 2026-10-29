@@ -19,7 +19,9 @@ descriptions, workflows, handling for missing information, examples and completi
 checks. Operational effects require an available native capability, intended member
 account/data selection, authorized effect scope and readback. No credentials, live
 household records, private preferences or machine-specific paths ship in them.
-AC, health and Calendar execution acceptance remains in its separate issues.
+See [ordinary AC skill acceptance](ac-skill-acceptance.md) for the disposable
+read/control scenario and optional real-device procedure. Health and Calendar
+execution acceptance remains in its separate issues.
 
 ## Add a third-party or household package
 
