@@ -32,6 +32,23 @@ Use this skill when the user asks Alphonse to plan, organize, update, or review 
 
 Do not change lifecycle status without the owner's request or an explicit project workflow that authorizes the transition.
 
+## Missing information, operations and examples
+
+If scope, goals or ownership are missing, ask only for what changes the next
+action and label any draft assumptions. Ordinary household questions need no
+project; use this skill for a defined finite effort. Planning works without a
+connected account. Reminders, messages and external updates require available
+authorized capabilities and the intended account; report setup gaps and verify
+saved state before claiming an effect.
+
+- “Plan the kitchen renovation.” Clarify goals and constraints, identify dependencies
+  and completion evidence; combine home-care for upkeep/service preparation.
+- “Review our moving project.” Compare verified outcomes with configured goals,
+  distinguish blocked work from completed work and preserve the next action.
+
+Check that reported progress has evidence and that remaining work still maps to
+goals. Keep project records outside this reusable package.
+
 ## Directory structure
 
 - Use `directory_structure` in `project_config.json` as the project's declared layout.
