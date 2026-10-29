@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import json
 import selectors
 import signal
 import shutil
@@ -30,6 +31,9 @@ BASH_ARGUMENT_SCHEMA: dict[str, Any] = {
             "description": "Shell command to execute with bash.",
         },
         "artifact_id": {"type": "string", "description": "Optional registered resource from a selected skill. Validates access and availability, supplies its working directory, and exposes ALPHONSE_ARTIFACT_ENTRYPOINT and ALPHONSE_ARTIFACT_RUNTIME. Does not invoke a dedicated artifact tool or grant effects."},
+        "skill_id": {"type": "string", "description": "Selected skill whose actor-scoped bindings are requested. Does not grant execution or data access."},
+        "binding_names": {"type": "array", "items": {"type": "string"}, "minItems": 1, "uniqueItems": True,
+                          "description": "Explicit logical binding roles configured for this actor. Trusted scripts read ALPHONSE_SKILL_BINDINGS JSON from their process environment; never put credential values in commands."},
         "cwd": {
             "type": "string",
             "description": "Optional working directory.",
@@ -64,6 +68,9 @@ def build_bash_tool_definition() -> ToolDefinition:
             "Use it for direct filesystem, process, build, test, diagnostic, and artifact creation or repair work. "
             "Favor Bash alongside a relevant CLI-backed artifact when the phase may need to invoke its CLI directly, "
             "inspect or repair its implementation, or verify behavior outside the registered artifact adapter. "
+            "For configured accounts/data, supply skill_id and binding_names. The process receives ALPHONSE_SKILL_BINDINGS JSON; "
+            "credentials stay out of command arguments and known literal credentials are redacted from output. "
+            "Bash is trusted host execution, not a filesystem or credential sandbox. "
             "Do not use Bash for multi-tool orchestration or aggregation of tool results."
         ),
         argument_schema=dict(BASH_ARGUMENT_SCHEMA),
@@ -81,6 +88,32 @@ def build_bash_tool_definition() -> ToolDefinition:
 
 def execute_bash(arguments: dict[str, Any], *, context: ToolExecutionContext | None = None) -> dict[str, Any]:
     """Execute a bash command and return a JSON-safe result."""
+    from alphonse.agent_v2.skill_bindings import ExecutionBindings
+
+    prepared = ExecutionBindings({}, ())
+    if "skill_id" in arguments or "binding_names" in arguments:
+        skill_id = arguments.get("skill_id")
+        names = arguments.get("binding_names")
+        if not isinstance(skill_id, str) or not isinstance(names, list) or not names:
+            raise ValueError("skill_binding_arguments_required")
+        if context is None or context.skill_bindings is None:
+            raise ValueError("skill_binding_context_required")
+        selection = context.task.metadata.get("v3_skill_selection") or {}
+        if skill_id not in selection.get("selected_skill_ids", []):
+            raise PermissionError("skill_binding_skill_not_selected")
+        prepared = context.skill_bindings.prepare(actor_id=str(context.task.user or ""), skill_id=skill_id, names=names)
+    try:
+        return prepared.redact(_execute_bash(arguments, context=context, prepared=prepared))
+    except Exception:
+        if prepared.values:
+            raise RuntimeError("skill_binding_execution_failed") from None
+        raise
+
+
+def _execute_bash(arguments: dict[str, Any], *, context: ToolExecutionContext | None, prepared: Any) -> dict[str, Any]:
+    def output(value: Any) -> str:
+        return _truncate_output(prepared.redact(_coerce_output(value)))
+
     command = str(arguments.get("command") or "").strip()
     if not command:
         raise ValueError("bash_command_required")
@@ -101,10 +134,13 @@ def execute_bash(arguments: dict[str, Any], *, context: ToolExecutionContext | N
         cwd = resource["working_directory"]
     else:
         cwd = _resolve_cwd(arguments.get("cwd"), context=context)
-    environment = None
+    environment = dict(os.environ)
+    environment.pop("ALPHONSE_SKILL_BINDINGS", None)
     if resource:
-        environment = dict(os.environ, ALPHONSE_ARTIFACT_ENTRYPOINT=resource["resolved_entrypoint_path"],
+        environment = dict(environment, ALPHONSE_ARTIFACT_ENTRYPOINT=resource["resolved_entrypoint_path"],
                            ALPHONSE_ARTIFACT_RUNTIME=resource["runtime_path"], ALPHONSE_ARTIFACT_ROOT=resource["storage_root"])
+    if prepared.values:
+        environment["ALPHONSE_SKILL_BINDINGS"] = json.dumps(prepared.values, ensure_ascii=True)
     timeout_seconds = _coerce_timeout(arguments.get("timeout_seconds", resource["timeout_seconds"] if resource else None))
     if resource and timeout_seconds is not None:
         timeout_seconds = min(timeout_seconds, resource["timeout_seconds"])
@@ -124,8 +160,8 @@ def execute_bash(arguments: dict[str, Any], *, context: ToolExecutionContext | N
         stdout, stderr = _stop_process_group(process, exc)
         return {
             "exit_code": -1,
-            "stdout": _truncate_output(stdout),
-            "stderr": _truncate_output(stderr or f"Command timed out after {timeout_seconds:g} seconds."),
+            "stdout": output(stdout),
+            "stderr": output(stderr or f"Command timed out after {timeout_seconds:g} seconds."),
             "timed_out": True,
             "cwd": cwd,
             "timeout_seconds": timeout_seconds,
@@ -134,8 +170,8 @@ def execute_bash(arguments: dict[str, Any], *, context: ToolExecutionContext | N
 
     return {
         "exit_code": int(process.returncode),
-        "stdout": _truncate_output(stdout),
-        "stderr": _truncate_output(stderr),
+        "stdout": output(stdout),
+        "stderr": output(stderr),
         "timed_out": False,
         "cwd": cwd,
         "timeout_seconds": timeout_seconds,
