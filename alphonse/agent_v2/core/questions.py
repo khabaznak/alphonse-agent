@@ -746,6 +746,33 @@ def _record_question_answer_tool_result(
         "answered_by": question.respondent_user_id,
     }
     now = _now().isoformat()
+    if task.intelligence_engine == "hierarchical_v3":
+        state = task.hierarchical_state or {}
+        phase = state.get("phase") or {}
+        receipt = {
+            "evidence_ref": "question-answer:" + question.question_id,
+            "task_id": str(task.task_id or task.message_id or ""),
+            "phase_id": str(phase.get("phase_id") or "question-resume"),
+            "subgoal_id": str(state.get("active_subgoal_id") or "question-answer"),
+            "tool_id": "native.ask_question", "kind": "authenticated_question_answer",
+            "status": "success", "recorded_at": now,
+            "result": {**result, "question": question.message},
+        }
+        receipts = task.metadata.setdefault("v3_resumption_evidence", [])
+        if not any(item.get("evidence_ref") == receipt["evidence_ref"] for item in receipts):
+            receipts.append(receipt)
+        if phase.get("phase_id"):
+            history = task.metadata.setdefault("v3_phase_history", [])
+            source = next((item for item in reversed(history)
+                           if (item.get("phase") or {}).get("phase_id") == phase["phase_id"]), None)
+            if source is None:
+                # An answer can race the parked-phase history checkpoint.
+                source = {"phase": dict(phase), "record_kind": "question_answer_receipt",
+                          "evidence": {"entries": []}}
+                history.append(source)
+            entries = source.setdefault("evidence", {}).setdefault("entries", [])
+            if not any(item.get("evidence_ref") == receipt["evidence_ref"] for item in entries):
+                entries.append(dict(receipt))
     for index in range(len(calls) - 1, -1, -1):
         call = calls[index]
         if not isinstance(call, dict):
