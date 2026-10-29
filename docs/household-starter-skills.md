@@ -21,8 +21,9 @@ through the same standard package/binding/native execution facilities. Accounts
 still require trusted setup. Operational effects require an available native
 capability, intended member account/data selection, authorized effect scope and
 readback. No credentials, live household records, private preferences or
-machine-specific paths ship in these packages. Meal ordering, payment, AC-control
-and health-record execution remain separate capabilities/workstreams.
+machine-specific paths ship in these packages. See [ordinary AC skill acceptance](ac-skill-acceptance.md)
+for the disposable read/control scenario and optional real-device procedure. Meal
+ordering, payment and health-record execution remain separate workstreams.
 
 ## Add a third-party or household package
 
