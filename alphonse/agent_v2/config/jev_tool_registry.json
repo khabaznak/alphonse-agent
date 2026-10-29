@@ -97,6 +97,14 @@
         "false": "The user is creating or changing the reminder's schedule or content, or the request does not concern an existing reminder or its delivery destinations."
       }
     },
+    "native.skill_maintain": {
+      "type": "noul",
+      "instructions": "Does this request or phase need to repair or extend an existing skill package?",
+      "criteria": {
+        "true": "The requester authorized existing skill maintenance: inspect lifecycle status, add or repair scripts/references/assets, update operating instructions, test staged behavior and publish a recoverable household override. Include when an existing skill script fails and a scoped repair may be needed. Selection is relevance only; administrator, native capabilities, mutation scope, cancellation and data permissions remain deterministic checks.",
+        "false": "The request only uses a skill, drafts a new skill, asks a question, or needs live data/account changes rather than package maintenance. Individual skill scripts are resources, never independent tools."
+      }
+    },
     "native.skill_read": {
       "type": "noul",
       "instructions": "Does this request or phase need to inspect supporting resources of an activated skill?",

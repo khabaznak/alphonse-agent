@@ -347,6 +347,7 @@ def test_jev_native_registry_template_covers_every_out_of_box_tool() -> None:
         "native.scheduled_task",
         "native.scheduled_task_delivery",
         "native.skill_install",
+        "native.skill_maintain",
         "native.skill_read",
         "native.analyze_image",
         "native.web_search",

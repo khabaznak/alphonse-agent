@@ -175,6 +175,7 @@ def selected_skill_guidance(task: "TaskState", context: "CoreLoopContext", *, ma
             "Follow documented runtime/dependency/configuration checks before mutations; runtime and required_files are optional Bash preflight arguments. "
             "Quote paths and use explicit interpreters for non-executable scripts. Verify writes through readback. "
             "Keep live data and runtime output outside the reusable package; changing its instructions/code/resources invalidates the active revision pin. "
+            "Authorized native.skill_maintain publication advances this task's pin with an audit receipt and reloads complete instructions; other tasks require fresh selection. "
             "Skill selection and resource bindings do not grant permission for effects.\n\n"
             + base_instructions + "\n\n" + migration_guidance
         )
