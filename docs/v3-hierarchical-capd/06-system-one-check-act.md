@@ -100,3 +100,9 @@ the key or request contents.
 - 2026-09-20 — Extended Jev into Do with a static full-registry parallel Noul contract,
   phase-wide relevance selection, deterministic per-subgoal enforcement, System Two
   invocation composition, and a semantic inner-Do completion review.
+
+
+Legacy catalog tools and ID-based execution were retired by #37. See the
+[implemented migration and recovery contract](../skill-artifact-resources.md)
+for explicit preview/reconciliation, preserved files, actor-scoped bindings and rollback.
+Historical Artifact descriptions above describe pre-migration behavior only.

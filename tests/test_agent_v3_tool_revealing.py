@@ -136,7 +136,7 @@ def test_exact_mutation_requires_scope_and_subgoal_authorization() -> None:
     assert [item.tool_id for item in visible.tools] == ["native.exact_text_edit"]
 
 
-def test_trusted_artifact_does_not_require_native_side_effect_classification() -> None:
+def test_legacy_artifact_is_retired_even_when_old_phase_authorizes_it() -> None:
     subgoal = PhaseSubgoal(
         "temperature", "Read temperature", "temperature",
         allowed_capabilities=(Capability.DEVICE_CONTROL.value,),
@@ -148,7 +148,8 @@ def test_trusted_artifact_does_not_require_native_side_effect_classification() -
         TaskState(project_id="home"), _state(subgoal), subgoal, (tool,),
     )
 
-    assert [item.tool_id for item in result.tools] == ["artifact.lg"]
+    assert not result.tools
+    assert result.decisions[0].reason == "legacy_artifact_tool_retired"
 
 
 def test_integration_tool_requires_installed_integration_id() -> None:
@@ -156,7 +157,7 @@ def test_integration_tool_requires_installed_integration_id() -> None:
         "temperature", "Read temperature", "temperature",
         allowed_capabilities=(Capability.DEVICE_CONTROL.value,),
     )
-    tool = _descriptor("artifact.lg", Capability.DEVICE_CONTROL, integration_id="lg-client")
+    tool = _descriptor("native.device", Capability.DEVICE_CONTROL, integration_id="lg-client")
     state = _state(subgoal)
 
     hidden = ToolRevealPolicy().reveal(TaskState(project_id="home"), state, subgoal, (tool,))
@@ -165,7 +166,7 @@ def test_integration_tool_requires_installed_integration_id() -> None:
     )
 
     assert hidden.decisions[0].reason == "integration_unavailable"
-    assert [item.tool_id for item in visible.tools] == ["artifact.lg"]
+    assert [item.tool_id for item in visible.tools] == ["native.device"]
 
 
 def test_reveal_enforces_tool_count_and_schema_budgets() -> None:

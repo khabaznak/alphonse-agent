@@ -54,11 +54,11 @@ exporting skills with registered legacy artifacts is refused until reconciled.
 
 ## Migration coordination
 
-Issue #38 implements package management independently of legacy migration #37.
-Legacy artifact management panels and IPC remain available and are labelled as
-legacy. Their removal criterion stays open until #37 verifies migration and
-saved-reference compatibility. Neither successful UI verification nor closing
-the format/contract prerequisites authorizes deleting those paths early.
+Issue #37 verifies metadata-only migration and retires the legacy panel, normal
+catalog IPC, native registration tools and saved ID-based execution. Use
+`legacy_skill_migration` for explicit inventory/reconciliation/apply/rollback as
+documented in [legacy migration](skill-artifact-resources.md). Original files,
+access guards and provenance tombstones remain; new packages need no registration.
 
 Verification uses disposable packages only: management IPC authorization,
 customization, metadata validation/rollback, nested resources, binary handling,

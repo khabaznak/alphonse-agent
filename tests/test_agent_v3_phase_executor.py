@@ -292,7 +292,7 @@ def test_phase_executor_rejects_mutation_outside_phase_scope() -> None:
     assert calls == []
 
 
-def test_phase_executor_allows_trusted_artifact_in_read_only_subgoal() -> None:
+def test_phase_executor_rejects_saved_artifact_before_dispatch() -> None:
     calls: list[dict[str, Any]] = []
     registry = InMemoryToolRegistry()
     registry.register(_tool(
@@ -321,8 +321,10 @@ def test_phase_executor_allows_trusted_artifact_in_read_only_subgoal() -> None:
         CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry, system_one=_accept_successful_actions()),
     )
 
-    assert outcome.status == PhaseStatus.PHASE_COMPLETE
-    assert calls == [{"command": "status", "device_id": "aire-estudio"}]
+    assert outcome.status == PhaseStatus.BLOCKED
+    assert calls == []
+    assert state.actions[0].status == "failed"
+    assert "legacy_artifact_execution_retired" in state.actions[0].error
 
 
 def test_phase_executor_still_rejects_non_read_only_native_tool_in_read_only_subgoal() -> None:
@@ -578,21 +580,20 @@ def test_phase_executor_rejects_identical_action_after_jev_reports_no_progress()
     calls: list[dict[str, Any]] = []
     registry = InMemoryToolRegistry()
     registry.register(_tool(
-        "artifact.lg-client",
+        "native.fixture_read",
         lambda arguments: calls.append(dict(arguments)) or {"devices": [{"name": "Aire Estudio"}]},
-        read_only=False,
-        kind=ToolKind.ARTIFACT,
+        read_only=True,
     ))
     phase = PhasePlan(
         "temperature", "Read studio temperature",
         (PhaseSubgoal(
             "read-temperature", "Read studio temperature", "temperature",
-            allowed_capabilities=("artifact.lg-client",),
+            allowed_capabilities=("native.fixture_read",),
         ),),
-        authorized_capabilities=("artifact.lg-client",),
+        authorized_capabilities=("native.fixture_read",),
     )
     state = new_tactical_state(phase)
-    state.revealed_tool_ids = ["artifact.lg-client"]
+    state.revealed_tool_ids = ["native.fixture_read"]
 
     class Jev:
         def evaluate_tactical_progress(self, **_values):
@@ -605,8 +606,8 @@ def test_phase_executor_rejects_identical_action_after_jev_reports_no_progress()
             )
 
     outcome = PhaseExecutor(action_selector=_selector([
-        {"tool_id": "artifact.lg-client", "arguments": {"command": "status", "device_id": "aire"}},
-        {"tool_id": "artifact.lg-client", "arguments": {"command": "status", "device_id": "aire"}},
+        {"tool_id": "native.fixture_read", "arguments": {"command": "status", "device_id": "aire"}},
+        {"tool_id": "native.fixture_read", "arguments": {"command": "status", "device_id": "aire"}},
     ])).run(
         TaskState(user="alex"), state,
         CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry, system_one=Jev()),
@@ -628,14 +629,13 @@ def test_phase_executor_rejects_identical_action_after_jev_reports_no_progress()
     assert state.evidence.entries[1]["semantic_duplicate_of"] == state.actions[0].action_id
 
 
-def test_phase_executor_can_pivot_to_bash_after_incomplete_artifact_result() -> None:
+def test_phase_executor_can_pivot_to_bash_after_incomplete_native_result() -> None:
     calls: list[str] = []
     registry = InMemoryToolRegistry()
     registry.register(_tool(
-        "artifact.lg-client",
-        lambda _arguments: calls.append("artifact") or {"devices": [{"name": "Aire Estudio"}]},
-        read_only=False,
-        kind=ToolKind.ARTIFACT,
+        "native.fixture_read",
+        lambda _arguments: calls.append("native") or {"devices": [{"name": "Aire Estudio"}]},
+        read_only=True,
     ))
     registry.register(_tool(
         "native.bash",
@@ -646,12 +646,12 @@ def test_phase_executor_can_pivot_to_bash_after_incomplete_artifact_result() -> 
         "temperature", "Read studio temperature",
         (PhaseSubgoal(
             "read-temperature", "Read studio temperature", "temperature",
-            allowed_capabilities=("artifact.lg-client", "local_shell"),
+            allowed_capabilities=("native.fixture_read", "local_shell"),
         ),),
-        authorized_capabilities=("artifact.lg-client", "local_shell"),
+        authorized_capabilities=("native.fixture_read", "local_shell"),
     )
     state = new_tactical_state(phase)
-    state.revealed_tool_ids = ["artifact.lg-client", "native.bash"]
+    state.revealed_tool_ids = ["native.fixture_read", "native.bash"]
 
     class Jev:
         def evaluate_tactical_progress(self, **values):
@@ -664,7 +664,7 @@ def test_phase_executor_can_pivot_to_bash_after_incomplete_artifact_result() -> 
             )
 
     outcome = PhaseExecutor(action_selector=_selector([
-        {"tool_id": "artifact.lg-client", "arguments": {"command": "status", "device_id": "aire"}},
+        {"tool_id": "native.fixture_read", "arguments": {"command": "status", "device_id": "aire"}},
         {"tool_id": "native.bash", "arguments": {"command": "lg-client status aire"}},
     ])).run(
         TaskState(user="alex"), state,
@@ -672,5 +672,5 @@ def test_phase_executor_can_pivot_to_bash_after_incomplete_artifact_result() -> 
     )
 
     assert outcome.status == PhaseStatus.PHASE_COMPLETE
-    assert calls == ["artifact", "bash"]
+    assert calls == ["native", "bash"]
     assert [entry["progress_review"]["complete"] for entry in state.evidence.entries] == [False, True]

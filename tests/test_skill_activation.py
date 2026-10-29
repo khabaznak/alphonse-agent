@@ -153,8 +153,8 @@ def test_unavailable_and_changed_packages_do_not_silently_disappear(library):
 def test_legacy_private_resource_package_cannot_be_read_via_generic_skill_reader(library):
     skill = library.create_skill('fixture', 'Shared workflow', 'Use the workflow.')
     add_resource(skill, 'references/private.txt', 'PRIVATE')
-    resources = SimpleNamespace(store=SimpleNamespace(list=lambda: [SimpleNamespace(
-        skill_id=skill.skill_id, storage_kind='skill')]), can_use=lambda record, actor: False)
+    resources = SimpleNamespace(access_records=lambda: [SimpleNamespace(
+        skill_id=skill.skill_id, storage_kind='skill')], can_use=lambda record, actor: False)
     task = task_for(skill)
     with pytest.raises(PermissionError, match='private_legacy'):
         read_resource({'skill_id': skill.skill_id, 'path': 'references/private.txt'}, context=ToolExecutionContext(

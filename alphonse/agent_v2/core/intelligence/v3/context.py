@@ -156,24 +156,10 @@ def selected_skill_guidance(task: "TaskState", context: "CoreLoopContext", *, ma
         # Artifact sections may contain another household member's private
         # paths. Load only catalog-backed, authorized sections for this task.
         base_instructions = re.split(r"(?m)^## Artifact: ", skill.instructions)[0].rstrip()
-        resource_blocks = []
-        operating_blocks = []
-        if resources is not None:
-            for record in resources.store.list():
-                if record.skill_id != skill.skill_id or not resources.can_use(record, str(task.user or "")):
-                    continue
-                detail = resources.describe(record, str(task.user or ""))
-                operating = resources.skills.artifact_instructions(skill.skill_id, record.artifact_id)
-                resource_blocks.append(
-                    f"Artifact {record.artifact_id} ({record.name}):\n"
-                    f"Verified resource manifest: {json.dumps(detail, ensure_ascii=False)}\n"
-                    f"Registered argument schema: {json.dumps(record.argument_schema, ensure_ascii=False)}"
-                )
-                operating_blocks.append(f"Operating instructions for {record.artifact_id}:\n{operating}")
-        location_guidance = (
-            f"Shared artifact repository: {resources.repository_root}\n"
-            f"New artifact directory convention: {resources.repository_root}/{skill.skill_id.removeprefix('skill:')}/ARTIFACT_ID_WITHOUT_PREFIX/\n"
-        ) if resources is not None else ""
+        migration_guidance = ""
+        if resources is not None and context.skill_bindings is not None:
+            from alphonse.agent_v2.legacy_migration import LegacyMigration
+            migration_guidance = LegacyMigration(resources, context.skill_bindings).guidance(skill.skill_id, str(task.user or ""))
         block = (
             f"### {skill.name} (`{skill.skill_id}`)\n"
             f"Description: {skill.description}\n"
@@ -184,17 +170,13 @@ def selected_skill_guidance(task: "TaskState", context: "CoreLoopContext", *, ma
             "script documentation/source or text assets on demand, or operation=list to inspect a directory. "
             "Do not load all supporting files or live databases. Binary assets require an authorized media capability. "
             "If the answer needs a supporting resource, plan a skill_resources subgoal before responding. "
-            f"{location_guidance}"
             "Skill files resolve against the skill package directory, independently of the current project. "
             "Standard scripts need no registration: use native.bash with skill_id to resolve cwd from this installed package. "
             "Follow documented runtime/dependency/configuration checks before mutations; runtime and required_files are optional Bash preflight arguments. "
             "Quote paths and use explicit interpreters for non-executable scripts. Verify writes through readback. "
             "Keep live data and runtime output outside the reusable package; changing its instructions/code/resources invalidates the active revision pin. "
-            "Legacy Artifact programs resolve ONLY against their verified resource manifest. Use native.bash with artifact_id "
-            "and the registered runtime; never substitute the task project or daemon directory. "
-            "An unavailable resource is a registration/runtime problem, not a reason to search the current project. "
-            "Skill selection and resource manifests do not grant permission for effects.\n\n"
-            + "\n\n".join(resource_blocks) + "\n\n" + base_instructions + "\n\n" + "\n\n".join(operating_blocks)
+            "Skill selection and resource bindings do not grant permission for effects.\n\n"
+            + base_instructions + "\n\n" + migration_guidance
         )
         blocks.append(block)
         loaded_ids.append(skill.skill_id)

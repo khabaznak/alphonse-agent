@@ -254,3 +254,9 @@ this decision does not implement another registration system.
 The account/data policy and trusted execution delivery boundary are implemented
 in [skill bindings](skill-bindings.md) (#36). Package activation, environment
 resolution, management UI and legacy migration remain their separate workstreams.
+
+
+Legacy catalog tools and ID-based execution were retired by #37. See the
+[implemented migration and recovery contract](skill-artifact-resources.md)
+for explicit preview/reconciliation, preserved files, actor-scoped bindings and rollback.
+Historical Artifact descriptions above describe pre-migration behavior only.

@@ -208,12 +208,12 @@ def build_runtime_host(
     artifact_resources = ArtifactResources(artifact_store, skill_store, project_store, repository_root=user_store.artifacts_root, is_admin=user_store.is_admin)
     if user_store.workspace_root() is not None:
         artifact_resources.ensure_repository()
-    # Artifacts are skill-owned implementation details. They are never
-    # materialized as independently curated tools; skills describe when
-    # and how to use their registered resources through native.bash.
+    # Legacy rows remain solely for migration/provenance and privacy guards.
     schedule_store = schedule_store or ScheduledTaskStore()
     outbox = outbox or SQLiteOutboundStore()
     integration_store = integration_store or SQLiteIntegrationStore()
+    skill_bindings = SkillBindings(integration_store, user_store, skill_store)
+    artifact_resources.bindings = skill_bindings
     communication_thread_store = communication_thread_store or SQLiteCommunicationThreadStore()
     def _compact_memory(source: str) -> str:
         from alphonse.agent_v2.core.inference import InferencePurpose, InferenceRequest
@@ -315,7 +315,7 @@ def build_runtime_host(
         system_one=build_system_one_provider(system_one_settings_store.get()),
         skill_store=skill_store,
         artifact_resources=artifact_resources,
-        skill_bindings=SkillBindings(integration_store, user_store, skill_store),
+        skill_bindings=skill_bindings,
     )
     runtime = V2RuntimeHost(
         user=str(user or (user_store.admin_user().user_id if user_store.admin_user() else "local")).strip() or "local",

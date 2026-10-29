@@ -50,26 +50,12 @@ def register(setup, *, kind="shared", project=None, execution=None, instructions
     return store.get("artifact.fixture"), root
 
 
-@pytest.mark.parametrize("project_mode", ["none", "unrelated"])
-def test_selected_skill_executes_shared_artifact_independent_of_task_project_and_daemon_cwd(setup, tmp_path, monkeypatch, project_mode):
-    skills, skill, store, projects, resources = setup
+def test_saved_artifact_invocations_require_migration_and_replanning(setup):
+    _, _, _, _, _ = setup
     record, root = register(setup)
-    unrelated = projects.create_project(name="Other", owner_user_id="alex", root_path=str(tmp_path / "other"))
-    monkeypatch.chdir(tmp_path / "other")
-    task = TaskState(user="alex", project_id=unrelated.project_id if project_mode == "unrelated" else "",
-                     metadata={"v3_skill_selection": {"selected_skill_ids": [skill.skill_id]}})
-    context = CoreLoopContext(messages=InMemoryMessageQueue(), skill_store=skills, artifact_resources=resources)
-    text, loaded = selected_skill_guidance(task, context)
-    assert str(root / "reader.py") in text
-    assert "Read the fixture; never change it." in text
-    assert loaded == [skill.skill_id]
-    result = execute_bash({"artifact_id": record.artifact_id,
-                          "command": '"$ALPHONSE_ARTIFACT_RUNTIME" "$ALPHONSE_ARTIFACT_ENTRYPOINT"'},
-                         context=ToolExecutionContext(task=task, messages=InMemoryMessageQueue(), project_store=projects, artifact_resources=resources))
-    assert result["exit_code"] == 0
-    assert json.loads(result["stdout"]) == {"value": "42"}
-    assert result["cwd"] == str(root)
-    assert build_artifact_tool_definitions(store, projects) == []
+    with pytest.raises(ValueError, match="execution_retired"):
+        execute_bash({"artifact_id": record.artifact_id, "command": "touch unexpected"})
+    assert not (root / "unexpected").exists()
 
 
 def test_legacy_artifact_is_available_without_membership_in_storage_project(setup, tmp_path):
@@ -83,14 +69,9 @@ def test_legacy_artifact_is_available_without_membership_in_storage_project(setu
     assert resources.require_ready(record.artifact_id, "gaby", [skill.skill_id])["storage_root"] == str(root)
 
 
-def test_permissions_selection_and_disabled_checks_happen_before_shell_execution(setup):
+def test_legacy_disabled_resources_remain_unavailable_to_migration(setup):
     _, skill, store, _, resources = setup
     record, root = register(setup)
-    for actor, selected, error in [("gaby", [skill.skill_id], "access_denied"), ("alex", [], "skill_not_selected")]:
-        task = TaskState(user=actor, metadata={"v3_skill_selection": {"selected_skill_ids": selected}})
-        with pytest.raises(PermissionError, match=error):
-            execute_bash({"artifact_id": record.artifact_id, "command": "touch unauthorized"}, context=ToolExecutionContext(task=task, messages=InMemoryMessageQueue(), artifact_resources=resources))
-        assert not (root / "unauthorized").exists()
     store.set_enabled(record.artifact_id, False)
     with pytest.raises(ValueError, match="disabled"):
         resources.require_ready(record.artifact_id, "alex", [skill.skill_id])
@@ -257,25 +238,15 @@ def test_ipc_exposes_diagnostics_and_authorized_location_updates_without_touchin
     daemon = V2Daemon(runtime)
     workspace = daemon.ipc._dispatch({"method": "skills", "params": {"actor_user_id": "alex"}})
     owned = next(item for item in workspace["skills"] if item["id"] == skill.skill_id)
-    assert owned["artifacts"][0]["resource"]["status"] == "ready"
-    assert workspace["artifact_repository_root"] == str(tmp_path / "artifacts")
-    report = daemon.ipc._dispatch({"method": "reconcile_artifacts", "params": {"actor_user_id": "alex"}})
-    assert report["artifacts"][0]["reconciliation"] == "registered"
-    replacement = Path(skill.directory) / "replacement.py"
-    replacement.write_text("print('replacement')")
-    request = {"method": "relocate_artifact", "params": {"actor_user_id": "gaby", "artifact_id": record.artifact_id,
-               "storage_kind": "skill", "entrypoint_path": "replacement.py", "execution": {"runtime_path": sys.executable}}}
-    with pytest.raises(PermissionError, match="manager_required"):
-        daemon.ipc._dispatch(request)
-    request["params"]["actor_user_id"] = "alex"
-    updated = daemon.ipc._dispatch(request)["artifact"]
-    assert updated["resource"]["resolved_entrypoint_path"] == str(replacement)
-    daemon.update_artifact(actor_user_id="alex", artifact_id=record.artifact_id, name="New name", description="New description")
-    assert "New description" in skills.get(skill.skill_id).instructions
-    with pytest.raises(ValueError, match="skill_has_registered_artifacts"):
-        daemon.delete_skill(actor_user_id="alex", skill_id=skill.skill_id)
-    daemon.delete_artifact(actor_user_id="alex", artifact_id=record.artifact_id)
-    assert replacement.is_file() and (root / "reader.py").is_file()
+    assert owned["artifacts"] == []
+    assert workspace["legacy_migration_required"]
+    report = daemon.ipc._dispatch({"method": "legacy_skill_migration", "params": {"actor_user_id": "alex"}})
+    assert report["resources"][0]["reconciliation"] == "registered"
+    for method in ("artifacts", "reconcile_artifacts", "relocate_artifact", "delete_artifact"):
+        with pytest.raises(ValueError, match="catalog_retired"):
+            daemon.ipc._dispatch({"method": method, "params": {"actor_user_id": "alex", "artifact_id": record.artifact_id}})
+    assert (root / "reader.py").is_file()
+    assert (root / "reading.txt").read_text() == "42"
 
 
 def test_fresh_workspace_initializes_shared_repository_without_any_project(tmp_path):
@@ -313,7 +284,7 @@ def test_native_catalog_location_repair_preserves_schema_and_is_not_an_artifact_
     assert result["artifact"]["argument_schema"] == record.argument_schema
     assert (root / "reader.py").is_file()
     tools = build_native_tool_registry(artifact_store=store, skill_store=skills).list()
-    assert any(item.tool_id == "native.artifact_metadata_update" for item in tools)
+    assert not any(item.tool_id in {"native.artifact_metadata_update", "native.skill_artifact_register"} for item in tools)
     assert not any(item.tool_id.startswith("artifact.") for item in tools)
 
 

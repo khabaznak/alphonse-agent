@@ -736,6 +736,17 @@ class V2Daemon:
         ))
         return saved.to_dict()
 
+    def legacy_skill_migration(self, *, actor_user_id: str, operation: str = "preview", artifact_id: str = "", review_token: str = "", instructions: str = "", location: dict | None = None) -> dict[str, Any]:
+        from alphonse.agent_v2.legacy_migration import LegacyMigration
+        migration = LegacyMigration(self.runtime.core.artifact_resources, self.runtime.core.skill_bindings)
+        if operation == "preview":
+            return {"resources": migration.preview(actor_user_id)}
+        if operation == "apply":
+            return migration.apply(actor_user_id, artifact_id, review_token=review_token, instructions=instructions, location=location)
+        if operation == "rollback":
+            return migration.rollback(actor_user_id, artifact_id)
+        raise ValueError("legacy_migration_operation_invalid")
+
     def list_artifacts(self, *, actor_user_id: str) -> list[dict[str, Any]]:
         actor = str(actor_user_id or "").strip()
         if not actor: raise PermissionError("artifact_manager_required")
@@ -793,12 +804,13 @@ class V2Daemon:
                  "lifecycle": self.runtime.skill_store.management_status(item.skill_id),
                  "bindings": self.runtime.core.skill_bindings.management_status(actor_id=actor_user_id, skill_id=item.skill_id),
                  "files": self.runtime.skill_store.files(item.skill_id),
-                 "artifacts": [{**record.to_dict(), "resource": self.runtime.core.artifact_resources.describe(record, actor_user_id)} for record in artifacts if record.skill_id == item.skill_id]}
+                 "artifacts": []}
                 for item in self.runtime.skill_store.list_skills()
             ],
             "diagnostics": list(self.runtime.skill_store.diagnostics),
-            "unassigned_artifacts": [record.to_dict() for record in artifacts if not record.skill_id],
-            "artifact_repository_root": str(self.runtime.core.artifact_resources.repository_root),
+            "unassigned_artifacts": [],
+            "legacy_migration_required": any(
+                not self._legacy_migration_complete(item.artifact_id) for item in artifacts),
         }
 
     def attach_artifact_to_skill(self, *, actor_user_id: str, artifact_id: str, skill_id: str, instructions: str) -> dict[str, Any]:
@@ -866,30 +878,40 @@ class V2Daemon:
         installed = self.runtime.skill_store.install_directory(source_directory, owner=actor_user_id)
         return installed.candidate()
 
+    def _legacy_migration_complete(self, identity: str) -> bool:
+        from alphonse.agent_v2.legacy_migration import LegacyMigration
+        migration = LegacyMigration(self.runtime.core.artifact_resources, self.runtime.core.skill_bindings)
+        journal = migration._journal(identity)
+        return bool(journal and journal[0] == "complete")
+
+    def _require_legacy_lifecycle_safe(self, skill_id: str) -> None:
+        from alphonse.agent_v2.legacy_migration import LegacyMigration
+        migration = LegacyMigration(self.runtime.core.artifact_resources, self.runtime.core.skill_bindings)
+        for item in self.runtime.core.artifact_resources.access_records():
+            if item.skill_id != skill_id:
+                continue
+            journal = migration._journal(item.artifact_id)
+            if item.storage_kind == "skill" or not journal or journal[0] != "complete":
+                raise ValueError("skill_has_retained_legacy_resources: reconcile migration/embedded data before lifecycle changes")
+
     def export_skill(self, *, actor_user_id: str, skill_id: str, destination_directory: str) -> dict[str, str]:
         self._require_admin(actor_user_id)
         canonical_id = "skill:" + str(skill_id).removeprefix("skill:")
-        if any(item.skill_id == canonical_id for item in self.runtime.artifact_store.list()):
-            raise ValueError("skill_has_registered_artifacts: reconcile legacy resources before portable export")
+        self._require_legacy_lifecycle_safe(canonical_id)
         return {"directory": str(self.runtime.skill_store.export_directory(skill_id, destination_directory))}
 
     def replace_skill(self, *, actor_user_id: str, skill_id: str, source_directory: str, resolution: str = "") -> dict[str, str]:
         self._require_admin(actor_user_id)
         canonical_id = "skill:" + str(skill_id).removeprefix("skill:")
-        if any(item.skill_id == canonical_id for item in self.runtime.artifact_store.list()):
-            raise ValueError("skill_has_registered_artifacts: preserve and unregister its artifacts before replacing the package")
+        self._require_legacy_lifecycle_safe(canonical_id)
         replaced = self.runtime.skill_store.replace_directory(skill_id, source_directory, resolution=resolution)
         return replaced.candidate()
 
     def delete_skill(self, *, actor_user_id: str, skill_id: str) -> dict[str, str]:
         self._require_admin(actor_user_id)
         canonical_id = "skill:" + str(skill_id).removeprefix("skill:")
-        if any(item.skill_id == canonical_id for item in self.runtime.artifact_store.list()):
-            raise ValueError("skill_has_registered_artifacts: unregister its artifacts first; program and data files must be preserved")
+        self._require_legacy_lifecycle_safe(canonical_id)
         deleted = self.runtime.skill_store.uninstall(skill_id)
-        for artifact in self.runtime.artifact_store.list():
-            if artifact.skill_id == deleted:
-                self.runtime.artifact_store.set_skill(artifact.artifact_id, "")
         return {"deleted": deleted}
 
     def web_tools_settings(self, *, actor_user_id: str) -> dict[str, object]:
