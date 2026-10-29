@@ -177,8 +177,17 @@ def _curate_request_tools(
     if attachment_manifest and any(item.get("mime_type", "").startswith("image/") for item in attachment_manifest):
         if any(tool.tool_id == "native.analyze_image" for tool in tools):
             selected_ids.add("native.analyze_image")
+    # Preserve the generic reader as an option for activated packages. This
+    # does not authorize a phase or grant package/data access; reveal and the
+    # reader still enforce those checks. Scripts themselves never enter curation.
+    required_native_ids = []
+    if task.metadata.get("v3_skill_selection", {}).get("loaded_skill_ids"):
+        if any(tool.tool_id == "native.skill_read" for tool in tools):
+            selected_ids.add("native.skill_read")
+            required_native_ids.append("native.skill_read")
     curated = tuple(tool for tool in tools if tool.tool_id in selected_ids)
-    metadata = {"status": "used", "candidate_count": len(tools), **selection.to_metadata()}
+    metadata = {"status": "used", "candidate_count": len(tools), **selection.to_metadata(),
+                "required_native_tool_ids": required_native_ids}
     history = task.metadata.setdefault("system_one_request_tool_selections", [])
     if not isinstance(history, list):
         history = []
@@ -279,6 +288,7 @@ def _strategic_plan_instructions() -> str:
         "do not describe a project-root search as a whole-machine search. Ask for a location when the intended scope is "
         "unclear. Use shell commands to create or edit files only in the authorized task scope and verify changes with "
         "read-back or diff checks. "
+        "Authorize skill_resources to inspect activated package references, assets or script documentation on demand with native.skill_read. Resource reads need no shell execution or side effects. "
         "Authorize local_shell for direct CLI, filesystem, process, build, test, diagnostic, and skill-owned program work. "
         "Standard package scripts use native.bash with skill_id and documented commands; no artifact registration or per-script schema is required. Plan dependency/configuration checks before writes and readback after them. On resume reconcile uncertain or prior mutations before repeating any write. Bash is trusted host access, not a filesystem sandbox. "
         "Legacy Artifacts are owned by skills, independently of the task project, and are not independently callable tools. Use each selected skill's verified resource manifest and native.bash artifact_id for execution; never resolve an artifact entrypoint against the task project or daemon directory. Follow the selected skill's "
@@ -396,6 +406,10 @@ def _curate_phase_tools(task, phase: PhasePlan, tools, context, *, task_context:
         )
         if image_analysis_required and any(tool.tool_id == "native.analyze_image" for tool in tools):
             selected_ids.append("native.analyze_image")
+        if any(Capability.SKILL_RESOURCES.value in subgoal.allowed_capabilities for subgoal in phase.subgoals):
+            if any(tool.tool_id == "native.skill_read" for tool in tools):
+                selected_ids.append("native.skill_read")
+                metadata["required_native_tool_ids"] = ["native.skill_read"]
         selected = tuple(dict.fromkeys(selected_ids))
         curated = replace(phase, curated_tool_ids=selected, tool_curation_status="used")
     _record_tool_curation(task, phase, metadata)

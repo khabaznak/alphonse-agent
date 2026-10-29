@@ -245,9 +245,9 @@ def _skill_root(skill_id: str, context: ToolExecutionContext | None) -> Path:
     selection = context.task.metadata.get("v3_skill_selection") or {}
     if skill_id not in selection.get("selected_skill_ids", []):
         raise PermissionError("bash_skill_not_selected")
-    skill = store.get(skill_id)
-    if skill is None:
-        raise ValueError("bash_skill_unavailable: restore or reactivate the installed package")
+    from alphonse.agent_v2.skill_resources import require_skill, pin_skill
+    skill = require_skill(context.task, store, skill_id)
+    pin_skill(context.task, skill, context.artifact_resources)
     root = Path(skill.directory).resolve(strict=True)
     if not root.is_dir() or not (root / "SKILL.md").is_file():
         raise ValueError("bash_skill_package_unavailable")

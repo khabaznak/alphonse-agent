@@ -98,6 +98,14 @@ class SkillStore:
             return None
         return self._read_skill(bundled)
 
+    def can_use(self, skill_id: str, actor: str) -> bool:
+        """Installed packages are household-shared; private data is not package content.
+
+        Called again at activation/read time, independently of Jev selection.
+        More restrictive library policies can override this method.
+        """
+        return bool(str(actor or "").strip())
+
     def files(self, skill_id: str) -> list[dict[str, Any]]:
         record = self.get(skill_id)
         if record is None:
@@ -458,9 +466,13 @@ def _validate_package_files(root: Path) -> None:
 
 def _skill_path(root: Path, relative_path: str) -> Path:
     value = str(relative_path or "").strip()
-    if not value or Path(value).is_absolute():
+    if not value or Path(value).is_absolute() or ".." in Path(value).parts:
         raise ValueError("skill_file_path_invalid")
-    path = (root / value).resolve()
+    candidate = root / value
+    if any((root / Path(*Path(value).parts[:index])).is_symlink()
+           for index in range(len(Path(value).parts) + 1)):
+        raise ValueError("skill_file_symlink_not_allowed")
+    path = candidate.resolve()
     if not path.is_relative_to(root):
         raise ValueError("skill_file_outside_package")
     return path

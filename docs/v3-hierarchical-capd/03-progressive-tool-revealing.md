@@ -253,3 +253,15 @@ Generic Bash continues to be trusted host access, not an OS filesystem sandbox.
 location and synchronizes the skill definition without changing program/data files.
 
 See [artifact resource storage and migration](../skill-artifact-resources.md).
+
+## Standard skill activation and resource inspection (#34)
+
+Activated packages contribute their complete essential instructions to direct
+responses, strategic planning and tactical execution, with atomic budget failure
+instead of clipping. Jev scores authorized package metadata for multiple core and
+complementary skills. A generic `native.skill_read` / `skill_resources` capability
+provides on-demand contained references, script documentation/source and asset
+inspection. The reader remains discoverable for activated packages, but phase
+reveal and deterministic package/private-resource checks still apply. No scripts
+are individually registered or curated. See [activation policy, revision pinning,
+limits and verification](../skills-activation.md).
