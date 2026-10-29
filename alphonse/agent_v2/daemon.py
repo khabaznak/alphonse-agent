@@ -784,16 +784,17 @@ class V2Daemon:
     def list_skills(self, *, actor_user_id: str) -> list[dict[str, Any]]:
         return self.list_skills_workspace(actor_user_id=actor_user_id)["skills"]
 
-    def list_skills_workspace(self, *, actor_user_id: str) -> dict[str, list[dict[str, Any]]]:
+    def list_skills_workspace(self, *, actor_user_id: str) -> dict[str, Any]:
         self._require_admin(actor_user_id)
         artifacts = self.runtime.artifact_store.list()
         return {
             "skills": [
-                {**item.candidate(), "directory": item.directory, "editable": Path(item.directory).resolve().is_relative_to(self.runtime.skill_store.skills_dir.resolve()), "instructions": item.instructions,
+                {**item.candidate(), **item.package_metadata(), "directory": item.directory, "editable": Path(item.directory).resolve().is_relative_to(self.runtime.skill_store.skills_dir.resolve()), "instructions": item.instructions,
                  "files": self.runtime.skill_store.files(item.skill_id),
                  "artifacts": [{**record.to_dict(), "resource": self.runtime.core.artifact_resources.describe(record, actor_user_id)} for record in artifacts if record.skill_id == item.skill_id]}
                 for item in self.runtime.skill_store.list_skills()
             ],
+            "diagnostics": list(self.runtime.skill_store.diagnostics),
             "unassigned_artifacts": [record.to_dict() for record in artifacts if not record.skill_id],
             "artifact_repository_root": str(self.runtime.core.artifact_resources.repository_root),
         }
@@ -858,6 +859,10 @@ class V2Daemon:
         self._require_admin(actor_user_id)
         installed = self.runtime.skill_store.install_directory(source_directory)
         return installed.candidate()
+
+    def export_skill(self, *, actor_user_id: str, skill_id: str, destination_directory: str) -> dict[str, str]:
+        self._require_admin(actor_user_id)
+        return {"directory": str(self.runtime.skill_store.export_directory(skill_id, destination_directory))}
 
     def replace_skill(self, *, actor_user_id: str, skill_id: str, source_directory: str) -> dict[str, str]:
         self._require_admin(actor_user_id)

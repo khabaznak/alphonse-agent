@@ -7,7 +7,9 @@ import re
 import json
 import shutil
 import tempfile
-from dataclasses import dataclass
+import logging
+import unicodedata
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -15,9 +17,12 @@ import yaml
 
 
 SKILL_FILE = "SKILL.md"
-_SKILL_NAME = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+logger = logging.getLogger(__name__)
+_FRONTMATTER_FIELDS = {"name", "description", "license", "compatibility", "metadata", "allowed-tools"}
 MAX_SKILL_NAME_LENGTH = 64
-MAX_SKILL_DESCRIPTION_LENGTH = 512
+MAX_SKILL_DESCRIPTION_LENGTH = 1024
+MAX_SKILL_COMPATIBILITY_LENGTH = 500
+# Alphonse operational limits, not Agent Skills format constraints.
 MAX_SKILL_INSTRUCTIONS_LENGTH = 12_000
 MAX_SKILL_FILE_BYTES = 256_000
 
@@ -29,6 +34,15 @@ class SkillRecord:
     description: str
     directory: str
     instructions: str
+
+    license: str | None = None
+    compatibility: str | None = None
+    metadata: dict[str, str] = field(default_factory=dict)
+    allowed_tools: str | None = None
+
+    def package_metadata(self) -> dict[str, Any]:
+        return {"license": self.license, "compatibility": self.compatibility,
+                "metadata": dict(self.metadata), "allowed-tools": self.allowed_tools}
 
     def candidate(self) -> dict[str, str]:
         return {
@@ -49,6 +63,7 @@ class SkillStore:
     def __init__(self, skills_dir: str | Path | None = None) -> None:
         self.skills_dir = Path(skills_dir).expanduser() if skills_dir is not None else default_skills_dir()
         self.skills_dir.mkdir(parents=True, exist_ok=True)
+        self.diagnostics: list[dict[str, str]] = []
 
     @classmethod
     def default(cls) -> "SkillStore":
@@ -56,17 +71,21 @@ class SkillStore:
 
     def list_skills(self) -> list[SkillRecord]:
         records: dict[str, SkillRecord] = {}
+        self.diagnostics = []
         for directory in (self._bundled_skills_dir(), self.skills_dir):
             if not directory.is_dir():
                 continue
             for path in sorted(directory.iterdir(), key=lambda item: item.name.casefold()):
-                if not path.is_dir() or path.is_symlink():
+                if path.name.startswith(".skill-") or not (path.is_dir() or path.is_symlink()):
                     continue
                 try:
                     record = self._read_skill(path)
                     records[record.skill_id] = record
-                except (OSError, UnicodeDecodeError, ValueError, yaml.YAMLError):
-                    continue
+                except (OSError, UnicodeDecodeError, ValueError, yaml.YAMLError) as exc:
+                    diagnostic = {"directory": str(path), "error": str(exc),
+                                  "category": "operational" if str(exc).startswith("skill_operational_") else "specification" if isinstance(exc, (ValueError, yaml.YAMLError)) else "filesystem"}
+                    self.diagnostics.append(diagnostic)
+                    logger.warning("Invalid skill package %s: %s", path, exc)
         return sorted(records.values(), key=lambda item: item.name.casefold())
 
     def get(self, skill_id: str) -> SkillRecord | None:
@@ -106,7 +125,7 @@ class SkillStore:
         path = _skill_path(root, relative_path)
         value = str(content)
         if len(value.encode("utf-8")) > MAX_SKILL_FILE_BYTES:
-            raise ValueError("skill_file_too_large")
+            raise ValueError("skill_operational_file_too_large: file limit is 256000 bytes")
         path.parent.mkdir(parents=True, exist_ok=True)
         if path.is_symlink():
             raise ValueError("skill_file_invalid")
@@ -139,7 +158,7 @@ class SkillStore:
         if not source_path.is_file():
             raise ValueError("skill_source_file_required")
         if source_path.stat().st_size > MAX_SKILL_FILE_BYTES:
-            raise ValueError("skill_file_too_large")
+            raise ValueError("skill_operational_file_too_large: file limit is 256000 bytes")
         name = source_path.name
         if name == SKILL_FILE:
             raise ValueError("skill_definition_cannot_be_replaced_by_import")
@@ -161,7 +180,7 @@ class SkillStore:
             return
         updated = current.rstrip() + section
         if len(updated.encode("utf-8")) > MAX_SKILL_FILE_BYTES:
-            raise ValueError("skill_file_too_large")
+            raise ValueError("skill_operational_file_too_large: file limit is 256000 bytes")
         path.write_text(updated, encoding="utf-8")
 
     def artifact_instructions(self, skill_id: str, artifact_id: str) -> str:
@@ -188,7 +207,7 @@ class SkillStore:
             sections[index] = f"## Artifact: {name}\n\nArtifact ID: `{artifact_id}`\n\nDefinition:\n\n```json\n{manifest}\n```\n\nOperating instructions:\n\n{detail}\n\n"
             updated = "".join(sections).rstrip() + "\n"
             if len(updated.encode("utf-8")) > MAX_SKILL_FILE_BYTES:
-                raise ValueError("skill_file_too_large")
+                raise ValueError("skill_operational_file_too_large: file limit is 256000 bytes")
             temporary = path.with_suffix(".tmp")
             temporary.write_text(updated, encoding="utf-8")
             temporary.replace(path)
@@ -215,9 +234,7 @@ class SkillStore:
 
     def update_description(self, skill_id: str, description: str) -> SkillRecord:
         record = self._editable(skill_id)
-        value = str(description or "").strip()
-        if not value or len(value) > MAX_SKILL_DESCRIPTION_LENGTH:
-            raise ValueError("skill_description_invalid")
+        value = _validate_description(description)
         path = Path(record.directory) / SKILL_FILE
         content = path.read_text(encoding="utf-8")
         metadata, instructions = _parse_skill_file(content)
@@ -243,6 +260,7 @@ class SkillStore:
         if not source_path.is_dir():
             raise ValueError("skill_source_must_be_directory")
         record = self._read_skill(source_path)
+        _validate_package_files(source_path)
         target = self.skills_dir / record.name
         if target.exists():
             raise ValueError("skill_already_installed")
@@ -259,14 +277,14 @@ class SkillStore:
     def create_skill(self, name: str, description: str, instructions: str) -> SkillRecord:
         """Create and install a plain-instruction skill package atomically."""
         skill_name = _validate_skill_name(name)
-        skill_description = str(description or "").strip()
-        skill_instructions = str(instructions or "").strip()
-        if not skill_description or len(skill_description) > MAX_SKILL_DESCRIPTION_LENGTH:
-            raise ValueError("skill_description_invalid")
+        skill_description = _validate_description(description)
+        if not isinstance(instructions, str):
+            raise ValueError("skill_operational_instructions_required: authored instructions must be a string")
+        skill_instructions = instructions.strip()
         if not skill_instructions:
-            raise ValueError("skill_instructions_required")
+            raise ValueError("skill_operational_instructions_required: authored skills need instructions")
         if len(skill_instructions) > MAX_SKILL_INSTRUCTIONS_LENGTH:
-            raise ValueError("skill_instructions_too_long")
+            raise ValueError("skill_operational_instructions_too_long: authoring limit is 12000 characters")
         if self.get(skill_name) is not None:
             raise ValueError("skill_already_installed")
         staging = Path(tempfile.mkdtemp(prefix=".skill-author-", dir=self.skills_dir))
@@ -291,12 +309,13 @@ class SkillStore:
         if not source_path.is_dir():
             raise ValueError("skill_source_must_be_directory")
         source_record = self._read_skill(source_path)
+        _validate_package_files(source_path)
         if source_record.name != name:
             raise ValueError("skill_update_name_mismatch")
 
         target = self.skills_dir / name
         if target.is_symlink():
-            raise ValueError("skill_package_symlink_not_allowed")
+            raise ValueError("skill_operational_symlink_not_allowed")
         if not target.is_dir():
             raise ValueError("skill_not_installed")
 
@@ -319,12 +338,35 @@ class SkillStore:
         finally:
             shutil.rmtree(staging, ignore_errors=True)
 
+    def export_directory(self, skill_id: str, destination: str | Path) -> Path:
+        """Export a whole package into a new name-matching directory."""
+        record = self.get(skill_id)
+        if record is None:
+            raise KeyError("skill_not_found")
+        source = Path(record.directory)
+        _validate_package_files(source)
+        parent = Path(destination).expanduser().resolve(strict=True)
+        if not parent.is_dir() or parent.is_relative_to(source.resolve()):
+            raise ValueError("skill_export_destination_invalid")
+        target = parent / record.name
+        if target.exists() or target.is_symlink():
+            raise ValueError("skill_export_destination_exists")
+        staging = Path(tempfile.mkdtemp(prefix=".skill-export-", dir=parent))
+        try:
+            staged = staging / record.name
+            shutil.copytree(source, staged)
+            self._read_skill(staged)
+            staged.rename(target)
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
+        return target
+
     def uninstall(self, skill_id: str) -> str:
         """Remove one installed skill package from the local library."""
         name = _validate_skill_name(str(skill_id or "").removeprefix("skill:"))
         target = self.skills_dir / name
         if target.is_symlink():
-            raise ValueError("skill_package_symlink_not_allowed")
+            raise ValueError("skill_operational_symlink_not_allowed")
         if not target.is_dir():
             raise ValueError("skill_not_installed")
         if not target.resolve().is_relative_to(self.skills_dir.resolve()):
@@ -334,21 +376,24 @@ class SkillStore:
 
     def _read_skill(self, directory: Path) -> SkillRecord:
         if directory.is_symlink():
-            raise ValueError("skill_package_symlink_not_allowed")
+            raise ValueError("skill_operational_symlink_not_allowed")
         path = directory / SKILL_FILE
-        if path.is_symlink() or path.stat().st_size > MAX_SKILL_FILE_BYTES:
-            raise ValueError("skill_file_invalid")
+        if path.is_symlink():
+            raise ValueError("skill_operational_symlink_not_allowed")
+        if path.stat().st_size > MAX_SKILL_FILE_BYTES:
+            raise ValueError("skill_operational_file_too_large: file limit is 256000 bytes")
         content = path.read_text(encoding="utf-8")
         metadata, instructions = _parse_skill_file(content)
         name = _validate_skill_name(metadata.get("name"))
-        if directory.name != name:
+        if unicodedata.normalize("NFKC", directory.name) != name:
             raise ValueError("skill_directory_name_mismatch")
-        description = str(metadata.get("description") or "").strip()
-        if not description or len(description) > MAX_SKILL_DESCRIPTION_LENGTH:
-            raise ValueError("skill_description_invalid")
+        description = _validate_description(metadata.get("description"))
+        _validate_optional_fields(metadata)
         return SkillRecord(
             skill_id=f"skill:{name}", name=name, description=description,
             directory=str(directory.resolve()), instructions=instructions,
+            license=metadata.get("license"), compatibility=metadata.get("compatibility"),
+            metadata=dict(metadata.get("metadata", {})), allowed_tools=metadata.get("allowed-tools"),
         )
 
 
@@ -369,16 +414,46 @@ def _parse_skill_file(content: str) -> tuple[dict[str, Any], str]:
     if not isinstance(metadata, dict):
         raise ValueError("skill_frontmatter_invalid")
     instructions = "\n".join(lines[end + 1:]).strip()
-    if not instructions:
-        raise ValueError("skill_instructions_required")
     return metadata, instructions
 
 
 def _validate_skill_name(value: Any) -> str:
-    name = str(value or "").strip()
-    if len(name) > MAX_SKILL_NAME_LENGTH or not _SKILL_NAME.fullmatch(name):
-        raise ValueError("skill_name_invalid")
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("skill_name_invalid: name must be a non-empty string")
+    name = unicodedata.normalize("NFKC", value.strip())
+    if (len(name) > MAX_SKILL_NAME_LENGTH or name != name.lower()
+            or name.startswith("-") or name.endswith("-") or "--" in name
+            or not all(c.isalnum() or c == "-" for c in name)):
+        raise ValueError("skill_name_invalid: use 1-64 lowercase letters, digits and single hyphens")
     return name
+
+
+def _validate_description(value: Any) -> str:
+    if not isinstance(value, str) or not value.strip() or len(value) > MAX_SKILL_DESCRIPTION_LENGTH:
+        raise ValueError("skill_description_invalid: description must be a non-empty string of at most 1024 characters")
+    return value
+
+
+def _validate_optional_fields(metadata: dict[str, Any]) -> None:
+    if set(metadata) - _FRONTMATTER_FIELDS:
+        raise ValueError("skill_frontmatter_unknown_fields: put custom fields in metadata")
+    for key in ("license", "compatibility", "allowed-tools"):
+        if key in metadata and not isinstance(metadata[key], str):
+            raise ValueError(f"skill_{key}_invalid: {key} must be a string")
+    if "compatibility" in metadata and not 1 <= len(metadata["compatibility"]) <= MAX_SKILL_COMPATIBILITY_LENGTH:
+        raise ValueError("skill_compatibility_invalid: use 1-500 characters")
+    if "metadata" in metadata and (not isinstance(metadata["metadata"], dict)
+            or not all(isinstance(k, str) and isinstance(v, str) for k, v in metadata["metadata"].items())):
+        raise ValueError("skill_metadata_invalid: metadata must map string keys to string values")
+
+
+def _validate_package_files(root: Path) -> None:
+    # Operational containment policy: never dereference package links on copy.
+    for path in root.rglob("*"):
+        if path.is_symlink():
+            raise ValueError(f"skill_operational_symlink_not_allowed: {path.relative_to(root)}")
+        if not path.is_file() and not path.is_dir():
+            raise ValueError(f"skill_operational_special_file_not_allowed: {path.relative_to(root)}")
 
 
 def _skill_path(root: Path, relative_path: str) -> Path:
