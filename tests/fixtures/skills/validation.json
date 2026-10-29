@@ -1,0 +1,399 @@
+[
+  {
+    "id": "minimal",
+    "frontmatter": {
+      "name": "sample",
+      "description": "A fixture"
+    },
+    "valid": true,
+    "reference": true
+  },
+  {
+    "id": "empty-body",
+    "frontmatter": {
+      "name": "sample",
+      "description": "A fixture"
+    },
+    "valid": true,
+    "reference": true,
+    "body": ""
+  },
+  {
+    "id": "unicode-name",
+    "frontmatter": {
+      "name": "家庭-café",
+      "description": "A fixture"
+    },
+    "valid": true,
+    "reference": true,
+    "directory": "家庭-café"
+  },
+  {
+    "id": "normalized-name",
+    "frontmatter": {
+      "name": "ｓａｍｐｌｅ",
+      "description": "A fixture"
+    },
+    "valid": true,
+    "reference": true
+  },
+  {
+    "id": "all-optionals",
+    "frontmatter": {
+      "name": "sample",
+      "description": "A fixture",
+      "license": "MIT",
+      "compatibility": "Requires shell",
+      "metadata": {
+        "version": "1.0"
+      },
+      "allowed-tools": "Bash(git:*) Read"
+    },
+    "valid": true,
+    "reference": true
+  },
+  {
+    "id": "description-513",
+    "frontmatter": {
+      "name": "sample",
+      "description": "ddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    },
+    "valid": true,
+    "reference": true
+  },
+  {
+    "id": "description-1024",
+    "frontmatter": {
+      "name": "sample",
+      "description": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    },
+    "valid": true,
+    "reference": true
+  },
+  {
+    "id": "description-1025",
+    "frontmatter": {
+      "name": "sample",
+      "description": "ddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    },
+    "valid": false,
+    "reference": true,
+    "error": "skill_description_invalid"
+  },
+  {
+    "id": "compatibility-500",
+    "frontmatter": {
+      "name": "sample",
+      "description": "A fixture",
+      "compatibility": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    },
+    "valid": true,
+    "reference": true
+  },
+  {
+    "id": "compatibility-501",
+    "frontmatter": {
+      "name": "sample",
+      "description": "A fixture",
+      "compatibility": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    },
+    "valid": false,
+    "reference": true,
+    "error": "skill_compatibility_invalid"
+  },
+  {
+    "id": "bad-name-UPPER",
+    "frontmatter": {
+      "name": "UPPER",
+      "description": "A fixture"
+    },
+    "valid": false,
+    "reference": true,
+    "error": "skill_name_invalid"
+  },
+  {
+    "id": "bad-name--sample",
+    "frontmatter": {
+      "name": "-sample",
+      "description": "A fixture"
+    },
+    "valid": false,
+    "reference": true,
+    "error": "skill_name_invalid"
+  },
+  {
+    "id": "bad-name-sample-",
+    "frontmatter": {
+      "name": "sample-",
+      "description": "A fixture"
+    },
+    "valid": false,
+    "reference": true,
+    "error": "skill_name_invalid"
+  },
+  {
+    "id": "bad-name-two--hyphens",
+    "frontmatter": {
+      "name": "two--hyphens",
+      "description": "A fixture"
+    },
+    "valid": false,
+    "reference": true,
+    "error": "skill_name_invalid"
+  },
+  {
+    "id": "bad-name-bad_name",
+    "frontmatter": {
+      "name": "bad_name",
+      "description": "A fixture"
+    },
+    "valid": false,
+    "reference": true,
+    "error": "skill_name_invalid"
+  },
+  {
+    "id": "bad-name-bad_name",
+    "frontmatter": {
+      "name": "bad/name",
+      "description": "A fixture"
+    },
+    "valid": false,
+    "reference": true,
+    "error": "skill_name_invalid"
+  },
+  {
+    "id": "bad-name-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "frontmatter": {
+      "name": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "description": "A fixture"
+    },
+    "valid": false,
+    "reference": true,
+    "error": "skill_name_invalid"
+  },
+  {
+    "id": "directory-mismatch",
+    "frontmatter": {
+      "name": "other",
+      "description": "A fixture"
+    },
+    "valid": false,
+    "reference": true,
+    "error": "skill_directory_name_mismatch"
+  },
+  {
+    "id": "description-type-None",
+    "frontmatter": {
+      "name": "sample",
+      "description": null
+    },
+    "valid": false,
+    "reference": true,
+    "error": "skill_description_invalid"
+  },
+  {
+    "id": "name-type-None",
+    "frontmatter": {
+      "name": null,
+      "description": "A fixture"
+    },
+    "valid": false,
+    "reference": true,
+    "error": "skill_name_invalid"
+  },
+  {
+    "id": "description-type-True",
+    "frontmatter": {
+      "name": "sample",
+      "description": true
+    },
+    "valid": false,
+    "reference": true,
+    "error": "skill_description_invalid"
+  },
+  {
+    "id": "name-type-True",
+    "frontmatter": {
+      "name": true,
+      "description": "A fixture"
+    },
+    "valid": false,
+    "reference": true,
+    "error": "skill_name_invalid"
+  },
+  {
+    "id": "description-type-42",
+    "frontmatter": {
+      "name": "sample",
+      "description": 42
+    },
+    "valid": false,
+    "reference": true,
+    "error": "skill_description_invalid"
+  },
+  {
+    "id": "name-type-42",
+    "frontmatter": {
+      "name": 42,
+      "description": "A fixture"
+    },
+    "valid": false,
+    "reference": true,
+    "error": "skill_name_invalid"
+  },
+  {
+    "id": "description-type-[]",
+    "frontmatter": {
+      "name": "sample",
+      "description": []
+    },
+    "valid": false,
+    "reference": true,
+    "error": "skill_description_invalid"
+  },
+  {
+    "id": "name-type-[]",
+    "frontmatter": {
+      "name": [],
+      "description": "A fixture"
+    },
+    "valid": false,
+    "reference": true,
+    "error": "skill_name_invalid"
+  },
+  {
+    "id": "description-type-{}",
+    "frontmatter": {
+      "name": "sample",
+      "description": {}
+    },
+    "valid": false,
+    "reference": true,
+    "error": "skill_description_invalid"
+  },
+  {
+    "id": "name-type-{}",
+    "frontmatter": {
+      "name": {},
+      "description": "A fixture"
+    },
+    "valid": false,
+    "reference": true,
+    "error": "skill_name_invalid"
+  },
+  {
+    "id": "optional-license-True",
+    "frontmatter": {
+      "name": "sample",
+      "description": "A fixture",
+      "license": true
+    },
+    "valid": false,
+    "reference": false,
+    "error": "skill_license_invalid"
+  },
+  {
+    "id": "optional-allowed-tools-['Bash']",
+    "frontmatter": {
+      "name": "sample",
+      "description": "A fixture",
+      "allowed-tools": [
+        "Bash"
+      ]
+    },
+    "valid": false,
+    "reference": false,
+    "error": "skill_allowed-tools_invalid"
+  },
+  {
+    "id": "optional-metadata-{'version': 1}",
+    "frontmatter": {
+      "name": "sample",
+      "description": "A fixture",
+      "metadata": {
+        "version": 1
+      }
+    },
+    "valid": false,
+    "reference": false,
+    "error": "skill_metadata_invalid"
+  },
+  {
+    "id": "optional-metadata-[]",
+    "frontmatter": {
+      "name": "sample",
+      "description": "A fixture",
+      "metadata": []
+    },
+    "valid": false,
+    "reference": false,
+    "error": "skill_metadata_invalid"
+  },
+  {
+    "id": "optional-compatibility-",
+    "frontmatter": {
+      "name": "sample",
+      "description": "A fixture",
+      "compatibility": ""
+    },
+    "valid": false,
+    "reference": false,
+    "error": "skill_compatibility_invalid"
+  },
+  {
+    "id": "compatibility-type",
+    "frontmatter": {
+      "name": "sample",
+      "description": "A fixture",
+      "compatibility": false
+    },
+    "valid": false,
+    "reference": true,
+    "error": "skill_compatibility_invalid"
+  },
+  {
+    "id": "unknown-field",
+    "frontmatter": {
+      "name": "sample",
+      "description": "A fixture",
+      "custom": "value"
+    },
+    "valid": false,
+    "reference": true,
+    "error": "skill_frontmatter_unknown_fields"
+  },
+  {
+    "id": "name-missing",
+    "frontmatter": {
+      "description": "A fixture"
+    },
+    "valid": false,
+    "error": "skill_name_invalid"
+  },
+  {
+    "id": "name-empty",
+    "frontmatter": {
+      "name": "",
+      "description": "A fixture"
+    },
+    "valid": false,
+    "error": "skill_name_invalid"
+  },
+  {
+    "id": "description-missing",
+    "frontmatter": {
+      "name": "sample"
+    },
+    "valid": false,
+    "error": "skill_description_invalid"
+  },
+  {
+    "id": "description-empty",
+    "frontmatter": {
+      "name": "sample",
+      "description": ""
+    },
+    "valid": false,
+    "error": "skill_description_invalid"
+  }
+]

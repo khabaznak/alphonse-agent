@@ -12,7 +12,7 @@ SKILL_INSTALL_ARGUMENT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
     "properties": {
-        "name": {"type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"},
+        "name": {"type": "string", "minLength": 1, "maxLength": 64, "description": "Lowercase Unicode letters/digits and single hyphens; must match the package directory."},
         "description": {"type": "string", "minLength": 1, "maxLength": 1024},
         "instructions": {"type": "string", "minLength": 1},
     },
@@ -59,9 +59,9 @@ def execute_skill_install(
     if not actor or not (is_admin and is_admin(actor)):
         raise PermissionError("skill_manager_required")
     skill = store.create_skill(
-        str(arguments.get("name") or ""),
-        str(arguments.get("description") or ""),
-        str(arguments.get("instructions") or ""),
+        arguments.get("name"),
+        arguments.get("description"),
+        arguments.get("instructions"),
     )
     return {
         "skill": skill.candidate(),

@@ -563,6 +563,8 @@ class V2DaemonServer:
             return self.daemon.add_skill_file(actor_user_id=str(params.get("actor_user_id") or ""), skill_id=str(params.get("skill_id") or ""), source_path=str(params.get("source_path") or ""))
         if method == "install_skill":
             return {"skill": self.daemon.install_skill(actor_user_id=str(params.get("actor_user_id") or ""), source_directory=str(params.get("source_directory") or ""))}
+        if method == "export_skill":
+            return self.daemon.export_skill(actor_user_id=str(params.get("actor_user_id") or ""), skill_id=str(params.get("skill_id") or ""), destination_directory=str(params.get("destination_directory") or ""))
         if method == "replace_skill":
             return {"skill": self.daemon.replace_skill(actor_user_id=str(params.get("actor_user_id") or ""), skill_id=str(params.get("skill_id") or ""), source_directory=str(params.get("source_directory") or ""))}
         if method == "delete_skill":
