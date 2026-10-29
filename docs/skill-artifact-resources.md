@@ -1,117 +1,126 @@
-# Legacy skill-owned artifact resources
+# Legacy resource migration and retirement
 
-Status: current implementation and transitional compatibility contract.
+Status: implemented in #37. New capabilities are ordinary Agent Skills packages
+and commands; there is no script-registration step. See
+[the standard contract](standard-skills-contract.md),
+[activation](skills-activation.md), [execution](skill-script-execution.md) and
+[bindings](skill-bindings.md).
 
-The accepted [standard skills and harness decision](standard-skills-contract.md)
-supersedes this document as the target architecture. New capabilities use standard
-packages, optional scripts/resources and separate household data/bindings, without
-mandatory per-script registration. The behavior below remains required for legacy
-resources until replacement access/runtime/storage checks and verified migration
-land. Do not remove containment or data-preservation checks based on this decision
-alone. Artifact management removal must be coordinated with migration.
+## Review first
 
-Projects track goals. A conversation does not need to select a project to use an
-installed skill's authorized artifacts. Artifact programs remain user-generated
-resources, never native tool definitions or independent Jev curation candidates.
+Use daemon IPC `legacy_skill_migration` with `actor_user_id` and
+`operation: "preview"` (the default). The response's `resources` inventory includes
+the original stable ID, owning skill/user, sharing/enabled state, original project,
+exact registered root, cwd, entrypoint, runtime, configuration/required-file paths,
+argument schema, operating instructions, known-location candidates, availability,
+migration state and a `review_token`. Configuration contents, credential values,
+program contents and live databases are never read into this report. Owners see
+their records; active administrators can inventory the household. Sharing a
+resource does not grant migration-management permission.
 
-## Storage and fresh installations
+Only registered shared, installed-package and captured legacy project roots are
+examined. Missing roots and multiple program copies are reported, never resolved
+by scanning unrelated directories or choosing the newest file. A suggested command
+quotes the verified cwd/interpreter/entrypoint; it is a review aid, never executed
+by migration. Check the actual program's documented CLI and dependencies.
 
-The runtime initializes `<workspace>/artifacts/` alongside `<workspace>/skills/`.
-Without a configured workspace the default is `~/.alphonse/artifacts/`.
-New registrations default to shared storage:
+`operation: "apply"` requires `artifact_id` (historical audit identity only),
+`review_token`, and **reviewed replacement `instructions`** describing ordinary
+commands and checks. Old shell text is not automatically rewritten. Instructions
+must not use the retired `artifact_id` argument or `ALPHONSE_ARTIFACT_*` variables.
+The preview token detects metadata/availability changes between review and apply.
 
-```
-<workspace>/artifacts/<skill-name>/<artifact-id-without-prefix>/
-```
-
-For example, `artifact.sensor-reader` belonging to `skill:household` has the
-storage root `<workspace>/artifacts/household/sensor-reader/`. Alphonse creates
-and maintains its program, dependencies and configuration there. The native
-registration tool only validates existing resources and records their metadata.
-It never writes, copies or repairs the artifact implementation.
-
-Each registration includes its owning skill, owner, optional explicitly shared
-household user IDs, enabled state, JSON Schema, entrypoint and execution metadata:
+An ambiguous or stale location additionally requires an explicit `location` object:
 
 ```json
 {
-  "storage_kind": "shared",
-  "entrypoint_path": "reader.py",
+  "storage_kind": "project",
+  "entrypoint_path": "scripts/reader.py",
   "execution": {
     "working_directory": ".",
-    "runtime_path": ".venv/bin/python",
+    "runtime_path": "/explicit/host/python",
     "configuration_paths": ["config.env"],
     "required_files": ["reading.sqlite"]
   }
 }
 ```
 
-Entrypoints and resource paths are relative to the storage root, never the task's
-project or daemon cwd. Traversal, absolute resource paths and symlink escapes are
-rejected. An explicit runtime can be an absolute executable or a contained runtime
-path; a virtual-environment interpreter may itself link to the system executable.
-Python resources require a registered runtime rather than implicitly using
-`python3` from PATH. No dependency installation or authentication repair happens
-in the resolver. Missing declared files are recorded as availability issues;
-configuration contents and credentials are never read into resource manifests.
+For an unassigned record, include the reviewed installed editable `skill_id`.
+For a lost legacy project root, include its explicitly verified absolute
+`legacy_root_path`; no path is reconstructed by guessing. Traversal, absolute
+resource references and symlink escape remain rejected. An absolute runtime or
+a contained environment's interpreter link can refer to a host executable.
+Missing scripts, runtimes or declared files require reconciliation before apply.
+Program defects, dependency repair and household implementation edits remain work
+for Alphonse in the resource's registered storage, never product-source fixes.
 
-`skill` storage supports existing files inside the installed skill package.
-`project` storage supports legacy locations, with the original owner/root
-containment requirements preserved. Neither kind depends on the task's project.
+## What apply changes
 
-## Runtime use and authorization
+Apply preserves all programs, environments, configuration and data **in place**.
+It makes no file moves, copies, overwrites, repairs, installs or executions of
+household resources. This implementation deliberately has no file-move option;
+any future move workflow needs separate explicit scope, backup and recovery.
 
-Selecting a skill supplies its base instructions and the catalog-backed resource
-manifests and operating instructions the requesting user can access. Artifact
-sections belonging to other users are not loaded merely because the skill is
-selected. Access is granted to the owner, administrators, and explicitly shared
-user IDs, never by Jev or by membership in the current task's project.
+The original catalog row is retained as a migration/provenance tombstone. A durable
+journal stores before/after SKILL.md and exact source/reconciled metadata. It is
+recovery state, not a tool or script catalog. A generic resource-binding note
+replaces only the corresponding generated Artifact section in SKILL.md; preceding ordinary workflow sections survive. All headings within the legacy
+section are treated as private instructions until explicitly reviewed; review any
+old trailing content before applying the replacement instructions. Private paths and reviewed operating instructions stay
+in local migration/binding storage, outside the shared portable package.
 
-An authorized shell call can reference the resource:
+Migration imports an optional local configuration binding carrying the retained
+root and relative resources, original owner, explicit audience and enabled state.
+Its deterministic `legacy-...` logical role is returned as `binding_name`. Existing
+access is carried over; no account or credential is selected. New ordinary scripts
+need neither this binding nor a migration journal. At activation, only authorized
+reviewed local guidance is supplied. Use ordinary `native.bash` with `skill_id` and
+`binding_names`, an explicitly quoted `cd` to the retained cwd, and the documented
+interpreter/arguments. Runtime/configuration containment and availability are
+rechecked when the binding is used, independently of the conversation's project.
+Sharing/revocation uses normal binding access policy. Generic Bash remains trusted
+host execution, not a filesystem or credential sandbox. Native phase effects,
+timeouts, cancellation, failed evidence and readback rules remain unchanged.
 
-```json
-{
-  "artifact_id": "artifact.sensor-reader",
-  "command": "\"$ALPHONSE_ARTIFACT_RUNTIME\" \"$ALPHONSE_ARTIFACT_ENTRYPOINT\" status"
-}
-```
+Apply journals `prepared` before changing bindings/instructions, atomically replaces
+SKILL.md, then records `complete`. Retry after interruption with the same identity:
+it resumes the recorded intent, checks source metadata and current skill content,
+and refuses conflicting edits instead of overwriting them. Reapplying a completed
+migration is a no-op and never recreates revoked access. Restore missing prerequisites
+before resuming a prepared operation. Keep both the catalog/migration and integration
+DBs in normal household runtime backups; journals contain private local information.
 
-Before spawning Bash, native code checks that the owning skill is selected, the
-user is authorized, the registration is enabled, and the resource is ready. It
-supplies the registered working directory and `ALPHONSE_ARTIFACT_ROOT`,
-`ALPHONSE_ARTIFACT_ENTRYPOINT`, and `ALPHONSE_ARTIFACT_RUNTIME`. An incompatible
-explicit cwd is rejected. The shell command and requested effects remain subject
-to the ordinary native-tool/phase controls. This is a resource resolver, not an
-OS sandbox for arbitrary generic Bash commands. These controls do not guarantee
-that the artifact implementation or its dependencies work.
+## Rollback and remaining compatibility
 
-## Existing installations and reconciliation
+`operation: "rollback"` with the historical `artifact_id` checks manager access and
+restores the exact prior SKILL.md, removes the imported binding/choices, and records
+`rolled_back`. It is idempotent and restartable, with revocation before restoration.
+Later edits or migrations cause a visible conflict; undo them in reverse order or
+explicitly reconcile first. It never rolls back household files/data, credentials,
+external effects or program changes. Catalog-based execution stays retired after
+rollback: review/reapply migration and replan to resume capability use.
 
-Database upgrades add metadata fields with legacy-compatible defaults. Existing
-IDs, skill associations and JSON Schemas are preserved. The runtime snapshots the
-legacy storage project's authorized root so archiving or deleting a goal project
-does not hide an artifact. No program, environment, configuration or data files
-are moved by this migration. Missing project records without a captured root are
-reported as unavailable; their path is not reconstructed by guessing.
+Normal registry, curation, prompts and Bash schemas no longer offer artifact
+registration/metadata tools or ID-based execution. Saved calls with `artifact_id`
+fail with a migration/replanning diagnostic; they are never silently replayed as
+ordinary shell commands. Historical capability enums remain readable in checkpoints.
+Old artifact IPC methods return `artifact_catalog_retired`; use the migration API.
+The Desktop catalog editor is removed; `/artifacts` in TUI is a read-only migration
+report. Expanded skill/binding management belongs to #38.
 
-The `reconcile_artifacts` IPC request reports availability and exact known-location
-candidates under registered shared, skill or legacy roots. It never chooses among
-copies or scans unrelated filesystem locations. A stale or ambiguous registration
-requires the intended resource to be identified before changing its location.
+The old SQLite reader, location validator and direct legacy helper modules remain
+only for importing historical records, provenance, containment checks and recovery
+fixtures; runtime registries never register them. Normal skill APIs return empty
+legacy artifact arrays for old client compatibility. Legacy rows also keep private
+package resource guards active, including after binding revocation. Export/replacement/uninstall remain blocked for pending migrations and embedded
+legacy package resources. Completed external-resource migrations permit ordinary
+package lifecycle changes while retaining bindings, files and provenance. Review
+and separate embedded household resources before destructive lifecycle actions.
+No catalog rows/tables are dropped automatically. Eventual physical removal requires
+reconciliation of all remaining tombstones, embedded private data and saved task
+references; deleting the database early would remove privacy/recovery guarantees.
 
-Desktop's Skills workspace shows resource status, resolved locations and editable
-location/runtime/configuration/sharing metadata. The TUI `/artifacts` screen shows
-the same diagnostics and accepts location metadata as JSON. `relocate_artifact`
-IPC and the native catalog metadata-update tool perform manager-authorized,
-validated updates and synchronize the owning skill definition, preserving its
-operating instructions and argument schema. Neither changes artifact files.
-
-Unregistration never deletes program or data files. Skills with registered
-artifacts cannot be uninstalled or replaced until their artifacts are preserved
-and unregistered. Workspace changes copy the shared repository as a whole, retain
-the old files and reject a nonempty destination rather than merge conflicting
-copies. Legacy roots are refreshed from the explicit project-root migration.
-
-Artifact-specific dependencies, configuration handling, operational instructions
-and implementation repairs belong to Alphonse and its user's artifact, not to
-this product repository.
+Tests use temporary project/shared/package programs, interrupted apply/rollback,
+ambiguous/stale copies, unrelated cwd, actor access/revocation, missing prerequisites,
+traversal/symlinks, idempotence, preservation and native-command readback. They never
+copy household programs into product source.

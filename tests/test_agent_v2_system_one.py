@@ -149,7 +149,7 @@ def test_jev_classifies_complete_static_tool_registry_with_parallel_noul_questio
     assert payloads[0]["questions"] == payloads[1]["questions"]
     assert all(question["type"] == "noul" for question in payloads[0]["questions"].values())
     instructions = [question["instructions"] for question in payloads[0]["questions"].values()]
-    assert instructions[0].startswith("Does this phase need Bash for local shell, project-file, or artifact work")
+    assert instructions[0].startswith("Does this phase need Bash for local shell, project files, or ordinary skill scripts")
     assert "Does this phase need to send a direct response to the requester?" in instructions
     questions = list(payloads[0]["questions"].values())
     assert "find, rg, or grep" in questions[0]["criteria"]["true"]
@@ -346,10 +346,8 @@ def test_jev_native_registry_template_covers_every_out_of_box_tool() -> None:
         "native.ask_question",
         "native.scheduled_task",
         "native.scheduled_task_delivery",
-        "native.skill_artifact_register",
         "native.skill_install",
         "native.skill_read",
-        "native.artifact_metadata_update",
         "native.analyze_image",
         "native.web_search",
         "native.web_fetch",
@@ -359,10 +357,10 @@ def test_jev_native_registry_template_covers_every_out_of_box_tool() -> None:
     assert "find, rg, or grep" in bash_question["criteria"]["true"]
     assert "create or edit files" in bash_question["criteria"]["true"]
     assert "verify edits" in bash_question["criteria"]["true"]
-    registration_question = registry["native.skill_artifact_register"]
-    assert "when Bash will create it earlier in the same phase" in registration_question["criteria"]["true"]
-    assert "CLI-backed artifact" in bash_question["instructions"]
-    assert "Favor Bash alongside a relevant CLI-backed artifact" in bash_question["criteria"]["true"]
+    assert "native.skill_artifact_register" not in registry
+    assert "native.artifact_metadata_update" not in registry
+    assert "ordinary skill scripts" in bash_question["instructions"]
+    assert "scripts require no registration" in bash_question["criteria"]["true"]
 
 
 def test_jev_tactical_review_distinguishes_operational_success_from_semantic_completion() -> None:

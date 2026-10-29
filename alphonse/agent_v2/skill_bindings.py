@@ -147,6 +147,81 @@ class SkillBindings:
                 (binding_id, skill.skill_id, owner_id, kind, target,
                  json.dumps(configuration or {}), json.dumps(requirements)))
 
+    def _legacy_configuration(self, payload):
+        return {"legacy_resource": {"root": payload['detail']['storage_root'],
+                "entrypoint": payload['selected']['entrypoint_path'],
+                "execution": payload['selected']['execution']}}
+
+    def check_legacy(self, payload):
+        with self.integrations._connect() as conn:
+            row = conn.execute("SELECT * FROM v2_skill_bindings WHERE binding_id=?", (payload['binding_id'],)).fetchone()
+        if row is not None and (row['skill_id'] != payload['skill_id']
+                or row['owner_id'] != payload['source']['owner_user_id']
+                or row['kind'] != 'configuration' or row['target']
+                or json.loads(row['requirements']) != {'secrets': [], 'executables': []}
+                or json.loads(row['configuration']) != self._legacy_configuration(payload)):
+            raise ValueError('legacy_binding_conflict')
+
+    def import_legacy(self, payload):
+        """Internal reviewed migration only. Never provision an account or copy data."""
+        self.check_legacy(payload)
+        source = payload['source']
+        with self.integrations._connect() as conn:
+            for actor in [source['owner_user_id'], *source['shared_with_user_ids']]:
+                choice = conn.execute('SELECT binding_id FROM v2_skill_binding_choices WHERE actor_id=? AND skill_id=? AND name=?',
+                    (actor, payload['skill_id'], payload['binding_id'])).fetchone()
+                if choice and choice['binding_id'] != payload['binding_id']:
+                    raise ValueError('legacy_binding_choice_conflict')
+        self._actor(source['owner_user_id'])
+        with self.integrations._connect() as conn:
+            existing = conn.execute('SELECT 1 FROM v2_skill_bindings WHERE binding_id=?', (payload['binding_id'],)).fetchone()
+            if not existing:
+                conn.execute("""INSERT INTO v2_skill_bindings
+                    (binding_id, skill_id, owner_id, kind, target, configuration, requirements, shared_with, enabled)
+                    VALUES (?, ?, ?, 'configuration', '', ?, ?, ?, ?)""",
+                    (payload['binding_id'], payload['skill_id'], source['owner_user_id'],
+                     json.dumps(self._legacy_configuration(payload)), json.dumps({'secrets': [], 'executables': []}),
+                     json.dumps(source['shared_with_user_ids']), int(source['enabled'])))
+            # Explicit migration carries the existing audience, never a guessed account.
+            # Do not replace a member's pre-existing role choice.
+            for actor in [source['owner_user_id'], *source['shared_with_user_ids']]:
+                conn.execute('INSERT OR IGNORE INTO v2_skill_binding_choices VALUES (?, ?, ?, ?)',
+                             (actor, payload['skill_id'], payload['binding_id'], payload['binding_id']))
+
+    def remove_legacy(self, payload):
+        self.check_legacy(payload)
+        with self.integrations._connect() as conn:
+            conn.execute('DELETE FROM v2_skill_binding_choices WHERE binding_id=?', (payload['binding_id'],))
+            conn.execute('DELETE FROM v2_skill_bindings WHERE binding_id=?', (payload['binding_id'],))
+
+    @staticmethod
+    def _validate_legacy(configuration):
+        resource = configuration.get('legacy_resource')
+        if resource is None:
+            return
+        from alphonse.agent_v2.artifact_resources import contained_path
+        import os
+        root = Path(resource['root'])
+        if not root.is_absolute() or not root.is_dir() or root.is_symlink() or root.resolve() != root:
+            raise ValueError('legacy_resource_root_changed')
+        execution = resource['execution']
+        entry = contained_path(root, resource['entrypoint'])
+        cwd = contained_path(root, execution.get('working_directory', '.'))
+        if not entry.is_file() or not cwd.is_dir():
+            raise ValueError('legacy_resource_unavailable')
+        for field in ('configuration_paths', 'required_files'):
+            if any(not contained_path(root, value).is_file() for value in execution.get(field, [])):
+                raise ValueError('legacy_resource_prerequisite_missing')
+        runtime = execution.get('runtime_path')
+        if runtime:
+            path = Path(runtime)
+            if not path.is_absolute():
+                path = contained_path(root, str(path.parent)) / path.name
+            if not path.is_file() or not os.access(path, os.X_OK):
+                raise ValueError('legacy_resource_runtime_missing')
+        elif not os.access(entry, os.X_OK):
+            raise ValueError('legacy_resource_not_executable')
+
     def _outside_packages(self, path: Path) -> None:
         roots = [self.skills.skills_dir.resolve(), self.skills._bundled_skills_dir().resolve()]
         if any(path.is_relative_to(root) or root.is_relative_to(path) for root in roots):
@@ -233,6 +308,7 @@ class SkillBindings:
                     raise ValueError("skill_binding_data_missing_or_changed")
                 self._outside_packages(path)
                 value["path"] = str(path)
+            self._validate_legacy(value["configuration"])
             values[name] = value
         return ExecutionBindings(values, tuple(secrets))
 

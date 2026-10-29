@@ -913,7 +913,7 @@ class JevCriterionDecisionProvider:
         for tool in tools:
             tool_id = str(tool.tool_id)
             question_id = _tool_question_id(tool_id)
-            if _tool_kind(tool) == "artifact":
+            if _tool_kind(tool) == "artifact" or tool_id in {"native.skill_artifact_register", "native.artifact_metadata_update"}:
                 continue
             question = native_questions.get(tool_id)
             if question is None:

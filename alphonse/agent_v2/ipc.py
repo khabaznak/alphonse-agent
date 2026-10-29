@@ -530,28 +530,15 @@ class V2DaemonServer:
             return {"settings": self.daemon.intelligence_engine_settings(actor_user_id=str(params.get("actor_user_id") or ""))}
         if method == "save_intelligence_engine_settings":
             return {"settings": self.daemon.save_intelligence_engine_settings(actor_user_id=str(params.get("actor_user_id") or ""), values=dict(params.get("values") or {}))}
-        if method == "artifacts":
-            return {"artifacts": self.daemon.list_artifacts(actor_user_id=str(params.get("actor_user_id") or ""))}
-        if method == "relocate_artifact":
-            execution = params.get("execution", {})
-            sharing = params.get("shared_with_user_ids")
-            if not isinstance(execution, dict) or (sharing is not None and not isinstance(sharing, list)):
-                raise ValueError("artifact_execution_or_sharing_invalid")
-            return {"artifact": self.daemon.relocate_artifact(actor_user_id=str(params.get("actor_user_id") or ""), artifact_id=str(params.get("artifact_id") or ""), storage_kind=str(params.get("storage_kind") or ""), entrypoint_path=str(params.get("entrypoint_path") or ""), execution=execution, shared_with_user_ids=sharing)}
-        if method == "reconcile_artifacts":
-            return {"artifacts": self.daemon.reconcile_artifacts(actor_user_id=str(params.get("actor_user_id") or ""))}
-        if method == "update_artifact":
-            return {"artifact": self.daemon.update_artifact(actor_user_id=str(params.get("actor_user_id") or ""), artifact_id=str(params.get("artifact_id") or ""), name=str(params.get("name") or ""), description=str(params.get("description") or ""))}
-        if method == "set_artifact_enabled":
-            return {"artifact": self.daemon.set_artifact_enabled(actor_user_id=str(params.get("actor_user_id") or ""), artifact_id=str(params.get("artifact_id") or ""), enabled=bool(params.get("enabled")))}
-        if method == "delete_artifact":
-            return self.daemon.delete_artifact(actor_user_id=str(params.get("actor_user_id") or ""), artifact_id=str(params.get("artifact_id") or ""))
+        if method == "legacy_skill_migration":
+            location = params.get("location")
+            if location is not None and not isinstance(location, dict):
+                raise ValueError("legacy_location_invalid")
+            return self.daemon.legacy_skill_migration(actor_user_id=str(params.get("actor_user_id") or ""), operation=str(params.get("operation") or "preview"), artifact_id=str(params.get("artifact_id") or ""), review_token=str(params.get("review_token") or ""), instructions=str(params.get("instructions") or ""), location=location)
+        if method in {"artifacts", "relocate_artifact", "reconcile_artifacts", "update_artifact", "set_artifact_enabled", "delete_artifact", "unassigned_artifacts", "attach_artifact_to_skill"}:
+            raise ValueError("artifact_catalog_retired: use legacy_skill_migration preview/apply/rollback; no files were changed")
         if method == "skills":
             return self.daemon.list_skills_workspace(actor_user_id=str(params.get("actor_user_id") or ""))
-        if method == "unassigned_artifacts":
-            return {"artifacts": self.daemon.list_unassigned_artifacts(actor_user_id=str(params.get("actor_user_id") or ""))}
-        if method == "attach_artifact_to_skill":
-            return {"artifact": self.daemon.attach_artifact_to_skill(actor_user_id=str(params.get("actor_user_id") or ""), artifact_id=str(params.get("artifact_id") or ""), skill_id=str(params.get("skill_id") or ""), instructions=str(params.get("instructions") or ""))}
         if method == "create_skill":
             return {"skill": self.daemon.create_skill(actor_user_id=str(params.get("actor_user_id") or ""), name=str(params.get("name") or ""), description=str(params.get("description") or ""), instructions=str(params.get("instructions") or ""))}
         if method == "update_skill":

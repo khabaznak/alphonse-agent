@@ -27,6 +27,9 @@ class ToolInvocationService:
     def execute_or_raise(self, tool_id: str, arguments: dict[str, Any]) -> Any:
         started = monotonic()
         try:
+            retirement = _retirement_reason(tool_id, arguments)
+            if retirement:
+                raise ValueError(retirement)
             if self.context.tools is None:
                 raise RuntimeError("tool_registry_unavailable")
             descriptor = _descriptor_for(self.context.tools, tool_id)
@@ -64,6 +67,9 @@ class ToolInvocationService:
 
     def invoke(self, tool_id: str, arguments: dict[str, Any], *, call_id: str | None = None, parallel: bool = False) -> dict[str, Any]:
         call_id = str(call_id or f"program-call-{uuid4()}")
+        retirement = _retirement_reason(tool_id, arguments)
+        if retirement:
+            return _failure(call_id, tool_id, "legacy_artifact_execution_retired", retirement)
         descriptor = _descriptor_for(self.context.tools, tool_id) if self.context.tools is not None else None
         if descriptor is None:
             return _failure(call_id, tool_id, "tool_not_found", "The requested tool is not enabled.")
@@ -108,6 +114,13 @@ class ToolInvocationService:
             Draft202012Validator(schema).validate(arguments)
         except ValidationError as exc:
             raise ValueError(f"tool_arguments_invalid: {exc.message}") from exc
+
+
+def _retirement_reason(tool_id: str, arguments: dict[str, Any]) -> str:
+    if (tool_id.startswith("artifact.") or tool_id in {"native.skill_artifact_register", "native.artifact_metadata_update"}
+            or (tool_id in {"native.bash", "bash"} and "artifact_id" in arguments)):
+        return "legacy_artifact_execution_retired: review legacy_skill_migration and replan with ordinary skill commands; no command was dispatched"
+    return ""
 
 
 def _failure(call_id: str, tool_id: str, code: str, message: str) -> dict[str, Any]:

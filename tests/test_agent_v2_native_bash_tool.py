@@ -217,5 +217,6 @@ def test_bash_tool_definition_can_be_built_directly() -> None:
     definition = build_bash_tool_definition()
 
     assert definition.descriptor.tool_id == BASH_TOOL_ID
-    assert "CLI-backed artifact" in definition.descriptor.description
+    assert "For standard package scripts supply skill_id" in definition.descriptor.description
+    assert "artifact_id" not in definition.argument_schema["properties"]
     assert definition.argument_schema["properties"]["command"]["type"] == "string"

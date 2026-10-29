@@ -399,8 +399,8 @@ def test_hierarchical_processor_plans_one_stage_and_jev_selects_respond_for_gree
     assert '"required": ["kind"]' in planning_request.prompt
     assert '"enum": ["read_only", "user_response", "project_mutation"' in planning_request.prompt
     assert "Do not declare it unavailable" in planning_request.prompt
-    assert "use native.artifact_metadata_update for the mutation" in planning_request.prompt
-    assert "editing a README or program is not a substitute" in planning_request.prompt
+    assert "native.artifact_metadata_update" not in planning_request.prompt
+    assert "Standard package scripts use native.bash with skill_id" in planning_request.prompt
     assert "For a requested known mutation, include needed inspection, mutation, and verification in one coherent phase" in planning_request.prompt
     assert '"acceptance_criteria"' in planning_request.prompt
     assert question_store.load_task_checkpoint("greeting-task") is not None

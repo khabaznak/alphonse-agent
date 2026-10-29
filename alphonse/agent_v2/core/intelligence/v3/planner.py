@@ -291,10 +291,7 @@ def _strategic_plan_instructions() -> str:
         "Authorize skill_resources to inspect activated package references, assets or script documentation on demand with native.skill_read. Resource reads need no shell execution or side effects. "
         "Authorize local_shell for direct CLI, filesystem, process, build, test, diagnostic, and skill-owned program work. "
         "Standard package scripts use native.bash with skill_id and documented commands; no artifact registration or per-script schema is required. Plan dependency/configuration checks before writes and readback after them. On resume reconcile uncertain or prior mutations before repeating any write. Bash is trusted host access, not a filesystem sandbox. "
-        "Legacy Artifacts are owned by skills, independently of the task project, and are not independently callable tools. Use each selected skill's verified resource manifest and native.bash artifact_id for execution; never resolve an artifact entrypoint against the task project or daemon directory. Follow the selected skill's "
-        "operating instructions and use authorized native capabilities such as local_shell to invoke or inspect its program. "
-        "When registering an artifact, attach its definition and operating instructions to an existing installed skill; "
-        "do not treat catalog metadata as a substitute for skill expertise. For a requested correction to an existing artifact registration, use native.artifact_metadata_update for the mutation; editing a README or program is not a substitute. Do not edit catalog databases with Bash. Verify the intended location before updating resource metadata. "
+
         "If Act requires closure, plan exactly one isolated user_response subgoal; if Act requests input, plan an ask-question "
         "subgoal. When an attached image is needed to answer or fulfill the request, authorize attachment_analysis in the "
         "relevant subgoal and use the listed task asset ID; do not ask the user to repeat image contents before analysis. "

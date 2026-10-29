@@ -69,7 +69,28 @@ class ArtifactResources:
             raise ValueError("artifact_storage_symlink_not_allowed")
         return contained_path(root, f"{skill_name}/{artifact_name}")
 
+    def access_records(self):
+        """Legacy privacy guards include reconciled roots after migration."""
+        import json
+        for record in self.store.list():
+            with self.store._connect() as conn:
+                exists = conn.execute("SELECT 1 FROM sqlite_master WHERE name='v2_legacy_migrations'").fetchone()
+                row = conn.execute("SELECT payload FROM v2_legacy_migrations WHERE artifact_id=? AND state='complete'", (record.artifact_id,)).fetchone() if exists else None
+            yield ArtifactRecord(**json.loads(row[0])['selected']) if row else record
+
     def can_use(self, record: ArtifactRecord, actor: str) -> bool:
+        bindings = getattr(self, 'bindings', None)
+        if bindings is not None:
+            with self.store._connect() as conn:
+                exists = conn.execute("SELECT 1 FROM sqlite_master WHERE name='v2_legacy_migrations'").fetchone()
+                row = conn.execute("SELECT payload FROM v2_legacy_migrations WHERE artifact_id=? AND state='complete'", (record.artifact_id,)).fetchone() if exists else None
+            if row:
+                import json
+                try:
+                    bindings._authorize(bindings._get(json.loads(row[0])['binding_id']), actor)
+                    return True
+                except (ValueError, PermissionError):
+                    return False
         return bool(actor and (actor == record.owner_user_id or self.is_admin(actor)
                               or actor in record.shared_with_user_ids))
 
@@ -99,8 +120,10 @@ class ArtifactResources:
             return Path(project.root_path).expanduser().resolve()
         raise ValueError("artifact_storage_kind_invalid")
 
-    def describe(self, record: ArtifactRecord, actor: str) -> dict[str, Any]:
-        if not self.can_use(record, actor):
+    def describe(self, record: ArtifactRecord, actor: str, *, management: bool = False) -> dict[str, Any]:
+        if management:
+            self.require_manager(record, actor)
+        elif not self.can_use(record, actor):
             raise PermissionError("artifact_access_denied")
         detail: dict[str, Any] = {"artifact_id": record.artifact_id, "storage_kind": record.storage_kind,
                                   "status": "ready", "issues": [], "timeout_seconds": record.timeout_seconds}
@@ -110,8 +133,8 @@ class ArtifactResources:
             execution = record.execution
             cwd = contained_path(root, execution.get("working_directory", "."))
             runtime_value = str(execution.get("runtime_path") or "")
-            runtime = (Path(runtime_value).expanduser().resolve() if Path(runtime_value).is_absolute()
-                       else (contained_path(root, str(Path(runtime_value).parent)) / Path(runtime_value).name).resolve()) if runtime_value else None
+            runtime = (Path(runtime_value).expanduser().absolute() if Path(runtime_value).is_absolute()
+                       else (contained_path(root, str(Path(runtime_value).parent)) / Path(runtime_value).name)) if runtime_value else None
             detail.update(storage_root=str(root), resolved_entrypoint_path=str(entrypoint), working_directory=str(cwd),
                           runtime_path=str(runtime) if runtime else "", invocation_prefix=[str(runtime), str(entrypoint)] if runtime else [str(entrypoint)])
             issues = detail["issues"]
@@ -151,7 +174,7 @@ class ArtifactResources:
         for user in record.shared_with_user_ids:
             if not isinstance(user, str) or not user.strip():
                 raise ValueError("artifact_shared_user_invalid")
-        detail = self.describe(record, record.owner_user_id)
+        detail = self.describe(record, record.owner_user_id, management=True)
         allowed = {"configuration_paths_missing", "required_files_missing", "disabled"} if allow_missing_configuration else {"disabled"}
         errors = [item for item in detail["issues"] if item not in allowed]
         if errors:
@@ -198,11 +221,11 @@ class ArtifactResources:
     def reconcile(self, record: ArtifactRecord, actor: str) -> dict[str, Any]:
         """Report known locations only. Never search arbitrary files or pick a copy."""
         self.require_manager(record, actor)
-        result = self.describe(record, actor)
+        result = self.describe(record, actor, management=True)
         candidates = []
         for kind in ("shared", "skill", "project"):
             candidate = replace(record, storage_kind=kind)
-            detail = self.describe(candidate, actor)
+            detail = self.describe(candidate, actor, management=True)
             path = detail.get("resolved_entrypoint_path")
             if path and Path(path).is_file():
                 candidates.append({"storage_kind": kind, "entrypoint_path": record.entrypoint_path,

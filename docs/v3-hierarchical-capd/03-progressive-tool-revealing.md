@@ -265,3 +265,9 @@ inspection. The reader remains discoverable for activated packages, but phase
 reveal and deterministic package/private-resource checks still apply. No scripts
 are individually registered or curated. See [activation policy, revision pinning,
 limits and verification](../skills-activation.md).
+
+
+Legacy catalog tools and ID-based execution were retired by #37. See the
+[implemented migration and recovery contract](../skill-artifact-resources.md)
+for explicit preview/reconciliation, preserved files, actor-scoped bindings and rollback.
+Historical Artifact descriptions above describe pre-migration behavior only.

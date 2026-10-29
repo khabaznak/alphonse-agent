@@ -74,97 +74,42 @@ overrides with provenance, conflict handling and rollback. Household programs
 remain in user-owned storage; do not adopt them into this repository without an
 explicit request. Use minimal disposable fixtures for framework regressions.
 
-### Transitional native tools, skills, and generated artifacts
+## Native tools, skills, and retained legacy resources
 
-The following describes the existing implementation, not the target model.
-Preserve its containment, ownership, sharing, readiness and data guarantees until
-verified replacements and legacy migration land. The accepted contract authorizes
-replacing these mechanisms; it does not authorize bypassing them in the interim.
+Native tools are product code maintained in this repository. Reusable expertise
+and generated programs belong to standard Agent Skills packages in user-owned
+storage. Scripts use authorized native capabilities and are ordinary files, never
+independent tools, Jev candidates or mandatory per-script registrations. Consult
+`docs/standard-skills-contract.md`, `docs/skill-script-execution.md` and
+`docs/skill-bindings.md` when changing these boundaries.
 
-Alphonse has native tools and skill-owned artifact programs:
+Legacy Artifact catalog/runtime flows are retired. `legacy_skill_migration` IPC
+provides preview, explicit reconciliation, metadata/instruction migration and
+rollback. Read `docs/skill-artifact-resources.md` and inspect
+`alphonse/agent_v2/legacy_migration.py`, `artifact_resources.py`, `skill_bindings.py`
+and `tests/test_legacy_skill_migration.py` before changing migration.
 
-- Native tools are built into Alphonse, shipped from this repository, and
-  maintained as part of the product.
-- Artifacts are programs created or maintained by a running Alphonse instance
-  in response to its users' tasks and needs. Each artifact belongs to a skill.
-  New artifacts use the shared repository organized by skill; legacy project
-  storage and existing skill-package files remain supported.
-
-This repository owns artifact catalog registration and persistence, project
-storage containment checks, skill association, and the user interfaces for managing
-skills and their artifacts. Artifacts are not independent runtime tools: they
-must not be materialized in the tool registry or presented for tool curation.
-Registering an artifact records its definition and adds its operating
-instructions to the owning skill's `SKILL.md`. Runtime use follows that skill's
-instructions and authorized native capabilities. This repository does not own
-the implementation of individual generated artifacts.
-
-When diagnosing a failure involving an artifact, first determine whether the
-failure belongs to the artifact framework or to the implementation of one
-particular artifact.
-
-- Reproduce artifact catalog or skill-association defects with a minimal
-  disposable test fixture
-  and fix them in this repository.
-- Artifact-specific defects belong to Alphonse and the user-owned skill/artifact
-  storage that holds the program. Do not copy, promote, or commit a generated artifact into this
-  repository, and do not modify product code merely to compensate for a defect
-  in one artifact. Leave the artifact in its registered storage for Alphonse to
-  repair, or report the artifact failure clearly if it cannot be repaired in
-  the current task.
-- Generated artifact programs, supporting files, and runtime data are not
-  product source code, even when encountered while testing or debugging this
-  repository. Do not stage or commit them unless the user explicitly asks to
-  adopt that capability as a native Alphonse feature.
-- Disposable artifact fixtures created inside temporary test directories are
-  allowed. Keep them to the minimum implementation needed to verify catalog,
-  project-containment, and skill-association behavior.
-
-### Transitional Artifact framework contract
-
-- The artifact catalog stores metadata and the owning skill ID only. Programs,
-  environments, configuration, and data remain in registered storage. Shared
-  storage is `<workspace>/artifacts/<skill-name>/<artifact-id-without-prefix>/`.
-- Entrypoints, working directories, required files and configuration paths must
-  be relative to and resolve within the registered storage root. Do not weaken
-  containment checks, including protection against traversal and symlink escape.
-  Explicit runtime executables may be absolute; a contained virtual environment
-  may link its interpreter to an external executable.
-- Shared or skill-package registration requires an authenticated owner and an
-  installed editable skill, not an active project. Legacy project registration
-  still requires that project's owner and enforces its root containment.
-- Access follows artifact ownership, explicit sharing, and administrator rights,
-  independently of the current task's project. Jev selection is relevance, never
-  permission. Native tools retain normal authorization and mutation checks.
-- Registration adds the definition, JSON Schema and operating instructions to
-  the owning skill; it never creates, modifies, moves or deletes program/data
-  files. Unregistration must never delete program/data files. Location updates
-  validate the intended existing resource and preserve its stable artifact ID.
-- Legacy migration is metadata-only: preserve registered roots and IDs. Report
-  stale/ambiguous locations for explicit reconciliation; never select a copy by
-  guessing or repair an individual artifact inside product source code.
-- Selected skills receive verified resource manifests from the catalog. Use
-  native Bash with `artifact_id` to validate availability and obtain the correct
-  working directory, entrypoint and runtime. Generic Bash remains a trusted host
-  capability, not an OS filesystem sandbox.
-- Artifact IDs use the `artifact.` prefix and remain stable once registered.
-- Keep artifact names and descriptions accurate for display and management.
-- Keep the registered JSON Schema in the artifact definition included with its
-  owning skill.
-- Artifact executables are not invoked through dedicated artifact tool
-  definitions. Do not add artifact IDs to runtime tool registries, Jev
-  curation, or progressive tool reveal. Native capabilities remain subject to
-  their normal authorization and mutation checks.
-- Changes to the artifact contract must consider registration, persistence,
-  storage containment, skill association and instructions, authorization, IPC,
-  Desktop and TUI management, progressive tool revealing, and tests.
-
-When changing artifact registration or skill association, inspect
-`alphonse/agent_v2/artifacts.py`,
-`alphonse/agent_v2/artifact_resources.py`,
-`alphonse/agent_v2/core/tools/registry/native/artifact_registration.py`, and
-`tests/test_agent_v2_artifacts.py`. When changing tool curation or skill-owned
-program access, consult `docs/v3-hierarchical-capd/03-progressive-tool-revealing.md`.
+- Household programs, supporting files and runtime data are not product source.
+  Do not copy, repair or commit them here unless the user explicitly adopts that
+  capability as a native feature. Reproduce framework defects with minimal
+  disposable temporary fixtures.
+- Migration preserves programs/data in place and never chooses an authoritative
+  copy by guessing. Stale/ambiguous locations need explicit reconciliation.
+- Preserve original IDs, owners, explicit audiences, schemas, locations and usable
+  provenance in recovery records. Migration journals/tombstones are recovery and
+  privacy state, never runtime tools or a replacement script registry.
+- Enforce contained relative resource/cwd/configuration paths, rejecting traversal
+  and symlink escape. Explicit host runtimes and a contained environment's final
+  interpreter link remain supported. Generic Bash is trusted host access, not an
+  OS filesystem sandbox.
+- Skill relevance never grants permission. Deterministic actor-scoped binding,
+  package access, revocation, phase effects, cancellation and verified completion
+  controls apply independently of the current project.
+- New skills need no artifact IDs/registration/schema. Existing private resources
+  retain containment/access guards after migration; do not remove tombstones or
+  embedded-data lifecycle guards before explicit reconciliation.
+- Consider persistence, recovery, containment, skill instructions, authorization,
+  IPC, Desktop/TUI, progressive revealing and tests when changing this contract.
 
 # Alphonse Version 3 Concepts
 

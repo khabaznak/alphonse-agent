@@ -11,10 +11,10 @@
     },
     "native.bash": {
       "type": "noul",
-      "instructions": "Does this phase need Bash for local shell, project-file, or artifact work, including direct work with a relevant CLI-backed artifact?",
+      "instructions": "Does this phase need Bash for local shell, project files, or ordinary skill scripts and CLIs?",
       "criteria": {
-        "true": "The phase needs any local command or project-file operation: discover files or search contents with find, rg, or grep; inspect or read files with cat or sed; create or edit files with shell commands; verify edits by reading them back or comparing diffs; run local processes, builds, tests, or diagnostics; or create, inspect, repair, or invoke an artifact or its CLI. Select Bash for these tasks even when the file path or CLI is already known. Favor Bash alongside a relevant CLI-backed artifact when either route may be needed.",
-        "false": "The phase is conversational or can be completed entirely by a relevant non-shell tool without local commands, filesystem access, project-file changes, or artifact CLI work."
+        "true": "The phase needs any local command or project-file operation: discover files or search contents with find, rg, or grep; inspect or read files with cat or sed; create or edit files with shell commands; verify edits by reading them back or comparing diffs; run local processes, builds, tests, or diagnostics; or create, inspect, repair, or invoke an ordinary skill script or CLI. Select Bash for these tasks even when the file path or CLI is already known. Use authorized native Bash for documented skill commands and runtime checks; scripts require no registration.",
+        "false": "The phase is conversational or can be completed entirely by a relevant non-shell tool without local commands, filesystem access, project-file changes, or skill script or CLI work."
       }
     },
     "native.deliver_message": {
@@ -47,14 +47,6 @@
       "criteria": {
         "true": "The user requested a reminder, delayed action, recurring action, or another task that must be queued at a specified time or cadence.",
         "false": "The work should happen now, has no time-based recurrence, or only needs an immediate response."
-      }
-    },
-    "native.skill_artifact_register": {
-      "type": "noul",
-      "instructions": "Does this phase need to register an existing skill-owned artifact in shared storage (or an explicit legacy location), with its schema, execution metadata and operating instructions?",
-      "criteria": {
-        "true": "The requester asks to register an artifact under an installed skill. The executable, schema, skill ID, explicit runtime and operating instructions are ready, or will be ready when Bash will create it earlier in the same phase. No active project is needed for shared or skill-package storage.",
-        "false": "The phase only uses an existing artifact, repairs an existing registration, or creates a program without registering it under a skill."
       }
     },
     "native.skill_install": {
@@ -103,14 +95,6 @@
       "criteria": {
         "true": "The user asks what reminders are active, asks whether a reminder exists, or asks to add or change a delivery channel for an existing reminder.",
         "false": "The user is creating or changing the reminder's schedule or content, or the request does not concern an existing reminder or its delivery destinations."
-      }
-    },
-    "native.artifact_metadata_update": {
-      "type": "noul",
-      "instructions": "Does this phase need to update or repair the catalog metadata, verified resource location, execution configuration paths, or explicit sharing of an existing skill-owned artifact?",
-      "criteria": {
-        "true": "The requester asks to correct an existing artifact registration's name, description, storage location, runtime/working directory, declared configuration paths, or sharing. Select this when a verified replacement location has been identified or Bash will verify it earlier in the same phase. It changes catalog and skill-definition metadata, never program/data files. The current task does not need to belong to the artifact's legacy storage project.",
-        "false": "The phase only invokes a working artifact, edits its program or data, repairs dependencies, or registers a new artifact; no existing catalog metadata needs updating. Relevance is not authorization to change another household member's registration."
       }
     },
     "native.skill_read": {

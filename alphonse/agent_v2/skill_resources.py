@@ -57,7 +57,7 @@ def private_legacy_package(skill, actor: str, resources) -> bool:
     # conservatively until that data is migrated into explicit bindings.
     return bool(resources is not None and any(
         record.skill_id == skill.skill_id and record.storage_kind == "skill"
-        and not resources.can_use(record, actor) for record in resources.store.list()
+        and not resources.can_use(record, actor) for record in resources.access_records()
     ))
 
 
@@ -136,7 +136,7 @@ def read_resource(arguments, *, context, store):
         # Resolve before comparing: ./SKILL.md must not bypass legacy filtering.
         raise PermissionError('skill_instructions_use_activation')
     if resources is not None:
-        for record in resources.store.list():
+        for record in resources.access_records():
             if record.skill_id != skill.skill_id or record.storage_kind != 'skill':
                 continue
             for value in record.execution.get('configuration_paths', []):

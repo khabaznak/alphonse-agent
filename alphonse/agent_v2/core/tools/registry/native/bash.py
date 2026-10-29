@@ -33,7 +33,6 @@ BASH_ARGUMENT_SCHEMA: dict[str, Any] = {
         "skill_id": {"type": "string", "description": "Optional selected standard skill ID. Resolve cwd from its verified installed package, independent of project. Exposes ALPHONSE_SKILL_ROOT; no script registration needed. Does not grant effects or sandbox the shell."},
         "runtime": {"type": "string", "description": "Optional documented executable: PATH name, absolute host path, or package-relative path (e.g. .venv/bin/python). Checks availability and exposes ALPHONSE_SKILL_RUNTIME; quote it in command. Does not install dependencies or automatically invoke it."},
         "required_files": {"type": "array", "items": {"type": "string"}, "description": "Optional documented prerequisite files. Relative to resolved cwd; absolute paths denote explicit host configuration. Check existence/readability before dispatch. No files are created."},
-        "artifact_id": {"type": "string", "description": "Optional registered resource from a selected skill. Validates access and availability, supplies its working directory, and exposes ALPHONSE_ARTIFACT_ENTRYPOINT and ALPHONSE_ARTIFACT_RUNTIME. Does not invoke a dedicated artifact tool or grant effects."},
         "binding_names": {"type": "array", "items": {"type": "string"}, "minItems": 1, "uniqueItems": True,
                           "description": "Explicit logical binding roles configured for this actor. Trusted scripts read ALPHONSE_SKILL_BINDINGS JSON from their process environment; never put credential values in commands."},
         "cwd": {
@@ -68,16 +67,13 @@ def build_bash_tool_definition() -> ToolDefinition:
             'documented runtime (for example imports) before mutation; missing prerequisites require actionable setup, '
             'never an automatic install or repeated failing route. A zero exit alone does not verify a write: read back '
             'effects, and on resume reconcile prior or uncertain writes before repeating them. Bash is trusted host '
-            'execution, not a filesystem sandbox; cwd does not restrict host files, network or environment. For a '
-            'registered legacy skill resource, supply artifact_id and use its verified working directory and runtime; '
-            'the current project is irrelevant to resource resolution. Without skill_id or artifact_id, a '
+            'execution, not a filesystem sandbox; cwd does not restrict host files, network or environment. Without skill_id, a '
             'project-associated task defaults to that project directory. '
             "For an ordinary user file lookup, search likely user-accessible locations such as the user's home folder, "
             "Downloads, or a path the user supplied; report the scope actually searched and ask when the intended "
             "location is unclear. Bash replaces dedicated project search, project file read, and exact text edit tools. "
-            "Use it for direct filesystem, process, build, test, diagnostic, and artifact creation or repair work. "
-            "Favor Bash alongside a relevant CLI-backed artifact when the phase may need to invoke its CLI directly, "
-            "inspect or repair its implementation, or verify behavior outside the registered artifact adapter. "
+            "Use it for direct filesystem, process, build, test, diagnostic, and skill script creation or repair work. "
+
             "For configured accounts/data, supply skill_id and binding_names. The process receives ALPHONSE_SKILL_BINDINGS JSON; "
             "credentials stay out of command arguments and known literal credentials are redacted from output. "
             "Bash is trusted host execution, not a filesystem or credential sandbox. "
@@ -144,21 +140,11 @@ def _execute_bash(arguments: dict[str, Any], *, context: ToolExecutionContext | 
     if not Path(bash_bin).exists():
         raise RuntimeError("bash_executable_missing")
 
-    resource = None
-    artifact_id = str(arguments.get("artifact_id") or "").strip()
+    if "artifact_id" in arguments:
+        raise ValueError("legacy_artifact_execution_retired: migrate resource and replan using skill commands")
     skill_id = str(arguments.get("skill_id") or "").strip()
-    if skill_id and artifact_id:
-        raise ValueError("bash_skill_and_artifact_mutually_exclusive")
     skill_root = _skill_root(skill_id, context) if skill_id else None
-    if artifact_id:
-        if context is None or context.artifact_resources is None:
-            raise ValueError("artifact_resource_context_required")
-        selection = context.task.metadata.get("v3_skill_selection") or {}
-        resource = context.artifact_resources.require_ready(artifact_id, str(context.task.user or ""), selection.get("selected_skill_ids", []))
-        if arguments.get("cwd") and Path(str(arguments["cwd"])).expanduser().resolve() != Path(resource["working_directory"]):
-            raise ValueError("artifact_working_directory_mismatch")
-        cwd = resource["working_directory"]
-    elif skill_root:
+    if skill_root:
         requested = Path(str(arguments.get("cwd") or "."))
         resolved = (skill_root / requested).resolve()
         if ".." in requested.parts or not resolved.is_relative_to(skill_root):
@@ -181,14 +167,9 @@ def _execute_bash(arguments: dict[str, Any], *, context: ToolExecutionContext | 
                 raise ValueError("bash_required_file_outside_package: relative resources must remain in the package")
         if not path.is_file() or not os.access(path, os.R_OK):
             raise ValueError(f"bash_required_file_unavailable: {path}; provide the documented configuration/resource before retrying")
-    if resource:
-        environment.update(ALPHONSE_ARTIFACT_ENTRYPOINT=resource["resolved_entrypoint_path"],
-                           ALPHONSE_ARTIFACT_RUNTIME=resource["runtime_path"], ALPHONSE_ARTIFACT_ROOT=resource["storage_root"])
     if prepared.values:
         environment["ALPHONSE_SKILL_BINDINGS"] = json.dumps(prepared.values, ensure_ascii=True)
-    timeout_seconds = _coerce_timeout(arguments.get("timeout_seconds", resource["timeout_seconds"] if resource else None))
-    if resource and timeout_seconds is not None:
-        timeout_seconds = min(timeout_seconds, resource["timeout_seconds"])
+    timeout_seconds = _coerce_timeout(arguments.get("timeout_seconds"))
     cancelled = context.cancellation_checker if context else None
     if cancelled and cancelled():
         return {"exit_code": -1, "stdout": "", "stderr": "Command cancelled before dispatch.",
