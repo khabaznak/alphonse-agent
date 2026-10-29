@@ -264,3 +264,29 @@ def test_choice_cannot_cross_skill_and_identity_cannot_be_retargeted(fixture):
         f.bindings.configure(actor_id='owner', owner_id='other', binding_id='test-binding', skill_id='skill:synthetic',
                              kind='configuration')
     assert prepare(f).values['account']['credentials']['token'] == f.secret
+
+
+def test_bound_skill_cancellation_redacts_partial_output(fixture):
+    import time
+    ctx = context(fixture)
+    started = time.monotonic()
+    from dataclasses import replace
+    ctx = replace(ctx, cancellation_checker=lambda: time.monotonic() - started > .15)
+    result = execute_bash({
+        'skill_id': 'skill:synthetic', 'binding_names': ['account'],
+        'command': 'printf "%s" "$ALPHONSE_SKILL_BINDINGS"; sleep 30',
+    }, context=ctx)
+    assert result['cancelled'] and not result['timed_out']
+    assert '[REDACTED]' in result['stdout']
+    assert json.dumps(fixture.secret)[1:-1] not in result['stdout']
+    assert fixture.secret not in result['stdout'] + result['stderr']
+
+
+def test_bound_script_preflight_is_actionable_without_leaking_configuration(fixture):
+    args = {'skill_id': 'skill:synthetic', 'binding_names': ['account'],
+            'command': 'touch should-not-run', 'required_files': ['/missing/private/config.json']}
+    with pytest.raises(RuntimeError, match='bash_required_file_unavailable.*provide the documented configuration') as error:
+        execute_bash(args, context=context(fixture))
+    assert '/missing/private' not in str(error.value)
+    assert fixture.secret not in str(error.value)
+    assert not (fixture.skills.skills_dir / 'synthetic' / 'should-not-run').exists()

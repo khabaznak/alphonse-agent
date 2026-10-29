@@ -100,7 +100,8 @@ credential revocation is a separate account operation.
 
 ## Script execution
 
-Native Bash accepts `skill_id` and `binding_names` together. The skill must be
+Native Bash accepts `skill_id` alone for [package script execution](skill-script-execution.md),
+and optional `binding_names` for managed account/data access. The skill must be
 in the task's selected skill IDs; binding ACLs are checked independently. No
 individual script is registered. Example native arguments:
 
@@ -125,7 +126,7 @@ Only requested roles are delivered. The parent environment is not modified;
 ordinary Bash dispatch strips any inherited `ALPHONSE_SKILL_BINDINGS`. Credentials
 are absent from tool arguments/receipts and the ephemeral payload's repr is private.
 Bash redacts known literal, JSON-escaped and Python-repr credential values from
-stdout/stderr **before** truncation, including timeout output. It returns static
+stdout/stderr **before** truncation, including timeout and cancellation output. It returns static
 errors on binding execution exceptions. The integration record's repr also omits
 secrets; its normal `to_dict()` remains masked.
 

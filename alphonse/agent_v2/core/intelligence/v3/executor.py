@@ -353,6 +353,9 @@ class PhaseExecutor:
             # inspection cannot stand in for OCR/vision evidence.
             result = False
             metadata["completion_blocker"] = "required_attachment_analysis_not_completed"
+        if action.status != "success":
+            result = False
+            metadata["completion_blocker"] = "tool_execution_failed"
         _record_system_one_tactical_review(task, state, subgoal, action, metadata)
         context.emit_telemetry({
             "event": "system_one_tactical_review", "task_id": task.task_id,
@@ -390,6 +393,17 @@ class PhaseExecutor:
             path = str(arguments.get("path") or "").strip().replace("\\", "/")
             if path not in set(state.phase.mutation_scope.allowed_paths):
                 raise PermissionError(f"tactical_mutation_path_not_authorized:{path or '(missing)'}")
+        if tool_id == BASH_TOOL_ID:
+            identity_keys = ("command", "skill_id", "artifact_id", "cwd", "runtime")
+            identity = tuple(str(arguments.get(key) or "").strip() for key in identity_keys)
+            for prior in state.actions:
+                prior_subgoal = next((item for item in state.phase.subgoals if item.subgoal_id == prior.subgoal_id), None)
+                mutation = prior_subgoal is not None and any(
+                    effect != SideEffectClass.READ_ONLY for effect in prior_subgoal.allowed_side_effects
+                )
+                if (prior.tool_id == BASH_TOOL_ID and mutation
+                        and tuple(str(prior.arguments.get(key) or "").strip() for key in identity_keys) == identity):
+                    raise ValueError("tactical_shell_mutation_replay_requires_reconciliation: inspect prior effects before a new write")
         raw_questions = selected.get("acceptance_questions")
         if not isinstance(raw_questions, list) or not raw_questions:
             raise ValueError("tactical_acceptance_questions_required")
@@ -552,7 +566,8 @@ def _tactical_prompt(
         "The tool entries below include their complete registry descriptors: descriptions, schemas, capabilities, tags, "
         "metadata, program behavior, and read-only semantics. Treat description and metadata as operational guidance. "
         "Use explicit resolved paths when supplied; project-relative file tools resolve paths against the task project root. "
-        "For generic native.bash calls without artifact_id, an omitted cwd uses the task project root shown below (or the host working directory if no project is associated). For an ordinary user file lookup, "
+        "For standard skill scripts use native.bash skill_id, documented runtime and configuration checks, and readback. Package paths resolve independently of the project. Do not register scripts. Never repeat a prior successful or uncertain mutation on resume: inspect its effects first. Bash is trusted host execution, not a filesystem sandbox. "
+        "For generic native.bash calls without skill_id or artifact_id, an omitted cwd uses the task project root shown below (or the host working directory if no project is associated). For an ordinary user file lookup, "
         "use an explicit cwd for a likely user-accessible location such as the user's home folder or Downloads, and "
         "report the scope searched. Do not describe a project-root search as a whole-machine search. Registered skill artifacts use their verified resource manifest and native.bash artifact_id, not the task project root. Use the manifest runtime and explicit configuration locations; do not assume python3 from PATH is the artifact environment.\n\n"
         f"Goal: {goal}\n"

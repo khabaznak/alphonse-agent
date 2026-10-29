@@ -80,6 +80,11 @@ from an explicitly authorized household-data binding outside that package.
 
 ## Execution and actual access guarantees
 
+The native execution path for #35 is documented in
+[standard skill script execution](skill-script-execution.md). Activation/revision
+lifecycle remains separate implementation work; managed actor-scoped bindings
+compose with native execution.
+
 System Two follows instructions and composes ordinary native Bash commands,
 choosing a cwd and runtime from verified package/environment information. A
 Python script can use a documented interpreter or virtual environment; do not
