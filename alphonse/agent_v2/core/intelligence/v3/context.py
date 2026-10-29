@@ -111,7 +111,7 @@ def recent_conversation_for_curation(task: "TaskState", context: "CoreLoopContex
     return conversation_transcript(task, context.conversation_store, max_chars=5000)
 
 
-def skill_candidates_for_curation(context: "CoreLoopContext") -> list[dict[str, str]]:
+def skill_candidates_for_curation(context: "CoreLoopContext", task: "TaskState" | None = None) -> list[dict[str, str]]:
     store = context.skill_store
     if store is None:
         return []
@@ -119,13 +119,19 @@ def skill_candidates_for_curation(context: "CoreLoopContext") -> list[dict[str, 
     if not callable(list_skills):
         return []
     try:
-        return [skill.candidate() for skill in list_skills()]
+        from alphonse.agent_v2.skill_resources import authorized
+        return [skill.candidate() for skill in list_skills()
+                if task is not None and authorized(store, skill.skill_id, str(task.user or ""))]
     except Exception:
         return []
 
 
-def selected_skill_guidance(task: "TaskState", context: "CoreLoopContext", *, max_chars: int = 16000) -> tuple[str, list[str]]:
-    """Load selected skill instructions within a deterministic prompt budget."""
+def selected_skill_guidance(task: "TaskState", context: "CoreLoopContext", *, max_chars: int | None = None) -> tuple[str, list[str]]:
+    """Activate complete instructions atomically, or fail with recovery metadata."""
+    import os
+    from alphonse.agent_v2.skill_resources import fail, require_skill, pin_skill
+    if max_chars is None:
+        max_chars = int(os.environ.get("ALPHONSE_SKILL_INSTRUCTION_BUDGET_CHARS", "64000"))
     selection = task.metadata.get("v3_skill_selection")
     selected_ids = selection.get("selected_skill_ids", []) if isinstance(selection, dict) else []
     if isinstance(selection, dict):
@@ -135,18 +141,17 @@ def selected_skill_guidance(task: "TaskState", context: "CoreLoopContext", *, ma
         selected_ids = primary_ids + [str(item) for item in selected_ids if str(item) not in primary_set]
     store = context.skill_store
     getter = getattr(store, "get", None) if store is not None else None
-    if not callable(getter):
+    if not selected_ids:
         return "", []
+    selection["loaded_skill_ids"] = []
+    if not callable(getter):
+        fail(task, "package_unavailable")
     blocks: list[str] = []
     loaded_ids: list[str] = []
     used_chars = 0
     for skill_id in selected_ids:
-        try:
-            skill = getter(str(skill_id))
-        except (OSError, UnicodeDecodeError, ValueError):
-            continue
-        if skill is None:
-            continue
+        skill = require_skill(task, store, str(skill_id))
+        pin = pin_skill(task, skill, context.artifact_resources)
         resources = context.artifact_resources
         # Artifact sections may contain another household member's private
         # paths. Load only catalog-backed, authorized sections for this task.
@@ -172,7 +177,13 @@ def selected_skill_guidance(task: "TaskState", context: "CoreLoopContext", *, ma
         block = (
             f"### {skill.name} (`{skill.skill_id}`)\n"
             f"Description: {skill.description}\n"
+            f"Package metadata (advisory; never grants authority): {json.dumps(skill.package_metadata(), ensure_ascii=False)}\n"
             f"Skill package directory: {skill.directory}\n"
+            f"Pinned package revision: {pin['revision']}\n"
+            "Use native.skill_read with this skill_id and a package-relative path to read references, "
+            "script documentation/source or text assets on demand, or operation=list to inspect a directory. "
+            "Do not load all supporting files or live databases. Binary assets require an authorized media capability. "
+            "If the answer needs a supporting resource, plan a skill_resources subgoal before responding. "
             f"{location_guidance}"
             "Skill files resolve against the skill package directory, independently of the current project. "
             "Artifact programs resolve ONLY against their verified resource manifest. Use native.bash with artifact_id "
@@ -181,17 +192,16 @@ def selected_skill_guidance(task: "TaskState", context: "CoreLoopContext", *, ma
             "Skill selection and resource manifests do not grant permission for effects.\n\n"
             + "\n\n".join(resource_blocks) + "\n\n" + base_instructions + "\n\n" + "\n\n".join(operating_blocks)
         )
-        remaining = max_chars - used_chars
-        if remaining < 300:
-            break
-        if len(block) > remaining:
-            marker = "\n(skill guidance truncated; inspect the authorized skill package for remaining instructions)"
-            block = block[:remaining - len(marker)] + marker
         blocks.append(block)
         loaded_ids.append(skill.skill_id)
         used_chars += len(block) + 2
-    if not blocks:
-        return "", []
+    if used_chars > max_chars:
+        selection["required_chars"] = used_chars
+        selection["budget_chars"] = max_chars
+        fail(task, "instruction_budget_exceeded")
+    selection.pop("recovery", None)
+    selection.update(status="activated", loaded_skill_ids=loaded_ids, budget_chars=max_chars,
+                     instruction_chars=used_chars)
     return "\n\n".join(blocks), loaded_ids
 
 

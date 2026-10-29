@@ -99,6 +99,10 @@ class PhaseExecutor:
                         "retry_attempt": retry_count,
                     },
                 )
+                # Inference and retry waits can outlive a package update or ACL
+                # change. Revalidate pins before native dispatch, not just when
+                # composing the prompt. Existing effect/phase checks still apply.
+                selected_skill_guidance(task, context)
                 outcome = ToolInvocationService(context=context, task=task).invoke(
                     action.tool_id, action.arguments, call_id=action.action_id
                 )
@@ -224,6 +228,7 @@ class PhaseExecutor:
         tools: tuple["ToolDescriptor", ...],
         context: "CoreLoopContext",
     ) -> dict[str, Any] | None:
+        skill_guidance, loaded_skill_ids = selected_skill_guidance(task, context)
         if self._action_selector is not None:
             selected = self._action_selector(state, subgoal, tools)
             if isinstance(selected, dict) and not selected.get("acceptance_questions"):
@@ -240,7 +245,6 @@ class PhaseExecutor:
             return selected
         if context.inference is None:
             return None
-        skill_guidance, loaded_skill_ids = selected_skill_guidance(task, context)
         skill_selection = task.metadata.get("v3_skill_selection")
         if isinstance(skill_selection, dict):
             skill_selection["loaded_skill_ids"] = loaded_skill_ids

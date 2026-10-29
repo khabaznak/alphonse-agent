@@ -1,6 +1,6 @@
 # Decision: standard skills and the Alphonse harness
 
-Status: accepted architecture; runtime and lifecycle implementation pending
+Status: accepted architecture; activation/resource loading implemented in #34; remaining runtime and lifecycle work pending
 
 Decision date: 2026-10-28
 
@@ -226,7 +226,7 @@ The following is a responsibility handoff, not permission to delete checks early
 
 [Format conformance #33](https://github.com/khabaznak/alphonse-agent/issues/33)
 implements package parsing. [Activation #34](https://github.com/khabaznak/alphonse-agent/issues/34)
-owns authorized discovery/loading/revision pinning; [execution #35](https://github.com/khabaznak/alphonse-agent/issues/35)
+owns authorized discovery/loading/revision pinning (see [implemented activation behavior](skills-activation.md)); [execution #35](https://github.com/khabaznak/alphonse-agent/issues/35)
 owns runtime resolution and native dispatch; [bindings #36](https://github.com/khabaznak/alphonse-agent/issues/36)
 owns account/data policy. [Migration #37](https://github.com/khabaznak/alphonse-agent/issues/37)
 and [management #38](https://github.com/khabaznak/alphonse-agent/issues/38)
