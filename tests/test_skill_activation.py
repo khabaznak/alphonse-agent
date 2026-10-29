@@ -345,3 +345,30 @@ def test_revision_changed_during_inference_stops_native_dispatch(library):
     with pytest.raises(SkillActivationError, match='package_changed_replan_required'):
         PhaseExecutor(reveal_policy=ToolRevealPolicy()).run(task, new_tactical_state(phase), context)
     assert not task.metadata.get('v3_skill_resource_reads')
+
+
+def test_standard_script_dispatch_rechecks_activation_access_and_revision(library, monkeypatch):
+    from alphonse.agent_v2.core.tools.registry.native.bash import execute_bash
+    skill = library.create_skill('fixture', 'Expertise', 'Run the documented command.')
+    reference = add_resource(skill)
+    task = task_for(skill)
+    context = ToolExecutionContext(task=task, messages=InMemoryMessageQueue(), skill_store=library)
+    selected_skill_guidance(task, loop(library))
+    result = execute_bash({'skill_id': skill.skill_id, 'command': 'printf fixture'}, context=context)
+    assert result['stdout'] == 'fixture'
+    reference.write_text('CHANGED_SCRIPT_PACKAGE')
+    with pytest.raises(SkillActivationError, match='package_changed_replan_required'):
+        execute_bash({'skill_id': skill.skill_id, 'command': 'printf forbidden'}, context=context)
+    monkeypatch.setattr(library, 'can_use', lambda identity, actor: False)
+    with pytest.raises(SkillActivationError, match='access_denied'):
+        execute_bash({'skill_id': skill.skill_id, 'command': 'printf forbidden'}, context=context)
+
+
+def test_resource_reader_honors_live_cancellation_checker(library):
+    skill = library.create_skill('fixture', 'Expertise', 'Use references.')
+    add_resource(skill)
+    task = task_for(skill)
+    selected_skill_guidance(task, loop(library))
+    context = ToolExecutionContext(task=task, messages=InMemoryMessageQueue(), cancellation_checker=lambda: True)
+    with pytest.raises(PermissionError, match='cancelled'):
+        read_resource({'skill_id': skill.skill_id, 'path': 'references/guide.md'}, context=context, store=library)

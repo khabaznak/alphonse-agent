@@ -31,9 +31,12 @@ an authenticated actor. Its absolute package root becomes cwd and
 `ALPHONSE_SKILL_ROOT`, independently of task project and daemon cwd. An explicit
 cwd is relative to that root (or an absolute directory within it). Traversal and
 symlink escape from package-relative cwd and prerequisite files are rejected.
-Selection does not grant execution permission. Discovery/access/revision lifecycle
-work remains owned by #34; this path uses the installed store and task selection,
-not a parallel package registry or a new access model.
+Selection does not grant execution permission. The [activation access/revision
+checks](skills-activation.md) from #34 run again at native dispatch, including
+callers outside the tactical executor. Keep live data and runtime output outside
+the reusable package: modifying a pinned package requires reactivation/replanning,
+while readback of external household output preserves the pin. This uses the
+installed store and task selection, not a parallel package registry.
 
 `runtime` resolves a PATH executable, an explicit absolute host executable, or a
 package-relative executable. It exports `ALPHONSE_SKILL_RUNTIME` without invoking

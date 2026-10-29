@@ -189,6 +189,7 @@ def selected_skill_guidance(task: "TaskState", context: "CoreLoopContext", *, ma
             "Standard scripts need no registration: use native.bash with skill_id to resolve cwd from this installed package. "
             "Follow documented runtime/dependency/configuration checks before mutations; runtime and required_files are optional Bash preflight arguments. "
             "Quote paths and use explicit interpreters for non-executable scripts. Verify writes through readback. "
+            "Keep live data and runtime output outside the reusable package; changing its instructions/code/resources invalidates the active revision pin. "
             "Legacy Artifact programs resolve ONLY against their verified resource manifest. Use native.bash with artifact_id "
             "and the registered runtime; never substitute the task project or daemon directory. "
             "An unavailable resource is a registration/runtime problem, not a reason to search the current project. "

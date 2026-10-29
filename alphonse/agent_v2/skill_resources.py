@@ -116,7 +116,7 @@ def read_resource(arguments, *, context, store):
     if context is None:
         raise PermissionError('skill_resource_context_required')
     task = context.task
-    if task.status == 'cancelled':
+    if task.status == 'cancelled' or (context.cancellation_checker and context.cancellation_checker()):
         raise PermissionError('skill_resource_cancelled')
     skill_id = str(arguments.get('skill_id') or '')
     selection = task.metadata.get('v3_skill_selection') or {}
@@ -155,6 +155,8 @@ def read_resource(arguments, *, context, store):
             if len(entries) > 200:
                 raise ValueError('skill_resource_listing_too_large: inspect a narrower directory')
         pin_skill(task, skill, resources)
+        if task.status == 'cancelled' or (context.cancellation_checker and context.cancellation_checker()):
+            raise PermissionError('skill_resource_cancelled')
         receipt = {'skill_id': skill.skill_id, 'path': relative, 'revision': pin['revision'], 'operation': 'list'}
         task.metadata.setdefault('v3_skill_resource_reads', []).append(receipt)
         return {**receipt, 'entries': entries}
@@ -173,7 +175,7 @@ def read_resource(arguments, *, context, store):
         raise ValueError('skill_resource_binary')
     # Detect package edits during the read as well as between phase calls.
     pin_skill(task, skill, resources)
-    if task.status == 'cancelled':
+    if task.status == 'cancelled' or (context.cancellation_checker and context.cancellation_checker()):
         raise PermissionError('skill_resource_cancelled')
     receipt = {'skill_id': skill.skill_id, 'path': path.relative_to(root).as_posix(),
                'revision': pin['revision'], 'sha256': hashlib.sha256(data).hexdigest()}

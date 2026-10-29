@@ -1,9 +1,10 @@
 # Skill activation and progressive resources
 
 Implemented for [issue #34](https://github.com/khabaznak/alphonse-agent/issues/34),
-under the [standard package contract](standard-skills-contract.md). Native script
-execution/runtime resolution (#35), account/data bindings (#36), lifecycle and
-legacy migration remain separate work.
+under the [standard package contract](standard-skills-contract.md). This integrates
+with [native script execution](skill-script-execution.md) (#35) and
+[account/data bindings](skill-bindings.md) (#36). Lifecycle and legacy migration
+remain separate work.
 
 ## Discovery and activation
 
@@ -72,7 +73,9 @@ fingerprint detects ordinary edits; it is not a portable lifecycle content diges
 or protection against a hostile filesystem/OS actor. Lifecycle provenance and
 immutable version storage remain separate work. An active task rejects changed
 pins rather than silently switching packages between planning and execution;
-native dispatch revalidates after inference and retry waits as well.
+native dispatch revalidates after inference and retry waits as well. The native
+Bash `skill_id` resolver also rechecks the same access policy and revision pin,
+including callers outside the tactical executor.
 
 Today's installed skill library is explicitly household-shared. `SkillStore.can_use`
 is the deterministic loading-policy boundary, checked independently at discovery,
