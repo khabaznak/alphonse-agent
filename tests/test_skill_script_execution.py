@@ -1,4 +1,5 @@
 """Disposable standard packages executed through the ordinary native Bash path."""
+from pathlib import Path
 import shlex
 import sys
 import time
@@ -148,6 +149,8 @@ def phase():
 
 def test_phase_write_resume_readback_does_not_duplicate_mutation(package):
     root, task, context = package
+    # Household output is live task data, outside the pinned reusable package.
+    target = Path(context.project_store.get_project(task.project_id).root_path) / "output.txt"
     state = new_tactical_state(phase())
     state.revealed_tool_ids = ["native.bash"]
     def review(**values):
@@ -156,18 +159,18 @@ def test_phase_write_resume_readback_does_not_duplicate_mutation(package):
             context.cancellation_checker = lambda: True
         return SystemOneTacticalReview(complete=True, confident=True, confidence=.99, answers={}, retry_approved=False)
     context.system_one = SimpleNamespace(evaluate_tactical_progress=review)
-    write = {"tool_id": "native.bash", "arguments": {"skill_id": "skill:sample", "command": "printf once >> output.txt"}, "acceptance_questions": question()}
+    write = {"tool_id": "native.bash", "arguments": {"skill_id": "skill:sample", "command": "printf once >> " + shlex.quote(str(target))}, "acceptance_questions": question()}
     PhaseExecutor(action_selector=lambda *a: write).run(task, state, context)
-    assert (root / "output.txt").read_text() == "once"
+    assert target.read_text() == "once"
     restored = TacticalState.from_dict(state.to_dict())
     restored.status = PhaseStatus.RUNNING
     restored.cancellation_pending = False
     context.cancellation_checker = None
-    read = {"tool_id": "native.bash", "arguments": {"skill_id": "skill:sample", "command": "cat output.txt"}, "acceptance_questions": question()}
+    read = {"tool_id": "native.bash", "arguments": {"skill_id": "skill:sample", "command": "cat " + shlex.quote(str(target))}, "acceptance_questions": question()}
     outcome = PhaseExecutor(action_selector=lambda *a: read).run(task, restored, context)
     assert outcome.status == PhaseStatus.PHASE_COMPLETE
     assert restored.actions[-1].result["stdout"] == "once"
-    assert (root / "output.txt").read_text() == "once"
+    assert target.read_text() == "once"
 
 
 @pytest.mark.parametrize("status", ["planned", "running", "success", "failed"])

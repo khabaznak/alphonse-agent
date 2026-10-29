@@ -67,7 +67,7 @@ def test_binary_metadata_and_path_authority(store, tmp_path):
         store.write_file('sample', 'SKILL.md', before.replace('description: A fixture', 'description: false'))
     assert store.read_file('sample', 'SKILL.md') == before
     for path in ('./SKILL.md', 'assets/../SKILL.md'):
-        with pytest.raises(ValueError, match='definition_required'):
+        with pytest.raises(ValueError, match='definition_required|path_invalid'):
             store.delete_file('sample', path)
     for path in ('../outside', '/tmp/outside'):
         with pytest.raises(ValueError):

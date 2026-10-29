@@ -22,6 +22,7 @@ class Capability(str, Enum):
     PROJECT_ARTIFACT_QUERY = "project_artifact_query"
     ARTIFACT_REGISTRATION = "skill_artifact_registration"
     SKILL_MANAGEMENT = "skill_management"
+    SKILL_RESOURCES = "skill_resources"
     MEMORY_RECALL = "memory_recall"
     ATTACHMENT_ANALYSIS = "attachment_analysis"
     DOCUMENT_EXTRACTION = "document_extraction"
@@ -60,6 +61,7 @@ class ToolRevealPolicy:
         Capability.PROJECT_ARTIFACT_QUERY.value: "Legacy artifact capability; use the selected skill and authorized local_shell for new plans.",
         Capability.ARTIFACT_REGISTRATION.value: "Register an existing skill-owned program in shared skill storage, with explicit execution metadata and operating instructions; no active project is required.",
         Capability.SKILL_MANAGEMENT.value: "Install a newly authored reusable SKILL.md instruction package after requester approval.",
+        Capability.SKILL_RESOURCES.value: "Inspect activated skill references, script documentation/source and text assets without execution or live data access.",
         Capability.MEMORY_RECALL.value: "Search the user's conversation history and bounded memory for the task's authorized scope.",
         Capability.ATTACHMENT_ANALYSIS.value: "Analyze an image attached to the current task.",
         Capability.DOCUMENT_EXTRACTION.value: "Extract information from a discovered document.",
@@ -190,6 +192,7 @@ def _has_analyzable_attachment(task: "TaskState", state: TacticalState) -> bool:
 
 _TOOL_CAPABILITIES: dict[str, tuple[str, ...]] = {
     "native.bash": (Capability.LOCAL_SHELL.value,),
+    "native.skill_read": (Capability.SKILL_RESOURCES.value,),
     "native.search_memory": (Capability.MEMORY_RECALL.value,),
     "native.skill_artifact_register": (Capability.ARTIFACT_REGISTRATION.value,),
     "native.artifact_metadata_update": (Capability.ARTIFACT_REGISTRATION.value,),
