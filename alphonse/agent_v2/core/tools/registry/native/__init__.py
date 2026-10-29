@@ -35,6 +35,7 @@ from alphonse.agent_v2.web_tools_settings import WebToolsSettings
 from alphonse.agent_v2.media_tools_settings import MediaToolsSettings
 from alphonse.agent_v2.skills import SkillStore
 from alphonse.agent_v2.core.tools.registry.native.skill_read import build_skill_read_tool_definition
+from alphonse.agent_v2.core.tools.registry.native.skill_maintain import build_skill_maintain_tool_definition
 
 
 def build_native_tool_registry(web_tools_settings: WebToolsSettings | None = None, asset_store: object | None = None, media_tools_settings: MediaToolsSettings | None = None, artifact_store: object | None = None, on_artifact_changed: object | None = None, user_store: object | None = None, skill_store: SkillStore | None = None) -> InMemoryToolRegistry:
@@ -48,6 +49,9 @@ def build_native_tool_registry(web_tools_settings: WebToolsSettings | None = Non
     registry.register(build_scheduled_task_tool_definition())
     registry.register(build_scheduled_task_delivery_tool_definition())
     if skill_store is not None:
+        registry.register(build_skill_maintain_tool_definition(
+            skill_store, is_admin=getattr(user_store, "is_admin", None),
+        ))
         registry.register(build_skill_read_tool_definition(skill_store))
         registry.register(build_skill_install_tool_definition(
             skill_store, is_admin=getattr(user_store, "is_admin", None),

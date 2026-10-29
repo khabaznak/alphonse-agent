@@ -59,7 +59,7 @@ class ToolRevealPolicy:
         Capability.PROJECT_RECORD_SEARCH.value: "Legacy project search capability; use local_shell for new plans.",
         Capability.PROJECT_FILE_INSPECTION.value: "Legacy project file inspection capability; use local_shell for new plans.",
         Capability.PROJECT_ARTIFACT_QUERY.value: "Legacy artifact capability; use the selected skill and authorized local_shell for new plans.",
-        Capability.SKILL_MANAGEMENT.value: "Install a newly authored reusable SKILL.md instruction package after requester approval.",
+        Capability.SKILL_MANAGEMENT.value: "Install or maintain reusable skill packages under the requester's authorized workflow; maintenance also requires local_shell for validation.",
         Capability.SKILL_RESOURCES.value: "Inspect activated skill references, script documentation/source and text assets without execution or live data access.",
         Capability.MEMORY_RECALL.value: "Search the user's conversation history and bounded memory for the task's authorized scope.",
         Capability.ATTACHMENT_ANALYSIS.value: "Analyze an image attached to the current task.",
@@ -159,6 +159,8 @@ def _prerequisite_failure(
     capabilities: tuple[str, ...],
 ) -> str:
     capability_set = set(capabilities)
+    if descriptor.tool_id == 'native.skill_maintain' and not {'skill_management', 'local_shell'}.issubset(subgoal.allowed_capabilities):
+        return 'skill_maintenance_capabilities_required'
     if Capability.ATTACHMENT_ANALYSIS.value in capability_set and not _has_analyzable_attachment(task, state):
         return "attachment_required"
     if Capability.EXACT_TEXT_MUTATION.value in capability_set:

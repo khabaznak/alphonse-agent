@@ -75,6 +75,24 @@ account/data access or changing an existing package's behavior.
    A draft-only request ends with the draft.
 4. `native.skill_install` creates an instruction-only SKILL.md from name, description
    and instructions after review/approval; it cannot import a resource directory.
+   For an authorized repair/extension, use `native.skill_maintain`: request `status`
+   for the owning skill's `local_revision`, then `apply` with that `expected_revision`,
+   a stable `operation_id`, a `files` map containing updated `SKILL.md` and focused
+   edits under `scripts/`, `references/`, `assets/`, and `checks` (Bash commands).
+   Authorize `skill_management` plus `local_shell` with `local_skill_installation`
+   effects. This requires a household administrator. Existing workflow authorization
+   covers its files; do not ask for approval for each file. Include runtime and
+   dependency checks, synthetic behavior tests and expected readback in the checks.
+   Checks run in the staged root, must leave package resources unchanged and must
+   not mutate live services or require new credentials. No artifact registration.
+   Bundled packages become explicit household overrides only after validation.
+   Reuse the same operation ID on resume; a failed/incomplete receipt requires
+   inspecting effects and retained drafts before starting a new operation. Recovery
+   copies retain prior content; restore reviewed reusable files through a new
+   validated edit, preserving current live data. Report an unrecoverable blocker
+   with the recovery location and required dependency/access setup. The publishing
+   task reloads complete instructions with an audited pin transition; older tasks
+   must reselect. Verify normal use in a fresh conversation after publication.
    For complete packages use an available admin package import/replace surface. If
    that surface is unavailable, deliver the staged package and explain the needed
    import step; do not invent a tool or claim installation. Verify the installed
