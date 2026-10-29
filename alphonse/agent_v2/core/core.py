@@ -197,6 +197,8 @@ class ToolExecutionContext:
     conversation_store: Any | None = None
     identity_resolver: Any | None = None
     artifact_resources: Any | None = None
+    skill_store: Any | None = None
+    cancellation_checker: Callable[[], bool] | None = None
 
     def record_memory_event(self, task: TaskState, heading: str, content: Any) -> None:
         """Record an event through the task's configured memory adapter."""
@@ -275,6 +277,8 @@ class CoreLoopContext:
             user_timezone_provider=self.user_timezone_provider,
             identity_resolver=self.identity_resolver,
             artifact_resources=self.artifact_resources,
+            skill_store=self.skill_store,
+            cancellation_checker=self.cancellation_checker,
         )
 
     def is_cancelled(self) -> bool:

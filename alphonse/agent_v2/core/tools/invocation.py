@@ -131,6 +131,8 @@ def _descriptor_for(registry: Any, tool_id: str) -> Any | None:
 def _bash_result_error(tool_id: str, result: Any) -> str:
     if tool_id != "native.bash" or not isinstance(result, dict):
         return ""
+    if result.get("cancelled") is True:
+        return "Bash command cancelled; reconcile any partial effects before retrying."
     if result.get("timed_out") is True:
         return str(result.get("stderr") or "Bash command timed out.").strip()
     try:
