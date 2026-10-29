@@ -197,6 +197,9 @@ class ToolExecutionContext:
     conversation_store: Any | None = None
     identity_resolver: Any | None = None
     artifact_resources: Any | None = None
+    skill_store: Any | None = None
+    cancellation_checker: Callable[[], bool] | None = None
+    skill_bindings: Any | None = None
 
     def record_memory_event(self, task: TaskState, heading: str, content: Any) -> None:
         """Record an event through the task's configured memory adapter."""
@@ -232,6 +235,7 @@ class CoreLoopContext:
     system_one: Any | None = None
     skill_store: Any | None = None
     artifact_resources: Any | None = None
+    skill_bindings: Any | None = None
     consumed_message_ids: list[str] = field(default_factory=list)
 
     def consume_message(self, selector: MessageSelector | None = None) -> QueuedMessage | None:
@@ -275,6 +279,9 @@ class CoreLoopContext:
             user_timezone_provider=self.user_timezone_provider,
             identity_resolver=self.identity_resolver,
             artifact_resources=self.artifact_resources,
+            skill_store=self.skill_store,
+            cancellation_checker=self.cancellation_checker,
+            skill_bindings=self.skill_bindings,
         )
 
     def is_cancelled(self) -> bool:
@@ -517,6 +524,7 @@ class AlphonseCore:
     system_one: Any | None = None
     skill_store: Any | None = None
     artifact_resources: Any | None = None
+    skill_bindings: Any | None = None
     question_store: Any | None = None
     project_store: Any | None = None
     schedule_store: Any | None = None
@@ -621,6 +629,7 @@ class AlphonseCore:
                 system_one=self.system_one,
                 skill_store=self.skill_store,
                 artifact_resources=self.artifact_resources,
+                skill_bindings=self.skill_bindings,
                 question_store=self.question_store,
                 project_store=self.project_store,
                 schedule_store=self.schedule_store,

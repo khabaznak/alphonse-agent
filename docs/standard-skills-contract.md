@@ -80,6 +80,11 @@ from an explicitly authorized household-data binding outside that package.
 
 ## Execution and actual access guarantees
 
+The native execution path for #35 is documented in
+[standard skill script execution](skill-script-execution.md). Activation/revision
+lifecycle remains separate implementation work; managed actor-scoped bindings
+compose with native execution.
+
 System Two follows instructions and composes ordinary native Bash commands,
 choosing a cwd and runtime from verified package/environment information. A
 Python script can use a documented interpreter or virtual environment; do not
@@ -245,3 +250,7 @@ never copies of live household programs or databases. Until those replacements
 pass, the [legacy resource contract](skill-artifact-resources.md) remains the
 implementation baseline. Issue #7's Artifact Smith direction is superseded;
 this decision does not implement another registration system.
+
+The account/data policy and trusted execution delivery boundary are implemented
+in [skill bindings](skill-bindings.md) (#36). Package activation, environment
+resolution, management UI and legacy migration remain their separate workstreams.

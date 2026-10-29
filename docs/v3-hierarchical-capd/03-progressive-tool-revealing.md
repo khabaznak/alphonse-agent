@@ -225,6 +225,11 @@ binding checks replace catalog responsibilities only after their implementation
 and migration are verified. Generic Bash remains trusted host execution; resolver
 containment does not sandbox arbitrary commands or subprocesses.
 
+The [standard script execution path](../skill-script-execution.md) uses the same
+`native.bash` capability with an optional selected `skill_id`, package-relative cwd
+and documented prerequisite checks. No script enters the native registry or Jev
+curation. Legacy `artifact_id` handling remains available during migration.
+
 ## Legacy skill-owned resource resolution
 
 The following is current transitional behavior. Preserve these checks until the
