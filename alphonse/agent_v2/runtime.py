@@ -53,6 +53,7 @@ from alphonse.agent_v2.code_mode_settings import SQLiteCodeModeSettingsStore
 from alphonse.agent_v2.media_tools_settings import SQLiteMediaToolsSettingsStore
 from alphonse.agent_v2.assets import SQLiteAssetStore
 from alphonse.agent_v2.artifacts import SQLiteArtifactStore
+from alphonse.agent_v2.skill_bindings import SkillBindings
 from alphonse.agent_v2.artifact_resources import ArtifactResources
 from alphonse.agent_v2.skills import SkillStore
 from alphonse.agent_v2.memory_settings import SQLiteMemorySettingsStore
@@ -314,6 +315,7 @@ def build_runtime_host(
         system_one=build_system_one_provider(system_one_settings_store.get()),
         skill_store=skill_store,
         artifact_resources=artifact_resources,
+        skill_bindings=SkillBindings(integration_store, user_store, skill_store),
     )
     runtime = V2RuntimeHost(
         user=str(user or (user_store.admin_user().user_id if user_store.admin_user() else "local")).strip() or "local",

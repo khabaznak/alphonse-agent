@@ -44,7 +44,10 @@ Missing/non-executable runtimes fail before dispatch with setup guidance.
 absolute host configuration paths. Missing files fail before dispatch; no files
 or environments are created and no dependencies are installed by resolution.
 Absolute configuration paths are explicit host prerequisites, not managed data
-bindings or an authorization grant; account/data binding policy belongs to #36.
+bindings or an authorization grant; managed account/data access uses the [actor-scoped bindings](skill-bindings.md) from #36.
+Supply optional `binding_names` with `skill_id` to resolve configured roles and
+deliver `ALPHONSE_SKILL_BINDINGS`; omitting binding roles requires no binding setup.
+Credential redaction applies before output truncation, including cancellation.
 
 Executable availability is not dependency readiness. System Two must run the
 package's documented dependency/version check with that runtime before a mutation
