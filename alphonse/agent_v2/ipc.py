@@ -264,8 +264,11 @@ class V2DaemonClient:
     def install_skill(self, *, actor_user_id: str, source_directory: str) -> dict[str, Any]:
         return self.request("install_skill", actor_user_id=actor_user_id, source_directory=source_directory)
 
-    def replace_skill(self, *, actor_user_id: str, skill_id: str, source_directory: str) -> dict[str, Any]:
-        return self.request("replace_skill", actor_user_id=actor_user_id, skill_id=skill_id, source_directory=source_directory)
+    def customize_skill(self, *, actor_user_id: str, skill_id: str) -> dict[str, Any]:
+        return self.request("customize_skill", actor_user_id=actor_user_id, skill_id=skill_id)
+
+    def replace_skill(self, *, actor_user_id: str, skill_id: str, source_directory: str, resolution: str = "") -> dict[str, Any]:
+        return self.request("replace_skill", actor_user_id=actor_user_id, skill_id=skill_id, source_directory=source_directory, resolution=resolution)
 
     def delete_skill(self, *, actor_user_id: str, skill_id: str) -> dict[str, Any]:
         return self.request("delete_skill", actor_user_id=actor_user_id, skill_id=skill_id)
@@ -555,6 +558,8 @@ class V2DaemonServer:
             return {"skill": self.daemon.update_skill(actor_user_id=str(params.get("actor_user_id") or ""), skill_id=str(params.get("skill_id") or ""), description=str(params.get("description") or ""))}
         if method == "read_skill_file":
             return self.daemon.read_skill_file(actor_user_id=str(params.get("actor_user_id") or ""), skill_id=str(params.get("skill_id") or ""), path=str(params.get("path") or ""))
+        if method == "customize_skill":
+            return {"skill": self.daemon.customize_skill(actor_user_id=str(params.get("actor_user_id") or ""), skill_id=str(params.get("skill_id") or ""))}
         if method == "write_skill_file":
             return self.daemon.write_skill_file(actor_user_id=str(params.get("actor_user_id") or ""), skill_id=str(params.get("skill_id") or ""), path=str(params.get("path") or ""), content=str(params.get("content") or ""))
         if method == "delete_skill_file":
@@ -566,7 +571,7 @@ class V2DaemonServer:
         if method == "export_skill":
             return self.daemon.export_skill(actor_user_id=str(params.get("actor_user_id") or ""), skill_id=str(params.get("skill_id") or ""), destination_directory=str(params.get("destination_directory") or ""))
         if method == "replace_skill":
-            return {"skill": self.daemon.replace_skill(actor_user_id=str(params.get("actor_user_id") or ""), skill_id=str(params.get("skill_id") or ""), source_directory=str(params.get("source_directory") or ""))}
+            return {"skill": self.daemon.replace_skill(actor_user_id=str(params.get("actor_user_id") or ""), skill_id=str(params.get("skill_id") or ""), source_directory=str(params.get("source_directory") or ""), resolution=str(params.get("resolution") or ""))}
         if method == "delete_skill":
             return self.daemon.delete_skill(actor_user_id=str(params.get("actor_user_id") or ""), skill_id=str(params.get("skill_id") or ""))
         if method == "web_tools_settings":

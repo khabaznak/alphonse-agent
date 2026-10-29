@@ -790,6 +790,8 @@ class V2Daemon:
         return {
             "skills": [
                 {**item.candidate(), **item.package_metadata(), "directory": item.directory, "editable": Path(item.directory).resolve().is_relative_to(self.runtime.skill_store.skills_dir.resolve()), "instructions": item.instructions,
+                 "lifecycle": self.runtime.skill_store.management_status(item.skill_id),
+                 "bindings": self.runtime.core.skill_bindings.management_status(actor_id=actor_user_id, skill_id=item.skill_id),
                  "files": self.runtime.skill_store.files(item.skill_id),
                  "artifacts": [{**record.to_dict(), "resource": self.runtime.core.artifact_resources.describe(record, actor_user_id)} for record in artifacts if record.skill_id == item.skill_id]}
                 for item in self.runtime.skill_store.list_skills()
@@ -831,15 +833,19 @@ class V2Daemon:
 
     def create_skill(self, *, actor_user_id: str, name: str, description: str, instructions: str) -> dict[str, str]:
         self._require_admin(actor_user_id)
-        return self.runtime.skill_store.create_skill(name, description, instructions).candidate()
+        return self.runtime.skill_store.create_skill(name, description, instructions, owner=actor_user_id).candidate()
 
     def update_skill(self, *, actor_user_id: str, skill_id: str, description: str) -> dict[str, str]:
         self._require_admin(actor_user_id)
         return self.runtime.skill_store.update_description(skill_id, description).candidate()
 
-    def read_skill_file(self, *, actor_user_id: str, skill_id: str, path: str) -> dict[str, str]:
+    def customize_skill(self, *, actor_user_id: str, skill_id: str) -> dict[str, str]:
         self._require_admin(actor_user_id)
-        return {"content": self.runtime.skill_store.read_file(skill_id, path)}
+        return self.runtime.skill_store.customize(skill_id, owner=actor_user_id).candidate()
+
+    def read_skill_file(self, *, actor_user_id: str, skill_id: str, path: str) -> dict[str, Any]:
+        self._require_admin(actor_user_id)
+        return self.runtime.skill_store.inspect_file(skill_id, path)
 
     def write_skill_file(self, *, actor_user_id: str, skill_id: str, path: str, content: str) -> dict[str, str]:
         self._require_admin(actor_user_id)
@@ -857,19 +863,22 @@ class V2Daemon:
 
     def install_skill(self, *, actor_user_id: str, source_directory: str) -> dict[str, str]:
         self._require_admin(actor_user_id)
-        installed = self.runtime.skill_store.install_directory(source_directory)
+        installed = self.runtime.skill_store.install_directory(source_directory, owner=actor_user_id)
         return installed.candidate()
 
     def export_skill(self, *, actor_user_id: str, skill_id: str, destination_directory: str) -> dict[str, str]:
         self._require_admin(actor_user_id)
+        canonical_id = "skill:" + str(skill_id).removeprefix("skill:")
+        if any(item.skill_id == canonical_id for item in self.runtime.artifact_store.list()):
+            raise ValueError("skill_has_registered_artifacts: reconcile legacy resources before portable export")
         return {"directory": str(self.runtime.skill_store.export_directory(skill_id, destination_directory))}
 
-    def replace_skill(self, *, actor_user_id: str, skill_id: str, source_directory: str) -> dict[str, str]:
+    def replace_skill(self, *, actor_user_id: str, skill_id: str, source_directory: str, resolution: str = "") -> dict[str, str]:
         self._require_admin(actor_user_id)
         canonical_id = "skill:" + str(skill_id).removeprefix("skill:")
         if any(item.skill_id == canonical_id for item in self.runtime.artifact_store.list()):
             raise ValueError("skill_has_registered_artifacts: preserve and unregister its artifacts before replacing the package")
-        replaced = self.runtime.skill_store.replace_directory(skill_id, source_directory)
+        replaced = self.runtime.skill_store.replace_directory(skill_id, source_directory, resolution=resolution)
         return replaced.candidate()
 
     def delete_skill(self, *, actor_user_id: str, skill_id: str) -> dict[str, str]:
