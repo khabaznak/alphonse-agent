@@ -356,6 +356,11 @@ class HierarchicalCAPDProcessor:
         )
         phase = plan_phase(task, context)
         prior = _deduplicated_history_evidence(task.metadata.get("v3_phase_history"))
+        seen = {item.get("evidence_ref") for item in prior}
+        for receipt in task.metadata.get("v3_resumption_evidence", []):
+            if isinstance(receipt, dict) and receipt.get("evidence_ref") not in seen:
+                prior.append(dict(receipt))
+                seen.add(receipt.get("evidence_ref"))
         return new_tactical_state(phase, cumulative_evidence=prior)
 
     @staticmethod

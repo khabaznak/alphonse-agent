@@ -1,0 +1,363 @@
+{
+  "mode": "deterministic-models-real-processor-and-native-shell",
+  "budgets": {
+    "planning_calls": 4,
+    "tactical_calls": 10,
+    "command_timeout_seconds": 5,
+    "wall_seconds": 30,
+    "automatic_shell_retries": 0
+  },
+  "mechanical_pass": true,
+  "checks": {
+    "no_install": true,
+    "terminal_failure": true,
+    "failed_routes_preserved": true,
+    "blocker_explained": true
+  },
+  "calls": {
+    "learning": {
+      "planning": 4,
+      "tactical": 4
+    },
+    "fresh": null
+  },
+  "approval": null,
+  "tasks": {
+    "initial_task": {
+      "task_id": "learn",
+      "status": "failed",
+      "project_id": "",
+      "outcome": {
+        "status": "failed",
+        "reason": "Both available routes failed; restore sensor connectivity."
+      },
+      "response": {
+        "source": "native.respond",
+        "tool_call_id": "action-4aee7c60-8606-4699-8944-f859c9a70024",
+        "message": "Both primary and backup routes are unavailable. I could not obtain a fresh reading or install a verified workflow. Restore sensor connectivity before trying again."
+      },
+      "selection": {
+        "selected_skill_ids": [],
+        "primary_skill_ids": [],
+        "secondary_skill_ids": [],
+        "candidate_ids": [],
+        "scores": {},
+        "status": "curated",
+        "loaded_skill_ids": []
+      },
+      "phases": [
+        {
+          "phase_id": "initial-route",
+          "outcome": {
+            "phase_id": "initial-route",
+            "status": "blocked",
+            "reason": "Bash exited with code 1. route unavailable: no measurement",
+            "evidence_refs": [
+              "tactical-action:action-6ad10a64-ed2c-4678-ba04-dd1afc10fe84"
+            ],
+            "blockers": [
+              "Bash exited with code 1. route unavailable: no measurement"
+            ]
+          },
+          "evidence": [
+            {
+              "evidence_ref": "tactical-action:action-6ad10a64-ed2c-4678-ba04-dd1afc10fe84",
+              "subgoal_id": "primary",
+              "tool_id": "native.bash",
+              "arguments": {
+                "command": "'<python>' '<temporary-root>/fixture host with spaces/sensor.py' primary",
+                "timeout_seconds": 5
+              },
+              "status": "failed",
+              "result": {
+                "exit_code": 1,
+                "stdout": "",
+                "stderr": "route unavailable: no measurement\n",
+                "cancelled": false,
+                "timed_out": false,
+                "cwd": "/private/tmp/alphonse-issue-28",
+                "timeout_seconds": 5.0,
+                "duration_ms": 26
+              },
+              "error": "Bash exited with code 1. route unavailable: no measurement"
+            }
+          ]
+        },
+        {
+          "phase_id": "recover-and-draft",
+          "outcome": {
+            "phase_id": "recover-and-draft",
+            "status": "blocked",
+            "reason": "Bash exited with code 1. route unavailable: no measurement",
+            "evidence_refs": [
+              "tactical-action:action-6ad10a64-ed2c-4678-ba04-dd1afc10fe84",
+              "tactical-action:action-d66cd924-32b6-4a1e-8b60-7f71d12bbd83"
+            ],
+            "blockers": [
+              "Bash exited with code 1. route unavailable: no measurement"
+            ]
+          },
+          "evidence": [
+            {
+              "evidence_ref": "tactical-action:action-d66cd924-32b6-4a1e-8b60-7f71d12bbd83",
+              "subgoal_id": "backup",
+              "tool_id": "native.bash",
+              "arguments": {
+                "command": "'<python>' '<temporary-root>/fixture host with spaces/sensor.py' backup",
+                "timeout_seconds": 5
+              },
+              "status": "failed",
+              "result": {
+                "exit_code": 1,
+                "stdout": "",
+                "stderr": "route unavailable: no measurement\n",
+                "cancelled": false,
+                "timed_out": false,
+                "cwd": "/private/tmp/alphonse-issue-28",
+                "timeout_seconds": 5.0,
+                "duration_ms": 21
+              },
+              "error": "Bash exited with code 1. route unavailable: no measurement"
+            }
+          ]
+        },
+        {
+          "phase_id": "inspect-remaining-routes",
+          "outcome": {
+            "phase_id": "inspect-remaining-routes",
+            "status": "phase_complete",
+            "reason": "All phase subgoals completed with recorded evidence.",
+            "evidence_refs": [
+              "tactical-action:action-6ad10a64-ed2c-4678-ba04-dd1afc10fe84",
+              "tactical-action:action-d66cd924-32b6-4a1e-8b60-7f71d12bbd83",
+              "tactical-action:action-9eea27b7-58ba-4a26-87aa-77f8dc38bb08"
+            ],
+            "blockers": []
+          },
+          "evidence": [
+            {
+              "evidence_ref": "tactical-action:action-9eea27b7-58ba-4a26-87aa-77f8dc38bb08",
+              "subgoal_id": "diagnose",
+              "tool_id": "native.bash",
+              "arguments": {
+                "command": "'<python>' '<temporary-root>/fixture host with spaces/sensor.py' --help",
+                "timeout_seconds": 5
+              },
+              "status": "success",
+              "result": {
+                "exit_code": 0,
+                "stdout": "Available sensor routes: primary, backup. Repair the host connection if both are unavailable.\n",
+                "stderr": "",
+                "cancelled": false,
+                "timed_out": false,
+                "cwd": "/private/tmp/alphonse-issue-28",
+                "timeout_seconds": 5.0,
+                "duration_ms": 20
+              },
+              "error": ""
+            }
+          ]
+        },
+        {
+          "phase_id": "explain-unresolved",
+          "outcome": {
+            "phase_id": "explain-unresolved",
+            "status": "phase_complete",
+            "reason": "All phase subgoals completed with recorded evidence.",
+            "evidence_refs": [
+              "tactical-action:action-6ad10a64-ed2c-4678-ba04-dd1afc10fe84",
+              "tactical-action:action-d66cd924-32b6-4a1e-8b60-7f71d12bbd83",
+              "tactical-action:action-9eea27b7-58ba-4a26-87aa-77f8dc38bb08",
+              "tactical-action:action-4aee7c60-8606-4699-8944-f859c9a70024"
+            ],
+            "blockers": []
+          },
+          "evidence": [
+            {
+              "evidence_ref": "tactical-action:action-4aee7c60-8606-4699-8944-f859c9a70024",
+              "subgoal_id": "respond",
+              "tool_id": "native.respond",
+              "arguments": {
+                "message": "Both primary and backup routes are unavailable. I could not obtain a fresh reading or install a verified workflow. Restore sensor connectivity before trying again."
+              },
+              "status": "success",
+              "result": {
+                "message": "Both primary and backup routes are unavailable. I could not obtain a fresh reading or install a verified workflow. Restore sensor connectivity before trying again.",
+                "tone": "neutral"
+              },
+              "error": ""
+            }
+          ]
+        }
+      ]
+    },
+    "learning_task": {
+      "task_id": "learn",
+      "status": "failed",
+      "project_id": "",
+      "outcome": {
+        "status": "failed",
+        "reason": "Both available routes failed; restore sensor connectivity."
+      },
+      "response": {
+        "source": "native.respond",
+        "tool_call_id": "action-4aee7c60-8606-4699-8944-f859c9a70024",
+        "message": "Both primary and backup routes are unavailable. I could not obtain a fresh reading or install a verified workflow. Restore sensor connectivity before trying again."
+      },
+      "selection": {
+        "selected_skill_ids": [],
+        "primary_skill_ids": [],
+        "secondary_skill_ids": [],
+        "candidate_ids": [],
+        "scores": {},
+        "status": "curated",
+        "loaded_skill_ids": []
+      },
+      "phases": [
+        {
+          "phase_id": "initial-route",
+          "outcome": {
+            "phase_id": "initial-route",
+            "status": "blocked",
+            "reason": "Bash exited with code 1. route unavailable: no measurement",
+            "evidence_refs": [
+              "tactical-action:action-6ad10a64-ed2c-4678-ba04-dd1afc10fe84"
+            ],
+            "blockers": [
+              "Bash exited with code 1. route unavailable: no measurement"
+            ]
+          },
+          "evidence": [
+            {
+              "evidence_ref": "tactical-action:action-6ad10a64-ed2c-4678-ba04-dd1afc10fe84",
+              "subgoal_id": "primary",
+              "tool_id": "native.bash",
+              "arguments": {
+                "command": "'<python>' '<temporary-root>/fixture host with spaces/sensor.py' primary",
+                "timeout_seconds": 5
+              },
+              "status": "failed",
+              "result": {
+                "exit_code": 1,
+                "stdout": "",
+                "stderr": "route unavailable: no measurement\n",
+                "cancelled": false,
+                "timed_out": false,
+                "cwd": "/private/tmp/alphonse-issue-28",
+                "timeout_seconds": 5.0,
+                "duration_ms": 26
+              },
+              "error": "Bash exited with code 1. route unavailable: no measurement"
+            }
+          ]
+        },
+        {
+          "phase_id": "recover-and-draft",
+          "outcome": {
+            "phase_id": "recover-and-draft",
+            "status": "blocked",
+            "reason": "Bash exited with code 1. route unavailable: no measurement",
+            "evidence_refs": [
+              "tactical-action:action-6ad10a64-ed2c-4678-ba04-dd1afc10fe84",
+              "tactical-action:action-d66cd924-32b6-4a1e-8b60-7f71d12bbd83"
+            ],
+            "blockers": [
+              "Bash exited with code 1. route unavailable: no measurement"
+            ]
+          },
+          "evidence": [
+            {
+              "evidence_ref": "tactical-action:action-d66cd924-32b6-4a1e-8b60-7f71d12bbd83",
+              "subgoal_id": "backup",
+              "tool_id": "native.bash",
+              "arguments": {
+                "command": "'<python>' '<temporary-root>/fixture host with spaces/sensor.py' backup",
+                "timeout_seconds": 5
+              },
+              "status": "failed",
+              "result": {
+                "exit_code": 1,
+                "stdout": "",
+                "stderr": "route unavailable: no measurement\n",
+                "cancelled": false,
+                "timed_out": false,
+                "cwd": "/private/tmp/alphonse-issue-28",
+                "timeout_seconds": 5.0,
+                "duration_ms": 21
+              },
+              "error": "Bash exited with code 1. route unavailable: no measurement"
+            }
+          ]
+        },
+        {
+          "phase_id": "inspect-remaining-routes",
+          "outcome": {
+            "phase_id": "inspect-remaining-routes",
+            "status": "phase_complete",
+            "reason": "All phase subgoals completed with recorded evidence.",
+            "evidence_refs": [
+              "tactical-action:action-6ad10a64-ed2c-4678-ba04-dd1afc10fe84",
+              "tactical-action:action-d66cd924-32b6-4a1e-8b60-7f71d12bbd83",
+              "tactical-action:action-9eea27b7-58ba-4a26-87aa-77f8dc38bb08"
+            ],
+            "blockers": []
+          },
+          "evidence": [
+            {
+              "evidence_ref": "tactical-action:action-9eea27b7-58ba-4a26-87aa-77f8dc38bb08",
+              "subgoal_id": "diagnose",
+              "tool_id": "native.bash",
+              "arguments": {
+                "command": "'<python>' '<temporary-root>/fixture host with spaces/sensor.py' --help",
+                "timeout_seconds": 5
+              },
+              "status": "success",
+              "result": {
+                "exit_code": 0,
+                "stdout": "Available sensor routes: primary, backup. Repair the host connection if both are unavailable.\n",
+                "stderr": "",
+                "cancelled": false,
+                "timed_out": false,
+                "cwd": "/private/tmp/alphonse-issue-28",
+                "timeout_seconds": 5.0,
+                "duration_ms": 20
+              },
+              "error": ""
+            }
+          ]
+        },
+        {
+          "phase_id": "explain-unresolved",
+          "outcome": {
+            "phase_id": "explain-unresolved",
+            "status": "phase_complete",
+            "reason": "All phase subgoals completed with recorded evidence.",
+            "evidence_refs": [
+              "tactical-action:action-6ad10a64-ed2c-4678-ba04-dd1afc10fe84",
+              "tactical-action:action-d66cd924-32b6-4a1e-8b60-7f71d12bbd83",
+              "tactical-action:action-9eea27b7-58ba-4a26-87aa-77f8dc38bb08",
+              "tactical-action:action-4aee7c60-8606-4699-8944-f859c9a70024"
+            ],
+            "blockers": []
+          },
+          "evidence": [
+            {
+              "evidence_ref": "tactical-action:action-4aee7c60-8606-4699-8944-f859c9a70024",
+              "subgoal_id": "respond",
+              "tool_id": "native.respond",
+              "arguments": {
+                "message": "Both primary and backup routes are unavailable. I could not obtain a fresh reading or install a verified workflow. Restore sensor connectivity before trying again."
+              },
+              "status": "success",
+              "result": {
+                "message": "Both primary and backup routes are unavailable. I could not obtain a fresh reading or install a verified workflow. Restore sensor connectivity before trying again.",
+                "tone": "neutral"
+              },
+              "error": ""
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

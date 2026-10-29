@@ -1,0 +1,517 @@
+{
+  "mode": "deterministic-models-real-processor-and-native-shell",
+  "budgets": {
+    "planning_calls": 4,
+    "tactical_calls": 10,
+    "command_timeout_seconds": 5,
+    "wall_seconds": 30,
+    "automatic_shell_retries": 0
+  },
+  "mechanical_pass": true,
+  "checks": {
+    "temporary_stores_only": true,
+    "recovery_parked_for_approval": true,
+    "no_install_before_approval": true,
+    "duplicate_answer_ignored": true,
+    "exact_install_readback": true,
+    "learning_completed": true,
+    "fresh_task_completed": true,
+    "ordinary_discovery": true,
+    "no_project_required": true,
+    "single_backup_read": true,
+    "no_artifact_argument": true,
+    "one_install": true,
+    "fresh_result": true,
+    "accurate_final_response": true
+  },
+  "calls": {
+    "learning": {
+      "planning": 3,
+      "tactical": 5
+    },
+    "fresh": {
+      "planning": 1,
+      "tactical": 2
+    }
+  },
+  "approval": {
+    "evidence_ref": "question-answer:2176f350-2a78-4cee-b28d-2aaab70d7e6c",
+    "task_id": "learn",
+    "phase_id": "recover-and-draft",
+    "subgoal_id": "approve",
+    "tool_id": "native.ask_question",
+    "kind": "authenticated_question_answer",
+    "status": "success",
+    "recorded_at": "2026-10-29T05:17:54.301471+00:00",
+    "result": {
+      "question_id": "2176f350-2a78-4cee-b28d-2aaab70d7e6c",
+      "question_kind": "yes_no",
+      "answer": {
+        "answer": true
+      },
+      "answered_by": "fixture-admin",
+      "question": "Approve installation of this exact complete skill draft?\n{\n  \"name\": \"study-temperature\",\n  \"description\": \"Read the current study temperature using the recovered sensor route.\",\n  \"instructions\": \"The primary route failed. Prefer the verified backup route. Run '<python>' '<temporary-root>/fixture host with spaces/sensor.py' backup. Require exit 0 and report the temperature, source and timestamp from the fresh JSON response. If unavailable, report the failure; do not fabricate a reading. Do not repeat the failed primary route without new evidence.\"\n}"
+    }
+  },
+  "tasks": {
+    "initial_task": {
+      "task_id": "learn",
+      "status": "waiting_user",
+      "project_id": "",
+      "outcome": null,
+      "response": null,
+      "selection": {
+        "selected_skill_ids": [],
+        "primary_skill_ids": [],
+        "secondary_skill_ids": [],
+        "candidate_ids": [],
+        "scores": {},
+        "status": "curated",
+        "loaded_skill_ids": []
+      },
+      "phases": [
+        {
+          "phase_id": "initial-route",
+          "outcome": {
+            "phase_id": "initial-route",
+            "status": "blocked",
+            "reason": "Bash exited with code 1. route unavailable: no measurement",
+            "evidence_refs": [
+              "tactical-action:action-d426f175-ad45-40ac-9bfc-385d80f71af3"
+            ],
+            "blockers": [
+              "Bash exited with code 1. route unavailable: no measurement"
+            ]
+          },
+          "evidence": [
+            {
+              "evidence_ref": "tactical-action:action-d426f175-ad45-40ac-9bfc-385d80f71af3",
+              "subgoal_id": "primary",
+              "tool_id": "native.bash",
+              "arguments": {
+                "command": "'<python>' '<temporary-root>/fixture host with spaces/sensor.py' primary",
+                "timeout_seconds": 5
+              },
+              "status": "failed",
+              "result": {
+                "exit_code": 1,
+                "stdout": "",
+                "stderr": "route unavailable: no measurement\n",
+                "cancelled": false,
+                "timed_out": false,
+                "cwd": "/private/tmp/alphonse-issue-28",
+                "timeout_seconds": 5.0,
+                "duration_ms": 24
+              },
+              "error": "Bash exited with code 1. route unavailable: no measurement"
+            }
+          ]
+        },
+        {
+          "phase_id": "recover-and-draft",
+          "outcome": {
+            "phase_id": "recover-and-draft",
+            "status": "waiting_user",
+            "reason": "A tactical action requires user input.",
+            "evidence_refs": [
+              "tactical-action:action-d426f175-ad45-40ac-9bfc-385d80f71af3",
+              "tactical-action:action-b6b014b0-934a-4453-86f7-a024f0262ac9",
+              "tactical-action:action-98ffc830-fb8a-4344-bd8b-96030db3af99"
+            ],
+            "blockers": []
+          },
+          "evidence": [
+            {
+              "evidence_ref": "tactical-action:action-b6b014b0-934a-4453-86f7-a024f0262ac9",
+              "subgoal_id": "backup",
+              "tool_id": "native.bash",
+              "arguments": {
+                "command": "'<python>' '<temporary-root>/fixture host with spaces/sensor.py' backup",
+                "timeout_seconds": 5
+              },
+              "status": "success",
+              "result": {
+                "exit_code": 0,
+                "stdout": "{\"temperature_c\": 24, \"source\": \"study-backup\", \"observed_at\": \"2026-10-29T05:17:54.293420+00:00\"}\n",
+                "stderr": "",
+                "cancelled": false,
+                "timed_out": false,
+                "cwd": "/private/tmp/alphonse-issue-28",
+                "timeout_seconds": 5.0,
+                "duration_ms": 21
+              },
+              "error": ""
+            },
+            {
+              "evidence_ref": "tactical-action:action-98ffc830-fb8a-4344-bd8b-96030db3af99",
+              "subgoal_id": "approve",
+              "tool_id": "native.ask_question",
+              "arguments": {
+                "question": "Approve installation of this exact complete skill draft?\n{\n  \"name\": \"study-temperature\",\n  \"description\": \"Read the current study temperature using the recovered sensor route.\",\n  \"instructions\": \"The primary route failed. Prefer the verified backup route. Run '<python>' '<temporary-root>/fixture host with spaces/sensor.py' backup. Require exit 0 and report the temperature, source and timestamp from the fresh JSON response. If unavailable, report the failure; do not fabricate a reading. Do not repeat the failed primary route without new evidence.\"\n}",
+                "question_kind": "yes_no"
+              },
+              "status": "waiting",
+              "result": {
+                "question_interrupt": {
+                  "question_id": "2176f350-2a78-4cee-b28d-2aaab70d7e6c",
+                  "task_id": "learn",
+                  "run_id": "learn",
+                  "thread_id": "learn",
+                  "respondent_user_id": "fixture-admin",
+                  "originator_user_id": "fixture-admin",
+                  "project_id": "",
+                  "message": "Approve installation of this exact complete skill draft?\n{\n  \"name\": \"study-temperature\",\n  \"description\": \"Read the current study temperature using the recovered sensor route.\",\n  \"instructions\": \"The primary route failed. Prefer the verified backup route. Run '<python>' '<temporary-root>/fixture host with spaces/sensor.py' backup. Require exit 0 and report the temperature, source and timestamp from the fresh JSON response. If unavailable, report the failure; do not fabricate a reading. Do not repeat the failed primary route without new evidence.\"\n}",
+                  "kind": "yes_no",
+                  "choices": [],
+                  "response_schema": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "answer": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "answer"
+                    ]
+                  },
+                  "status": "pending",
+                  "expires_at": "2026-10-30T05:17:54.298360+00:00",
+                  "created_at": "2026-10-29T05:17:54.298360+00:00",
+                  "updated_at": "2026-10-29T05:17:54.298360+00:00",
+                  "metadata": {
+                    "delivery": {
+                      "origin_channel": {}
+                    },
+                    "child_task_id": ""
+                  }
+                },
+                "waiting_for_answer": true,
+                "delivery_result": null
+              },
+              "error": ""
+            }
+          ]
+        }
+      ]
+    },
+    "learning_task": {
+      "task_id": "learn",
+      "status": "completed",
+      "project_id": "",
+      "outcome": {
+        "status": "success",
+        "reason": "Verified phase evidence satisfies all required acceptance criteria.",
+        "phase_id": "approved-install"
+      },
+      "response": {
+        "source": "native.respond",
+        "tool_call_id": "action-a607925d-ad6e-4668-b28c-fd155bcefcac",
+        "message": "Installed and read back the exact approved study-temperature workflow."
+      },
+      "selection": {
+        "candidate_ids": [],
+        "loaded_skill_ids": [],
+        "primary_skill_ids": [],
+        "scores": {},
+        "secondary_skill_ids": [],
+        "selected_skill_ids": [],
+        "status": "curated"
+      },
+      "phases": [
+        {
+          "phase_id": "initial-route",
+          "outcome": {
+            "blockers": [
+              "Bash exited with code 1. route unavailable: no measurement"
+            ],
+            "evidence_refs": [
+              "tactical-action:action-d426f175-ad45-40ac-9bfc-385d80f71af3"
+            ],
+            "phase_id": "initial-route",
+            "reason": "Bash exited with code 1. route unavailable: no measurement",
+            "status": "blocked"
+          },
+          "evidence": [
+            {
+              "evidence_ref": "tactical-action:action-d426f175-ad45-40ac-9bfc-385d80f71af3",
+              "subgoal_id": "primary",
+              "tool_id": "native.bash",
+              "arguments": {
+                "command": "'<python>' '<temporary-root>/fixture host with spaces/sensor.py' primary",
+                "timeout_seconds": 5
+              },
+              "status": "failed",
+              "result": {
+                "cancelled": false,
+                "cwd": "/private/tmp/alphonse-issue-28",
+                "duration_ms": 24,
+                "exit_code": 1,
+                "stderr": "route unavailable: no measurement\n",
+                "stdout": "",
+                "timed_out": false,
+                "timeout_seconds": 5.0
+              },
+              "error": "Bash exited with code 1. route unavailable: no measurement"
+            }
+          ]
+        },
+        {
+          "phase_id": "recover-and-draft",
+          "outcome": {
+            "blockers": [],
+            "evidence_refs": [
+              "tactical-action:action-d426f175-ad45-40ac-9bfc-385d80f71af3",
+              "tactical-action:action-b6b014b0-934a-4453-86f7-a024f0262ac9",
+              "tactical-action:action-98ffc830-fb8a-4344-bd8b-96030db3af99"
+            ],
+            "phase_id": "recover-and-draft",
+            "reason": "A tactical action requires user input.",
+            "status": "waiting_user"
+          },
+          "evidence": [
+            {
+              "evidence_ref": "tactical-action:action-b6b014b0-934a-4453-86f7-a024f0262ac9",
+              "subgoal_id": "backup",
+              "tool_id": "native.bash",
+              "arguments": {
+                "command": "'<python>' '<temporary-root>/fixture host with spaces/sensor.py' backup",
+                "timeout_seconds": 5
+              },
+              "status": "success",
+              "result": {
+                "cancelled": false,
+                "cwd": "/private/tmp/alphonse-issue-28",
+                "duration_ms": 21,
+                "exit_code": 0,
+                "stderr": "",
+                "stdout": "{\"temperature_c\": 24, \"source\": \"study-backup\", \"observed_at\": \"2026-10-29T05:17:54.293420+00:00\"}\n",
+                "timed_out": false,
+                "timeout_seconds": 5.0
+              },
+              "error": ""
+            },
+            {
+              "evidence_ref": "tactical-action:action-98ffc830-fb8a-4344-bd8b-96030db3af99",
+              "subgoal_id": "approve",
+              "tool_id": "native.ask_question",
+              "arguments": {
+                "question": "Approve installation of this exact complete skill draft?\n{\n  \"name\": \"study-temperature\",\n  \"description\": \"Read the current study temperature using the recovered sensor route.\",\n  \"instructions\": \"The primary route failed. Prefer the verified backup route. Run '<python>' '<temporary-root>/fixture host with spaces/sensor.py' backup. Require exit 0 and report the temperature, source and timestamp from the fresh JSON response. If unavailable, report the failure; do not fabricate a reading. Do not repeat the failed primary route without new evidence.\"\n}",
+                "question_kind": "yes_no"
+              },
+              "status": "waiting",
+              "result": {
+                "delivery_result": null,
+                "question_interrupt": {
+                  "choices": [],
+                  "created_at": "2026-10-29T05:17:54.298360+00:00",
+                  "expires_at": "2026-10-30T05:17:54.298360+00:00",
+                  "kind": "yes_no",
+                  "message": "Approve installation of this exact complete skill draft?\n{\n  \"name\": \"study-temperature\",\n  \"description\": \"Read the current study temperature using the recovered sensor route.\",\n  \"instructions\": \"The primary route failed. Prefer the verified backup route. Run '<python>' '<temporary-root>/fixture host with spaces/sensor.py' backup. Require exit 0 and report the temperature, source and timestamp from the fresh JSON response. If unavailable, report the failure; do not fabricate a reading. Do not repeat the failed primary route without new evidence.\"\n}",
+                  "metadata": {
+                    "child_task_id": "",
+                    "delivery": {
+                      "origin_channel": {}
+                    }
+                  },
+                  "originator_user_id": "fixture-admin",
+                  "project_id": "",
+                  "question_id": "2176f350-2a78-4cee-b28d-2aaab70d7e6c",
+                  "respondent_user_id": "fixture-admin",
+                  "response_schema": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "answer": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "answer"
+                    ],
+                    "type": "object"
+                  },
+                  "run_id": "learn",
+                  "status": "pending",
+                  "task_id": "learn",
+                  "thread_id": "learn",
+                  "updated_at": "2026-10-29T05:17:54.298360+00:00"
+                },
+                "waiting_for_answer": true
+              },
+              "error": ""
+            },
+            {
+              "evidence_ref": "question-answer:2176f350-2a78-4cee-b28d-2aaab70d7e6c",
+              "kind": "authenticated_question_answer",
+              "subgoal_id": "approve",
+              "tool_id": "native.ask_question",
+              "status": "success",
+              "result": {
+                "question_id": "2176f350-2a78-4cee-b28d-2aaab70d7e6c",
+                "question_kind": "yes_no",
+                "answer": {
+                  "answer": true
+                },
+                "answered_by": "fixture-admin",
+                "question": "Approve installation of this exact complete skill draft?\n{\n  \"name\": \"study-temperature\",\n  \"description\": \"Read the current study temperature using the recovered sensor route.\",\n  \"instructions\": \"The primary route failed. Prefer the verified backup route. Run '<python>' '<temporary-root>/fixture host with spaces/sensor.py' backup. Require exit 0 and report the temperature, source and timestamp from the fresh JSON response. If unavailable, report the failure; do not fabricate a reading. Do not repeat the failed primary route without new evidence.\"\n}"
+              }
+            }
+          ]
+        },
+        {
+          "phase_id": "approved-install",
+          "outcome": {
+            "phase_id": "approved-install",
+            "status": "phase_complete",
+            "reason": "All phase subgoals completed with recorded evidence.",
+            "evidence_refs": [
+              "tactical-action:action-d426f175-ad45-40ac-9bfc-385d80f71af3",
+              "tactical-action:action-b6b014b0-934a-4453-86f7-a024f0262ac9",
+              "tactical-action:action-98ffc830-fb8a-4344-bd8b-96030db3af99",
+              "question-answer:2176f350-2a78-4cee-b28d-2aaab70d7e6c",
+              "tactical-action:action-ad6080da-2351-4ece-91ae-705cf1010aa8",
+              "tactical-action:action-a607925d-ad6e-4668-b28c-fd155bcefcac"
+            ],
+            "blockers": []
+          },
+          "evidence": [
+            {
+              "evidence_ref": "tactical-action:action-ad6080da-2351-4ece-91ae-705cf1010aa8",
+              "subgoal_id": "install",
+              "tool_id": "native.skill_install",
+              "arguments": {
+                "name": "study-temperature",
+                "description": "Read the current study temperature using the recovered sensor route.",
+                "instructions": "The primary route failed. Prefer the verified backup route. Run '<python>' '<temporary-root>/fixture host with spaces/sensor.py' backup. Require exit 0 and report the temperature, source and timestamp from the fresh JSON response. If unavailable, report the failure; do not fabricate a reading. Do not repeat the failed primary route without new evidence."
+              },
+              "status": "success",
+              "result": {
+                "skill": {
+                  "id": "skill:study-temperature",
+                  "title": "study-temperature",
+                  "description": "Read the current study temperature using the recovered sensor route.",
+                  "snippet": "Read the current study temperature using the recovered sensor route."
+                },
+                "instructions": "The primary route failed. Prefer the verified backup route. Run '<python>' '<temporary-root>/fixture host with spaces/sensor.py' backup. Require exit 0 and report the temperature, source and timestamp from the fresh JSON response. If unavailable, report the failure; do not fabricate a reading. Do not repeat the failed primary route without new evidence.",
+                "created": true,
+                "verification": {
+                  "status": "verified",
+                  "source": "skill_store_readback"
+                },
+                "message": "Installed skill \"study-temperature\" (skill:study-temperature)."
+              },
+              "error": ""
+            },
+            {
+              "evidence_ref": "tactical-action:action-a607925d-ad6e-4668-b28c-fd155bcefcac",
+              "subgoal_id": "respond",
+              "tool_id": "native.respond",
+              "arguments": {
+                "message": "Installed and read back the exact approved study-temperature workflow."
+              },
+              "status": "success",
+              "result": {
+                "message": "Installed and read back the exact approved study-temperature workflow.",
+                "tone": "neutral"
+              },
+              "error": ""
+            }
+          ]
+        }
+      ]
+    },
+    "fresh_task": {
+      "task_id": "fresh",
+      "status": "completed",
+      "project_id": "",
+      "outcome": {
+        "status": "success",
+        "reason": "Verified phase evidence satisfies all required acceptance criteria.",
+        "phase_id": "fresh-reuse"
+      },
+      "response": {
+        "source": "native.respond",
+        "tool_call_id": "action-878b49be-8596-496b-89df-968d27860dd7",
+        "message": "Study: 27 C from study-backup at 2026-10-29T05:17:54.334771+00:00."
+      },
+      "selection": {
+        "selected_skill_ids": [
+          "skill:study-temperature"
+        ],
+        "primary_skill_ids": [
+          "skill:study-temperature"
+        ],
+        "secondary_skill_ids": [],
+        "candidate_ids": [
+          "skill:study-temperature"
+        ],
+        "scores": {},
+        "status": "activated",
+        "loaded_skill_ids": [
+          "skill:study-temperature"
+        ],
+        "packages": {
+          "skill:study-temperature": {
+            "root": "/private<temporary-root>/temporary skills with spaces/study-temperature",
+            "revision": "1792ad3546756d4e7874cb26086c121b12d498b8858c49b6a880407dfd52cd95"
+          }
+        },
+        "budget_chars": 64000,
+        "instruction_chars": 2020
+      },
+      "phases": [
+        {
+          "phase_id": "fresh-reuse",
+          "outcome": {
+            "phase_id": "fresh-reuse",
+            "status": "phase_complete",
+            "reason": "All phase subgoals completed with recorded evidence.",
+            "evidence_refs": [
+              "tactical-action:action-ccd3abea-3047-428c-a561-09a76b8d1182",
+              "tactical-action:action-878b49be-8596-496b-89df-968d27860dd7"
+            ],
+            "blockers": []
+          },
+          "evidence": [
+            {
+              "evidence_ref": "tactical-action:action-ccd3abea-3047-428c-a561-09a76b8d1182",
+              "subgoal_id": "read",
+              "tool_id": "native.bash",
+              "arguments": {
+                "command": "'<python>' '<temporary-root>/fixture host with spaces/sensor.py' backup",
+                "timeout_seconds": 5,
+                "skill_id": "skill:study-temperature"
+              },
+              "status": "success",
+              "result": {
+                "exit_code": 0,
+                "stdout": "{\"temperature_c\": 27, \"source\": \"study-backup\", \"observed_at\": \"2026-10-29T05:17:54.334771+00:00\"}\n",
+                "stderr": "",
+                "cancelled": false,
+                "timed_out": false,
+                "cwd": "/private<temporary-root>/temporary skills with spaces/study-temperature",
+                "timeout_seconds": 5.0,
+                "duration_ms": 20
+              },
+              "error": ""
+            },
+            {
+              "evidence_ref": "tactical-action:action-878b49be-8596-496b-89df-968d27860dd7",
+              "subgoal_id": "respond",
+              "tool_id": "native.respond",
+              "arguments": {
+                "message": "Study: 27 C from study-backup at 2026-10-29T05:17:54.334771+00:00."
+              },
+              "status": "success",
+              "result": {
+                "message": "Study: 27 C from study-backup at 2026-10-29T05:17:54.334771+00:00.",
+                "tone": "neutral"
+              },
+              "error": ""
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
