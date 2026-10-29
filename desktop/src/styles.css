@@ -829,6 +829,13 @@ button { border: 0; cursor: pointer; }
 .skill-open-folder:hover, .skill-open-folder:focus-visible { color: var(--text); background: var(--surface-subtle); }
 .skill-editor h2 { margin: 0 0 12px; color: var(--text); font-size: 18px; }
 .skill-editor section { display: grid; gap: 10px; padding: 18px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-raised); }
+.skill-editor section p { margin: 0; overflow-wrap: anywhere; }
+.skill-editor > header { flex-wrap: wrap; }
+.skill-editor > header > div:first-child { flex: 1 1 240px; }
+.skill-editor button:not(.skill-open-folder) { min-height: 34px; padding: 7px 12px; border-radius: 6px; }
+.skill-files-heading { flex-wrap: wrap; align-items: center; }
+.skill-files-heading > p { flex-basis: 100%; }
+.skill-editor label { display: grid; gap: 6px; }
 .skill-create-editor > form { display: grid; gap: 16px; }
 .skill-create-editor label { color: var(--muted); font-size: 13px; line-height: 1.5; }
 .skill-create-editor .skill-instructions-input { min-height: 300px; }

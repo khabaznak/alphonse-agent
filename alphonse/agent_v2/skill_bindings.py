@@ -84,6 +84,22 @@ class SkillBindings:
         if user is None or not user.is_active:
             raise PermissionError("skill_binding_actor_denied")
 
+    def management_status(self, *, actor_id: str, skill_id: str) -> list[dict[str, str]]:
+        """Report the actor's explicit choices and readiness, never target/config/secrets."""
+        self._actor(actor_id)
+        with self.integrations._connect() as conn:
+            choices = conn.execute("SELECT name FROM v2_skill_binding_choices WHERE actor_id = ? AND skill_id = ? ORDER BY name",
+                                   (actor_id, skill_id)).fetchall()
+        result = []
+        for choice in choices:
+            status = "available"
+            try:
+                self.prepare(actor_id=actor_id, skill_id=skill_id, names=[choice["name"]])
+            except (ValueError, PermissionError) as exc:
+                status = str(exc)
+            result.append({"name": choice["name"], "status": status})
+        return result
+
     def configure(self, *, actor_id: str, binding_id: str, skill_id: str, owner_id: str,
                   kind: str, target: str = "", configuration: dict[str, Any] | None = None,
                   required_secrets: tuple[str, ...] = (), executables: tuple[str, ...] = ()) -> None:

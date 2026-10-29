@@ -93,7 +93,9 @@ def test_install_replace_export_preserve_entire_package(store, tmp_path):
     assert updated.package_metadata() == record.package_metadata()
     assert store.get(record.skill_id).allowed_tools == 'Bash Read'
     (source / 'assets' / 'nested' / 'fixture.bin').write_bytes(b'\x00\xffreplacement')
-    store.replace_directory(record.skill_id, source)
+    with pytest.raises(ValueError, match='skill_update_conflict'):
+        store.replace_directory(record.skill_id, source)
+    store.replace_directory(record.skill_id, source, resolution='accept-upstream')
     destination = tmp_path / 'export'
     destination.mkdir()
     exported = store.export_directory(record.skill_id, destination)
