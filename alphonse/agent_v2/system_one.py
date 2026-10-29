@@ -442,7 +442,7 @@ class JevCriterionDecisionProvider:
         skill_scores: dict[str, dict[str, Any]] = {}
         selected_skill_ids: list[str] = []
         primary_skill_ids: list[str] = []
-        if questions and not selected_context:
+        if questions:
             curation_state = {
                 "user_message": message_value,
                 "recent_conversation": recent_value,

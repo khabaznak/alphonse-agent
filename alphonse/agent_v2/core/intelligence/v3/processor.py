@@ -14,6 +14,7 @@ from alphonse.agent_v2.core.intelligence.v3.outer import V3OuterController
 from alphonse.agent_v2.core.intelligence.v3.planner import plan_phase
 from alphonse.agent_v2.core.intelligence.v3.planner import V3PhasePlanValidationError
 from alphonse.agent_v2.system_one import SystemOneUnavailableError
+from alphonse.agent_v2.skill_resources import SkillActivationError
 from alphonse.agent_v2.core.intelligence.v3.revealing import ToolRevealPolicy
 from alphonse.agent_v2.core.intelligence.v3.context import prepare_context_curation
 from alphonse.agent_v2.core.intelligence.v3.context import recent_conversation_for_curation
@@ -39,7 +40,14 @@ class HierarchicalCAPDProcessor:
         context.emit_ui_event("run_started", {"task": task.to_dict(), "engine": "hierarchical_v3"})
         task.intelligence_engine = "hierarchical_v3"
         task.intelligence_schema_version = 3
-        if self._admit_initial_human_task(task, context):
+        try:
+            admitted = self._admit_initial_human_task(task, context)
+        except SkillActivationError as exc:
+            task.status = "failed"
+            task.outcome = {"status": "failure", "reason": str(exc)}
+            self._persist(task, context)
+            return self._result(task, context)
+        if admitted:
             self._persist(task, context)
             return self._result(task, context)
         no_progress_phases = int(task.metadata.get("v3_no_progress_phase_count") or 0)
@@ -131,7 +139,7 @@ class HierarchicalCAPDProcessor:
             candidates = []
             recent_context = ""
         existing_skill_selection = task.metadata.get("v3_skill_selection")
-        skill_candidates = [] if isinstance(existing_skill_selection, dict) else skill_candidates_for_curation(context)
+        skill_candidates = [] if isinstance(existing_skill_selection, dict) else skill_candidates_for_curation(context, task)
         classify = getattr(context.system_one, "classify_task_admission", None) if context.system_one is not None else None
         if callable(classify):
             try:
@@ -190,9 +198,25 @@ class HierarchicalCAPDProcessor:
                 "scores": skill_scores,
                 "status": "curated",
             }
+        # Supporting resources need normal Plan/Do so System Two can inspect
+        # them on demand; instruction-only packages can still reply directly.
+        selected_skill_guidance(task, context)
+        if direct_response:
+            from pathlib import Path
+            from alphonse.agent_v2.skill_resources import reusable_path
+            packages = task.metadata.get("v3_skill_selection", {}).get("packages", {})
+            direct_response = not any(
+                path.is_file() and path.name != "SKILL.md" and reusable_path(path.relative_to(root).as_posix())
+                for package in packages.values() for root in [Path(package["root"])]
+                for path in root.rglob("*")
+            )
+            if not direct_response:
+                decision_metadata["resource_inspection_route"] = "activated_skill_has_supporting_files"
         if direct_response:
             try:
                 cls._complete_direct_response(task, context)
+            except SkillActivationError:
+                raise
             except Exception as exc:
                 if context.is_cancelled():
                     raise

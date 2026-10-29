@@ -112,6 +112,14 @@
         "true": "The requester asks to correct an existing artifact registration's name, description, storage location, runtime/working directory, declared configuration paths, or sharing. Select this when a verified replacement location has been identified or Bash will verify it earlier in the same phase. It changes catalog and skill-definition metadata, never program/data files. The current task does not need to belong to the artifact's legacy storage project.",
         "false": "The phase only invokes a working artifact, edits its program or data, repairs dependencies, or registers a new artifact; no existing catalog metadata needs updating. Relevance is not authorization to change another household member's registration."
       }
+    },
+    "native.skill_read": {
+      "type": "noul",
+      "instructions": "Does this request or phase need to inspect supporting resources of an activated skill?",
+      "criteria": {
+        "true": "An activated skill may need references, script documentation/source or assets read on demand to answer, plan or execute accurately. Include when uncertain whether a supporting resource is needed.",
+        "false": "Complete activated instructions suffice and no supporting skill resource inspection is needed."
+      }
     }
   }
 }
