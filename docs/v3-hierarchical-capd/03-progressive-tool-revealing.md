@@ -214,7 +214,21 @@ that phase unless new evidence and the phase contract make them relevant.
   reviewed Jev registry template. Artifact programs do not contribute tool questions.
 
 
-## Skill-owned resource resolution
+## Standard skill direction
+
+The accepted [standard-skills contract](../standard-skills-contract.md) governs
+new package discovery, activation and resource loading. Jev selects relevance from
+authorized skill metadata; activation exposes standard instructions and a verified
+package root, with supporting files read on demand. Scripts are ordinary resources,
+never native tool entries or independent Jev candidates. Package and account/data
+binding checks replace catalog responsibilities only after their implementation
+and migration are verified. Generic Bash remains trusted host execution; resolver
+containment does not sandbox arbitrary commands or subprocesses.
+
+## Legacy skill-owned resource resolution
+
+The following is current transitional behavior. Preserve these checks until the
+standard-skills replacements land; new packages must not require this catalog.
 
 Selecting a skill loads only that user's authorized artifact sections, along with
 catalog-derived resource manifests. Resolution is independent of the current

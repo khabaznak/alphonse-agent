@@ -150,3 +150,20 @@ V2 already provides several V3 foundations:
 
 All architectural stages are implemented. Current work focuses on live reliability,
 evaluation regressions, and operational recovery under the V3 default.
+
+
+## Standard skills and harness contract
+
+The accepted [standard-skills decision](../standard-skills-contract.md) replaces
+Artifacts as the reusable capability model. Discovery uses authorized package
+metadata; activation loads standard instructions and verified relative resources.
+Jev performs bounded relevance selection; System Two composes native calls.
+Scripts never become independent tools or require a per-script catalog.
+The harness owns package access, runtime readiness, separate account/data bindings,
+provenance, customization and preservation across lifecycle operations. Generic
+Bash is trusted host execution with no implied filesystem sandbox.
+
+This is an implementation contract for the Adding Skills milestone, not a claim
+that its runtime is complete. Existing Artifact containment, sharing and data
+checks stay active until verified replacements and migration land. See the
+contract's delivery boundaries for issues #33–#39 and integration #42.
