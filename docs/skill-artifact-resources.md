@@ -1,4 +1,14 @@
-# Skill-owned artifact resources
+# Legacy skill-owned artifact resources
+
+Status: current implementation and transitional compatibility contract.
+
+The accepted [standard skills and harness decision](standard-skills-contract.md)
+supersedes this document as the target architecture. New capabilities use standard
+packages, optional scripts/resources and separate household data/bindings, without
+mandatory per-script registration. The behavior below remains required for legacy
+resources until replacement access/runtime/storage checks and verified migration
+land. Do not remove containment or data-preservation checks based on this decision
+alone. Artifact management removal must be coordinated with migration.
 
 Projects track goals. A conversation does not need to select a project to use an
 installed skill's authorized artifacts. Artifact programs remain user-generated

@@ -53,7 +53,33 @@ When changing this decision architecture, consult
 `docs/v3-hierarchical-capd/06-system-one-check-act.md`, and
 `alphonse/agent_v2/system_one.py` as relevant to the task.
 
-## Native tools, skills, and generated artifacts
+## Standard skills: accepted target architecture
+
+Follow `docs/standard-skills-contract.md` (issue #32) for new skill work.
+Standard Agent Skills packages are the sole user-facing reusable capability unit:
+`SKILL.md` plus optional supporting directories. Scripts are ordinary package
+resources, never independent tools or mandatory catalog entries. Alphonse-specific
+metadata is optional. Do not build another per-script registry.
+
+The harness owns authorized discovery/activation, contained relative resource
+loading, package provenance/revisions, runtime readiness and account/data binding
+checks. Jev judges bounded relevance; System Two plans and composes native calls;
+deterministic code enforces authorization, effects, cancellation and completion.
+Generic Bash is trusted host execution, not a filesystem sandbox.
+
+Keep reusable packages separate from live household databases, configuration,
+credentials and runtime state. Updates, exports and uninstall must preserve the
+contract's data boundaries. Bundled defaults use household-editable copies or
+overrides with provenance, conflict handling and rollback. Household programs
+remain in user-owned storage; do not adopt them into this repository without an
+explicit request. Use minimal disposable fixtures for framework regressions.
+
+### Transitional native tools, skills, and generated artifacts
+
+The following describes the existing implementation, not the target model.
+Preserve its containment, ownership, sharing, readiness and data guarantees until
+verified replacements and legacy migration land. The accepted contract authorizes
+replacing these mechanisms; it does not authorize bypassing them in the interim.
 
 Alphonse has native tools and skill-owned artifact programs:
 
@@ -94,7 +120,7 @@ particular artifact.
   allowed. Keep them to the minimum implementation needed to verify catalog,
   project-containment, and skill-association behavior.
 
-### Artifact framework contract
+### Transitional Artifact framework contract
 
 - The artifact catalog stores metadata and the owning skill ID only. Programs,
   environments, configuration, and data remain in registered storage. Shared
@@ -158,12 +184,12 @@ A **Project** is a well-defined effort with limited scope, duration, and clear g
 
 ## Skill
 
-A **Skill** supplies reusable expertise or workflows, available wherever relevant. Skills may guide domain reasoning, behavior, communication, recommendations, or operational workflows. Artifacts belong to skills; a skill includes each artifact's definition and the instructions needed to use it. A project or ordinary conversation can use one or more skills as needed.
+A **Skill** supplies reusable expertise or workflows, available wherever relevant. Skills may guide domain reasoning, behavior, communication, recommendations, or operational workflows. Standard skills include instructions and optional scripts/resources. Existing Artifact definitions remain transitional compatibility metadata. A project or ordinary conversation can use one or more skills as needed.
 
 ## Shared Repositories
 
-Alphonse needs a repository for installed skills and a shared repository for artifacts organized under their owning skills. Existing artifacts in the local instance should be associated with the skills that operate them as the shared repositories evolve; Alphonse currently has one user.
+Alphonse needs installed standard skill packages and separate user-owned household data/runtime storage. Existing shared Artifact storage remains supported until explicitly reconciled and migrated under `docs/standard-skills-contract.md`; Alphonse currently has one user.
 
 Skills are the foundational reusable unit. A named combination of skills (previously called a **Personality**) may be useful as a convenience, but does not need to be a separate core concept unless experience shows it is needed.
 
-Alphonse has an initial skill library, installation flow, and Desktop CRUD workspace, but does not yet have a complete skills system, shared artifact repository, or a defined conversation and memory-ledger model. These concepts describe intended capabilities and direction.
+Alphonse has an initial skill library, installation flow, and Desktop CRUD workspace, but does not yet have a complete standard-skills lifecycle or a fully implemented conversation and memory-ledger model. These concepts describe intended capabilities and direction.

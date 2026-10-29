@@ -31,6 +31,17 @@ schema, scope, and verification failures remain deterministic and cannot be conv
 to success by Jev. Ambiguous or unavailable semantic reviews fall back to the declared
 deterministic completion predicate.
 
+## Standard skill boundary
+
+Under the accepted [standard-skills contract](../standard-skills-contract.md),
+Jev may judge bounded relevance of authorized skill packages. Package scripts do
+not enter the tool registry and require no individual classification or registration.
+System Two reads activated instructions, plans and composes native Bash commands.
+Deterministic package visibility, relative-resource containment, runtime readiness,
+account/data binding access, native effect checks and cancellation remain harness
+responsibilities. Existing Artifact checks persist until replacements are verified.
+Selection never grants permission, and shell success never proves task completion.
+
 ## Check boundary
 
 For each still-pending acceptance criterion and each bounded successful evidence
