@@ -18,4 +18,4 @@ alphonse = "alphonse.agent_v2.cli:main"
 include = ["alphonse*"]
 
 [tool.setuptools.package-data]
-"alphonse.agent_v2" = ["builtin_skills/*/SKILL.md"]
+"alphonse.agent_v2" = ["builtin_skills/*/SKILL.md", "mascot_assets/*.png", "mascot_assets/*.md"]

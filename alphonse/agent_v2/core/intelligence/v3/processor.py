@@ -266,6 +266,9 @@ class HierarchicalCAPDProcessor:
     def _complete_direct_response(task: "TaskState", context: "CoreLoopContext") -> None:
         if context.inference is None:
             raise RuntimeError("v3_direct_response_inference_unavailable")
+        # Make the existing skill decision visible while System Two composes
+        # the reply, including conversations that never enter a tool phase.
+        HierarchicalCAPDProcessor._persist(task, context)
         context.emit_activity(
             phase=ImprovementPhase.ACT,
             label="responding",
