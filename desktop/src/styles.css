@@ -304,12 +304,6 @@ a { color: var(--accent); }
 .queue-chart-tooltip span,
 .queue-chart-tooltip time { color: var(--sidebar-muted); }
 @keyframes queue-chart-pulse { 50% { opacity: .38; transform: scale(1.8); } }
-.sidebar-collapsed .queue-workload-panel,
-.sidebar-collapsed .pdca-activity-panel { width: 44px; min-height: 52px; margin-inline: -6px; padding: 5px 2px; }
-.sidebar-collapsed .queue-workload-heading,
-.sidebar-collapsed .pdca-activity-heading,
-.sidebar-collapsed .queue-chart-label,
-.sidebar-collapsed .queue-chart-tooltip { display: none; }
 
 .conversation {
   min-height: 0;
@@ -985,15 +979,7 @@ a { color: var(--accent); }
   .brand-avatar { width: 35px; }
   .brand-mascot { width: 35px; height: 35px; }
   .brand-avatar-status { width: 64px; font-size: 8px; }
-  .queue-workload-panel,
-  .pdca-activity-panel { width: 44px; min-height: 52px; margin-inline: -2px; padding: 5px 2px; }
-  .queue-workload-heading,
-  .pdca-activity-heading,
-  .queue-chart-label,
-  .queue-chart-tooltip { display: none; }
-  .brand-name,
-  .sidebar > button span,
-  .sidebar > button small { display: none; }
+
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1063,7 +1049,6 @@ a { color: var(--accent); }
   .desktop-shell .brand-avatar, .desktop-shell .brand-mascot { width: 32px; height: 32px; }
   .desktop-shell .brand-name, .desktop-shell .member-context, .desktop-shell .shell-navigation span, .desktop-shell .shell-navigation small, .desktop-shell .in-progress-projects > small { display: none; }
   .desktop-shell .shell-navigation button { justify-content: center; padding-inline: 8px; }
-  .desktop-shell .queue-workload-panel, .desktop-shell .pdca-activity-panel { display: none; }
 }
 .timeline-message { display: contents; }
 .timeline-message .message { flex: 0 0 auto; }
@@ -1297,3 +1282,86 @@ a { color: var(--accent); }
 .at-hand-drawer .recorded-progress.dots { display: grid; grid-template-columns: repeat(16, minmax(0, 1fr)); gap: 7px; margin-block: 14px; }
 .at-hand-drawer .recorded-progress.dots i { width: 5px; height: 5px; border: 0; background: var(--border); }
 .at-hand-drawer .recorded-progress.dots i[data-filled="true"] { background: var(--accent); }
+
+/* Design Study 01: household navigation, a quiet profile footer and open composer. */
+.desktop-shell { --nav-width: 220px; }
+.desktop-shell .sidebar { display: flex; flex-direction: column; gap: 0; padding: 26px 15px 16px; background: var(--sidebar); }
+.desktop-shell .brand { display: flex; align-items: center; gap: 10px; position: relative; margin: 0; padding: 0 10px; font-size: 23px; font-weight: 750; letter-spacing: -1px; }
+.desktop-shell .brand-avatar, .desktop-shell .brand-mascot { width: 42px; height: 42px; }
+.desktop-shell .brand-name { white-space: nowrap; }
+.desktop-shell .collapse-toggle { position: absolute; top: -17px; right: -9px; width: 24px; height: 24px; padding: 3px; opacity: 0; background: transparent; }
+.desktop-shell .brand:hover .collapse-toggle, .desktop-shell .collapse-toggle:focus-visible { opacity: 1; }
+.sidebar-search { display: flex; flex: 0 0 auto; align-items: center; gap: 8px; margin: 25px 1px 20px; padding: 9px 10px; border: 1px solid var(--border); border-radius: 9px; color: var(--muted); background: var(--surface); }
+.sidebar-search:focus-within { outline: 2px solid var(--focus); outline-offset: 2px; }
+.sidebar-search > svg { flex: 0 0 16px; width: 16px; height: 16px; }
+.sidebar-search input { width: 100%; min-width: 0; border: 0; padding: 0; border-radius: 0; background: transparent; font-size: 12px; outline: none; }
+.sidebar-search button { display: grid; place-items: center; padding: 0; background: transparent; }
+.sidebar-search button svg { width: 13px; height: 13px; }
+.shell-navigation { display: block; flex: 1; min-height: 0; overflow-y: auto; margin-top: 8px; }
+.sidebar-section-label, .in-progress-projects > small { display: block; padding: 9px 12px; margin: 0; color: var(--muted); font-size: 10px; letter-spacing: 1.4px; text-transform: uppercase; }
+.desktop-shell .shell-navigation button { min-height: 40px; margin: 2px 0; padding: 10px 12px; gap: 11px; border-radius: 8px; font-size: 13px; font-weight: 500; color: var(--muted); }
+.desktop-shell .shell-navigation button[aria-current="page"] { color: var(--text); background: var(--nav-hover); font-weight: 650; box-shadow: none; }
+.shell-navigation button small { border-radius: 5px; background: var(--surface); padding: 0 6px; font-size: 10px; }
+.in-progress-projects { margin-top: 22px; gap: 0; }
+.desktop-shell .in-progress-projects button { padding: 8px 12px; font-size: 12px; }
+.project-status-dot { display: inline-block; flex: 0 0 7px; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+.sidebar-bottom { flex: 0 0 auto; padding-top: 20px; }
+.sidebar-settings { display: flex; align-items: center; gap: 11px; width: 100%; background: transparent; color: var(--muted); padding: 10px 12px; font-size: 13px; text-align: left; }
+.sidebar-settings svg { width: 18px; height: 18px; }
+.sidebar-settings:hover { background: var(--nav-hover); color: var(--text); }
+.agent-status { display: flex; align-items: center; gap: 8px; margin: 14px 10px 0; border-top: 1px solid var(--border); padding-top: 16px; color: var(--muted); font-size: 11px; }
+.agent-status i { flex: 0 0 7px; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+.agent-status i.disconnected { background: var(--danger); }
+.sidebar-profile { display: flex; align-items: center; gap: 10px; margin: 18px 6px 0; padding: 10px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); }
+.member-initials { display: grid; place-items: center; flex: 0 0 30px; width: 30px; height: 30px; border-radius: 50%; color: var(--accent); background: var(--accent-soft); font-size: 11px; font-weight: 700; }
+.sidebar-profile > div { min-width: 0; }
+.sidebar-profile strong { display: block; font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
+.sidebar-profile small { display: block; color: var(--muted); font-size: 10px; }
+.workspace-host { grid-template-rows: 69px minmax(0, 1fr); }
+.shell-toolbar { padding: 0 30px; }
+.workspace-breadcrumb { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.workspace-breadcrumb strong { color: var(--text); font-weight: 550; }
+.workspace-breadcrumb svg { width: 12px; height: 12px; }
+.shell-toolbar > button { padding: 7px; font-size: 11px; border-radius: 7px; background: var(--accent-soft); border-color: transparent; color: var(--accent); }
+.desktop-shell .conversation { padding: 24px 30px 15px; }
+.desktop-shell .input-dock { border-top: 0; padding: 13px 0 0; background: var(--canvas); }
+.desktop-shell .composer { display: block; padding: 12px 13px; border: 1px solid var(--border); border-radius: 13px; background: var(--surface); box-shadow: 0 3px 10px var(--shadow); }
+.desktop-shell .composer:focus-within { border-color: var(--accent); }
+.desktop-shell .composer textarea { display: block; width: 100%; min-height: 40px; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--text); font-size: 13px; line-height: 1.5; }
+.desktop-shell .composer textarea:focus-visible { outline-offset: 3px; border-radius: 3px; }
+.composer-bottom { display: flex; align-items: center; gap: 8px; margin-top: 5px; }
+.composer-context { padding: 4px 8px; border-radius: 6px; color: var(--accent); background: var(--accent-soft); font-size: 10px; }
+.desktop-shell .composer .send { display: grid; place-items: center; flex: 0 0 31px; width: 31px; height: 30px; margin-left: auto; padding: 6px; border-radius: 8px; }
+.composer .send svg { width: 18px; height: 18px; }
+.composer-hint { margin: 8px 0 0; text-align: center; color: var(--muted); font-size: 10px; }
+.composer-command-menu { position: relative; }
+.composer-command-menu > summary { display: grid; place-items: center; list-style: none; cursor: pointer; width: 28px; height: 28px; color: var(--muted); border-radius: 6px; }
+.composer-command-menu > summary::-webkit-details-marker { display: none; }
+.composer-command-menu > summary:hover { background: var(--surface-subtle); color: var(--text); }
+.composer-command-menu svg { width: 18px; height: 18px; }
+.composer-command-menu > div { position: absolute; z-index: 4; bottom: calc(100% + 12px); left: -8px; width: min(300px, 60vw); max-height: 240px; overflow-y: auto; padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-raised); box-shadow: 0 6px 20px var(--shadow); }
+.composer-command-menu p { margin: 0 0 8px; font-size: 11px; color: var(--muted); }
+.composer-command-menu button { display: block; width: 100%; text-align: left; font-size: 12px; background: transparent; }
+.composer-command-menu button:hover:not(:disabled) { background: var(--accent-soft); }
+.at-hand-card .queue-workload-panel, .at-hand-card .pdca-activity-panel { padding: 0; margin: 0; border: 0; border-radius: 0; background: transparent; color: var(--text); }
+.at-hand-card .queue-chart-wrap svg { width: 100%; height: auto; }
+.at-hand-card .queue-workload-heading > span, .at-hand-card .pdca-activity-heading > span { display: none; }
+.at-hand-card .queue-workload-heading strong, .at-hand-card .pdca-activity-heading strong { font: 600 30px/1.2 var(--font-display); }
+@media (max-width: 1199px) { .at-hand-drawer { top: 69px; } }
+.desktop-shell.sidebar-collapsed .brand { flex-direction: column; padding: 0; }
+.desktop-shell.sidebar-collapsed .collapse-toggle { position: static; opacity: 1; }
+.sidebar-collapsed .sidebar-search, .sidebar-collapsed .sidebar-section-label, .sidebar-collapsed .sidebar-profile, .sidebar-collapsed .agent-status span, .sidebar-collapsed .sidebar-settings span { display: none; }
+.sidebar-collapsed .sidebar-bottom { display: grid; justify-items: center; }
+.sidebar-collapsed .sidebar-settings { padding-inline: 10px; }
+.sidebar-collapsed .agent-status { margin: 10px 0; padding: 10px 0 0; }
+@media (max-width: 960px) {
+  .desktop-shell { --nav-width: 72px; }
+  .desktop-shell .brand { flex-direction: column; padding: 0; }
+  .desktop-shell .collapse-toggle { position: static; opacity: 1; }
+  .sidebar-search, .sidebar-section-label, .sidebar-profile, .agent-status span, .sidebar-settings span { display: none; }
+  .sidebar-bottom { display: grid; justify-items: center; }
+  .sidebar-settings { padding-inline: 10px; }
+  .agent-status { margin: 10px 0; padding: 10px 0 0; }
+  .desktop-shell .conversation { padding-inline: 20px; }
+  .shell-toolbar { padding-inline: 20px; }
+}
