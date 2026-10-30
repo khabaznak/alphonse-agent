@@ -167,6 +167,17 @@ a { color: var(--accent); }
   animation: brand-mascot-enter var(--motion-enter) ease-out both;
 }
 
+.mascot-image { position: relative; display: inline-block; flex: none; overflow: hidden; vertical-align: middle; }
+.mascot-image > img { position: absolute; width: 100%; height: 100%; left: 0; top: 0; object-fit: contain; }
+.mascot-previews { display: flex; flex-wrap: wrap; gap: 12px; margin-block: 16px; }
+.mascot-previews figure { margin: 0; text-align: center; }
+.mascot-preview { width: 72px; height: 72px; }
+.mascot-previews figcaption { font-size: 12px; color: var(--text-muted); }
+.skill-appearance-settings { text-align: left; }
+.skill-appearance-settings label:has(input[type="checkbox"]) { display: flex; align-items: center; gap: 8px; }
+.skill-appearance-settings input[type="checkbox"] { width: auto; }
+.skill-appearance-settings small { display: block; margin-top: 8px; }
+
 .brand-avatar { display: grid; width: 80px; justify-items: center; gap: 3px; animation: brand-mascot-bob 4s ease-in-out infinite; }
 .brand-avatar-status { color: var(--danger); font: 500 9px/1.2 var(--font-mono); white-space: nowrap; }
 
@@ -1153,3 +1164,20 @@ a { color: var(--accent); }
 .question-answer-legend { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .question-fields .a2ui-choice-picker label { display: flex; }
 .question-fields input[type="checkbox"] { flex: 0 0 auto; min-width: 0; }
+
+/* At hand: fixed header/catalog and independent card-list/content scrolling. */
+.at-hand-drawer { display: flex; flex-direction: column; overflow: hidden; padding: 14px; }
+.at-hand-drawer > header { flex-shrink: 0; margin-bottom: 14px; }
+.widget-catalog { flex-shrink: 0; max-height: 30%; overflow-y: auto; padding: 10px; border: 1px solid var(--border); border-radius: 10px; }
+.widget-catalog summary { cursor: pointer; font-weight: 600; }
+.widget-catalog > div { padding-block: 10px; }
+.widget-catalog button { background: var(--accent); color: var(--accent-contrast); padding: 8px; }
+.widget-help { flex-shrink: 0; font-size: 11px !important; }
+.at-hand-cards { min-height: 0; overflow-y: auto; flex: 1; padding: 3px; }
+.at-hand-card { padding: 12px; overflow-wrap: anywhere; }
+.at-hand-card h3 { margin-bottom: 6px; }
+.widget-mode { color: var(--muted); font-size: 11px; }
+.widget-body { max-height: 220px; overflow-y: auto; margin-block: 10px; }
+.widget-controls { display: flex; flex-wrap: wrap; gap: 6px; border-top: 1px solid var(--border); padding-top: 10px; }
+.at-hand-drawer .widget-controls button { padding: 6px 8px; background: var(--surface-raised); color: var(--text); border: 1px solid var(--border); font-size: 11px; }
+.at-hand-drawer button:disabled { opacity: .45; cursor: default; }

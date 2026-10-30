@@ -69,6 +69,10 @@ overflow. No fixture, household data or generated artifact program is shipped.
 The browser run uses a mocked native transport; it is not a live provider or
 native WebKit endurance test. Daily-use acceptance remains #78.
 
-Final checks on October 29, 2026: 132 targeted Python tests, all 85 Desktop tests,
+Final checks on October 29, 2026: 151 targeted Python tests, all 95 Desktop tests,
 and the TypeScript/Vite production build pass. Fifteen full-shell browser
 assertions pass. Vite retains the existing bundle-size advisory.
+
+Integration includes PR #92 (skill appearances) and PR #93 (At hand). The sole
+App import conflict retains both At hand and the extracted activity renderer.
+The complete checks and full-shell browser transitions pass on this combined tree.
