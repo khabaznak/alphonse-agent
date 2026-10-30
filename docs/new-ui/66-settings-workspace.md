@@ -35,7 +35,7 @@ This is stated in the Settings header.
 
 ## Validation — October 29, 2026
 
-- 63 desktop tests pass; TypeScript/Vite production build passes. The existing
+- 66 desktop tests pass after integrating #67; TypeScript/Vite production build passes. The existing
   bundle-size advisory remains.
 - 157 focused Python tests pass across IPC, inference settings, System One,
   users, web/Code Mode, integrations, media, artifacts and resources, plus the

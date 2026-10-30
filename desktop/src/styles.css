@@ -362,16 +362,20 @@ a { color: var(--accent); }
 .message {
   flex: 0 0 auto;
   white-space: pre-wrap;
+  min-width: 0;
   max-width: 77%;
+  overflow-wrap: anywhere;
   padding: 14px 16px;
   border-radius: 8px;
   line-height: 1.55;
   font-size: 14px;
 }
 
-.message.assistant { background: var(--surface); box-shadow: 0 8px 20px var(--shadow); align-self: flex-start; }
+.message.assistant { align-self: flex-start; }
+.message.assistant.conversation-message { width: min(100%, 70ch); max-width: 100%; padding: 8px 0 16px; border-radius: 0; background: transparent; box-shadow: none; }
+.message.assistant.conversation-message .message-timestamp { text-align: left; }
 .message.user { background: var(--user); color: var(--user-text); box-shadow: 0 8px 20px var(--shadow); align-self: flex-end; }
-.message.system { background: var(--surface-subtle); }
+.message.system { background: var(--surface-subtle); border-inline-start: 3px solid var(--input-border); }
 .message-timestamp {
   display: block;
   margin-top: 7px;
@@ -381,7 +385,7 @@ a { color: var(--accent); }
   white-space: nowrap;
 }
 .message.user .message-timestamp { color: var(--muted); }
-.task-progress-bubble { width: min(620px, 77%); padding: 0; overflow: hidden; border: 1px solid var(--warning); background: var(--warning-soft); }
+.task-progress-bubble { width: min(100%, 70ch); max-width: 100%; padding: 0; overflow: hidden; border: 1px solid var(--warning); background: var(--warning-soft); }
 .task-progress-content { display: grid; gap: 10px; padding: 15px 16px; color: var(--text); }
 .task-progress-heading { display: flex; align-items: center; gap: 8px; color: var(--warning); font-size: 13px; }
 .task-progress-spinner { color: var(--warning); font-size: 18px; animation: task-progress-pulse 1.25s ease-in-out infinite; }
@@ -402,12 +406,17 @@ a { color: var(--accent); }
 .task-progress-context summary { padding: 8px 10px; color: var(--text); cursor: pointer; font-size: 12px; font-weight: 600; }
 .task-progress-step .task-progress-detail,
 .task-progress-context .task-progress-detail { margin: 0 7px 7px; }
-.task-question-bubble { flex: 0 0 auto; width: min(620px, 77%); max-width: 77%; padding: 0; overflow: hidden; }
+.task-question-bubble { flex: 0 0 auto; width: min(100%, 70ch); max-width: 100%; padding: 0; overflow: hidden; }
 .task-question-bubble .question-card { margin: 0; border-radius: 7px; }
 @keyframes task-progress-pulse { 50% { opacity: .35; transform: scale(.85); } }
-.message-source { display: block; width: max-content; margin: -2px 0 10px; padding: 3px 6px; border-radius: 999px; background: var(--accent-soft); color: var(--muted); font-size: 10px; letter-spacing: .04em; text-transform: uppercase; }
-.message-project-association { display: block; width: max-content; margin: -2px 0 10px; color: var(--muted); font-size: 10px; }
-.message-markdown { white-space: normal; }
+.message-source { display: block; width: fit-content; max-width: 100%; margin: -2px 0 10px; padding: 3px 6px; border-radius: 999px; background: var(--accent-soft); color: var(--muted); font-size: 10px; letter-spacing: .04em; text-transform: uppercase; }
+.message-project-association { display: block; width: fit-content; max-width: 100%; margin: -2px 0 10px; color: var(--muted); font-size: 10px; }
+.message-markdown { white-space: normal; min-width: 0; }
+.message-markdown img { display: block; max-width: 100%; max-height: 480px; object-fit: contain; margin: 12px 0; padding: 8px; border: 1px solid var(--border); border-radius: var(--radius-card); background: var(--surface-subtle); }
+.message-markdown a { overflow-wrap: anywhere; text-underline-offset: 3px; }
+.message-markdown a.message-resource { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; padding: 9px 12px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); }
+.message-resource svg { flex-shrink: 0; }
+.message-markdown pre { border: 1px solid var(--border); }
 .message-markdown > :first-child { margin-top: 0; }
 .message-markdown > :last-child { margin-bottom: 0; }
 .message-markdown p, .message-markdown ul, .message-markdown ol, .message-markdown blockquote, .message-markdown pre, .message-markdown table { margin: 0 0 12px; }

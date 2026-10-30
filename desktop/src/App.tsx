@@ -17,7 +17,7 @@ import { desktopDiagnosticBehavior, type DesktopDiagnosticMode } from "./diagnos
 import { createDesktopNotifier, DESKTOP_NOTIFICATION_PREFERENCES_KEY, notificationForCompletion, notificationForQuestion, readDesktopNotificationPreferences, type DesktopNotificationPreferences } from "./desktopNotifications";
 import { readDismissedScheduledSurfaces, rememberDismissedScheduledSurface, withoutDismissedSurfaces, withoutSurface } from "./dismissedSurfaces";
 import { avatarState, avatarStateLabel, capdActivityLabel, type Workspace, SETTINGS_SECTIONS } from "./layoutState";
-import { formatMessageTime } from "./messageTime";
+import { ConversationMessage, MemoizedConversationMessage } from "./ConversationMessage";
 import { reuseQuestions, withoutTaskProgressSurfaces } from "./pollState";
 import { QueueWorkloadChart } from "./QueueWorkloadChart";
 import { appendQueueSample, type QueueSample } from "./queueHistory";
@@ -50,7 +50,6 @@ type Provider = {
   cli_path?: string;
   catalog_cli_matches_runtime?: boolean | null;
 };
-const REMARK_PLUGINS = [remarkGfm];
 const SETTINGS_ICONS = { general: Settings, appearance: Palette, tools: Wrench, integrations: Plug, automations: CalendarClock, model: Brain, "system-one": Gauge, "agent-config": FileText, skills: Sparkles, members: UsersRound };
 const localDay = (timezone: string) => {
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone: timezone || "UTC", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
@@ -600,8 +599,8 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       if (item.kind === "message") {
         const question = questions.find((candidate) => item.message.id === `question:${candidate.question_id}`);
         const questionSurface = question ? surfaces[`question:${question.question_id}`] : undefined;
-        if (questionSurface) return <article data-question-id={question?.question_id} className="message assistant task-question-bubble" key={item.key}><A2uiSurfaceView surface={questionSurface} clientId={clientId} user={user} onDone={poll} /></article>;
-        const Bubble = diagnosticBehavior.memoizesMessages ? MemoizedMessageBubble : MessageBubble;
+        if (questionSurface) return <article data-question-id={question?.question_id} className="message assistant task-question-bubble" aria-label="Question from Alphonse" key={item.key}><A2uiSurfaceView surface={questionSurface} clientId={clientId} user={user} onDone={poll} /></article>;
+        const Bubble = diagnosticBehavior.memoizesMessages ? MemoizedConversationMessage : ConversationMessage;
         const bubble = <Bubble key={item.key} message={item.message} timezone={timezone} projectName={contextProjects.find((projectItem) => projectItem.project_id === item.message.project_id)?.name || ""} renderMarkdown={!diagnosticBehavior.plainTextMessages} />;
         return question ? <div className="timeline-message" data-question-id={question.question_id} key={item.key}>{bubble}</div> : bubble;
       }
@@ -609,7 +608,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       const surface = archivedSurface || surfaces[`task-progress:${item.taskId}`] || heldProgressSurfaces[item.taskId];
       const questionSurface = Object.values(surfaces).find((candidate) => questionTaskId(candidate) === item.taskId);
       if (questionSurface) {
-        return <article data-question-id={questions.find((question) => question.task_id === item.taskId)?.question_id} className="message assistant task-question-bubble" key={item.key}><A2uiSurfaceView surface={questionSurface} clientId={clientId} user={user} onDone={poll} /></article>;
+        return <article data-question-id={questions.find((question) => question.task_id === item.taskId)?.question_id} className="message assistant task-question-bubble" aria-label="Question from Alphonse" key={item.key}><A2uiSurfaceView surface={questionSurface} clientId={clientId} user={user} onDone={poll} /></article>;
       }
       return surface ? <TaskProgressBubble key={item.key} surface={surface} archived={Boolean(archivedSurface)} /> : null;
     }), [archivedProgress, clientId, contextProjects, diagnosticBehavior.memoizesMessages, diagnosticBehavior.plainTextMessages, heldProgressSurfaces, messages, morphedMessageTaskIds, pendingProgressMessages, poll, progressTaskIds, questionTaskIds, questions, surfaces, timelineRenderVersion, timezone, user]);
@@ -987,10 +986,6 @@ function calendarDateLabel(value: string | null | undefined, timezone: string): 
   }
 }
 
-function sourceLabel(source: string): string {
-  return source.replace(/[-_]/g, " ").replace(/\b\w/g, (character) => character.toUpperCase());
-}
-
 function timezoneSettingsError(cause: unknown): string {
   const message = cause instanceof Error ? cause.message : "Timezone settings unavailable";
   return message.includes("unknown_method") ? "Restart the Alphonse daemon once to enable timezone settings." : message;
@@ -1006,18 +1001,6 @@ function taskProgressIds(events: Array<{ event: { type: string; name?: string; v
   return [...ids];
 }
 
-function MessageBubble({ message, timezone, projectName = "", renderMarkdown = true }: { message: ChatMessage; timezone: string; projectName?: string; renderMarkdown?: boolean }) {
-  const timestamp = message.created_at ? formatMessageTime(message.created_at, timezone) : null;
-  return <article className={`message ${message.role}`}>
-    {message.source && !["desktop", "ledger"].includes(message.source) && <small className="message-source" title={`Sent from ${message.source}`}>↗ {sourceLabel(message.source)}</small>}
-    {message.project_id && <small className="message-project-association" title="Task project context">Project · {projectName || message.project_id}</small>}
-    {message.role === "assistant" && renderMarkdown ? <div className="message-markdown"><ReactMarkdown remarkPlugins={REMARK_PLUGINS}>{message.content}</ReactMarkdown></div> : message.content}
-    {timestamp && <time className="message-timestamp" dateTime={message.created_at} title={timestamp.tooltip}>{timestamp.visible}</time>}
-  </article>;
-}
-
-const MemoizedMessageBubble = memo(MessageBubble);
-
 function TaskProgressBubble({ surface, archived = false }: { surface: A2uiSurface; archived?: boolean }) {
   const text = (id: string) => String(surface.components[id]?.text || "").trim();
   const steps = Object.values(surface.components).filter((component) => component.id.startsWith("step_") && component.text).sort((left, right) => left.id.localeCompare(right.id, undefined, { numeric: true }));
@@ -1025,7 +1008,7 @@ function TaskProgressBubble({ surface, archived = false }: { surface: A2uiSurfac
   const criteria = text("criteria").replace(/^Acceptance criteria\n?/, "").trim();
   const visibleCriteria = criteria === "- (none)" ? "" : criteria;
   const Container = archived ? "details" : "div";
-  return <article className="message assistant task-progress-bubble" aria-live="polite">
+  return <article className="message assistant task-progress-bubble" aria-label="Task activity" aria-live="polite">
     <Container className="task-progress-log">
       {archived && <summary>Work log{text("summary") ? ` · ${text("summary")}` : ""}</summary>}
     <div className="task-progress-content">
