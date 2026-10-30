@@ -10,8 +10,8 @@ import json
 import re
 from pathlib import Path
 
+from alphonse.agent_v2 import activity_widgets, care_widgets
 from alphonse.agent_v2.coordination_widgets import valid_binding, snapshot
-from alphonse.agent_v2 import activity_widgets
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.core import ToolExecutionContext
 from alphonse.agent_v2.core.tools.registry.native.memory import execute_read_memory_source
@@ -35,7 +35,7 @@ def definitions(skill):
                 continue
             if not isinstance(title, str) or not 1 <= len(title) <= 100 or not isinstance(binding, dict):
                 continue
-            if not activity_widgets.valid_binding(binding) and not valid_binding(binding) and binding != {"type": "agenda"} and not (set(binding) == {"type", "source_id"} and binding["type"] == "memory" and isinstance(binding["source_id"], str) and 0 < len(binding["source_id"]) <= 256):
+            if not activity_widgets.valid_binding(binding) and not care_widgets.valid_binding(binding) and not valid_binding(binding) and binding != {"type": "agenda"} and not (set(binding) == {"type", "source_id"} and binding["type"] == "memory" and isinstance(binding["source_id"], str) and 0 < len(binding["source_id"]) <= 256):
                 continue
             if not isinstance(item.get("suggestion", "show"), str) or item.get("suggestion", "show") not in {"show", "update", "pin", "remove", "expire"}:
                 continue
@@ -57,7 +57,7 @@ def project_widgets(runtime, user, task, *, expires_at, requested_ids=()):
             binding = item["binding"]
             identity = hashlib.sha256(f'{user}\0{skill.skill_id}\0{item["key"]}'.encode()).hexdigest()[:32]
             widget_id = f"skill-widget:{identity}"
-            if skill.skill_id not in selected and widget_id not in requested_ids:
+            if skill.skill_id not in selected and widget_id not in requested_ids and not (binding["type"] == "care" and "care" in requested_ids):
                 continue
             row = {"id": widget_id, "kind": "skill", "skillId": skill.skill_id,
                    "contextId": task.task_id if task and skill.skill_id in selected else "",
@@ -72,6 +72,10 @@ def project_widgets(runtime, user, task, *, expires_at, requested_ids=()):
                 payload = activity_widgets.snapshot(runtime, user, skill.skill_id, binding)
                 if payload is not None:
                     row.update(status="ready", activity=payload)
+            elif binding["type"] == "care":
+                payload = care_widgets.snapshot(runtime, user, skill.skill_id)
+                if payload is not None:
+                    row.update(status="ready", care=payload)
             elif binding["type"] == "coordination":
                 payload = snapshot(runtime, user, skill.skill_id, binding)
                 if payload is not None:

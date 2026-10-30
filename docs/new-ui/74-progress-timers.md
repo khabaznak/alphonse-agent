@@ -115,3 +115,9 @@ in #78.
   `/private/tmp/issue74-timer.png`, `/private/tmp/issue74-minimum.png`.
   This fixture renders the real drawer/components, without a household daemon;
   it does not claim a real trainer integration or packaged Tauri acceptance.
+
+Integrated the newly merged care-widget PR #99 before delivery. Shared bridge
+conflicts were resolved by retaining both native binding validators/renderers and
+care access behavior. The combined result passes all 119 Desktop tests, 57
+Python tests (including care regressions), and the TypeScript/Vite production
+build. No care capability implementation is included in the #74 diff.
