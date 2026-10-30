@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { AtHandDrawer } from "./AtHandDrawer";
 import { defaultDrawer } from "./atHandState";
-const props = { state: { ...defaultDrawer(), open: true }, act: () => {}, member: "alice", connected: true, questionCount: 7, questionsMember: "alice", onAttention: () => {}, onAgenda: () => {}, toggleRef: { current: null }, saveFailed: false };
+const props = { timezone: "UTC", onSchedule: () => {}, onProjects: () => {}, state: { ...defaultDrawer(), open: true }, act: () => {}, member: "alice", connected: true, questionCount: 7, questionsMember: "alice", onAttention: () => {}, onAgenda: () => {}, toggleRef: { current: null }, saveFailed: false };
 describe("At hand rendering boundaries", () => {
   it("never displays previous-member question counts or disconnected data", () => {
     expect(renderToStaticMarkup(<AtHandDrawer {...props} />)).toContain("7 waiting for your input");

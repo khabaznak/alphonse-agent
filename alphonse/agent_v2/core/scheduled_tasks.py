@@ -450,6 +450,26 @@ class ScheduledTaskStore:
             ).fetchall()
         return [_execution_from_row(row) for row in rows if _execution_from_row(row) is not None]
 
+    def agenda_executions(self, *, scheduled_task_id: str, start_at: str, end_at: str) -> list[ScheduledTaskExecutionRecord]:
+        # Canonical occurrence keys contain the scheduled timestamp after the stable ID.
+        # Legacy keys have no timestamp; their started_at is an explicitly labelled fallback.
+        prefix = str(scheduled_task_id) + ":"
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT * FROM v2_scheduled_task_executions
+                   WHERE scheduled_task_id = ? AND
+                   julianday(COALESCE(CASE WHEN substr(occurrence_key, 1, ?) = ?
+                     AND julianday(substr(occurrence_key, ?)) IS NOT NULL
+                     THEN substr(occurrence_key, ?) END, started_at)) >= julianday(?) AND
+                   julianday(COALESCE(CASE WHEN substr(occurrence_key, 1, ?) = ?
+                     AND julianday(substr(occurrence_key, ?)) IS NOT NULL
+                     THEN substr(occurrence_key, ?) END, started_at)) < julianday(?)
+                   ORDER BY started_at LIMIT 501""",
+                (scheduled_task_id, len(prefix), prefix, len(prefix) + 1, len(prefix) + 1, start_at,
+                 len(prefix), prefix, len(prefix) + 1, len(prefix) + 1, end_at),
+            ).fetchall()
+        return [_execution_from_row(row) for row in rows]
+
     def claim_due_occurrences(
         self,
         *,
