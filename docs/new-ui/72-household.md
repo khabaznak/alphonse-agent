@@ -84,6 +84,7 @@ project-administration reconciliation.
   browser fixtures model those responses. Real household daily-use acceptance
   remains #78. No browser/mobile product client or CLI removal is introduced.
 
-Final checks: 106 targeted Python tests, all 68 Desktop tests and the
+Final checks: 122 targeted Python tests, all 79 Desktop tests and the
 TypeScript/Vite production build pass. Vite retains its existing bundle-size
-advisory. The Playwright checks were rerun after the final lifecycle refinement.
+advisory. The Playwright checks were rerun after the final lifecycle refinement and
+integration of PR #90’s question UI.

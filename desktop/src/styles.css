@@ -1140,3 +1140,16 @@ a { color: var(--accent); }
 .household-grid button { flex-shrink: 0; }
 .household-footnote { font-size: 12px; margin-top: 22px; }
 @media (max-width: 1000px) { .household-grid { grid-template-columns: minmax(0, 1fr); } .household-grid li { align-items: flex-start; flex-direction: column; } }
+.pending-questions { display: grid; gap: 1rem; width: min(100%, 70ch); margin: 1rem 0; }
+.pending-questions h2 { font-size: 1.1rem; }
+.question-fields { border: 0; padding: 0; margin: 0; min-width: 0; display: grid; gap: .75rem; }
+.question-fields label { display: grid; gap: .4rem; }
+.question-fields textarea { width: 100%; resize: vertical; }
+.question-resource { padding: .75rem; margin-block: .75rem; border: 1px solid var(--border); border-radius: .6rem; overflow-wrap: anywhere; }
+.question-resource p { margin-block: .35rem; }
+.question-context { white-space: pre-wrap; overflow-wrap: anywhere; }
+.question-card:focus { outline: 2px solid var(--accent); outline-offset: 3px; }
+.pending-questions .question-card form { display: block; }
+.question-answer-legend { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.question-fields .a2ui-choice-picker label { display: flex; }
+.question-fields input[type="checkbox"] { flex: 0 0 auto; min-width: 0; }

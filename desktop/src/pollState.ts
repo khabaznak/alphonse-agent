@@ -7,15 +7,7 @@ export function reuseQuestions(current: Question[], next: Question[]): Question[
   if (current.length !== next.length) return next;
   const unchanged = current.every((question, index) => {
     const candidate = next[index];
-    return question.question_id === candidate.question_id
-      && question.task_id === candidate.task_id
-      && question.project_id === candidate.project_id
-      && question.created_at === candidate.created_at
-      && question.conversation_sequence === candidate.conversation_sequence
-      && question.message === candidate.message
-      && question.kind === candidate.kind
-      && question.choices.length === candidate.choices.length
-      && question.choices.every((choice, choiceIndex) => choice.id === candidate.choices[choiceIndex].id && choice.label === candidate.choices[choiceIndex].label);
+    return JSON.stringify(question) === JSON.stringify(candidate);
   });
   return unchanged ? current : next;
 }
@@ -26,4 +18,11 @@ export function reuseQueueStatus(current: QueueStatus, next: QueueStatus): Queue
 
 export function withoutTaskProgressSurfaces(surfaces: Record<string, A2uiSurface>): Record<string, A2uiSurface> {
   return Object.fromEntries(Object.entries(surfaces).filter(([surfaceId]) => !surfaceId.startsWith("task-progress:")));
+}
+
+// Pending questions are the authoritative snapshot, including after reconnect
+// or a dropped delete event. Never keep an actionable stale question surface.
+export function reconcileQuestionSurfaces(surfaces: Record<string, A2uiSurface>, questions: Question[]): Record<string, A2uiSurface> {
+  const pending = new Set(questions.map((question) => `question:${question.question_id}`));
+  return Object.fromEntries(Object.entries(surfaces).filter(([id]) => !id.startsWith("question:") || pending.has(id)));
 }
