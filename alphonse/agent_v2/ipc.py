@@ -651,6 +651,11 @@ class V2DaemonServer:
                     source_paths=[str(item) for item in source_paths],
                 )
             }
+        if method == "household_overview":
+            return self.daemon.household_overview(
+                actor_user_id=str(params.get("actor_user_id") or ""),
+                include_personal=params.get("include_personal") is True,
+            )
         if method == "work_items":
             return self.daemon.work_items(
                 actor_user_id=str(params.get("actor_user_id") or ""),

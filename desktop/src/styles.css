@@ -1121,6 +1121,25 @@ a { color: var(--accent); }
 .settings-workspace .embedded-workspace > header { display: none; }
 .settings-setup-notice { margin: 0; padding: 12px 28px; color: var(--muted); }
 
+/* Household follows the shared-card hierarchy, with explicit personal disclosure. */
+.household-workspace { height: 100%; overflow-y: auto; width: min(100%, 1080px); margin: 0 auto; padding: clamp(20px, 4vw, 48px); }
+.household-intro h1 { margin: 8px 0 12px; font-size: clamp(26px, 3.5vw, 38px); }
+.household-intro p, .household-footnote { color: var(--muted); }
+.household-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 20px 0 28px; }
+.household-actions [aria-pressed="true"] { background: var(--accent-soft); color: var(--text); border-color: var(--accent); }
+.household-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.household-grid .card { min-width: 0; margin: 0; padding: 24px; }
+.household-wide { grid-column: 1 / -1; }
+.household-grid header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.household-grid h2 { font-size: 19px; margin: 0 0 12px; }
+.household-grid header span, .household-grid small { font-size: 12px; color: var(--muted); }
+.household-grid ul { list-style: none; padding: 0; margin: 4px 0 16px; }
+.household-grid li { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 14px 0; border-bottom: 1px solid var(--border); }
+.household-grid li div { min-width: 0; overflow-wrap: anywhere; }
+.household-grid small { display: block; margin-top: 6px; }
+.household-grid button { flex-shrink: 0; }
+.household-footnote { font-size: 12px; margin-top: 22px; }
+@media (max-width: 1000px) { .household-grid { grid-template-columns: minmax(0, 1fr); } .household-grid li { align-items: flex-start; flex-direction: column; } }
 .pending-questions { display: grid; gap: 1rem; width: min(100%, 70ch); margin: 1rem 0; }
 .pending-questions h2 { font-size: 1.1rem; }
 .question-fields { border: 0; padding: 0; margin: 0; min-width: 0; display: grid; gap: .75rem; }
