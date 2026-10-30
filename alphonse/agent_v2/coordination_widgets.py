@@ -7,15 +7,15 @@ from alphonse.agent_v2.artifact_resources import contained_path
 FAMILIES = {"todos", "shopping", "reminders", "appointments"}
 
 
-def valid_binding(binding):
+def valid_binding(binding, *, binding_type="coordination", families=FAMILIES):
     return (isinstance(binding, dict) and set(binding) == {"type", "family", "artifact_id", "path"}
-            and binding.get("type") == "coordination" and isinstance(binding.get("family"), str)
-            and binding["family"] in FAMILIES and isinstance(binding.get("artifact_id"), str)
+            and binding.get("type") == binding_type and isinstance(binding.get("family"), str)
+            and binding["family"] in families and isinstance(binding.get("artifact_id"), str)
             and binding["artifact_id"].startswith("artifact.") and isinstance(binding.get("path"), str)
             and 0 < len(binding["path"]) <= 256)
 
 
-def snapshot(runtime, actor, skill_id, binding):
+def snapshot(runtime, actor, skill_id, binding, *, validate_items=None):
     """Catalog access is the boundary; selection and snapshot fields grant no access."""
     try:
         resources = runtime.core.artifact_resources
@@ -34,22 +34,34 @@ def snapshot(runtime, actor, skill_id, binding):
             return None
         if not isinstance(value["items"], list) or len(value["items"]) > 50:
             return None
-        items, ids = [], set()
-        for item in value["items"]:
-            if not isinstance(item, dict) or set(item) - {"id", "title", "status", "when"} or not {"id", "title", "status"} <= set(item):
+        if validate_items is not None:
+            items = validate_items(value["items"], updated)
+            if items is None:
                 return None
-            if any(not isinstance(item.get(key), str) or not 0 < len(item[key]) <= limit for key, limit in (("id", 128), ("title", 300), ("status", 32))):
+        else:
+            items = _list_items(value["items"])
+            if items is None:
                 return None
-            if item["id"] in ids or item["status"] not in {"pending", "completed", "cancelled"}:
-                return None
-            if "when" in item:
-                when = datetime.fromisoformat(item["when"])
-                if not when.tzinfo:
-                    return None
-            ids.add(item["id"])
-            items.append(dict(item))
         return {"family": binding["family"], "artifactId": record.artifact_id,
                 "owner": record.owner_user_id, "source": record.name, "updatedAt": value["updated_at"],
                 "expiresAt": expires.timestamp() * 1000, "items": items}
     except (OSError, ValueError, TypeError, KeyError, OverflowError, RecursionError):
         return None
+
+
+def _list_items(values):
+    items, ids = [], set()
+    for item in values:
+        if not isinstance(item, dict) or set(item) - {"id", "title", "status", "when"} or not {"id", "title", "status"} <= set(item):
+            return None
+        if any(not isinstance(item.get(key), str) or not 0 < len(item[key]) <= limit for key, limit in (("id", 128), ("title", 300), ("status", 32))):
+            return None
+        if item["id"] in ids or item["status"] not in {"pending", "completed", "cancelled"}:
+            return None
+        if "when" in item:
+            when = datetime.fromisoformat(item["when"])
+            if not when.tzinfo:
+                return None
+        ids.add(item["id"])
+        items.append(dict(item))
+    return items
