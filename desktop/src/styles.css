@@ -1009,7 +1009,7 @@ a { color: var(--accent); }
 /* Persistent desktop shell: each column owns its scrolling. */
 .desktop-shell { --nav-width: 224px; position: relative; grid-template-columns: var(--nav-width) minmax(0, 1fr); }
 .desktop-shell.sidebar-collapsed { --nav-width: 72px; grid-template-columns: var(--nav-width) minmax(0, 1fr); }
-.desktop-shell.at-hand-open { grid-template-columns: var(--nav-width) minmax(0, 1fr) 280px; }
+.desktop-shell.at-hand-open { grid-template-columns: var(--nav-width) minmax(0, 1fr) 324px; }
 .desktop-shell [hidden] { display: none !important; }
 .desktop-shell .sidebar { box-shadow: none; border-right: 1px solid var(--border); }
 .desktop-shell .brand { grid-template-columns: 44px minmax(0, 1fr) auto; font-size: 21px; }
@@ -1039,7 +1039,7 @@ a { color: var(--accent); }
 .embedded-workspace > .modal-content { padding-top: 16px; }
 .attention-workspace { overflow-y: auto; padding: 24px; }
 .attention-workspace .card { margin-block: 16px; }
-.attention-workspace button, .at-hand-drawer .card button { padding: 8px 12px; color: var(--accent-contrast); background: var(--accent); }
+.attention-workspace button { padding: 8px 12px; color: var(--accent-contrast); background: var(--accent); }
 .at-hand-drawer { min-width: 0; min-height: 0; overflow-y: auto; border-left: 1px solid var(--border); background: var(--surface); padding: 18px; }
 .at-hand-drawer header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 24px; }
 .at-hand-drawer h2 { margin: 0; font-size: 21px; }
@@ -1055,7 +1055,7 @@ a { color: var(--accent); }
   /* At the supported desktop minimum, an explicit drawer overlays the right
      edge; it never squeezes project editors or makes the window wider. */
   .desktop-shell.at-hand-open { grid-template-columns: var(--nav-width) minmax(0, 1fr); }
-  .at-hand-drawer { position: absolute; z-index: 3; top: 48px; bottom: 0; right: 0; width: 280px; box-shadow: -8px 0 24px var(--shadow); }
+  .at-hand-drawer { position: absolute; z-index: 3; top: 48px; bottom: 0; right: 0; width: 324px; box-shadow: -8px 0 24px var(--shadow); }
 }
 @media (max-width: 960px) {
   .desktop-shell, .desktop-shell.sidebar-collapsed { --nav-width: 72px; }
@@ -1165,22 +1165,35 @@ a { color: var(--accent); }
 .question-fields .a2ui-choice-picker label { display: flex; }
 .question-fields input[type="checkbox"] { flex: 0 0 auto; min-width: 0; }
 
-/* At hand: fixed header/catalog and independent card-list/content scrolling. */
-.at-hand-drawer { display: flex; flex-direction: column; overflow: hidden; padding: 14px; }
-.at-hand-drawer > header { flex-shrink: 0; margin-bottom: 14px; }
-.widget-catalog { flex-shrink: 0; max-height: 30%; overflow-y: auto; padding: 10px; border: 1px solid var(--border); border-radius: 10px; }
-.widget-catalog summary { cursor: pointer; font-weight: 600; }
-.widget-catalog > div { padding-block: 10px; }
-.widget-catalog button { background: var(--accent); color: var(--accent-contrast); padding: 8px; }
-.widget-help { flex-shrink: 0; font-size: 11px !important; }
-.at-hand-cards { min-height: 0; overflow-y: auto; flex: 1; padding: 3px; }
-.at-hand-card { padding: 12px; overflow-wrap: anywhere; }
-.at-hand-card h3 { margin-bottom: 6px; }
-.widget-mode { color: var(--muted); font-size: 11px; }
-.widget-body { max-height: 220px; overflow-y: auto; margin-block: 10px; }
-.widget-controls { display: flex; flex-wrap: wrap; gap: 6px; border-top: 1px solid var(--border); padding-top: 10px; }
-.at-hand-drawer .widget-controls button { padding: 6px 8px; background: var(--surface-raised); color: var(--text); border: 1px solid var(--border); font-size: 11px; }
+/* At hand follows Design Study 01: quiet header, content-first cards and one list. */
+.at-hand-drawer { display: flex; flex-direction: column; overflow: hidden; padding: 0; background: var(--canvas); }
+.at-hand-drawer > .at-hand-heading { flex-shrink: 0; min-height: 64px; margin: 0; padding: 16px 18px; }
+.at-hand-heading h2 { display: flex; align-items: center; gap: 10px; font-size: 14px; }
+.widget-count { padding: 2px 7px; border: 1px solid var(--border); border-radius: 5px; color: var(--muted); background: var(--surface); font: 10px var(--font-body); }
+.at-hand-heading > div { display: flex; gap: 4px; }
+.at-hand-drawer .at-hand-heading button { background: transparent; color: var(--muted); padding: 6px; }
+.at-hand-cards { min-height: 0; overflow-y: auto; flex: 1; padding: 0 15px 20px; scrollbar-gutter: stable; }
+.at-hand-drawer .drawer-context { font-size: 10px; margin: 0 4px 13px; }
+.at-hand-drawer .at-hand-card { padding: 16px; margin: 0 0 13px; border-radius: 12px; overflow-wrap: anywhere; }
+.widget-heading { display: flex; justify-content: space-between; align-items: start; gap: 6px; margin-bottom: 13px; }
+.at-hand-drawer .widget-heading h3 { font-size: 13px; line-height: 1.4; margin: 5px 0 0; }
+.widget-controls { display: flex; flex: 0 0 auto; align-items: center; gap: 0; }
+.at-hand-drawer .widget-controls button { display: grid; place-items: center; width: 24px; height: 26px; padding: 4px; background: transparent; color: var(--muted); border-radius: 6px; }
+.at-hand-drawer .widget-controls svg { width: 13px; height: 13px; }
+.at-hand-drawer .widget-controls button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); }
+.at-hand-drawer .widget-controls button:hover:not(:disabled), .at-hand-heading button:hover { background: var(--surface-subtle); color: var(--text); }
+.widget-mode { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.widget-body { max-height: min(480px, 65vh); overflow-y: auto; margin: 0; scrollbar-gutter: stable; }
 .at-hand-drawer button:disabled { opacity: .45; cursor: default; }
+.widget-catalog { border: 1px dashed var(--border); border-radius: 9px; padding: 12px; }
+.widget-catalog > summary { display: flex; align-items: center; justify-content: center; gap: 8px; list-style: none; cursor: pointer; color: var(--muted); font-size: 11px; }
+.widget-catalog > summary::-webkit-details-marker { display: none; }
+.widget-catalog > div { padding-block: 12px; border-bottom: 1px solid var(--border); }
+.widget-catalog button { background: var(--accent); color: var(--accent-contrast); padding: 7px 10px; }
+.widget-catalog p, .widget-help { font-size: 11px !important; }
+.widget-source-details { margin-top: 12px; font-size: 11px; color: var(--muted); }
+.widget-source-details summary { cursor: pointer; }
+.at-hand-drawer .widget-body button { font-size: 11px; }
 
 .coordination-list { display: grid; gap: .6rem; }
 .coordination-list small { display: block; overflow-wrap: anywhere; color: var(--muted); }
@@ -1204,8 +1217,36 @@ a { color: var(--accent); }
 .agenda-occurrence time, .agenda-occurrence small { font-size: .7rem; }
 .agenda-source-note { font-size: .8rem; opacity: .8; }
 .agenda-compact { padding: 0; }
-.agenda-compact .agenda-month, .agenda-compact .agenda-week { grid-template-columns: 1fr; }
-.agenda-compact .agenda-day { min-height: 2rem; }
+/* Compact Agenda is a purpose-built preview, never a compressed workspace. */
+.agenda-segments { display: flex; gap: 2px; padding: 3px; margin-bottom: 14px; background: var(--surface-subtle); border-radius: 7px; }
+.at-hand-drawer .agenda-segments button { flex: 1; padding: 6px 8px; background: transparent; color: var(--muted); border-radius: 5px; }
+.at-hand-drawer .agenda-segments button[aria-pressed="true"] { background: var(--surface-raised); color: var(--text); box-shadow: 0 1px 3px var(--shadow); }
+.agenda-preview-navigation { display: flex; align-items: center; gap: 4px; margin-bottom: 14px; }
+.agenda-preview-navigation strong { flex: 1; font-size: 11px; }
+.at-hand-drawer .agenda-preview-navigation > button { display: grid; place-items: center; padding: 4px; background: transparent; color: var(--muted); }
+.agenda-preview-navigation svg { width: 14px; height: 14px; }
+.agenda-date-picker { position: relative; font-size: 11px; }
+.agenda-date-picker > summary { cursor: pointer; list-style: none; display: grid; place-items: center; padding: 4px; }
+.agenda-date-picker > summary::-webkit-details-marker { display: none; }
+.agenda-date-picker[open] { flex: 1; }
+.agenda-date-picker label { display: grid; gap: 4px; }
+.agenda-date-picker input { width: 100%; }
+.agenda-preview-events h4 { margin: 12px 0 8px; font-size: 11px; }
+.at-hand-drawer .agenda-preview-empty { margin: 5px 0 12px; font-size: 11px; }
+.at-hand-drawer .agenda-preview-event { display: flex; align-items: start; gap: 10px; width: 100%; padding: 0; margin: 0 0 14px; color: var(--text); background: transparent; text-align: left; }
+.agenda-preview-event > time { flex: 0 0 48px; font-size: 10px; padding-top: 2px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.agenda-preview-event > span { border-left: 2px solid var(--accent); padding-left: 10px; }
+.agenda-preview-event strong { font-size: 11px; font-weight: 500; }
+.agenda-preview-event small { display: block; margin-top: 3px; font-size: 10px; color: var(--muted); }
+.agenda-mini-month { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 3px; text-align: center; margin-bottom: 12px; }
+.agenda-mini-month > span { font-size: 10px; color: var(--muted); }
+.at-hand-drawer .agenda-mini-month button { position: relative; padding: 5px 0; border-radius: 5px; background: transparent; color: var(--text); font-size: 10px; }
+.agenda-mini-month .outside { opacity: .45; }
+.at-hand-drawer .agenda-mini-month button[aria-pressed="true"] { background: var(--accent); color: var(--accent-contrast); }
+.agenda-mini-month .has-occurrences::after { content: ""; position: absolute; bottom: 1px; left: calc(50% - 1.5px); width: 3px; height: 3px; border-radius: 50%; background: currentColor; }
+.agenda-compact footer { display: grid; gap: 4px; margin-top: 12px; border-top: 1px solid var(--border); padding-top: 8px; }
+.at-hand-drawer .agenda-compact footer button { display: flex; justify-content: space-between; align-items: center; padding: 5px 0; color: var(--accent); background: transparent; text-align: left; }
+.agenda-compact footer svg { width: 14px; height: 14px; }
 @media (max-width: 1100px) { .agenda-month, .agenda-week { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
 .activity-widget { display: grid; gap: 8px; }
@@ -1227,3 +1268,32 @@ a { color: var(--accent); }
 .home-widget button { margin: 5px 0; padding: 6px 8px; background: var(--surface-raised); color: var(--text); border: 1px solid var(--border); }
 .home-widget .sensor-state { font-size: 12px; font-weight: 600; margin-block: 4px; }
 .home-widget .sensor-current { color: var(--accent); }
+
+/* Widget values lead; source identities and secondary actions stay inspectable. */
+.at-hand-drawer .widget-text-link, .at-hand-drawer .coordination-list > button { display: flex; width: 100%; align-items: center; justify-content: space-between; margin-top: 10px; padding: 9px 0 0; border-top: 1px solid var(--border); border-radius: 0; background: transparent; color: var(--accent); text-align: left; font-size: 11px; }
+.at-hand-drawer .widget-text-link svg { width: 14px; height: 14px; transform: rotate(90deg); }
+.at-hand-drawer .coordination-list { gap: 8px; }
+.at-hand-drawer .coordination-list ul { gap: 12px; }
+.at-hand-drawer .coordination-list li { border: 0; padding: 0; }
+.at-hand-drawer .coordination-list li strong { font-size: 12px; font-weight: 500; }
+.at-hand-drawer .coordination-list small { font-size: 10px; }
+.coordination-row-title { display: flex; align-items: start; gap: 9px; }
+.coordination-mark { flex: 0 0 13px; width: 13px; height: 13px; margin-top: 3px; display: grid; place-items: center; border: 1px solid var(--muted); border-radius: 2px; font-size: 10px; line-height: 1; }
+.coordination-completed .coordination-mark { background: var(--accent); color: var(--accent-contrast); }
+.coordination-completed strong { text-decoration: line-through; color: var(--muted); }
+.coordination-row > small, .coordination-row > details { margin-left: 22px; }
+.widget-row-details { color: var(--muted); font-size: 10px; margin-top: 5px; }
+.widget-row-details summary { cursor: pointer; }
+.widget-row-details button { margin-top: 5px; }
+.at-hand-drawer .widget-body p { font-size: 12px; line-height: 1.5; margin: 8px 0; }
+.activity-widget section { border: 0; padding: 0; }
+.activity-widget h4 { font-size: 11px; }
+.activity-widget section > small { font-size: 10px; color: var(--muted); }
+.activity-metric { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 12px 0; }
+.activity-metric > strong { font: 600 32px/1.2 var(--font-display); letter-spacing: -1px; }
+.activity-metric > strong > span { font-size: 20px; }
+.activity-metric > small { color: var(--accent); background: var(--accent-soft); padding: 5px 8px; border-radius: 5px; font-size: 10px; }
+.at-hand-drawer .recorded-progress.bar { height: 4px; margin-block: 12px; }
+.at-hand-drawer .recorded-progress.dots { display: grid; grid-template-columns: repeat(16, minmax(0, 1fr)); gap: 7px; margin-block: 14px; }
+.at-hand-drawer .recorded-progress.dots i { width: 5px; height: 5px; border: 0; background: var(--border); }
+.at-hand-drawer .recorded-progress.dots i[data-filled="true"] { background: var(--accent); }
