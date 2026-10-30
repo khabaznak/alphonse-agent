@@ -20,8 +20,8 @@ export function scheduleMatches(task: Schedule, view: WorkView) {
 }
 const time = (value: string | null) => value ? new Date(value).toLocaleString() : "Not scheduled";
 
-export function WorkOverview({ active, user, ownerId, projects, users, onProject, onAgenda, onConversation, onQuestions }: {
-  active: boolean; user: string; ownerId: string; projects: Project[]; users: Array<{ user_id: string; display_name: string }>; onProject: (project: Project) => void;
+export function WorkOverview({ active, user, ownerId, initialTaskId = "", selectionRequest = 0, projects, users, onProject, onAgenda, onConversation, onQuestions }: {
+  active: boolean; user: string; ownerId: string; initialTaskId?: string; selectionRequest?: number; projects: Project[]; users: Array<{ user_id: string; display_name: string }>; onProject: (project: Project) => void;
   onAgenda: (id: string) => void; onConversation: (day: string) => void; onQuestions: () => void;
 }) {
   const [view, setView] = useState<WorkView>("active");
@@ -34,6 +34,8 @@ export function WorkOverview({ active, user, ownerId, projects, users, onProject
   const [scheduleError, setScheduleError] = useState("");
   const request = useRef(0);
   const detail = useRef<HTMLElement>(null);
+  const requestedTask = useRef(initialTaskId);
+  useEffect(() => { requestedTask.current = initialTaskId; if (initialTaskId) { setView("active"); setOffset(0); } }, [initialTaskId, selectionRequest]);
   const memberName = (id: string) => users.find((member) => member.user_id === id)?.display_name || id;
   useEffect(() => { if (selected) detail.current?.focus({ preventScroll: false }); }, [selected?.task_id]);
   const load = useCallback(async () => {
@@ -47,12 +49,14 @@ export function WorkOverview({ active, user, ownerId, projects, users, onProject
     if (id !== request.current) return;
     if (work.status === "fulfilled") {
       setPage(work.value);
-      setSelected((current) => work.value.items.find((item) => item.task_id === current?.task_id) || null);
+      const requestedId = requestedTask.current;
+      requestedTask.current = "";
+      setSelected((current) => work.value.items.find((item) => item.task_id === (requestedId || current?.task_id)) || null);
     } else { setPage(null); setSelected(null); setError(String(work.reason?.message || "Work could not be loaded.")); }
     if (timed.status === "fulfilled") setSchedules(timed.value.tasks);
     else { setSchedules([]); setScheduleError(String(timed.reason?.message || "Schedules could not be loaded.")); }
     setLoading(false);
-  }, [user, ownerId, view, offset]);
+  }, [user, ownerId, view, offset, initialTaskId, selectionRequest]);
   useEffect(() => { if (active) void load(); return () => { request.current++; }; }, [load, active]);
   const chooseView = (next: WorkView) => { setView(next); setOffset(0); setSelected(null); };
   const items = page?.items || [];

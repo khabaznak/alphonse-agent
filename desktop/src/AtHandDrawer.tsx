@@ -1,5 +1,6 @@
 import { Agenda } from "./Agenda";
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
+import { CoordinationList, NativeCoordinationBody, useNativeCoordination, type CoordinationRoutes } from "./CoordinationWidgets";
 import { PanelRightClose } from "lucide-react";
 import { changeDrawer, reconcileContext, readDrawer, saveDrawer, widgetAvailability, WIDGET_CATALOG, type DrawerAction, type DrawerState } from "./atHandState";
 
@@ -33,13 +34,15 @@ export function useAtHand(member: string) {
   return { state, act, saveFailed, reconcile };
 }
 
-export function AtHandDrawer({ state, act, member, connected, questionCount, questionsMember, onAttention, onAgenda, toggleRef, saveFailed, widgetContext, timezone, onSchedule, onProjects }: {
-  timezone: string; onSchedule: (id: string) => void; onProjects: () => void;
+export function AtHandDrawer({ state, act, member, connected, questionCount, questionsMember, onAttention, onAgenda, toggleRef, saveFailed, widgetContext, onWork, onRequest, onItem, timezone, onSchedule, onProjects }: CoordinationRoutes & {
+  onSchedule?: (id: string) => void; onProjects?: () => void;
   state: DrawerState; act: (action: DrawerAction) => void; member: string; connected: boolean;
-  questionCount: number; questionsMember: string; onAttention: () => void; onAgenda: () => void;
+  questionCount: number; questionsMember: string; onAttention: () => void;
   toggleRef: RefObject<HTMLButtonElement | null>; saveFailed: boolean; widgetContext?: WidgetContext;
 }) {
   const rows = authorizedWidgets(widgetContext, member);
+  const native = useNativeCoordination(member, connected && state.open && state.widgets.some((widget) => ["todos", "reminders"].includes(widget.kind)));
+  const routes = { onWork, onRequest, onItem, onAgenda, timezone };
   const closeRef = useRef<HTMLButtonElement>(null);
   const [now, setNow] = useState(Date.now);
   useEffect(() => { if (state.open) closeRef.current?.focus(); }, [state.open]);
@@ -57,11 +60,11 @@ export function AtHandDrawer({ state, act, member, connected, questionCount, que
         const title = data?.title || WIDGET_CATALOG.find((entry) => entry.kind === widget.kind)?.title || "Unavailable widget";
         const availability = widget.kind === "skill" && (!data || data.status !== "ready") ? "unavailable" : widgetAvailability(widget, member, connected, now);
         const locked = widget.mode === "locked";
-        const agendaBody = <Agenda key={member} compact active={state.open} member={member} timezone={timezone} onSchedule={onSchedule} onProjects={onProjects} onOpen={onAgenda} />;
+        const agendaBody = <Agenda key={member} compact active={state.open} member={member} timezone={timezone || "UTC"} onSchedule={onSchedule || ((id) => onAgenda(id))} onProjects={onProjects || (() => onWork?.(""))} onOpen={() => onAgenda()} />;
         return <article className="card at-hand-card" key={widget.id} aria-label={title}>
           <h3>{title}</h3><small className="widget-mode">{locked ? "User locked" : widget.mode === "pinned" ? "Pinned" : "Temporary context"}</small>
           <div className="widget-body" tabIndex={0} aria-label={`${title} content`}>
-            {availability === "loading" ? <p role="status">Loading member…</p> : availability === "expired" ? <p role="status">Context expired. Remove this card or pin it to keep it.</p> : availability === "unavailable" ? <p role="status">Unavailable. Reconnect or check access in the workspace.</p> : widget.kind === "skill" ? data!.binding === "agenda" ? agendaBody : <SkillWidgetBody data={data!} onAgenda={onAgenda} /> : widget.kind === "questions" ? questionsMember !== member ? <p role="status">Loading questions…</p> : <><p>{questionCount ? `${questionCount} waiting for your input` : "No pending questions"}</p><button onClick={onAttention}>Needs your attention</button></> : agendaBody}
+            {availability === "loading" ? <p role="status">Loading member…</p> : availability === "expired" ? <p role="status">Context expired. Remove this card or pin it to keep it.</p> : availability === "unavailable" ? <p role="status">Unavailable. Reconnect or check access in the workspace.</p> : widget.kind === "skill" ? data!.binding === "agenda" ? agendaBody : <SkillWidgetBody data={data!} {...routes} /> : ["todos", "reminders", "shopping", "appointments"].includes(widget.kind) ? <>{rows.filter((row) => row.status === "ready" && row.binding === "coordination" && row.coordination?.family === widget.kind).map((row) => <CoordinationList key={row.id} data={row.coordination!} {...routes} />)}{["todos", "reminders"].includes(widget.kind) ? <NativeCoordinationBody family={widget.kind} controller={native} {...routes} /> : !rows.some((row) => row.status === "ready" && row.coordination?.family === widget.kind) && <p role="status">Unavailable. Install the owning skill and connect an authorized, current list source.</p>}</> : widget.kind === "questions" ? questionsMember !== member ? <p role="status">Loading questions…</p> : <><p>{questionCount ? `${questionCount} waiting for your input` : "No pending questions"}</p><button onClick={onAttention}>Needs your attention</button></> : agendaBody}
           </div>
           <div className="widget-controls" role="group" aria-label={`${title} controls`}>
             <button aria-label={`${locked ? "Unlock" : "Lock"} ${title}`} onClick={() => act({ type: "mode", id: widget.id, mode: locked ? "pinned" : "locked" })}>{locked ? "Unlock" : "Lock"}</button>
@@ -76,9 +79,11 @@ export function AtHandDrawer({ state, act, member, connected, questionCount, que
   </aside>;
 }
 
-function SkillWidgetBody({ data, onAgenda }: { data: SkillWidget; onAgenda: () => void }) {
+function SkillWidgetBody({ data, ...routes }: CoordinationRoutes & { data: SkillWidget }) {
+  const { onAgenda } = routes;
+  if (data.binding === "coordination") return <><small>Skill: {data.skillId}{data.contextId && <> · Context: {data.contextId}</>}</small><CoordinationList data={data.coordination!} {...routes} /></>;
   return <>{data.historical && <small>Historical context · not a current measurement</small>}<p style={{ whiteSpace: "pre-wrap" }}>{data.text}</p>
-    {data.binding === "agenda" && <button onClick={onAgenda}>Open Agenda</button>}
+    {data.binding === "agenda" && <button onClick={() => onAgenda()}>Open Agenda</button>}
     {data.relevant && ["pin", "remove", "expire"].includes(data.suggestion) && <p role="status">Alphonse suggests {data.suggestion === "pin" ? "keeping this card pinned" : data.suggestion === "remove" ? "removing this card" : "letting this context expire"}. Use the card controls to apply.</p>}
   </>;
 }

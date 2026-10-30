@@ -27,8 +27,9 @@ flow. No generated program or real household data belongs in this repository.
   declaration key. Keep keys stable when updating a binding/title. All current
   bindings are member-scoped. Context ID identifies the active task; it does
   not confer permission. Skill IDs remain the existing installed skill IDs.
-- Only the fixed Agenda navigation and historical-memory text renderers are
-  supported. Agenda opens the existing authorized workspace; it does not claim
+- At #69 completion, only the fixed Agenda navigation and historical-memory
+  text renderers were supported. #73 adds the authorized fixed list snapshot
+  binding described in [daily coordination widgets](73-coordination-widgets.md). Agenda opens the existing authorized workspace; it does not claim
   to provide a calendar data implementation (#71/#73). Historical text uses the
   existing native memory-source reader, with the polling actor as requester,
   no neighbors and at most 4000 characters. It is labeled historical, never a

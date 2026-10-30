@@ -1,5 +1,6 @@
+import { appendWidgetDraft, CoordinationList, type CoordinationData } from "./CoordinationWidgets";
+import { authorizedWidgets, type WidgetContext } from "./widgetContext";
 import { Agenda } from "./Agenda";
-import type { WidgetContext } from "./widgetContext";
 import { SkillMascot, SkillAppearanceSettings } from "./SkillMascot";
 import { BASE_CONTEXT, type AppearanceContext, type SkillAppearance } from "./skillAppearances";
 import { HouseholdWorkspace } from "./HouseholdWorkspace";
@@ -127,10 +128,14 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
     workspaceHostRef.current?.querySelector<HTMLElement>(".workspace-panel:not([hidden])")?.focus({ preventScroll: true });
   }, [workspace, settingsTab]);
   const [scheduledTaskForView, setScheduledTaskForView] = useState("");
+  const [scheduleViewRequest, setScheduleViewRequest] = useState(0);
+  const [workTaskForView, setWorkTaskForView] = useState("");
   const [modal, setModal] = useState<Modal>(null);
   const [user, setUser] = useState("");
   const { state: drawer, act: changeDrawer, saveFailed: drawerSaveFailed, reconcile: reconcileWidgets } = useAtHand(user);
   const [widgetContext, setWidgetContext] = useState<WidgetContext>();
+  const [widgetItem, setWidgetItem] = useState<{ member: string; artifactId: string; itemId: string; family: CoordinationData["family"] }>();
+
   const drawerIdsRef = useRef<string[]>([]);
   drawerIdsRef.current = drawer.widgets.filter((widget) => widget.kind === "skill").map((widget) => widget.id);
   const atHandOpen = Boolean(user && drawer.open);
@@ -544,6 +549,9 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
     if (command === "/exit" || command === "/quit") window.close();
   };
 
+  const selectedWidgetData = connected && widgetItem?.member === user ? authorizedWidgets(widgetContext, user).find((row) => row.status === "ready" && row.coordination?.artifactId === widgetItem.artifactId && row.coordination.family === widgetItem.family)?.coordination : undefined;
+  const selectedWidgetItem = selectedWidgetData?.items.find((item) => item.id === widgetItem?.itemId);
+
   const suggestions = useMemo(() => matchingCommands(prompt), [prompt]);
   const activeSurface = Object.values(surfaces).find((surface) => !surface.surfaceId.startsWith("question:") && !surface.surfaceId.startsWith("task-progress:") && !progressTaskIds.includes(questionTaskId(surface)));
   const timelineRenderVersion = diagnosticBehavior.memoizesTimeline ? 0 : diagnosticRenderTick;
@@ -593,6 +601,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       </aside>
       <div className="workspace-host" ref={workspaceHostRef}>
         <div className="shell-toolbar"><span>{memberName || user || "Local household"} · {connected ? currentAvatarStateLabel : "Disconnected"}</span><button ref={drawerToggleRef} aria-label="Toggle At hand" aria-controls="at-hand" aria-expanded={atHandOpen} disabled={!user} onClick={() => changeDrawer({ type: "visibility", open: !atHandOpen })}>{atHandOpen ? <PanelRightClose /> : <PanelRightOpen />} At hand</button></div>
+        {widgetItem?.member === user && (workspace === "agenda" && ["appointments", "reminders"].includes(widgetItem.family) || workspace === "projects" && ["todos", "shopping"].includes(widgetItem.family)) && <section className="card widget-item-detail" aria-label="Widget item details"><button onClick={() => setWidgetItem(undefined)}>Close item</button><h2>Selected item</h2>{selectedWidgetData && selectedWidgetItem ? <CoordinationList data={{ ...selectedWidgetData, items: [selectedWidgetItem] }} timezone={timezone} onAgenda={() => navigate("agenda")} onWork={() => navigate("projects")} onRequest={(draft) => { setPrompt((current) => appendWidgetDraft(current, draft)); navigate("conversation"); }} /> : <p role="status">Item unavailable. Refresh the source or check access.</p>}</section>}
         <section className="workspace-panel" tabIndex={-1} aria-label="Conversation workspace" hidden={workspace !== "conversation"}>
         <section className="conversation">
         <header className="topbar">
@@ -620,9 +629,9 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
           </form>
         </section>
         </section></section>
-        {visited.has("projects") && <section className="workspace-panel" tabIndex={-1} aria-label="Projects and tasks workspace" hidden={workspace !== "projects"}><ProjectsWorkspace active={workspace === "projects"} user={user} initialProjectId={projectForView.id} selectionRequest={projectForView.request} onAgenda={(id) => { setScheduledTaskForView(id); navigate("agenda"); }} onConversation={(day) => { setConversationDay(day); navigate("conversation"); }} onQuestions={() => navigate("attention")} onClose={() => navigate("conversation")} /></section>}
+        {visited.has("projects") && <section className="workspace-panel" tabIndex={-1} aria-label="Projects and tasks workspace" hidden={workspace !== "projects"}><ProjectsWorkspace active={workspace === "projects"} user={user} initialTaskId={workTaskForView} initialProjectId={projectForView.id} selectionRequest={projectForView.request} onAgenda={(id) => { setScheduledTaskForView(id); navigate("agenda"); }} onConversation={(day) => { setConversationDay(day); navigate("conversation"); }} onQuestions={() => navigate("attention")} onClose={() => navigate("conversation")} /></section>}
         {visited.has("household") && <section className="workspace-panel" tabIndex={-1} aria-label="Household workspace" hidden={workspace !== "household"}><HouseholdWorkspace key={user} user={user} active={workspace === "household"} connected={connected} isAdmin={isAdmin} onProject={(id) => { setProjectForView((current) => ({ id, request: current.request + 1 })); navigate("projects"); }} onAgenda={(id) => { setScheduledTaskForView(id); navigate("agenda"); }} onConversation={(day) => { setConversationDay(day); navigate("conversation"); }} onQuestions={() => navigate("attention")} onMembers={() => { setSettingsTab("members"); navigate("settings"); }} /></section>}
-        {visited.has("agenda") && <section className="workspace-panel" tabIndex={-1} aria-label="Agenda workspace" hidden={workspace !== "agenda"}><AgendaWorkspace key={user} member={user} timezone={timezone} active={workspace === "agenda"} initialTaskId={scheduledTaskForView} onProjects={() => navigate("projects")} onConversation={() => navigate("conversation")} /></section>}
+        {visited.has("agenda") && <section className="workspace-panel" tabIndex={-1} aria-label="Agenda workspace" hidden={workspace !== "agenda"}><AgendaWorkspace key={user} selectionRequest={scheduleViewRequest} member={user} timezone={timezone} active={workspace === "agenda"} initialTaskId={scheduledTaskForView} onProjects={() => navigate("projects")} onConversation={() => navigate("conversation")} /></section>}
         {visited.has("attention") && <section className="workspace-panel attention-workspace" tabIndex={-1} aria-label="Needs your attention workspace" hidden={workspace !== "attention"}><h1>Needs your attention</h1>{questions.length ? questions.map((question) => <article className="card" key={question.question_id}><p>{question.message}</p><button onClick={() => { navigate("conversation"); window.requestAnimationFrame(() => {
               const target = Array.from(document.querySelectorAll<HTMLElement>("[data-question-id]")).find((element) => element.dataset.questionId === question.question_id);
               (target?.querySelector<HTMLElement>(".message") || target)?.scrollIntoView({ block: "center" });
@@ -630,7 +639,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
             }); }}>View in conversation</button></article>) : <p>No pending questions.</p>}</section>}
       {visited.has("settings") && <section className="workspace-panel" tabIndex={-1} aria-label="Settings workspace" hidden={workspace !== "settings"}><SettingsWorkspace isAdmin={isAdmin} user={user} initialTab={settingsTab} workspaceRequired={workspaceRequired} enterToSend={enterToSend} desktopStyle={desktopStyle} desktopNotifications={desktopNotifications} onDesktopStyleChange={changeDesktopStyle} onDesktopNotificationsChange={setDesktopNotifications} onEnterToSendChange={setEnterToSend} onTimezoneChange={setTimezone} onWorkspaceConfigured={() => setWorkspaceRequired(false)} onTestDesktopNotification={() => void desktopNotifierRef.current.notify({ id: `test:${Date.now()}`, title: "Alphonse test alert", body: "Desktop notifications are ready." }, { ...desktopNotifications, onlyWhenUnfocused: false })} onClose={() => { navigate(returnWorkspace); }} /></section>}
       </div>
-      <AtHandDrawer state={{ ...drawer, open: atHandOpen }} act={changeDrawer} member={user} connected={connected} questionCount={questions.length} questionsMember={questionsMember} onAttention={() => navigate("attention")} onAgenda={() => navigate("agenda")} toggleRef={drawerToggleRef} saveFailed={drawerSaveFailed} widgetContext={widgetContext} timezone={timezone} onSchedule={(id) => { setScheduledTaskForView(id); navigate("agenda"); }} onProjects={() => navigate("projects")} />
+      <AtHandDrawer state={{ ...drawer, open: atHandOpen }} act={changeDrawer} member={user} connected={connected} questionCount={questions.length} questionsMember={questionsMember} onAttention={() => navigate("attention")} onAgenda={(id) => { setScheduleViewRequest((value) => value + 1); setScheduledTaskForView(id || ""); navigate("agenda"); }} toggleRef={drawerToggleRef} saveFailed={drawerSaveFailed} widgetContext={widgetContext} timezone={timezone} onItem={(artifactId, itemId, family) => { setWidgetItem({ member: user, artifactId, itemId, family }); navigate(["appointments", "reminders"].includes(family) ? "agenda" : "projects"); }} onWork={(id, taskId) => { setWorkTaskForView(taskId || ""); setProjectForView((current) => ({ id: taskId ? "" : id, request: current.request + 1 })); navigate("projects"); }} onRequest={(draft) => { setPrompt((current) => appendWidgetDraft(current, draft)); setConversationDay(localDay(timezone)); navigate("conversation"); window.requestAnimationFrame(() => textareaRef.current?.focus()); }} />
       {modal === "onboarding" && <OnboardingModal onComplete={(next) => { setUser(next); setIsAdmin(true); setWorkspaceRequired(false); setModal(null); void poll(); }} />}
     </main>
   );
@@ -933,11 +942,11 @@ function questionTaskId(surface: A2uiSurface): string {
   return typeof question === "object" && question !== null && "task_id" in question ? String((question as { task_id?: unknown }).task_id || "") : "";
 }
 
-function AgendaWorkspace({ member, timezone, active, initialTaskId, onProjects, onConversation }: { member: string; timezone: string; active: boolean; initialTaskId: string; onProjects: () => void; onConversation: () => void }) {
+function AgendaWorkspace({ member, timezone, active, initialTaskId, selectionRequest = 0, onProjects, onConversation }: { member: string; timezone: string; active: boolean; initialTaskId: string; selectionRequest?: number; onProjects: () => void; onConversation: () => void }) {
   const [selected, setSelected] = useState(initialTaskId);
   const [revision, setRevision] = useState(0);
   const [managing, setManaging] = useState(Boolean(initialTaskId));
-  useEffect(() => { if (initialTaskId) { setSelected(initialTaskId); setManaging(true); } }, [initialTaskId]);
+  useEffect(() => { if (initialTaskId) { setSelected(initialTaskId); setManaging(true); } }, [initialTaskId, active, selectionRequest]);
   return <><Agenda revision={revision} member={member} timezone={timezone} active={active} onSchedule={(id) => { setSelected(id); setManaging(true); }} onProjects={onProjects} />
     <div className="agenda-toolbar"><button aria-expanded={managing} onClick={() => setManaging(!managing)}>{managing ? "Hide schedule management" : "Manage schedules & execution history"}</button><button onClick={onConversation}>Create a schedule in Conversation</button></div>
     {managing && active && <ScheduleManager onChanged={() => setRevision(value => value + 1)} embedded actorUserId={member} initialTaskId={selected} onClose={() => setManaging(false)} />}</>;
@@ -1043,7 +1052,7 @@ function UsersModal({ embedded = false, onClose }: { embedded?: boolean; onClose
   </ModalFrame>;
 }
 
-function ProjectsWorkspace({ active, user, initialProjectId = "", selectionRequest = 0, onClose, onAgenda, onConversation, onQuestions }: { active: boolean; user: string; initialProjectId?: string; selectionRequest?: number; onClose: () => void; onAgenda: (id: string) => void; onConversation: (day: string) => void; onQuestions: () => void }) {
+function ProjectsWorkspace({ active, user, initialTaskId = "", initialProjectId = "", selectionRequest = 0, onClose, onAgenda, onConversation, onQuestions }: { active: boolean; user: string; initialTaskId?: string; initialProjectId?: string; selectionRequest?: number; onClose: () => void; onAgenda: (id: string) => void; onConversation: (day: string) => void; onQuestions: () => void }) {
   const [projects, setProjects] = useState<ManagedProject[]>([]); const [users, setUsers] = useState<ManagedUser[]>([]); const [ownerId, setOwnerId] = useState(user); const [filter, setFilter] = useState("active"); const [showCreate, setShowCreate] = useState(false);
   const [selectedProject, setSelectedProject] = useState<ManagedProject | null>(null);
   const [projectsLoading, setProjectsLoading] = useState(true);
@@ -1054,6 +1063,7 @@ function ProjectsWorkspace({ active, user, initialProjectId = "", selectionReque
   const refreshProjects = async (selectedId?: string) => { await load(); if (selectedId) { const latest = await daemonRequest<{ projects: ManagedProject[] }>("manageable_projects", { user }); setSelectedProject(latest.projects.find((item) => item.project_id === selectedId) || null); } };
   const createOrImport = async (event: FormEvent) => { event.preventDefault(); try { const method = mode === "import" ? "import_project" : "create_project"; const result = await daemonRequest<{ project: ManagedProject }>(method, { user, name, description, root_path: rootPath, visibility }); if (visibility === "shared" && newMemberIds.length) await daemonRequest("update_project", { user, project_id: result.project.project_id, name, description, visibility, member_user_ids: newMemberIds }); setNotice(mode === "import" ? "Project imported." : "Project created."); setShowCreate(false); await refreshProjects(result.project.project_id); } catch (cause) { setNotice(cause instanceof Error ? cause.message : "Project could not be created."); } };
   const appliedProjectId = useRef("");
+  useEffect(() => { if (initialTaskId) { setSelectedProject(null); setShowCreate(false); setOwnerId(user); } }, [initialTaskId, selectionRequest, user]);
   useEffect(() => {
     if (initialProjectId) setFilter("");
   }, [initialProjectId, selectionRequest]);
@@ -1073,7 +1083,7 @@ function ProjectsWorkspace({ active, user, initialProjectId = "", selectionReque
       <nav className="projects-workspace-list" aria-label="Available projects">{visibleProjects.map((item) => <button type="button" key={item.project_id} className={selectedProject?.project_id === item.project_id ? "active" : ""} onClick={() => { setShowCreate(false); setSelectedProject(item); }}><FolderKanban size={17} /><span>{item.name}<small>{item.status} · {item.visibility === "shared" ? "Shared" : "Private"}</small></span><ChevronRight size={16} /></button>)}{!projectsLoading && !projectsError && !visibleProjects.length && <p>No projects found.</p>}</nav>
       {notice && <p className="projects-workspace-notice">{notice}</p>}
     </aside>
-    <section className="projects-workspace-main">{projectsLoading ? <p role="status">Loading projects…</p> : projectsError ? <div role="alert"><p>{projectsError}</p><button onClick={() => void load()}>Retry projects</button></div> : showCreate ? <div className="projects-workspace-empty"><h1>Create a project</h1><p>Fill out the project details in the sidebar.</p></div> : selectedProject ? <><button className="work-back" onClick={() => setSelectedProject(null)}>← Work overview</button><ProjectEditorPanel key={selectedProject.project_id} user={user} project={selectedProject} onBack={() => { setSelectedProject(null); void load(); }} onUpdated={() => void refreshProjects(selectedProject.project_id)} onClose={onClose} /></> : <WorkOverview active={active} key={`${user}:${ownerId}`} user={user} ownerId={ownerId} projects={ownerProjects} users={users} onProject={(project) => setSelectedProject(project)} onAgenda={onAgenda} onConversation={onConversation} onQuestions={onQuestions} />}</section>
+    <section className="projects-workspace-main">{projectsLoading ? <p role="status">Loading projects…</p> : projectsError ? <div role="alert"><p>{projectsError}</p><button onClick={() => void load()}>Retry projects</button></div> : showCreate ? <div className="projects-workspace-empty"><h1>Create a project</h1><p>Fill out the project details in the sidebar.</p></div> : selectedProject ? <><button className="work-back" onClick={() => setSelectedProject(null)}>← Work overview</button><ProjectEditorPanel key={selectedProject.project_id} user={user} project={selectedProject} onBack={() => { setSelectedProject(null); void load(); }} onUpdated={() => void refreshProjects(selectedProject.project_id)} onClose={onClose} /></> : <WorkOverview active={active} initialTaskId={initialTaskId} selectionRequest={selectionRequest} key={`${user}:${ownerId}`} user={user} ownerId={ownerId} projects={ownerProjects} users={users} onProject={(project) => setSelectedProject(project)} onAgenda={onAgenda} onConversation={onConversation} onQuestions={onQuestions} />}</section>
   </div>;
 }
 

@@ -1182,6 +1182,14 @@ a { color: var(--accent); }
 .at-hand-drawer .widget-controls button { padding: 6px 8px; background: var(--surface-raised); color: var(--text); border: 1px solid var(--border); font-size: 11px; }
 .at-hand-drawer button:disabled { opacity: .45; cursor: default; }
 
+.coordination-list { display: grid; gap: .6rem; }
+.coordination-list small { display: block; overflow-wrap: anywhere; color: var(--muted); }
+.coordination-list ul { list-style: none; padding: 0; margin: 0; display: grid; gap: .75rem; }
+.coordination-list li { border-top: 1px solid var(--border); padding-top: .6rem; overflow-wrap: anywhere; }
+.coordination-actions { display: flex; gap: .35rem; flex-wrap: wrap; margin-top: .4rem; }
+.coordination-list button { white-space: normal; }
+
+.widget-item-detail { margin: 1rem; padding: 1rem; max-height: 45vh; overflow: auto; }
 .agenda { padding: 1.2rem; min-width: 0; }
 .agenda-toolbar, .agenda-toolbar > div, .agenda footer { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; }
 .agenda-toolbar { justify-content: space-between; }

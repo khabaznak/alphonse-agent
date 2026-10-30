@@ -4,11 +4,15 @@ export type WidgetPlacement = { id: string; kind: string; mode: WidgetMode; expi
 export type DrawerState = { open: boolean; widgets: WidgetPlacement[]; dismissed: string[] };
 export type ContextWidget = { id: string; kind: string; expiresAt: number };
 export const WIDGET_CATALOG = [
+  { kind: "todos", title: "To-dos", description: "Active work and authorized skill lists." },
+  { kind: "shopping", title: "Shopping list", description: "A list supplied by its owning skill." },
+  { kind: "reminders", title: "Reminders", description: "Native reminder schedules and their controls." },
+  { kind: "appointments", title: "Appointments", description: "Appointments supplied by a connected skill." },
   { kind: "questions", title: "Pending questions", description: "Questions waiting for your input." },
   { kind: "agenda", title: "Agenda", description: "Month, Week and Today views of your authorized scheduled work and history." },
 ] as const;
 export const knownWidget = (kind: string) => kind === "skill" || WIDGET_CATALOG.some((entry) => entry.kind === kind);
-export const defaultDrawer = (): DrawerState => ({ open: false, widgets: WIDGET_CATALOG.map(({ kind }) => ({ id: kind, kind, mode: "pinned" })), dismissed: [] });
+export const defaultDrawer = (): DrawerState => ({ open: false, widgets: WIDGET_CATALOG.filter(({ kind }) => ["questions", "agenda"].includes(kind)).map(({ kind }) => ({ id: kind, kind, mode: "pinned" })), dismissed: [] });
 export const drawerStorageKey = (member: string) => `alphonse.desktop.atHand.v1.${encodeURIComponent(member)}`;
 export function readDrawer(storage: Pick<Storage, "getItem">, member: string): DrawerState {
   if (!member) return defaultDrawer();
