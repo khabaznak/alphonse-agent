@@ -121,10 +121,9 @@ The pre-correction native run included the documented 60-second warm-up and
 [evidence/78/pre-layout-webkit-memory.csv](evidence/78/pre-layout-webkit-memory.csv).
 Physical footprint ranged 89.8–204.9 MB, finishing at 108.4 MB; the recorded peak
 reached 388.0 MB during navigation. This was a mixed-workload sample of the old
-layout, not proof of a leak-free final layout or an endurance pass. Final-layout
-long-history endurance and native reduced-motion configuration remain pending.
-Source-level reduced-motion rules and previous component evidence are not a
-substitute for that native review.
+layout, not proof of a leak-free final layout or an endurance pass. The final
+revision’s bounded native review, reduced-motion check and fresh sample are
+recorded below; sustained regular-use evidence remains pending.
 
 ## Household observation record
 
@@ -151,7 +150,8 @@ revision. Use the usage/recovery guidance in [desktop/README.md](../../desktop/R
 ## Remaining work and owner acceptance
 
 - **Within #78:** review the corrected layout with the owner, finish real household
-  workflows and final native qualification, then obtain dated regular-use acceptance.
+  workflows, then obtain dated regular-use acceptance. The native review below
+  qualifies the tested layout revision; repeat it if source changes affect the UI.
   The owner has reported a defect; that is not an approval to merge/close acceptance.
 - **Baseline maintenance:** #48, #52 and #102 above. #54 is resolved and passing.
 - **Capability prerequisites:** [#4](https://github.com/khabaznak/alphonse-agent/issues/4)
@@ -216,9 +216,65 @@ now measure 259 px wide in the 324 px drawer at the minimum. Both skins were
 inspected in the browser. No Python source changed; the recorded Python baseline
 and follow-up ownership above remain applicable.
 
-**Native review of this follow-up is pending:** the Mac was locked when computer
-use resumed. Browser evidence and successful packaging do not complete native
-WebKit visual/accessibility qualification or the owner's acceptance. The earlier
-native drawer review applies to `3271125`, not automatically to this new revision.
-Local synthetic browser image: `output/playwright/issue78-shell-dark.png` (not a
-household record, and not a native screenshot). No acceptance gate is closed.
+### Native follow-up review — 2026-10-30
+
+Reviewed the macOS ARM package built from `1684a378d08762115113b78bf5c42d2f825cf7c1`
+in the uniquely identified `local.alphonse.issue78.review` bundle. Both socket and
+database were explicitly set to the disposable fixture, and `current_user` was
+verified as `review-owner` before launch and relaunch. This review used native
+Tauri/WebKit, not the browser shim. All visible records are synthetic fixtures.
+
+- Light and dark skins: sidebar hierarchy, bottom member/status/settings, single
+  composer surface and compact cards were visually inspected against Study 01.
+  Source dates, availability and counts remain explicit instead of copying the
+  mockup's sample content. Screenshots are linked below.
+- Navigation search narrowed to the synthetic trip and cleared normally. A draft
+  survived navigation from Conversation to Household and back. While populated,
+  command choices were disabled; Escape closed the menu and returned focus to the
+  composer. With an empty draft, `/scheduled-tasks` prepared text without sending.
+- Native windows were reviewed at 1240 × 760, 1440 × 900 and 760 × 600. At the
+  minimum the drawer overlays the conversation; closing it restores the full
+  composer and focuses its toggle. Sidebar icons, bottom settings and member
+  identity remain accessible. At wide sizes the drawer scrolls independently.
+- Added Workload and PDCA through the catalog; both charts use the drawer width.
+  Locking Workload disabled movement and removal. After quitting and relaunching,
+  exactly one of each chart remained, including Workload's lock, Agenda's lock,
+  the pinned source cards, selected light skin and persisted conversation history.
+  Removing To-dos removed its presentation only: the source JSON SHA-1 remained
+  `0fd88c8e659df572da73a67ce1b0247d5f03efac` before and after.
+- Expired unpinned context showed an explicit expiry message. Pinning restored its
+  available source preview; no completed source item was manufactured by the UI.
+- With explicit permission, macOS Accessibility → Motion → Reduce motion changed
+  from **off** to **on**. Native keyboard Tab moved from the composer to its
+  command disclosure with a visible focus outline. The app remained usable.
+  Reduce motion was restored to **off**, confirmed in the native settings tree.
+  CSS disables animation, transitions and smooth scrolling under that preference.
+  This was a manual usability check, not frame-by-frame animation instrumentation.
+- WCAG luminance calculations of the semantic colors: light/dark primary text
+  against canvas **13.00/15.42:1**; muted text against card **5.58/7.24:1**;
+  sidebar muted text **4.96/7.41:1**; primary action text **7.65/10.14:1**;
+  focus against canvas **7.13/11.20:1**. These are token-pair checks, not a claim
+  that every possible data visualization or disabled state was audited.
+
+The final-renderer sample used PID 43967, `normal` mode, 60 seconds warm-up,
+300 seconds observation and 30 second intervals, with long conversation history
+and native navigation/widget interactions during observation. Physical footprint
+was **71.1–86.6 MB**, ending at **86.3 MB**, with a reported lifetime peak of
+**232.2 MB**; live allocations ended at 236,211. The short mixed-interaction run
+and responsive scrolling support this native review. It does not prove leak-free
+endurance or replace regular household use. Raw measurements:
+[final WebKit sample](evidence/78/final-webkit-memory.csv).
+
+Native images: [light shell](evidence/78/native-shell-light.png),
+[dark shell](evidence/78/native-shell-dark.png),
+[diagnostic widgets](evidence/78/native-diagnostic-widgets-dark.png),
+[minimum composer](evidence/78/native-minimum-composer-dark.png),
+[reduced-motion focus](evidence/78/native-reduced-motion-focus.png).
+
+This completes the bounded native layout/accessibility/performance review for
+this code revision. It does not complete real household processor workflows,
+all ownership/delegation and cancellation/failure scenarios, or the explicit dated
+owner acceptance after regular use. The fixture's receipt processor remains
+synthetic; it cannot qualify real hierarchical processing. No source changed
+since the passing 128-test/frontend/native build validation. PR #103 stays draft,
+#78 stays open, and #80 stays blocked until the remaining criteria are met.
