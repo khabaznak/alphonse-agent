@@ -417,6 +417,18 @@ class V2Daemon:
         self._migrate_blank_project_records()
         return user.to_dict()
 
+    def work_items(self, *, actor_user_id: str, owner_user_id: str = "", view: str = "active", limit: int = 50, offset: int = 0) -> dict[str, Any]:
+        from alphonse.agent_v2.work_items import project_work_items
+        actor = str(actor_user_id or "").strip()
+        if not actor or self.runtime.user_store.get_user(actor) is None:
+            raise PermissionError("work_actor_required")
+        owner = str(owner_user_id or actor).strip()
+        if owner != actor and not self.runtime.user_store.is_admin(actor):
+            raise PermissionError("work_owner_forbidden")
+        if self.runtime.user_store.get_user(owner) is None:
+            raise KeyError("work_owner_not_found")
+        return project_work_items(self.runtime, actor=actor, owner=owner, view=view, limit=limit, offset=offset)
+
     def scheduled_tasks(
         self,
         *,
