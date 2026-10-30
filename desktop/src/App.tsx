@@ -1,3 +1,4 @@
+import type { WidgetContext } from "./widgetContext";
 import { SkillMascot, SkillAppearanceSettings } from "./SkillMascot";
 import { BASE_CONTEXT, type AppearanceContext, type SkillAppearance } from "./skillAppearances";
 import { HouseholdWorkspace } from "./HouseholdWorkspace";
@@ -36,6 +37,7 @@ type SettingsTab = (typeof SETTINGS_SECTIONS)[number][0];
 type ManagedProject = Project & { owner?: { display_name?: string; user_id?: string } | null };
 type PollResponse = {
   mascot?: AppearanceContext;
+  widget_context?: WidgetContext;
   daemon_id?: string;
   daemon_changed?: boolean;
   events: ActivityEvent[];
@@ -126,7 +128,10 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const [scheduledTaskForView, setScheduledTaskForView] = useState("");
   const [modal, setModal] = useState<Modal>(null);
   const [user, setUser] = useState("");
-  const { state: drawer, act: changeDrawer, saveFailed: drawerSaveFailed } = useAtHand(user);
+  const { state: drawer, act: changeDrawer, saveFailed: drawerSaveFailed, reconcile: reconcileWidgets } = useAtHand(user);
+  const [widgetContext, setWidgetContext] = useState<WidgetContext>();
+  const drawerIdsRef = useRef<string[]>([]);
+  drawerIdsRef.current = drawer.widgets.filter((widget) => widget.kind === "skill").map((widget) => widget.id);
   const atHandOpen = Boolean(user && drawer.open);
   const [questionsMember, setQuestionsMember] = useState("");
   const [workspaceRequired, setWorkspaceRequired] = useState(false);
@@ -189,7 +194,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
         after_sequence: sequence.current,
         after_ui_sequence: uiSequence.current,
         daemon_id: daemonId.current,
-        client_capabilities: { supportedCatalogIds: [DESKTOP_CATALOG_ID] },
+        client_capabilities: { supportedCatalogIds: [DESKTOP_CATALOG_ID], widgetIds: drawerIdsRef.current },
         limit: 50,
     });
     if (generation < committedPollGeneration.current) return { response, daemonChanged: false, stale: true };
@@ -220,6 +225,8 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       setError("");
       setQuestionsMember(user);
       setMascotContext(response.mascot || BASE_CONTEXT);
+      setWidgetContext(response.widget_context);
+      reconcileWidgets(response.widget_context);
       setQuestions((current) => reuseQuestions(current, response.questions));
       response.questions.forEach((question) => appendMessage({
         id: `question:${question.question_id}`,
@@ -293,7 +300,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       setError(cause instanceof Error ? cause.message : "Daemon connection lost");
       setActivity("idle");
     }
-  }, [appendMessage, clientId, contextProjects, desktopNotifications, diagnosticBehavior.commitsPollResponses, pollTransport, user]);
+  }, [appendMessage, clientId, contextProjects, desktopNotifications, diagnosticBehavior.commitsPollResponses, pollTransport, reconcileWidgets, user]);
 
   useEffect(() => {
     const runCycle = diagnosticBehavior.cycle === "ping"
@@ -622,7 +629,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
             }); }}>View in conversation</button></article>) : <p>No pending questions.</p>}</section>}
       {visited.has("settings") && <section className="workspace-panel" tabIndex={-1} aria-label="Settings workspace" hidden={workspace !== "settings"}><SettingsWorkspace isAdmin={isAdmin} user={user} initialTab={settingsTab} workspaceRequired={workspaceRequired} enterToSend={enterToSend} desktopStyle={desktopStyle} desktopNotifications={desktopNotifications} onDesktopStyleChange={changeDesktopStyle} onDesktopNotificationsChange={setDesktopNotifications} onEnterToSendChange={setEnterToSend} onTimezoneChange={setTimezone} onWorkspaceConfigured={() => setWorkspaceRequired(false)} onTestDesktopNotification={() => void desktopNotifierRef.current.notify({ id: `test:${Date.now()}`, title: "Alphonse test alert", body: "Desktop notifications are ready." }, { ...desktopNotifications, onlyWhenUnfocused: false })} onClose={() => { navigate(returnWorkspace); }} /></section>}
       </div>
-      <AtHandDrawer state={{ ...drawer, open: atHandOpen }} act={changeDrawer} member={user} connected={connected} questionCount={questions.length} questionsMember={questionsMember} onAttention={() => navigate("attention")} onAgenda={() => navigate("agenda")} toggleRef={drawerToggleRef} saveFailed={drawerSaveFailed} />
+      <AtHandDrawer state={{ ...drawer, open: atHandOpen }} act={changeDrawer} member={user} connected={connected} questionCount={questions.length} questionsMember={questionsMember} onAttention={() => navigate("attention")} onAgenda={() => navigate("agenda")} toggleRef={drawerToggleRef} saveFailed={drawerSaveFailed} widgetContext={widgetContext} />
       {modal === "onboarding" && <OnboardingModal onComplete={(next) => { setUser(next); setIsAdmin(true); setWorkspaceRequired(false); setModal(null); void poll(); }} />}
     </main>
   );

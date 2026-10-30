@@ -853,6 +853,30 @@ class V2Daemon:
             appearance = None
         return {"task_id": active.task_id, "ready": isinstance(selection, dict), "appearance": appearance}
 
+    def desktop_widget_context(self, user: str, widget_ids: Any = None) -> dict[str, Any]:
+        from alphonse.agent_v2.widget_context import project_widgets
+
+        active = self.kill_switch.active()
+        task = None
+        if active and active.user_id == user and not self.kill_switch.is_cancelled(active.message_id):
+            candidate = self.runtime.question_store.load_task_checkpoint(active.task_id)
+            if candidate and candidate.user == user and candidate.status not in {"completed", "failed", "cancelled"}:
+                task = candidate
+        # A daemon-local lifetime is only a suggestion for new placements. Saved
+        # placement expiry is never extended by a poll/reconnect.
+        key = (user, task.task_id if task else "")
+        lifetime = getattr(self, "_widget_context_lifetime", None)
+        if lifetime is None or lifetime[0] != key:
+            lifetime = (key, int(time.time() * 1000) + 30 * 60 * 1000)
+            self._widget_context_lifetime = lifetime
+        expiry = lifetime[1]
+        try:
+            requested_ids = {item for item in widget_ids[:128] if isinstance(item, str)} if isinstance(widget_ids, list) else set()
+            widgets = project_widgets(self.runtime, user, task, expires_at=expiry, requested_ids=requested_ids)
+        except (OSError, ValueError, KeyError):
+            widgets = []
+        return {"version": 1, "member": user, "widgets": widgets}
+
     def attach_artifact_to_skill(self, *, actor_user_id: str, artifact_id: str, skill_id: str, instructions: str) -> dict[str, Any]:
         self._require_admin(actor_user_id)
         record = self.runtime.artifact_store.get(artifact_id)
@@ -1222,6 +1246,7 @@ class V2Daemon:
             "conversation_has_unseen_messages": self.runtime.conversation_store.user_has_unseen_messages(owner_user_id=normalized_user, local_date=day.isoformat(), start_utc=day_start.isoformat(), end_utc=day_end.isoformat()),
             "status": {"active_work": self.active_work(), "activity": self.activity_status(), "queue": self._inbound_queue_status()},
             "mascot": self.desktop_appearance_context(normalized_user),
+            "widget_context": self.desktop_widget_context(normalized_user, capabilities.get("widgetIds")),
         }
 
     def acknowledge_desktop_delivery(self, *, client_id: str, outbox_message_id: str) -> bool:

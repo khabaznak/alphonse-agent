@@ -1,6 +1,8 @@
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import { PanelRightClose } from "lucide-react";
-import { changeDrawer, readDrawer, saveDrawer, widgetAvailability, WIDGET_CATALOG, type DrawerAction, type DrawerState } from "./atHandState";
+import { changeDrawer, reconcileContext, readDrawer, saveDrawer, widgetAvailability, WIDGET_CATALOG, type DrawerAction, type DrawerState } from "./atHandState";
+
+import { authorizedWidgets, suggestedPlacements, type WidgetContext, type SkillWidget } from "./widgetContext";
 
 export function useAtHand(member: string) {
   // An identity-tagged snapshot avoids writing the previous member's layout into a new key.
@@ -13,14 +15,29 @@ export function useAtHand(member: string) {
     setSnapshot({ member, state: next });
     setSaveFailed(!saveDrawer(window.localStorage, member, next));
   };
-  return { state, act, saveFailed };
+  const memberRef = useRef(member);
+  memberRef.current = member;
+  const reconcile = useCallback((context: WidgetContext | undefined) => {
+    const currentMember = memberRef.current;
+    if (!context || context.member !== currentMember) return;
+    const candidates = suggestedPlacements(authorizedWidgets(context, currentMember));
+    setSnapshot((previous) => {
+      const current = previous.member === currentMember ? previous.state : readDrawer(window.localStorage, currentMember);
+      const next = reconcileContext(current, candidates, Date.now());
+      if (next === current && previous.member === currentMember) return previous;
+      setSaveFailed(!saveDrawer(window.localStorage, currentMember, next));
+      return { member: currentMember, state: next };
+    });
+  }, []);
+  return { state, act, saveFailed, reconcile };
 }
 
-export function AtHandDrawer({ state, act, member, connected, questionCount, questionsMember, onAttention, onAgenda, toggleRef, saveFailed }: {
+export function AtHandDrawer({ state, act, member, connected, questionCount, questionsMember, onAttention, onAgenda, toggleRef, saveFailed, widgetContext }: {
   state: DrawerState; act: (action: DrawerAction) => void; member: string; connected: boolean;
   questionCount: number; questionsMember: string; onAttention: () => void; onAgenda: () => void;
-  toggleRef: RefObject<HTMLButtonElement | null>; saveFailed: boolean;
+  toggleRef: RefObject<HTMLButtonElement | null>; saveFailed: boolean; widgetContext?: WidgetContext;
 }) {
+  const rows = authorizedWidgets(widgetContext, member);
   const closeRef = useRef<HTMLButtonElement>(null);
   const [now, setNow] = useState(Date.now);
   useEffect(() => { if (state.open) closeRef.current?.focus(); }, [state.open]);
@@ -34,13 +51,14 @@ export function AtHandDrawer({ state, act, member, connected, questionCount, que
     <div className="at-hand-cards" aria-label="Widgets">
       {!state.widgets.length && <p>No widgets. Use Add widget to choose one.</p>}
       {state.widgets.map((widget, index) => {
-        const title = WIDGET_CATALOG.find((entry) => entry.kind === widget.kind)?.title || "Unavailable widget";
-        const availability = widgetAvailability(widget, member, connected, now);
+        const data = rows.find((row) => row.id === widget.id);
+        const title = data?.title || WIDGET_CATALOG.find((entry) => entry.kind === widget.kind)?.title || "Unavailable widget";
+        const availability = widget.kind === "skill" && (!data || data.status !== "ready") ? "unavailable" : widgetAvailability(widget, member, connected, now);
         const locked = widget.mode === "locked";
         return <article className="card at-hand-card" key={widget.id} aria-label={title}>
           <h3>{title}</h3><small className="widget-mode">{locked ? "User locked" : widget.mode === "pinned" ? "Pinned" : "Temporary context"}</small>
           <div className="widget-body" tabIndex={0} aria-label={`${title} content`}>
-            {availability === "loading" ? <p role="status">Loading member…</p> : availability === "expired" ? <p role="status">Context expired. Remove this card or pin it to keep it.</p> : availability === "unavailable" ? <p role="status">Unavailable. Reconnect or check access in the workspace.</p> : widget.kind === "questions" ? questionsMember !== member ? <p role="status">Loading questions…</p> : <><p>{questionCount ? `${questionCount} waiting for your input` : "No pending questions"}</p><button onClick={onAttention}>Needs your attention</button></> : <><p>Review scheduled work and its history.</p><button onClick={onAgenda}>Open Agenda</button></>}
+            {availability === "loading" ? <p role="status">Loading member…</p> : availability === "expired" ? <p role="status">Context expired. Remove this card or pin it to keep it.</p> : availability === "unavailable" ? <p role="status">Unavailable. Reconnect or check access in the workspace.</p> : widget.kind === "skill" ? <SkillWidgetBody data={data!} onAgenda={onAgenda} /> : widget.kind === "questions" ? questionsMember !== member ? <p role="status">Loading questions…</p> : <><p>{questionCount ? `${questionCount} waiting for your input` : "No pending questions"}</p><button onClick={onAttention}>Needs your attention</button></> : <><p>Review scheduled work and its history.</p><button onClick={onAgenda}>Open Agenda</button></>}
           </div>
           <div className="widget-controls" role="group" aria-label={`${title} controls`}>
             <button aria-label={`${locked ? "Unlock" : "Lock"} ${title}`} onClick={() => act({ type: "mode", id: widget.id, mode: locked ? "pinned" : "locked" })}>{locked ? "Unlock" : "Lock"}</button>
@@ -53,4 +71,11 @@ export function AtHandDrawer({ state, act, member, connected, questionCount, que
       })}
     </div>
   </aside>;
+}
+
+function SkillWidgetBody({ data, onAgenda }: { data: SkillWidget; onAgenda: () => void }) {
+  return <>{data.historical && <small>Historical context · not a current measurement</small>}<p style={{ whiteSpace: "pre-wrap" }}>{data.text}</p>
+    {data.binding === "agenda" && <button onClick={onAgenda}>Open Agenda</button>}
+    {data.relevant && ["pin", "remove", "expire"].includes(data.suggestion) && <p role="status">Alphonse suggests {data.suggestion === "pin" ? "keeping this card pinned" : data.suggestion === "remove" ? "removing this card" : "letting this context expire"}. Use the card controls to apply.</p>}
+  </>;
 }
