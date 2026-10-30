@@ -30,6 +30,24 @@ def _transport(route="continue", support=0.91, route_probability=0.84):
     return send
 
 
+@pytest.mark.parametrize("probability,expected", [(0.95, True), (0.5, False), (0.05, False), (True, False), (float("nan"), False), (float("inf"), False), (1.1, False), (-0.1, False), (None, False)])
+def test_acknowledgement_review_uses_bounded_noul_and_requires_confident_valid_answer(probability, expected):
+    def transport(url, api_key, payload, timeout):
+        assert payload["state"]["work_state"].startswith("admitted")
+        assert payload["state"]["acknowledgement"] == "Listo, ya lo hice."
+        assert payload["questions"]["safe_intention"]["type"] == "noul"
+        assert "before any work starts" in payload["questions"]["safe_intention"]["instructions"]
+        return {"answers": {"safe_intention": {"type": "noul", "noul": probability}}}
+    provider = JevCriterionDecisionProvider(SystemOneSettings(api_key="secret"), transport=transport)
+    assert provider.review_task_acknowledgement(message="Update it", acknowledgement="Listo, ya lo hice.") is expected
+
+
+def test_acknowledgement_review_never_checks_only_a_prefix():
+    provider = JevCriterionDecisionProvider(SystemOneSettings(api_key="secret"),
+        transport=lambda *args: pytest.fail("oversized acknowledgement must be suppressed"))
+    assert provider.review_task_acknowledgement(message="Update it", acknowledgement="I'll check. " * 120 + "Done!") is False
+
+
 def test_system_one_settings_mask_key_and_require_validation_before_runtime_use(tmp_path) -> None:
     store = SQLiteSystemOneSettingsStore(tmp_path / "settings.sqlite3")
     saved = validate_and_save_system_one_settings(
@@ -542,3 +560,14 @@ def test_memory_support_selection_never_guesses_on_ambiguous_or_invalid_answers(
         "answers": {"support_0": {"type": "noul", "noul": probability}}})
     with pytest.raises(ValueError):
         provider.select_memory_support(item, [item])
+
+
+@pytest.mark.parametrize("probability,expected", [(0.95, True), (0.5, False), (0.05, False), (True, False), (float("nan"), False), (1.1, False)])
+def test_failure_wording_review_cannot_turn_failed_state_into_success(probability, expected):
+    def transport(url, api_key, payload, timeout):
+        assert payload["state"]["work_state"] == "failed; overall result unverified"
+        assert payload["questions"]["honest_failure"]["type"] == "noul"
+        assert "Reject reassuring overall success" in payload["questions"]["honest_failure"]["instructions"]
+        return {"answers": {"honest_failure": {"type": "noul", "noul": probability}}}
+    provider = JevCriterionDecisionProvider(SystemOneSettings(api_key="secret"), transport=transport)
+    assert provider.review_task_failure(message="Update it", explanation="Could not update: service offline. Try again later.") is expected

@@ -638,6 +638,10 @@ def project_snapshot_to_outbox(
     task_state = metadata.get("task_state")
     if not isinstance(task_state, dict):
         return None
+    # A prepared response is intermediate evidence, not permission to announce
+    # completion. Parked tasks can retain one while awaiting a user answer.
+    if task_state.get("status") != "completed":
+        return None
     task_metadata = task_state.get("metadata") if isinstance(task_state.get("metadata"), dict) else {}
     origin = channel_address_from_metadata(task_metadata)
     if origin is None:
