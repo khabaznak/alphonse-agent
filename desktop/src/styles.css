@@ -1219,3 +1219,11 @@ a { color: var(--accent); }
 .recorded-progress.dots i[data-filled="true"] { background: var(--accent); }
 .visual-time { width: 76px; height: 76px; border-radius: 50%; display: grid; place-items: center; margin-block: 10px; }
 .visual-time span { width: 54px; height: 54px; border-radius: 50%; background: var(--surface); }
+
+/* Fixed home renderers share the drawer's bounded, scrolling body. */
+.home-widget > small, .home-widget li > small, .home-widget li > span { display: block; }
+.home-widget ul { padding: 0; list-style: none; }
+.home-widget li { padding-block: 10px; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+.home-widget button { margin: 5px 0; padding: 6px 8px; background: var(--surface-raised); color: var(--text); border: 1px solid var(--border); }
+.home-widget .sensor-state { font-size: 12px; font-weight: 600; margin-block: 4px; }
+.home-widget .sensor-current { color: var(--accent); }
