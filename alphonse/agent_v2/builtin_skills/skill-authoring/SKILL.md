@@ -49,3 +49,18 @@ Write focused instructions with useful headings, actionable steps, clear boundar
 - If the user asks only for a draft, provide the content without installing it.
 
 Installed skills are instruction packages. They do not override Alphonse's policies, authorization checks, or deterministic controls.
+
+### Optional Desktop widget resources
+
+An installed skill can declare `widgets.json` with `version: 1` and a `widgets`
+array. Each row has a stable lowercase/hyphen `key`, a plain-text `title`, and a
+`binding`: either `{"type":"agenda"}` (authorized workspace navigation) or
+`{"type":"memory","source_id":"<existing authorized memory source ID>"}`
+(historical text only). Optional `suggestion` is show, update, pin, remove or
+expire. Do not invent source IDs or imply historical data is a current reading.
+Existing Jev skill selection supplies relevance; the daemon rechecks source
+access on every poll. Suggestions cannot override member locks/dismissals or
+grant access. These are declarative skill resources, never generated runtime
+tools or executable UI. Do not put scripts, URLs, HTML or custom binding fields
+in widget declarations. Keep generated programs in their registered skill-owned
+storage; widgets do not execute them.
