@@ -7,7 +7,7 @@ import { authorizedWidgets, suggestedPlacements, type SkillWidget, type WidgetCo
 const calendar: SkillWidget = { id: `skill-widget:${"a".repeat(32)}`, kind: "skill", member: "alice", skillId: "skill:calendar", contextId: "dinner-trip", scope: "member", title: "Calendar", binding: "agenda", status: "ready", text: "Review scheduled work and its history.", relevant: true, suggestion: "show", expiresAt: Date.now() + 100000 };
 const exercise: SkillWidget = { ...calendar, id: `skill-widget:${"b".repeat(32)}`, title: "Exercise progress", binding: "memory", historical: true, text: "Past session: three sets", contextId: "past-session" };
 const snapshot = (widgets: SkillWidget[]): WidgetContext => ({ version: 1, member: "alice", widgets });
-const props = { act: () => {}, member: "alice", connected: true, questionCount: 0, questionsMember: "alice", onAttention: () => {}, onAgenda: () => {}, toggleRef: { current: null }, saveFailed: false };
+const props = { timezone: "UTC", onSchedule: () => {}, onProjects: () => {}, act: () => {}, member: "alice", connected: true, questionCount: 0, questionsMember: "alice", onAttention: () => {}, onAgenda: () => {}, toggleRef: { current: null }, saveFailed: false };
 describe("authorized contextual widgets", () => {
   it("resurfaces dinner/trip calendar and past-session progress, preserving unrelated locks", () => {
     let state = changeDrawer(defaultDrawer(), { type: "mode", id: "questions", mode: "locked" });

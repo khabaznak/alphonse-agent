@@ -301,8 +301,8 @@ class ProjectInboundRouter:
             message_id=message_id,
         )
         turns_ahead = self._turns_ahead(queued.message_id) if disposition == "pdca_task" else 0
-        if turns_ahead > 0 and project is not None and not str(merged_metadata.get("source") or "").strip():
-            self._queue_waiting_notice(address, project.project_id, queued.message_id, turns_ahead)
+        if turns_ahead > 0 and not str(merged_metadata.get("source") or "").strip():
+            self._queue_waiting_notice(address, project.project_id if project is not None else "", queued.message_id, turns_ahead)
         return InboundRouteResult(queued=queued, project_id=project.project_id if project is not None else "", disposition=disposition, turns_ahead=turns_ahead)
 
     def active_project(self, key: ChannelProjectSelectionKey) -> ProjectRecord | None:
@@ -522,6 +522,7 @@ class ProjectInboundRouter:
             address=address,
             message=message,
             kind="queue_waiting_notice",
+            task_id=inbound_message_id,
             audience_user_id=address.alphonse_user_id,
             project_id=project_id,
             metadata={"inbound_message_id": inbound_message_id, "turns_ahead": turns_ahead},

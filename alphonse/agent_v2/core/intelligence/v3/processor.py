@@ -344,6 +344,21 @@ class HierarchicalCAPDProcessor:
         message = str(result.content or "").strip()
         if not message:
             return {"status": "generation_empty"}
+        if context.is_cancelled():
+            raise SystemOneUnavailableError("v3_acknowledgement_cancelled")
+        review = getattr(context.system_one, "review_task_acknowledgement", None)
+        if not callable(review):
+            return {"status": "review_unavailable"}
+        try:
+            safe = review(message=task.goal, acknowledgement=message)
+        except Exception as exc:
+            if context.is_cancelled():
+                raise
+            return {"status": "review_failed", "error_type": type(exc).__name__}
+        if context.is_cancelled():
+            raise SystemOneUnavailableError("v3_acknowledgement_cancelled")
+        if safe is not True:
+            return {"status": "review_rejected"}
         if context.delivery_sink is None:
             return {"status": "delivery_unavailable", "message": message}
         try:
@@ -475,11 +490,24 @@ class HierarchicalCAPDProcessor:
     def _result(task: "TaskState", context: "CoreLoopContext") -> ProcessingResult:
         if task.status == "failed":
             HierarchicalCAPDProcessor._prepare_failure_response(task, context)
+            response = task.metadata.get("v3_failure_response")
+            if isinstance(response, dict) and not response.get("communication_reviewed"):
+                review = getattr(context.system_one, "review_task_failure", None)
+                try:
+                    safe = callable(review) and review(message=task.goal, explanation=str(response.get("message") or "")) is True
+                except Exception:
+                    safe = False
+                if safe:
+                    response["communication_reviewed"] = True
+                else:
+                    task.metadata.pop("v3_failure_response", None)
             if not task.metadata.get("v3_failure_response"):
                 task.metadata["v3_failure_response"] = {
                     "source": "v3_failure_fallback",
+                    "communication_reviewed": True,
                     "message": "I couldn't complete this task because a required step failed. "
-                               "The requested result has not been fully verified. Any completed work has been preserved.",
+                               "The requested result has not been fully verified. Any completed work has been preserved. "
+                               "Review the failed action in the work log and ask me to retry once the blocker is resolved.",
                 }
             HierarchicalCAPDProcessor._persist(task, context)
         status = (

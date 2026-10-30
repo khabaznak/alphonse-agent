@@ -9,7 +9,7 @@ export const WIDGET_CATALOG = [
   { kind: "reminders", title: "Reminders", description: "Native reminder schedules and their controls." },
   { kind: "appointments", title: "Appointments", description: "Appointments supplied by a connected skill." },
   { kind: "questions", title: "Pending questions", description: "Questions waiting for your input." },
-  { kind: "agenda", title: "Household agenda", description: "A shortcut to authorized scheduled work and history." },
+  { kind: "agenda", title: "Agenda", description: "Month, Week and Today views of your authorized scheduled work and history." },
 ] as const;
 export const knownWidget = (kind: string) => kind === "skill" || WIDGET_CATALOG.some((entry) => entry.kind === kind);
 export const defaultDrawer = (): DrawerState => ({ open: false, widgets: WIDGET_CATALOG.filter(({ kind }) => ["questions", "agenda"].includes(kind)).map(({ kind }) => ({ id: kind, kind, mode: "pinned" })), dismissed: [] });

@@ -7,7 +7,8 @@ import { progressStatus, terminalProgressStates } from "./taskProgress";
 
 export function activityStateLabel(status: string, archived: boolean): string {
   const labels: Record<string, string> = { completed: "Completed", done: "Completed", success: "Completed", failed: "Failed", cancelled: "Cancelled", canceled: "Cancelled", abandoned: "Abandoned", interrupted: "Interrupted · outcome unconfirmed", waiting_user: "Waiting for your answer", waiting: "Waiting", retrying: "Waiting to retry" };
-  return labels[status] || (archived ? "Stopped · outcome unconfirmed" : "Alphonse is working");
+  const pending: Record<string, string> = { admitted: "Request received", queued: "Queued", planned: "Ready to start", started: "Alphonse is working", blocked: "Blocked · action needed" };
+  return labels[status] || pending[status] || (archived ? "Stopped · outcome unconfirmed" : "Alphonse is working");
 }
 
 export function TaskProgressBubble({ surface, archived = false, connected = true, timezone = "UTC" }: { surface: A2uiSurface; archived?: boolean; connected?: boolean; timezone?: string }) {
@@ -28,7 +29,8 @@ export function TaskProgressBubble({ surface, archived = false, connected = true
     <div className="task-progress-content">
       {timestamp && <small>Updated <time dateTime={updated}>{timestamp.toLocaleString(undefined, { timeZone: timezone })}</time></small>}
       {archived && <p>{status === "failed" ? "Review the failed action before retrying in conversation." : status === "cancelled" || status === "abandoned" ? "Work stopped. Ask in conversation to start another attempt." : status === "interrupted" ? "Reconnect to check the task status before retrying." : ""}</p>}
-      {!archived && <div className="task-progress-heading">{status !== "waiting_user" && <span className="task-progress-spinner" aria-hidden="true">◌</span>}<strong>{stateLabel}</strong></div>}
+      {!archived && <div className="task-progress-heading">{!["waiting_user", "waiting", "blocked", "queued", "admitted", "planned", "retrying"].includes(status) && <span className="task-progress-spinner" aria-hidden="true">◌</span>}<strong>{stateLabel}</strong></div>}
+      {!archived && status === "blocked" && <p>Review the blocker below and reply in conversation with the needed input or action.</p>}
       {!archived && text("summary") && <p>{text("summary")}</p>}
       {visibleCriteria && <section><small>Acceptance criteria</small><div className="task-progress-checklist"><ReactMarkdown remarkPlugins={[remarkGfm]}>{acceptanceCriteriaMarkdown(visibleCriteria)}</ReactMarkdown></div></section>}
       {text("intention") && <section><small>Intention</small><p>{text("intention").replace(/^Intention:\s*/, "")}</p></section>}

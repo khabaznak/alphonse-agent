@@ -136,3 +136,15 @@ and the production build passed. The complete isolated browser fixture passed;
 its initially incomplete synthetic Tauri metadata and schedule fields were fixed
 and the full run repeated. Local screenshots: `output/playwright/issue-73-widgets.png`
 and `output/playwright/issue-73-minimum.png`.
+
+Integrated the latest V3 branch, including #31 and #71, and resolved the shared
+App/drawer/styles changes while preserving the real Agenda preview and schedule
+management. Final validation passes: all **110 Desktop tests**, **173 targeted
+Python tests** (77 widget/IPC/artifact/Agenda checks and 96 System One/admission/
+failure-reporting/manifest regressions), and the TypeScript/Vite production build.
+The existing bundle-size advisory remains. Repeated the complete browser checks
+against this combined implementation, including reopening the same reminder's
+schedule management and suppressing repeated identical list-action drafts; all
+passed. The browser uses a separate cached headless executable because the shared
+browser connector was already in use. `issue-73-coordination.png` additionally
+shows the list/draft interaction. Screenshots remain local and uncommitted.

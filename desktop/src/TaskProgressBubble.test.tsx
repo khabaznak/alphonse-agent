@@ -20,6 +20,14 @@ function update(taskId: string, status: string) {
 }
 
 describe("poll projection through the production task renderer", () => {
+  it.each([["admitted", "Request received"], ["queued", "Queued"], ["planned", "Ready to start"], ["blocked", "Blocked · action needed"], ["waiting_user", "Waiting for your answer"]])("presents %s without implying completion or active execution", (status, label) => {
+    const result = projectTaskProgress({}, {}, update("request", status), false);
+    const html = renderToStaticMarkup(<TaskProgressBubble surface={result.surfaces["task-progress:request"]} />);
+    expect(html).toContain(label);
+    expect(html).not.toContain("Completed");
+    expect(html).not.toContain("task-progress-spinner");
+    expect(html).toContain('data-task-id="request"');
+  });
   it.each(["completed", "failed", "cancelled", "abandoned"])("collapses %s without a stale spinner or private checkpoint text", (status) => {
     const result = projectTaskProgress({}, {}, [...update("repair", status), event({ deleteSurface: { surfaceId: "task-progress:repair" } })], false);
     const html = renderToStaticMarkup(<TaskProgressBubble surface={result.archived.repair} archived />);

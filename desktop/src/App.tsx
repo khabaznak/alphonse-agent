@@ -1,5 +1,6 @@
-import { CoordinationList, type CoordinationData } from "./CoordinationWidgets";
+import { appendWidgetDraft, CoordinationList, type CoordinationData } from "./CoordinationWidgets";
 import { authorizedWidgets, type WidgetContext } from "./widgetContext";
+import { Agenda } from "./Agenda";
 import { SkillMascot, SkillAppearanceSettings } from "./SkillMascot";
 import { BASE_CONTEXT, type AppearanceContext, type SkillAppearance } from "./skillAppearances";
 import { HouseholdWorkspace } from "./HouseholdWorkspace";
@@ -127,6 +128,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
     workspaceHostRef.current?.querySelector<HTMLElement>(".workspace-panel:not([hidden])")?.focus({ preventScroll: true });
   }, [workspace, settingsTab]);
   const [scheduledTaskForView, setScheduledTaskForView] = useState("");
+  const [scheduleViewRequest, setScheduleViewRequest] = useState(0);
   const [workTaskForView, setWorkTaskForView] = useState("");
   const [modal, setModal] = useState<Modal>(null);
   const [user, setUser] = useState("");
@@ -599,7 +601,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       </aside>
       <div className="workspace-host" ref={workspaceHostRef}>
         <div className="shell-toolbar"><span>{memberName || user || "Local household"} · {connected ? currentAvatarStateLabel : "Disconnected"}</span><button ref={drawerToggleRef} aria-label="Toggle At hand" aria-controls="at-hand" aria-expanded={atHandOpen} disabled={!user} onClick={() => changeDrawer({ type: "visibility", open: !atHandOpen })}>{atHandOpen ? <PanelRightClose /> : <PanelRightOpen />} At hand</button></div>
-        {widgetItem?.member === user && (workspace === "agenda" && ["appointments", "reminders"].includes(widgetItem.family) || workspace === "projects" && ["todos", "shopping"].includes(widgetItem.family)) && <section className="card widget-item-detail" aria-label="Widget item details"><button onClick={() => setWidgetItem(undefined)}>Close item</button><h2>Selected item</h2>{selectedWidgetData && selectedWidgetItem ? <CoordinationList data={{ ...selectedWidgetData, items: [selectedWidgetItem] }} timezone={timezone} onAgenda={() => navigate("agenda")} onWork={() => navigate("projects")} onRequest={(draft) => { setPrompt((current) => current.trim() ? `${current}\n\n${draft}` : draft); navigate("conversation"); }} /> : <p role="status">Item unavailable. Refresh the source or check access.</p>}</section>}
+        {widgetItem?.member === user && (workspace === "agenda" && ["appointments", "reminders"].includes(widgetItem.family) || workspace === "projects" && ["todos", "shopping"].includes(widgetItem.family)) && <section className="card widget-item-detail" aria-label="Widget item details"><button onClick={() => setWidgetItem(undefined)}>Close item</button><h2>Selected item</h2>{selectedWidgetData && selectedWidgetItem ? <CoordinationList data={{ ...selectedWidgetData, items: [selectedWidgetItem] }} timezone={timezone} onAgenda={() => navigate("agenda")} onWork={() => navigate("projects")} onRequest={(draft) => { setPrompt((current) => appendWidgetDraft(current, draft)); navigate("conversation"); }} /> : <p role="status">Item unavailable. Refresh the source or check access.</p>}</section>}
         <section className="workspace-panel" tabIndex={-1} aria-label="Conversation workspace" hidden={workspace !== "conversation"}>
         <section className="conversation">
         <header className="topbar">
@@ -629,7 +631,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
         </section></section>
         {visited.has("projects") && <section className="workspace-panel" tabIndex={-1} aria-label="Projects and tasks workspace" hidden={workspace !== "projects"}><ProjectsWorkspace active={workspace === "projects"} user={user} initialTaskId={workTaskForView} initialProjectId={projectForView.id} selectionRequest={projectForView.request} onAgenda={(id) => { setScheduledTaskForView(id); navigate("agenda"); }} onConversation={(day) => { setConversationDay(day); navigate("conversation"); }} onQuestions={() => navigate("attention")} onClose={() => navigate("conversation")} /></section>}
         {visited.has("household") && <section className="workspace-panel" tabIndex={-1} aria-label="Household workspace" hidden={workspace !== "household"}><HouseholdWorkspace key={user} user={user} active={workspace === "household"} connected={connected} isAdmin={isAdmin} onProject={(id) => { setProjectForView((current) => ({ id, request: current.request + 1 })); navigate("projects"); }} onAgenda={(id) => { setScheduledTaskForView(id); navigate("agenda"); }} onConversation={(day) => { setConversationDay(day); navigate("conversation"); }} onQuestions={() => navigate("attention")} onMembers={() => { setSettingsTab("members"); navigate("settings"); }} /></section>}
-        {visited.has("agenda") && <section className="workspace-panel" tabIndex={-1} aria-label="Agenda workspace" hidden={workspace !== "agenda"}><ScheduledTasksModal embedded actorUserId={user} initialTaskId={scheduledTaskForView} onClose={() => navigate("conversation")} /></section>}
+        {visited.has("agenda") && <section className="workspace-panel" tabIndex={-1} aria-label="Agenda workspace" hidden={workspace !== "agenda"}><AgendaWorkspace key={user} selectionRequest={scheduleViewRequest} member={user} timezone={timezone} active={workspace === "agenda"} initialTaskId={scheduledTaskForView} onProjects={() => navigate("projects")} onConversation={() => navigate("conversation")} /></section>}
         {visited.has("attention") && <section className="workspace-panel attention-workspace" tabIndex={-1} aria-label="Needs your attention workspace" hidden={workspace !== "attention"}><h1>Needs your attention</h1>{questions.length ? questions.map((question) => <article className="card" key={question.question_id}><p>{question.message}</p><button onClick={() => { navigate("conversation"); window.requestAnimationFrame(() => {
               const target = Array.from(document.querySelectorAll<HTMLElement>("[data-question-id]")).find((element) => element.dataset.questionId === question.question_id);
               (target?.querySelector<HTMLElement>(".message") || target)?.scrollIntoView({ block: "center" });
@@ -637,7 +639,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
             }); }}>View in conversation</button></article>) : <p>No pending questions.</p>}</section>}
       {visited.has("settings") && <section className="workspace-panel" tabIndex={-1} aria-label="Settings workspace" hidden={workspace !== "settings"}><SettingsWorkspace isAdmin={isAdmin} user={user} initialTab={settingsTab} workspaceRequired={workspaceRequired} enterToSend={enterToSend} desktopStyle={desktopStyle} desktopNotifications={desktopNotifications} onDesktopStyleChange={changeDesktopStyle} onDesktopNotificationsChange={setDesktopNotifications} onEnterToSendChange={setEnterToSend} onTimezoneChange={setTimezone} onWorkspaceConfigured={() => setWorkspaceRequired(false)} onTestDesktopNotification={() => void desktopNotifierRef.current.notify({ id: `test:${Date.now()}`, title: "Alphonse test alert", body: "Desktop notifications are ready." }, { ...desktopNotifications, onlyWhenUnfocused: false })} onClose={() => { navigate(returnWorkspace); }} /></section>}
       </div>
-      <AtHandDrawer state={{ ...drawer, open: atHandOpen }} act={changeDrawer} member={user} connected={connected} questionCount={questions.length} questionsMember={questionsMember} onAttention={() => navigate("attention")} onAgenda={(id) => { setScheduledTaskForView(id || ""); navigate("agenda"); }} toggleRef={drawerToggleRef} saveFailed={drawerSaveFailed} widgetContext={widgetContext} timezone={timezone} onItem={(artifactId, itemId, family) => { setWidgetItem({ member: user, artifactId, itemId, family }); navigate(["appointments", "reminders"].includes(family) ? "agenda" : "projects"); }} onWork={(id, taskId) => { setWorkTaskForView(taskId || ""); setProjectForView((current) => ({ id: taskId ? "" : id, request: current.request + 1 })); navigate("projects"); }} onRequest={(draft) => { setPrompt((current) => current.trim() ? `${current}\n\n${draft}` : draft); setConversationDay(localDay(timezone)); navigate("conversation"); window.requestAnimationFrame(() => textareaRef.current?.focus()); }} />
+      <AtHandDrawer state={{ ...drawer, open: atHandOpen }} act={changeDrawer} member={user} connected={connected} questionCount={questions.length} questionsMember={questionsMember} onAttention={() => navigate("attention")} onAgenda={(id) => { setScheduleViewRequest((value) => value + 1); setScheduledTaskForView(id || ""); navigate("agenda"); }} toggleRef={drawerToggleRef} saveFailed={drawerSaveFailed} widgetContext={widgetContext} timezone={timezone} onItem={(artifactId, itemId, family) => { setWidgetItem({ member: user, artifactId, itemId, family }); navigate(["appointments", "reminders"].includes(family) ? "agenda" : "projects"); }} onWork={(id, taskId) => { setWorkTaskForView(taskId || ""); setProjectForView((current) => ({ id: taskId ? "" : id, request: current.request + 1 })); navigate("projects"); }} onRequest={(draft) => { setPrompt((current) => appendWidgetDraft(current, draft)); setConversationDay(localDay(timezone)); navigate("conversation"); window.requestAnimationFrame(() => textareaRef.current?.focus()); }} />
       {modal === "onboarding" && <OnboardingModal onComplete={(next) => { setUser(next); setIsAdmin(true); setWorkspaceRequired(false); setModal(null); void poll(); }} />}
     </main>
   );
@@ -940,29 +942,53 @@ function questionTaskId(surface: A2uiSurface): string {
   return typeof question === "object" && question !== null && "task_id" in question ? String((question as { task_id?: unknown }).task_id || "") : "";
 }
 
-function ScheduledTasksModal({ embedded = false, actorUserId, initialTaskId = "", onClose }: { embedded?: boolean; actorUserId: string; initialTaskId?: string; onClose: () => void }) {
+function AgendaWorkspace({ member, timezone, active, initialTaskId, selectionRequest = 0, onProjects, onConversation }: { member: string; timezone: string; active: boolean; initialTaskId: string; selectionRequest?: number; onProjects: () => void; onConversation: () => void }) {
+  const [selected, setSelected] = useState(initialTaskId);
+  const [revision, setRevision] = useState(0);
+  const [managing, setManaging] = useState(Boolean(initialTaskId));
+  useEffect(() => { if (initialTaskId) { setSelected(initialTaskId); setManaging(true); } }, [initialTaskId, active, selectionRequest]);
+  return <><Agenda revision={revision} member={member} timezone={timezone} active={active} onSchedule={(id) => { setSelected(id); setManaging(true); }} onProjects={onProjects} />
+    <div className="agenda-toolbar"><button aria-expanded={managing} onClick={() => setManaging(!managing)}>{managing ? "Hide schedule management" : "Manage schedules & execution history"}</button><button onClick={onConversation}>Create a schedule in Conversation</button></div>
+    {managing && active && <ScheduleManager onChanged={() => setRevision(value => value + 1)} embedded actorUserId={member} initialTaskId={selected} onClose={() => setManaging(false)} />}</>;
+}
+
+function ScheduleManager({ embedded = false, actorUserId, initialTaskId = "", onClose, onChanged }: { onChanged: () => void; embedded?: boolean; actorUserId: string; initialTaskId?: string; onClose: () => void }) {
   const [users, setUsers] = useState<ManagedUser[]>([]); const [ownerId, setOwnerId] = useState(actorUserId); const [status, setStatus] = useState("");
   const [tasks, setTasks] = useState<ScheduledTask[]>([]); const [selected, setSelected] = useState<ScheduledTask | null>(null); const [executions, setExecutions] = useState<ScheduledExecution[]>([]);
   const [name, setName] = useState(""); const [prompt, setPrompt] = useState(""); const [notice, setNotice] = useState(""); const [removeOpen, setRemoveOpen] = useState(false);
+  const requests = useRef({ list: 0, history: 0 });
+  const initialSelection = useRef("");
+  const [loading, setLoading] = useState(true);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  useEffect(() => () => { requests.current.list++; requests.current.history++; }, []);
   const isAdmin = users.some((item) => item.user_id === actorUserId && item.role === "admin");
   const load = useCallback(async () => {
+    const request = ++requests.current.list;
+    requests.current.history++;
+    setLoading(true); setTasks([]); setExecutions([]);
     try {
       const [taskResult, userResult] = await Promise.all([
-        daemonRequest<{ tasks: ScheduledTask[] }>("scheduled_tasks", { actor_user_id: actorUserId, owner_user_id: ownerId, status }),
+        daemonRequest<{ tasks: ScheduledTask[] }>("scheduled_tasks", { actor_user_id: actorUserId, owner_user_id: ownerId, status, limit: 1000 }),
         daemonRequest<{ users: ManagedUser[] }>("users"),
       ]);
+      if (request !== requests.current.list) return;
       setTasks(taskResult.tasks); setUsers(userResult.users); setNotice("");
       setSelected((current) => current ? taskResult.tasks.find((task) => task.scheduled_task_id === current.scheduled_task_id) || null : null);
-    } catch (cause) { setNotice(cause instanceof Error ? cause.message : "Scheduled tasks could not be loaded."); }
+    } catch (cause) { if (request === requests.current.list) { setTasks([]); setSelected(null); setExecutions([]); setNotice(cause instanceof Error ? cause.message : "Scheduled tasks could not be loaded."); } }
+    finally { if (request === requests.current.list) setLoading(false); }
   }, [actorUserId, ownerId, status]);
   useEffect(() => { void load(); }, [load]);
   const select = async (task: ScheduledTask) => {
-    setSelected(task); setName(task.name); setPrompt(task.prompt); setRemoveOpen(false);
-    try { const result = await daemonRequest<{ executions: ScheduledExecution[] }>("scheduled_executions", { actor_user_id: actorUserId, scheduled_task_id: task.scheduled_task_id, limit: 8 }); setExecutions(result.executions); } catch (cause) { setNotice(cause instanceof Error ? cause.message : "Execution history could not be loaded."); }
+    const request = ++requests.current.history;
+    setHistoryLoading(true);
+    setSelected(task); setExecutions([]); setName(task.name); setPrompt(task.prompt); setRemoveOpen(false);
+    try { const result = await daemonRequest<{ executions: ScheduledExecution[] }>("scheduled_executions", { actor_user_id: actorUserId, scheduled_task_id: task.scheduled_task_id, limit: 8 }); if (request === requests.current.history) setExecutions(result.executions); } catch (cause) { if (request === requests.current.history) setNotice(cause instanceof Error ? cause.message : "Execution history could not be loaded."); }
+    finally { if (request === requests.current.history) setHistoryLoading(false); }
   };
   useEffect(() => {
-    const task = tasks.find((item) => item.scheduled_task_id === initialTaskId);
-    if (task && selected?.scheduled_task_id !== task.scheduled_task_id) void select(task);
+    const target = initialTaskId !== initialSelection.current ? initialTaskId : selected?.scheduled_task_id || initialTaskId;
+    const task = tasks.find((item) => item.scheduled_task_id === target);
+    if (task) { initialSelection.current = initialTaskId; void select(task); }
   }, [initialTaskId, tasks]);
   const mutate = async (method: string, extra: Record<string, unknown> = {}) => {
     if (!selected) return;
@@ -970,21 +996,22 @@ function ScheduledTasksModal({ embedded = false, actorUserId, initialTaskId = ""
       await daemonRequest(method, { actor_user_id: actorUserId, scheduled_task_id: selected.scheduled_task_id, ...extra });
       setNotice(method === "delete_scheduled_task" ? "Task permanently deleted." : "Task updated."); setRemoveOpen(false);
       if (method === "delete_scheduled_task") { setSelected(null); setExecutions([]); }
-      await load();
+      await load(); onChanged();
     } catch (cause) { setNotice(cause instanceof Error ? cause.message : "Scheduled task could not be updated."); }
   };
   const editable = selected?.status === "active" || selected?.status === "paused";
-  return <ModalFrame embedded={embedded} title={embedded ? "Alphonse’s Agenda" : "Scheduled tasks"} onClose={onClose}>
+  return <ModalFrame embedded={embedded} title="Manage schedules" onClose={onClose}>
     {isAdmin && <div className="form-field"><label htmlFor="scheduled-owner">User</label><select id="scheduled-owner" value={ownerId} onChange={(event) => { setOwnerId(event.target.value); setSelected(null); setExecutions([]); }}>{users.map((item) => <option key={item.user_id} value={item.user_id}>{item.display_name}</option>)}</select></div>}
     <div className="form-field"><label htmlFor="scheduled-status">Status</label><select id="scheduled-status" value={status} onChange={(event) => { setStatus(event.target.value); setSelected(null); setExecutions([]); }}><option value="">All statuses</option>{["active", "paused", "completed", "cancelled", "failed"].map((value) => <option key={value} value={value}>{value}</option>)}</select></div>
-    <div className="stack scheduled-task-list">{tasks.length ? tasks.map((task) => {
+    <div className="stack scheduled-task-list">{loading ? <p role="status">Loading schedules…</p> : tasks.length ? tasks.map((task) => {
       const calendar = calendarDateLabel(task.next_run_at, task.timezone);
       return <button className={`scheduled-task-row${task.scheduled_task_id === selected?.scheduled_task_id ? " selected" : ""}`} key={task.scheduled_task_id} onClick={() => void select(task)}>
         <span className="scheduled-task-row-calendar" aria-label={calendar.pending ? "Schedule pending" : `Next run on ${calendar.month} ${calendar.day}`}><span>{calendar.month}</span><strong>{calendar.day}</strong></span>
         <span className="scheduled-task-row-summary"><span className="scheduled-task-row-title"><strong>{task.name}</strong><small className="scheduled-task-row-status">{task.status}</small></span><small>{calendar.pending ? "Schedule pending" : `Next: ${dateLabel(task.next_run_at, task.timezone)}`}</small><small>{scheduleLabel(task.schedule)} · {task.timezone}</small><small>Owner: {users.find((item) => item.user_id === task.owner_user_id)?.display_name || task.owner_user_id} · Latest: {task.latest_execution?.status || "not run"}</small></span>
       </button>;
     }) : <p>No scheduled tasks match this filter.</p>}</div>
-    {selected && <section className="scheduled-task-detail">
+    {tasks.length >= 1000 && <p role="status">Showing up to 1,000 schedules. Filter by status to narrow the list.</p>}
+    {selected && !loading && <section className="scheduled-task-detail">
       <div className="form-field"><label htmlFor="scheduled-name">Task name</label><input id="scheduled-name" value={name} disabled={!editable} onChange={(event) => setName(event.target.value)} /></div>
       <div className="form-field"><label htmlFor="scheduled-prompt">Stored prompt</label><textarea id="scheduled-prompt" value={prompt} disabled={!editable} onChange={(event) => setPrompt(event.target.value)} rows={6} /></div>
       <div className="form-field task-readonly"><label>Owner</label><output>{users.find((item) => item.user_id === selected.owner_user_id)?.display_name || selected.owner_user_id}</output><small>{selected.owner_user_id}</small></div>
@@ -992,9 +1019,9 @@ function ScheduledTasksModal({ embedded = false, actorUserId, initialTaskId = ""
       {editable && <button onClick={() => void mutate("update_scheduled_task", { name, prompt })}>Save name and prompt</button>}
       <div className="dialog-actions">{selected.status === "active" && <button onClick={() => void mutate("pause_schedule")}>Suspend</button>}{selected.status === "paused" && <button onClick={() => void mutate("resume_schedule")}>Resume</button>}<button onClick={() => setRemoveOpen((value) => !value)}>Remove…</button></div>
       {removeOpen && <div className="form-field destructive-action"><p>Cancel keeps this task and its execution history. Permanent deletion removes both.</p><div className="dialog-actions">{["active", "paused"].includes(selected.status) && <button onClick={() => void mutate("cancel_schedule")}>Cancel task</button>}<button onClick={() => void mutate("delete_scheduled_task")}>Delete permanently</button></div></div>}
-      <h3>Recent executions</h3><div className="execution-list">{executions.length ? executions.map((execution) => <p key={execution.run_id}><strong>{execution.status}</strong> · {dateLabel(execution.started_at)}{execution.error || execution.last_error ? ` · ${execution.error || execution.last_error}` : ""}</p>) : <p>No executions yet.</p>}</div>
+      <h3>Recent executions</h3><div className="execution-list">{historyLoading ? <p role="status">Loading execution history…</p> : executions.length ? executions.map((execution) => <p key={execution.run_id}><strong>{execution.status}</strong> · {dateLabel(execution.started_at)}{execution.error || execution.last_error ? ` · ${execution.error || execution.last_error}` : ""}</p>) : <p>No executions yet.</p>}</div>
     </section>}
-    <p>{notice}</p>
+    <p>{notice}</p><p>Create schedules by asking Alphonse in Conversation. For a different time or recurrence, cancel the existing schedule and ask Alphonse for a replacement.</p>
   </ModalFrame>;
 }
 

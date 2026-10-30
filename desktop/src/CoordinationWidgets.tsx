@@ -5,13 +5,16 @@ import type { WorkItem } from "./WorkOverview";
 export type CoordinationItem = { id: string; title: string; status: "pending" | "completed" | "cancelled"; when?: string };
 export type CoordinationData = { family: "todos" | "shopping" | "reminders" | "appointments"; artifactId: string; owner: string; source: string; updatedAt: string; expiresAt: number; items: CoordinationItem[] };
 export function validCoordination(data: CoordinationData | undefined): data is CoordinationData {
-  return !!data && ["todos", "shopping", "reminders", "appointments"].includes(data.family) && typeof data.artifactId === "string" && data.artifactId.startsWith("artifact.") && typeof data.owner === "string" && typeof data.source === "string" && Number.isFinite(Date.parse(data.updatedAt)) && Number.isFinite(data.expiresAt) && Array.isArray(data.items) && data.items.length <= 50 && new Set(data.items.map((item) => item?.id)).size === data.items.length && data.items.every((item) => item && typeof item.id === "string" && item.id.length > 0 && item.id.length <= 128 && typeof item.title === "string" && item.title.length <= 300 && ["pending", "completed", "cancelled"].includes(item.status) && (item.when === undefined || Number.isFinite(Date.parse(item.when))));
+  return !!data && ["todos", "shopping", "reminders", "appointments"].includes(data.family) && typeof data.artifactId === "string" && data.artifactId.startsWith("artifact.") && typeof data.owner === "string" && typeof data.source === "string" && typeof data.updatedAt === "string" && Number.isFinite(Date.parse(data.updatedAt)) && Number.isFinite(data.expiresAt) && Array.isArray(data.items) && data.items.length <= 50 && new Set(data.items.map((item) => item?.id)).size === data.items.length && data.items.every((item) => item && typeof item.id === "string" && item.id.length > 0 && item.id.length <= 128 && typeof item.title === "string" && item.title.length > 0 && item.title.length <= 300 && ["pending", "completed", "cancelled"].includes(item.status) && (item.when === undefined || typeof item.when === "string" && Number.isFinite(Date.parse(item.when))));
 }
 export type CoordinationRoutes = { onAgenda: (id?: string) => void; onWork?: (project: string, taskId?: string) => void; onItem?: (artifactId: string, itemId: string, family: CoordinationData["family"]) => void; onRequest?: (text: string) => void; timezone?: string };
 export function widgetTime(value: string, timezone = "UTC") {
   return new Date(value).toLocaleString(undefined, { timeZone: timezone });
 }
 /** Creates a draft only. Sending, authorization, execution and verification use the ordinary skill workflow. */
+export function appendWidgetDraft(current: string, draft: string) {
+  return current.includes(draft) ? current : current.trim() ? `${current}\n\n${draft}` : draft;
+}
 export function workflowDraft(data: CoordinationData, item: CoordinationItem | undefined, action: string) {
   return `Use the owning skill workflow for ${data.family}. Requested action: ${action}.\nResource: ${data.artifactId}; owner: ${data.owner}; source revision: ${data.updatedAt}.\n${item ? `Item ID: ${JSON.stringify(item.id)}; displayed title: ${JSON.stringify(item.title)}.` : "List-level edit."}\nRe-read the current source, check authorization and prerequisites, and verify the effect before reporting success. Refresh the widget snapshot after a confirmed change.`;
 }

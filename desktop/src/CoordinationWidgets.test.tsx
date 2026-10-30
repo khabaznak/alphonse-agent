@@ -1,7 +1,7 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { CoordinationList, NativeCoordinationBody, validCoordination, widgetTime, workflowDraft, type CoordinationData, type NativeCoordination } from "./CoordinationWidgets";
+import { appendWidgetDraft, CoordinationList, NativeCoordinationBody, validCoordination, widgetTime, workflowDraft, type CoordinationData, type NativeCoordination } from "./CoordinationWidgets";
 import { AtHandDrawer } from "./AtHandDrawer";
 import { authorizedWidgets, type SkillWidget } from "./widgetContext";
 import { changeDrawer, defaultDrawer, reconcileContext } from "./atHandState";
@@ -15,7 +15,9 @@ describe("Coordination widgets", () => {
     expect(html).toContain("Fixture list"); expect(html).toContain("Owner: alice"); expect(html).toContain("Item: milk");
     expect(html).toContain("&lt;img"); expect(html).not.toContain("<img");
     expect(html).toContain("Request completion"); expect(html).toContain("Request edit"); expect(html).toContain("Open in Projects &amp; Tasks");
-    expect(workflowDraft(data, data.items[0], "Complete this item")).toContain("verify the effect");
+    const draft = workflowDraft(data, data.items[0], "Complete this item");
+    expect(draft).toContain("verify the effect");
+    expect(appendWidgetDraft(appendWidgetDraft("Existing draft", draft), draft)).toBe(`Existing draft\n\n${draft}`);
   });
   it("never converts missing, expired, malformed or revoked data into an empty success", () => {
     expect(validCoordination({ ...data, items: [data.items[0], data.items[0]] })).toBe(false);
