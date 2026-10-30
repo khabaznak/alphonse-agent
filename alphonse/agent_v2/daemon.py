@@ -2422,6 +2422,9 @@ class V2Daemon:
             message=message,
             kind="task_failed",
             audience_user_id=user_id,
+            task_id=str(task_state.get("task_id") or "") if isinstance(task_state, dict)
+                and str(task_state.get("message_id") or "") == str(getattr(queued, "message_id", ""))
+                and str(task_state.get("user") or "") == user_id else str(getattr(queued, "message_id", "")),
             project_id=project_id,
             correlation_id=str(getattr(inbound, "correlation_id", "") or ""),
             metadata={"source": "inbound_failure", "failure_code": _scheduled_failure_code(error)},

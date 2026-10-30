@@ -25,6 +25,12 @@ class FailureInference:
         return SimpleNamespace(content=EXPLANATION)
 
 
+class FailureReview:
+    def review_task_failure(self, *, message, explanation):
+        assert message
+        return explanation == EXPLANATION
+
+
 def _task():
     return TaskState(
         task_id="current", message_id="current", user="alex",
@@ -44,7 +50,7 @@ def test_no_progress_failure_keeps_failed_status_and_prepares_evidence_based_exp
     task = _task()
     inference = FailureInference()
     questions = SQLiteQuestionStore(":memory:")
-    context = CoreLoopContext(messages=InMemoryMessageQueue(), inference=inference, question_store=questions)
+    context = CoreLoopContext(messages=InMemoryMessageQueue(), inference=inference, question_store=questions, system_one=FailureReview())
 
     result = HierarchicalCAPDProcessor._result(task, context)
 
@@ -82,7 +88,7 @@ def test_failure_explanation_keeps_successful_observations_and_redacts_named_sec
         "result": {"exit_code": 0, "stdout": '{"temperature_c":24}', "api_key": "DO_NOT_FORWARD"},
     })
     inference = FailureInference()
-    HierarchicalCAPDProcessor._result(task, CoreLoopContext(messages=InMemoryMessageQueue(), inference=inference))
+    HierarchicalCAPDProcessor._result(task, CoreLoopContext(messages=InMemoryMessageQueue(), inference=inference, system_one=FailureReview()))
     assert "temperature_c" in inference.requests[0].prompt and "24" in inference.requests[0].prompt
     assert "DO_NOT_FORWARD" not in inference.requests[0].prompt
     assert task.status == "failed"
@@ -94,7 +100,7 @@ def test_failure_closure_reuses_prepared_response_without_another_model_call():
     task.metadata["prepared_user_response"] = {"source": "native.respond", "message": EXPLANATION}
     inference = FailureInference()
 
-    HierarchicalCAPDProcessor._result(task, CoreLoopContext(messages=InMemoryMessageQueue(), inference=inference))
+    HierarchicalCAPDProcessor._result(task, CoreLoopContext(messages=InMemoryMessageQueue(), inference=inference, system_one=FailureReview()))
 
     assert task.metadata["v3_failure_response"]["message"] == EXPLANATION
     assert inference.requests == []
@@ -116,6 +122,7 @@ def test_daemon_delivers_failure_explanation_to_origin_and_records_actual_text()
     assert outbound.kind == "task_failed"
     assert outbound.integration_id == "desktop"
     assert outbound.message == EXPLANATION
+    assert outbound.task_id == task.task_id
     events = runtime.conversation_store.list_recent(owner_user_id="alex")
     assert events[-1].content == EXPLANATION
 
@@ -147,6 +154,7 @@ def test_daemon_terminal_failure_projects_explanation_instead_of_generic_fallbac
             task.outcome = failed.outcome
             task.hierarchical_state = failed.hierarchical_state
             context.inference = inference
+            context.system_one = FailureReview()
             return HierarchicalCAPDProcessor._result(task, context)
 
     runtime.core.intelligence = FailedProcessor()
@@ -173,3 +181,29 @@ def test_required_service_failure_does_not_attempt_another_inference():
 
     assert result.error == task.outcome["reason"]
     assert inference.requests == []
+
+
+def test_failure_closure_cannot_reuse_a_reassuring_success_response():
+    task = _task()
+    task.metadata["act_directive"] = {"closure_only": True}
+    task.metadata["prepared_user_response"] = {"message": "Done, everything is fixed."}
+    inference = FailureInference()
+    result = HierarchicalCAPDProcessor._result(task, CoreLoopContext(
+        messages=InMemoryMessageQueue(), inference=inference, system_one=FailureReview()))
+    assert result.status == ProcessingStatus.FAILED
+    assert task.metadata["v3_failure_response"]["source"] == "v3_failure_fallback"
+    assert "ask me to retry" in task.metadata["v3_failure_response"]["message"]
+    assert "everything is fixed" not in task.metadata["v3_failure_response"]["message"]
+    assert inference.requests == []
+
+
+def test_unavailable_failure_review_preserves_failure_and_provides_next_action():
+    task = _task()
+    class UnavailableReview:
+        def review_task_failure(self, **kwargs):
+            raise RuntimeError("review unavailable")
+    result = HierarchicalCAPDProcessor._result(task, CoreLoopContext(
+        messages=InMemoryMessageQueue(), inference=FailureInference(), system_one=UnavailableReview()))
+    assert result.status == ProcessingStatus.FAILED
+    assert "not been fully verified" in task.metadata["v3_failure_response"]["message"]
+    assert "ask me to retry" in task.metadata["v3_failure_response"]["message"]
