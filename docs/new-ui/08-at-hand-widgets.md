@@ -54,7 +54,8 @@ falls back safely, and duplicate saved identities are discarded.
 
 ## Validation — October 29, 2026
 
-- 86 desktop tests pass, including seven new model/render tests covering member
+- 89 desktop tests pass after integrating the merged #77 mascot changes,
+  including seven new model/render tests covering member
   storage isolation, round trips, payload exclusion, lock enforcement, ordering,
   expiry, dismissal, reconnect deduplication, unavailable/loading states,
   stale-member count suppression and failed persistence.
@@ -71,3 +72,7 @@ falls back safely, and duplicate saved identities are discarded.
 - Browser reload/model fixtures validate restart-independent layout behavior;
   this does not claim packaged native or real household workflow qualification.
   Broader New UI daily-use acceptance remains #78.
+
+The #77 integration conflict in the poll handler retains both the fresh-member
+question marker and the mascot context update. The combined build/tests pass;
+browser reload at the minimum size retains the locked layout and base mascot.

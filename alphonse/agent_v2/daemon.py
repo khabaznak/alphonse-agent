@@ -806,18 +806,52 @@ class V2Daemon:
         return self.list_skills_workspace(actor_user_id=actor_user_id)["skills"]
 
     def list_skills_workspace(self, *, actor_user_id: str) -> dict[str, list[dict[str, Any]]]:
+        from alphonse.agent_v2.skill_appearances import resolve_appearance
+
         self._require_admin(actor_user_id)
         artifacts = self.runtime.artifact_store.list()
         return {
             "skills": [
                 {**item.candidate(), "directory": item.directory, "editable": Path(item.directory).resolve().is_relative_to(self.runtime.skill_store.skills_dir.resolve()), "instructions": item.instructions,
                  "files": self.runtime.skill_store.files(item.skill_id),
+                 "appearance": resolve_appearance(item), "appearance_configured": bool(item.appearance),
                  "artifacts": [{**record.to_dict(), "resource": self.runtime.core.artifact_resources.describe(record, actor_user_id)} for record in artifacts if record.skill_id == item.skill_id]}
                 for item in self.runtime.skill_store.list_skills()
             ],
             "unassigned_artifacts": [record.to_dict() for record in artifacts if not record.skill_id],
             "artifact_repository_root": str(self.runtime.core.artifact_resources.repository_root),
         }
+
+    def skill_appearance(self, *, actor_user_id: str, skill_id: str) -> dict[str, Any]:
+        from alphonse.agent_v2.skill_appearances import resolve_appearance
+
+        self._require_admin(actor_user_id)
+        record = self.runtime.skill_store.get(skill_id)
+        return {"appearance": resolve_appearance(record, include_resources=True) if record else None}
+
+    def set_skill_appearance(self, *, actor_user_id: str, skill_id: str, preset: str) -> dict[str, str]:
+        self._require_admin(actor_user_id)
+        self.runtime.skill_store.set_appearance(skill_id, preset)
+        return {"saved": skill_id}
+
+    def desktop_appearance_context(self, user: str) -> dict[str, Any]:
+        """Project only the current user's persisted skill decision, never task contents."""
+        from alphonse.agent_v2.skill_appearances import leading_skill, resolve_appearance
+
+        active = self.kill_switch.active()
+        if active is None or active.user_id != user or self.kill_switch.is_cancelled(active.message_id):
+            return {"task_id": "", "ready": False, "appearance": None}
+        task = self.runtime.question_store.load_task_checkpoint(active.task_id)
+        if task is None or task.user != user or task.status in {"completed", "failed", "cancelled", "waiting_user"}:
+            return {"task_id": active.task_id, "ready": False, "appearance": None}
+        selection = task.metadata.get("v3_skill_selection")
+        skill_id = leading_skill(selection)
+        try:
+            record = self.runtime.skill_store.get(skill_id) if skill_id else None
+            appearance = resolve_appearance(record) if record else None
+        except (KeyError, OSError, ValueError):
+            appearance = None
+        return {"task_id": active.task_id, "ready": isinstance(selection, dict), "appearance": appearance}
 
     def attach_artifact_to_skill(self, *, actor_user_id: str, artifact_id: str, skill_id: str, instructions: str) -> dict[str, Any]:
         self._require_admin(actor_user_id)
@@ -1187,6 +1221,7 @@ class V2Daemon:
             "server_capabilities": self._a2ui.server_capabilities(),
             "conversation_has_unseen_messages": self.runtime.conversation_store.user_has_unseen_messages(owner_user_id=normalized_user, local_date=day.isoformat(), start_utc=day_start.isoformat(), end_utc=day_end.isoformat()),
             "status": {"active_work": self.active_work(), "activity": self.activity_status(), "queue": self._inbound_queue_status()},
+            "mascot": self.desktop_appearance_context(normalized_user),
         }
 
     def acknowledge_desktop_delivery(self, *, client_id: str, outbox_message_id: str) -> bool:
