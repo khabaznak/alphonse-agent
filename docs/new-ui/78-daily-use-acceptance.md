@@ -179,3 +179,46 @@ remain expandable. The same three-card fixture was reviewed at 1120 × 760 and
 760 × 600. Locking Agenda disabled both movement and removal. The cards remain
 in their own scrolling column, with the collapsed navigation and composer usable
 at the minimum. These checks support the correction, not owner acceptance.
+
+## Sidebar, composer and diagnostic widgets — follow-up on `1684a37`
+
+The owner also reported that the sidebar and main composer did not follow the
+mockup, and asked for Workload and PDCA to become widgets. This follow-up restores
+household navigation spacing, an actual workspace/project filter, project status
+dots and the bottom Settings/status/profile area. The filter only searches the
+already authorized navigation entries; it does not pretend to search all records.
+The member remains explicit, and Settings still changes the sidebar's internal
+navigation. Long project lists scroll without pushing the footer out of view.
+
+The composer now has one larger rounded surface, a full-width text area, a quiet
+Everyday assistant label and an accessible arrow Send control. Its plus opens the
+existing command catalog. Choosing a command prepares a draft only; commands are
+disabled while another draft exists, so this control cannot silently discard it.
+Escape closes the command menu and restores text focus. Existing Enter/Shift+Enter
+behavior, task submission, errors, settings and conversation continuity remain.
+
+Workload and PDCA activity are optional catalog entries, using the existing
+in-session samples. They are no longer fixed sidebar panels or hidden at narrow
+widths. No new poller, backend authority or resource/tool registration is added.
+Placement, pins, locks and dismissal use the existing metadata-only persistence.
+Member-tagged samples prevent the previous member's charts from rendering;
+member/daemon changes reset the sample history. Disconnect hides the payloads.
+These charts remain session telemetry, not persistent task-history records.
+
+Validation: **128 Desktop tests** and the TypeScript/Vite and macOS ARM native
+builds pass. Browser checks against the disposable IPC-backed fixture verify
+navigation filtering, draft preservation, command preparation without sending,
+Escape, adding both charts, disabled removal while locked, and stable single
+cards/locks after reload. At 1440 × 900 and 760 × 600 the composer and footer
+remain inside the viewport, with no horizontal overflow. The narrow check caught
+an old 44 px chart rule inherited from the sidebar; it was removed and both SVGs
+now measure 259 px wide in the 324 px drawer at the minimum. Both skins were
+inspected in the browser. No Python source changed; the recorded Python baseline
+and follow-up ownership above remain applicable.
+
+**Native review of this follow-up is pending:** the Mac was locked when computer
+use resumed. Browser evidence and successful packaging do not complete native
+WebKit visual/accessibility qualification or the owner's acceptance. The earlier
+native drawer review applies to `3271125`, not automatically to this new revision.
+Local synthetic browser image: `output/playwright/issue78-shell-dark.png` (not a
+household record, and not a native screenshot). No acceptance gate is closed.

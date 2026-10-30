@@ -124,3 +124,15 @@ preferences are per member on this Mac. Motion follows macOS Reduce Motion.
 The current validation evidence, known baseline failures, observation record and
 pending owner acceptance are in
 [the daily-use acceptance record](../docs/new-ui/78-daily-use-acceptance.md).
+
+Workload and PDCA activity are available from At hand → Add widget. They display
+this session's existing samples, and support the same pin, lock and remove controls
+as other cards. They no longer occupy the navigation sidebar. Removing them does
+not stop processing or delete history; samples themselves are not saved in layout
+storage. The sidebar filter finds visible workspaces and authorized projects.
+
+The composer's plus opens the existing conversation command catalog. Choose a
+command to prepare it, then review and send it. An existing nonempty draft disables
+command selection so it cannot be overwritten. Escape closes that menu. The arrow
+button retains the accessible name Send; the configured Enter-to-send behavior
+still applies.
