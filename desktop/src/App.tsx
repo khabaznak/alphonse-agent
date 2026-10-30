@@ -12,7 +12,7 @@ import { mergeFreshConversationHistory } from "./conversationHistory";
 import { projectTaskProgress } from "./taskProgress";
 import { buildConversationTimeline } from "./conversationTimeline";
 import { A2uiSurfaceView, DESKTOP_CATALOG_ID, type A2uiSurface } from "./a2ui";
-import { DESKTOP_STYLE_STORAGE_KEY, parseDesktopStyle, type DesktopStyle } from "./desktopStyle";
+import { followDesktopStyle, readDesktopStyle, saveDesktopStyle, type DesktopStyle } from "./desktopStyle";
 import { desktopDiagnosticBehavior, type DesktopDiagnosticMode } from "./diagnosticMode";
 import { createDesktopNotifier, DESKTOP_NOTIFICATION_PREFERENCES_KEY, notificationForCompletion, notificationForQuestion, readDesktopNotificationPreferences, type DesktopNotificationPreferences } from "./desktopNotifications";
 import { readDismissedScheduledSurfaces, rememberDismissedScheduledSurface, withoutDismissedSurfaces, withoutSurface } from "./dismissedSurfaces";
@@ -120,7 +120,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const [morphedMessageTaskIds, setMorphedMessageTaskIds] = useState<Record<string, string>>({});
   const [heldProgressSurfaces, setHeldProgressSurfaces] = useState<Record<string, A2uiSurface>>({});
   const [enterToSend, setEnterToSend] = useState(() => window.localStorage.getItem("alphonse.desktop.enterToSend") !== "false");
-  const [desktopStyle, setDesktopStyle] = useState<DesktopStyle>(() => parseDesktopStyle(window.localStorage.getItem(DESKTOP_STYLE_STORAGE_KEY)));
+  const [desktopStyle, setDesktopStyle] = useState<DesktopStyle>("system");
   const [desktopNotifications, setDesktopNotifications] = useState<DesktopNotificationPreferences>(() => readDesktopNotificationPreferences(window.localStorage));
   const [diagnosticRenderTick, forceDiagnosticRender] = useState(0);
   const currentAvatarState = avatarState(connected, error, activity);
@@ -360,9 +360,17 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   }, [enterToSend]);
 
   useEffect(() => {
-    window.localStorage.setItem(DESKTOP_STYLE_STORAGE_KEY, desktopStyle);
-    document.documentElement.dataset.alphonseStyle = desktopStyle;
-  }, [desktopStyle]);
+    setDesktopStyle(readDesktopStyle(window.localStorage, user));
+  }, [user]);
+
+  useEffect(() => followDesktopStyle(
+    document.documentElement, window.matchMedia("(prefers-color-scheme: dark)"), desktopStyle,
+  ), [desktopStyle]);
+
+  const changeDesktopStyle = (next: DesktopStyle) => {
+    saveDesktopStyle(window.localStorage, user, next);
+    setDesktopStyle(next);
+  };
 
   useEffect(() => {
     window.localStorage.setItem(DESKTOP_NOTIFICATION_PREFERENCES_KEY, JSON.stringify(desktopNotifications));
@@ -630,7 +638,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       </section>}
 
       {modal === "scheduled-tasks" && <ScheduledTasksModal actorUserId={user} initialTaskId={scheduledTaskForView} onClose={() => { setScheduledTaskForView(""); setModal(null); }} />}
-      {modal === "settings" && <SettingsModal user={user} initialTab={settingsTab} workspaceRequired={workspaceRequired} enterToSend={enterToSend} desktopStyle={desktopStyle} desktopNotifications={desktopNotifications} onDesktopStyleChange={setDesktopStyle} onDesktopNotificationsChange={setDesktopNotifications} onEnterToSendChange={setEnterToSend} onTimezoneChange={setTimezone} onWorkspaceConfigured={() => setWorkspaceRequired(false)} onTestDesktopNotification={() => void desktopNotifierRef.current.notify({ id: `test:${Date.now()}`, title: "Alphonse test alert", body: "Desktop notifications are ready." }, { ...desktopNotifications, onlyWhenUnfocused: false })} onClose={() => { if (!workspaceRequired) setModal(null); }} />}
+      {modal === "settings" && <SettingsModal user={user} initialTab={settingsTab} workspaceRequired={workspaceRequired} enterToSend={enterToSend} desktopStyle={desktopStyle} desktopNotifications={desktopNotifications} onDesktopStyleChange={changeDesktopStyle} onDesktopNotificationsChange={setDesktopNotifications} onEnterToSendChange={setEnterToSend} onTimezoneChange={setTimezone} onWorkspaceConfigured={() => setWorkspaceRequired(false)} onTestDesktopNotification={() => void desktopNotifierRef.current.notify({ id: `test:${Date.now()}`, title: "Alphonse test alert", body: "Desktop notifications are ready." }, { ...desktopNotifications, onlyWhenUnfocused: false })} onClose={() => { if (!workspaceRequired) setModal(null); }} />}
       {modal === "users" && <UsersModal onClose={() => setModal(null)} />}
       {modal === "onboarding" && <OnboardingModal onComplete={(next) => { setUser(next); setWorkspaceRequired(false); setModal(null); void poll(); }} />}
     </main>
@@ -806,19 +814,16 @@ function CodeModeSettingsSection({ user }: { user: string }) {
 }
 
 function AppearanceSettingsSection({ value, onChange }: { value: DesktopStyle; onChange: (value: DesktopStyle) => void }) {
-  const options: Array<{ value: DesktopStyle; label: string; description: string }> = [
-    { value: "classic", label: "Classic", description: "The current green editorial style with Fraunces and DM Mono." },
-    { value: "modern", label: "Modern", description: "A crisp Helvetica interface with neutral surfaces and teal accents." },
-  ];
   return <section className="settings-panel appearance-settings">
-    <div><h3>Appearance</h3><p>Choose how Alphonse Desktop looks on this Mac. Your selection applies immediately.</p></div>
-    <div className="style-picker" role="radiogroup" aria-label="Desktop style">
-      {options.map((option) => <button key={option.value} type="button" role="radio" aria-checked={value === option.value} className={`style-preview ${option.value}${value === option.value ? " selected" : ""}`} onClick={() => onChange(option.value)}>
-        <span className="style-preview-window" aria-hidden="true"><span className="style-preview-sidebar" /><span className="style-preview-content"><span /><span /><i /></span></span>
-        <span className="style-preview-copy"><strong>{option.label}</strong><small>{option.description}</small></span>
-        <span className="style-preview-selected">{value === option.value ? "Selected" : "Select"}</span>
-      </button>)}
-    </div>
+    <div><h3>Appearance</h3><p>Warm, quiet surfaces for everyday life. Your preference applies immediately and is saved for your household profile on this Mac.</p></div>
+    <label>Color appearance
+      <select value={value} onChange={(event) => onChange(event.target.value as DesktopStyle)}>
+        <option value="system">Follow system</option>
+        <option value="light">Light</option>
+        <option value="dark">Dark</option>
+      </select>
+    </label>
+    <div className="typography-preview"><h4>A little help, every day.</h4><p>Manrope headings · DM Sans reading and controls</p><small>Bundled fonts work offline. Motion follows your system’s reduced-motion preference.</small></div>
   </section>;
 }
 
