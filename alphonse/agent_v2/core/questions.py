@@ -468,7 +468,7 @@ class SQLiteQuestionStore:
 
         task = self.load_task_checkpoint(question.task_id)
         if task is None:
-            return QuestionAnswerResult(handled=True, question=question, answer=answer, message="Question answered.")
+            return QuestionAnswerResult(handled=True, question=question, invalid=True, message="The waiting task is unavailable. The question has not been answered.")
 
         task.status = "running"
         task.metadata.pop("pending_question_id", None)
@@ -487,13 +487,16 @@ class SQLiteQuestionStore:
                 """
                 UPDATE v2_questions
                 SET status = 'answered', answer_json = ?, updated_at = ?
-                WHERE question_id = ? AND respondent_user_id = ? AND status = 'pending'
+                WHERE question_id = ? AND respondent_user_id = ? AND status = 'pending' AND expires_at > ?
+                  AND EXISTS (SELECT 1 FROM v2_task_checkpoints
+                              WHERE task_id = v2_questions.task_id AND status = 'waiting_user')
                 """,
                 (
                     json.dumps(answer, sort_keys=True),
                     now,
                     question.question_id,
                     respondent,
+                    now,
                 ),
             )
             if cursor.rowcount != 1:

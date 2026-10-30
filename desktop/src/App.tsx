@@ -1,3 +1,4 @@
+import { QuestionCard } from "./QuestionCard";
 import { DecisionContext } from "./DecisionContext";
 import { FormEvent, KeyboardEvent, memo, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CalendarClock, ChevronLeft, ChevronRight, FolderKanban, FolderOpen, Settings, UsersRound, Sparkles, MessageCircle, CircleHelp, PanelRightClose, PanelRightOpen, Palette, Wrench, Plug, Brain, Gauge, FileText } from "lucide-react";
@@ -18,7 +19,7 @@ import { createDesktopNotifier, DESKTOP_NOTIFICATION_PREFERENCES_KEY, notificati
 import { readDismissedScheduledSurfaces, rememberDismissedScheduledSurface, withoutDismissedSurfaces, withoutSurface } from "./dismissedSurfaces";
 import { avatarState, avatarStateLabel, capdActivityLabel, type Workspace, SETTINGS_SECTIONS } from "./layoutState";
 import { ConversationMessage, MemoizedConversationMessage } from "./ConversationMessage";
-import { reuseQuestions, withoutTaskProgressSurfaces } from "./pollState";
+import { reconcileQuestionSurfaces, reuseQuestions, withoutTaskProgressSurfaces } from "./pollState";
 import { QueueWorkloadChart } from "./QueueWorkloadChart";
 import { appendQueueSample, type QueueSample } from "./queueHistory";
 import { PdcaActivityChart } from "./PdcaActivityChart";
@@ -178,7 +179,10 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
     });
   }, []);
 
+  const pollGeneration = useRef(0);
+  const committedPollGeneration = useRef(0);
   const pollTransport = useCallback(async () => {
+    const generation = ++pollGeneration.current;
     const response = await daemonRequest<PollResponse>("desktop_poll", {
         client_id: clientId,
         user,
@@ -190,17 +194,20 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
         client_capabilities: { supportedCatalogIds: [DESKTOP_CATALOG_ID] },
         limit: 50,
     });
+    if (generation < committedPollGeneration.current) return { response, daemonChanged: false, stale: true };
+    committedPollGeneration.current = generation;
     const previousDaemonId = daemonId.current;
     const daemonChanged = Boolean(response.daemon_changed || (previousDaemonId && response.daemon_id && previousDaemonId !== response.daemon_id));
     if (response.daemon_id) daemonId.current = response.daemon_id;
     sequence.current = response.next_sequence;
     uiSequence.current = response.next_ui_sequence ?? uiSequence.current;
-    return { response, daemonChanged };
+    return { response, daemonChanged, stale: false };
   }, [clientId, conversationDay, user]);
 
   const poll = useCallback(async () => {
     try {
-      const { response, daemonChanged } = await pollTransport();
+      const { response, daemonChanged, stale } = await pollTransport();
+      if (stale) return;
       if (!diagnosticBehavior.commitsPollResponses) return;
       if (daemonChanged) {
         progressCompletionTimersRef.current.forEach((timer) => window.clearTimeout(timer));
@@ -270,7 +277,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
         progressMeaningfulAtRef.current.delete(taskId);
       });
       const projectedSurfaces = withoutDismissedSurfaces(
-        progressProjection.surfaces,
+        reconcileQuestionSurfaces(progressProjection.surfaces, response.questions),
         dismissedScheduledSurfacesRef.current,
       );
       surfacesRef.current = projectedSurfaces;
@@ -585,10 +592,9 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   };
 
   const suggestions = useMemo(() => matchingCommands(prompt), [prompt]);
-  const activeSurface = Object.values(surfaces).find((surface) => !surface.surfaceId.startsWith("task-progress:") && !progressTaskIds.includes(questionTaskId(surface)));
-  const fallbackQuestion = questions.find((question) => !surfaces[`question:${question.question_id}`]);
+  const activeSurface = Object.values(surfaces).find((surface) => !surface.surfaceId.startsWith("question:") && !surface.surfaceId.startsWith("task-progress:") && !progressTaskIds.includes(questionTaskId(surface)));
   const timelineRenderVersion = diagnosticBehavior.memoizesTimeline ? 0 : diagnosticRenderTick;
-  const questionTaskIds = new Set(questions.filter((question) => surfaces[`question:${question.question_id}`]).map((question) => question.task_id));
+  const questionTaskIds = new Set(questions.map((question) => question.task_id));
   const timelineNodes: ReactNode[] = useMemo(() => buildConversationTimeline(
       messages,
       progressTaskIds.filter((taskId) => !questionTaskIds.has(taskId)),
@@ -597,19 +603,13 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       Object.keys(archivedProgress),
     ).map((item) => {
       if (item.kind === "message") {
-        const question = questions.find((candidate) => item.message.id === `question:${candidate.question_id}`);
-        const questionSurface = question ? surfaces[`question:${question.question_id}`] : undefined;
-        if (questionSurface) return <article data-question-id={question?.question_id} className="message assistant task-question-bubble" aria-label="Question from Alphonse" key={item.key}><A2uiSurfaceView surface={questionSurface} clientId={clientId} user={user} onDone={poll} /></article>;
+        if (questions.some((question) => item.message.id === `question:${question.question_id}`)) return null;
         const Bubble = diagnosticBehavior.memoizesMessages ? MemoizedConversationMessage : ConversationMessage;
         const bubble = <Bubble key={item.key} message={item.message} timezone={timezone} projectName={contextProjects.find((projectItem) => projectItem.project_id === item.message.project_id)?.name || ""} renderMarkdown={!diagnosticBehavior.plainTextMessages} />;
-        return question ? <div className="timeline-message" data-question-id={question.question_id} key={item.key}>{bubble}</div> : bubble;
+        return bubble;
       }
       const archivedSurface = archivedProgress[item.taskId];
       const surface = archivedSurface || surfaces[`task-progress:${item.taskId}`] || heldProgressSurfaces[item.taskId];
-      const questionSurface = Object.values(surfaces).find((candidate) => questionTaskId(candidate) === item.taskId);
-      if (questionSurface) {
-        return <article data-question-id={questions.find((question) => question.task_id === item.taskId)?.question_id} className="message assistant task-question-bubble" aria-label="Question from Alphonse" key={item.key}><A2uiSurfaceView surface={questionSurface} clientId={clientId} user={user} onDone={poll} /></article>;
-      }
       return surface ? <TaskProgressBubble key={item.key} surface={surface} archived={Boolean(archivedSurface)} /> : null;
     }), [archivedProgress, clientId, contextProjects, diagnosticBehavior.memoizesMessages, diagnosticBehavior.plainTextMessages, heldProgressSurfaces, messages, morphedMessageTaskIds, pendingProgressMessages, poll, progressTaskIds, questionTaskIds, questions, surfaces, timelineRenderVersion, timezone, user]);
 
@@ -654,19 +654,17 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
         {error && <div className="error" role="alert">{error}</div>}
         <div className="timeline" ref={timelineRef} aria-live="polite">
           {timelineNodes}
+          {questions.length > 0 && <section className="pending-questions" aria-label="Pending questions"><h2>Questions for you</h2>{questions.map((question) => <QuestionCard key={`${user}:${question.question_id}`} question={question} user={user} timezone={timezone} onDone={poll} />)}</section>}
         </div>
         <section className="input-dock">
-          {activeSurface ? (
+          {activeSurface && (
             <A2uiSurfaceView surface={activeSurface} clientId={clientId} user={user} onDone={poll} onDismiss={dismissScheduledSurface} onAction={(result) => { if (result.action === "view_scheduled_task" && typeof result.scheduled_task_id === "string") { dismissScheduledSurface(activeSurface.surfaceId); setScheduledTaskForView(result.scheduled_task_id); navigate("agenda"); } }} />
-          ) : fallbackQuestion ? (
-            <QuestionCard question={fallbackQuestion} onDone={poll} />
-          ) : (
-            <form className="composer" onSubmit={submit}>
+          )}
+          <form className="composer" onSubmit={submit}>
               {suggestions.length > 0 && <div className="suggestions">{suggestions.map((item) => <button type="button" key={item} onClick={() => setPrompt(item)}>{item}</button>)}</div>}
               <textarea ref={textareaRef} value={prompt} onKeyDown={onComposerKeyDown} onChange={(event) => setPrompt(event.target.value)} placeholder="Message Alphonse... Type / for commands" rows={1} />
               <button className="send" type="submit">Send</button>
-            </form>
-          )}
+          </form>
         </section>
         </section></section>
         {visited.has("projects") && <section className="workspace-panel" tabIndex={-1} aria-label="Projects and tasks workspace" hidden={workspace !== "projects"}><ProjectsWorkspace user={user} initialProjectId={projectForView.id} selectionRequest={projectForView.request} onClose={() => navigate("conversation")} /></section>}
@@ -687,26 +685,6 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       {modal === "onboarding" && <OnboardingModal onComplete={(next) => { setUser(next); setIsAdmin(true); setWorkspaceRequired(false); setModal(null); void poll(); }} />}
     </main>
   );
-}
-
-function QuestionCard({ question, onDone }: { question: Question; onDone: () => Promise<void> }) {
-  const [value, setValue] = useState("");
-  const [selected, setSelected] = useState<string[]>([]);
-  const answer = async (payload: Record<string, unknown>, text = "") => {
-    await daemonRequest("answer_question", { question_id: question.question_id, payload, text });
-    await onDone();
-  };
-  const cancel = async () => {
-    await daemonRequest("cancel_question", { question_id: question.question_id });
-    await onDone();
-  };
-  return <section className="question-card"><strong>Alphonse needs your input</strong><p>{question.message}</p>
-    {question.kind === "yes_no" && <div className="question-actions"><button onClick={() => void answer({ answer: true }, "yes")}>Yes</button><button onClick={() => void answer({ answer: false }, "no")}>No</button><button className="question-cancel" onClick={() => void cancel()}>Cancel</button></div>}
-    {question.kind === "single_choice" && <><div>{question.choices.map((choice) => <button key={choice.id} onClick={() => void answer({ choice_id: choice.id }, choice.label)}>{choice.label}</button>)}</div><div className="question-actions"><button className="question-cancel" onClick={() => void cancel()}>Cancel</button></div></>}
-    {question.kind === "multi_choice" && <form onSubmit={(event) => { event.preventDefault(); void answer({ choice_ids: selected }, selected.join(", ")); }}><fieldset className="a2ui-choice-picker"><legend>Choose one or more options</legend>{question.choices.map((choice) => <label key={choice.id}><input type="checkbox" checked={selected.includes(choice.id)} onChange={(event) => setSelected((current) => event.target.checked ? [...current, choice.id] : current.filter((id) => id !== choice.id))} />{choice.label}</label>)}</fieldset><span className="question-actions"><button disabled={!selected.length}>Answer</button><button type="button" className="question-cancel" onClick={() => void cancel()}>Cancel</button></span></form>}
-    {question.kind === "datetime" && <form onSubmit={(event) => { event.preventDefault(); void answer({ datetime: value }, value); }}><input type="datetime-local" value={value} onChange={(event) => setValue(event.target.value)} aria-label="Date and time" /><span className="question-actions"><button disabled={!value}>Answer</button><button type="button" className="question-cancel" onClick={() => void cancel()}>Cancel</button></span></form>}
-    {question.kind === "open_text" && <form onSubmit={(event) => { event.preventDefault(); void answer({ text: value }, value); }}><input value={value} onChange={(event) => setValue(event.target.value)} placeholder="Your answer" /><span className="question-actions"><button>Answer</button><button type="button" className="question-cancel" onClick={() => void cancel()}>Cancel</button></span></form>}
-  </section>;
 }
 
 function ModalFrame({ title, children, tabs, className = "", embedded = false, onClose }: { title: string; children: ReactNode; tabs?: ReactNode; className?: string; embedded?: boolean; onClose: () => void }) {

@@ -1079,3 +1079,13 @@ a { color: var(--accent); }
 }
 .settings-workspace .embedded-workspace > header { display: none; }
 .settings-setup-notice { margin: 0; padding: 12px 28px; color: var(--muted); }
+
+.pending-questions { display: grid; gap: 1rem; width: min(100%, 70ch); margin: 1rem 0; }
+.pending-questions h2 { font-size: 1.1rem; }
+.question-fields { border: 0; padding: 0; margin: 0; min-width: 0; display: grid; gap: .75rem; }
+.question-fields label { display: grid; gap: .4rem; }
+.question-fields textarea { width: 100%; resize: vertical; }
+.question-resource { padding: .75rem; margin-block: .75rem; border: 1px solid var(--border); border-radius: .6rem; overflow-wrap: anywhere; }
+.question-resource p { margin-block: .35rem; }
+.question-context { white-space: pre-wrap; overflow-wrap: anywhere; }
+.question-card:focus { outline: 2px solid var(--accent); outline-offset: 3px; }
