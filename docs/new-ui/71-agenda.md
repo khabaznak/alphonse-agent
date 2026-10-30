@@ -64,7 +64,8 @@ Agenda. Removing or hiding a widget does not change schedules or execution recor
   Agenda fixtures cover spring/fall DST midnights, recurrence across DST, overlaps,
   past slots, delayed execution, legacy execution timestamps, cancelled state,
   private/revoked project access, invalid actor/ranges, immutability and density limits.
-- All 101 Desktop tests and the TypeScript/Vite production build pass. Date fixtures
+  Revalidated after integrating #31 (`19547450`).
+- All 106 Desktop tests and the TypeScript/Vite production build pass. Date fixtures
   cover Monday/year boundaries, leap days, short months and timezone-local today.
   The existing Vite bundle-size advisory remains non-fatal.
 - Disposable Playwright fixtures exercised real Agenda components for Month/Week/Today,

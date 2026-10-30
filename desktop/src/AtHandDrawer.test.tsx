@@ -14,8 +14,8 @@ describe("At hand rendering boundaries", () => {
   it("labels keyboard controls, renders expiration, and explains storage failure", () => {
     const html = renderToStaticMarkup(<AtHandDrawer {...props} state={{ ...props.state, widgets: [{ id: "trip", kind: "agenda", mode: "contextual", expiresAt: 1 }] }} saveFailed />);
     expect(html).toContain("Context expired");
-    expect(html).toContain('aria-label="Pin Household agenda"');
-    expect(html).toContain('aria-label="Remove Household agenda"');
+    expect(html).toContain('aria-label="Pin Agenda"');
+    expect(html).toContain('aria-label="Remove Agenda"');
     expect(html).toContain("Layout could not be saved");
   });
 });
