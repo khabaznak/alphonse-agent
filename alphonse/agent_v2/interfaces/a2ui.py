@@ -169,6 +169,11 @@ class A2UiAdapter:
         if result not in (None, "", {}, []):
             children.append("result")
             components.append({"id": "result", "component": "Text", "text": f"Output: {_compact_value(result)}"})
+        outcome = progress.get("outcome") if isinstance(progress.get("outcome"), dict) else {}
+        reason = str(outcome.get("reason") or "").strip()
+        if reason:
+            children.append("blocker")
+            components.append({"id": "blocker", "component": "Text", "text": f"Outcome: {reason[:500]}"})
         steps = progress.get("steps") if isinstance(progress.get("steps"), list) else []
         step_ids: list[str] = []
         for index, step in enumerate(steps):
@@ -196,19 +201,21 @@ class A2UiAdapter:
         from alphonse.agent_v2.core.context_manifests import manifest_summary
         children.append("decision_context")
         components.append({"id": "decision_context", "component": "Text", "text": manifest_summary(progress.get("decision_context_manifests", []))})
-        task_context = ["Task state diagnostics · current checkpoint; not decision inputs."]
-        for label, key in (("Goal", "goal"), ("Facts", "facts"), ("Memory facts", "memory_facts"), ("Recent conversation", "recent_conversation"), ("Conversation history", "conversation_history"), ("Durable memory", "durable_memory"), ("Task updates", "updates"), ("Evidence", "evidence"), ("Question", "question"), ("Outcome", "outcome")):
-            value = progress.get(key)
-            if value not in (None, "", {}, []):
-                limit = 6000 if key in {"recent_conversation", "conversation_history", "durable_memory"} else 700
-                task_context.append(f"{label}: {_compact_value(value, limit=limit)}")
-        if task_context:
-            children.append("task_context")
-            components.append({"id": "task_context", "component": "Text", "text": "\n\n".join(task_context)})
         messages = [
             {"version": A2UI_VERSION, "createSurface": {"surfaceId": surface_id, "catalogId": self.catalog_id, "sendDataModel": False}},
             {"version": A2UI_VERSION, "updateComponents": {"surfaceId": surface_id, "components": components}},
-            {"version": A2UI_VERSION, "updateDataModel": {"surfaceId": surface_id, "path": "/", "value": {"task_id": normalized_task_id, "project_id": str(progress.get("project_id") or ""), "owner_user_id": str(progress.get("owner_user_id") or ""), "decision_context_manifests": progress.get("decision_context_manifests", [])}}},
+            {"version": A2UI_VERSION, "updateDataModel": {"surfaceId": surface_id, "path": "/", "value": {
+                "task_id": normalized_task_id,
+                "project_id": str(progress.get("project_id") or ""),
+                "owner_user_id": str(progress.get("owner_user_id") or ""),
+                "status": str(progress.get("status") or "running"),
+                "updated_at": str(progress.get("updated_at") or ""),
+                "tool_id": str(progress.get("tool_id") or ""),
+                "tool_name": str(progress.get("tool_name") or ""),
+                "tool_status": tool_status,
+                "steps": steps,
+                "decision_context_manifests": progress.get("decision_context_manifests", []),
+            }}},
         ]
         for item in messages:
             validate_envelope(item)

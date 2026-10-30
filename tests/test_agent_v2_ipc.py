@@ -539,7 +539,9 @@ def test_desktop_task_progress_a2ui_is_admin_desktop_only_and_sanitized(tmp_path
     task.record_plan_call_success("call-1", {"summary": "Sunny", "access_token": "hidden-token"})
     progress = _task_progress_snapshot(task)
     assert progress["tool_arguments"]["api_key"] == "[redacted]"
-    assert progress["tool_result"]["access_token"] == "[redacted]"
+    assert progress["tool_result"] is None
+    assert progress["tool_status"] == "planned"
+    assert progress["steps"][0]["result"]["access_token"] == "[redacted]"
     runtime.activity_events.append(CoreActivityEvent(
         phase=ImprovementPhase.PLAN,
         label="thinking",
@@ -557,7 +559,8 @@ def test_desktop_task_progress_a2ui_is_admin_desktop_only_and_sanitized(tmp_path
     envelopes = [item["event"]["value"] for item in rich["ui_events"] if item["event"].get("name") == "a2ui.envelope"]
     assert any(item.get("createSurface", {}).get("surfaceId") == "task-progress:task-progress" for item in envelopes)
     assert "secret-value" not in str(envelopes)
-    assert "Choosing the weather source" in str(envelopes)
+    assert "Choosing the weather source" not in str(envelopes)
+    assert "Intention: Check status" in str(envelopes)
     assert "Sunny" in str(envelopes)
 
     runtime.activity_events.append(CoreActivityEvent(
@@ -665,6 +668,7 @@ def test_v3_task_progress_projects_hierarchical_actions_without_private_reasonin
 
     progress = _task_progress_snapshot(task)
 
+    assert progress["tool_id"] == "native.respond"
     assert progress["tool_name"] == "Respond"
     assert progress["tool_status"] == "failed"
     assert progress["tool_result"] == {"error": "Response delivery failed."}
@@ -674,6 +678,7 @@ def test_v3_task_progress_projects_hierarchical_actions_without_private_reasonin
             "action": None,
             "attempt": 1,
             "intention": "Read the current device status",
+            "tool_id": "native.device_status",
             "tool_name": "Device Status",
             "arguments": {"device_id": "studio", "api_token": "[redacted]"},
             "status": "success",
@@ -683,6 +688,7 @@ def test_v3_task_progress_projects_hierarchical_actions_without_private_reasonin
             "action": None,
             "attempt": 2,
             "intention": "Read the current device status",
+            "tool_id": "native.respond",
             "tool_name": "Respond",
             "arguments": {"message": "The studio is 23 C."},
             "status": "failed",
@@ -1058,7 +1064,7 @@ def test_project_management_ipc_archives_imports_and_safely_removes(tmp_path) ->
     assert external.exists()
 
 
-def test_task_context_ui_preserves_latest_message_after_snapshot_truncation() -> None:
+def test_progress_keeps_request_but_does_not_render_raw_checkpoint_context() -> None:
     from alphonse.agent_v2.interfaces.a2ui import A2UiAdapter
 
     prompt = "Please, revisa la temperatura del estudio"
@@ -1066,7 +1072,72 @@ def test_task_context_ui_preserves_latest_message_after_snapshot_truncation() ->
     task.conversation_history_md = "- Assistant: " + "old context " * 1000 + "\n- User: " + prompt
     envelopes = A2UiAdapter().task_progress("current", _task_progress_snapshot(task))
     components = next(item["updateComponents"]["components"] for item in envelopes if "updateComponents" in item)
-    context = next(item["text"] for item in components if item["id"] == "task_context")
-    history = context.split("Conversation history: ", 1)[1].split("\n\n", 1)[0]
-    assert prompt in history
-    assert "earlier context omitted" in history
+    assert not any(item["id"] == "task_context" for item in components)
+    assert next(item["text"] for item in components if item["id"] == "summary") == prompt
+    assert prompt in _task_progress_snapshot(task)["conversation_history"]
+
+
+@pytest.mark.parametrize("status", ["completed", "failed", "cancelled", "abandoned"])
+def test_task_progress_terminal_projection_replay_and_concurrent_work(tmp_path, status):
+    from alphonse.agent_v2.interfaces.a2ui import A2UiAdapter
+    users = V2UserStore(":memory:")
+    admin = users.onboard(display_name="Admin", users_root=tmp_path / "users")
+    runtime = build_runtime_host(user_store=users, schedule_store=ScheduledTaskStore(":memory:"), inference=_router())
+    daemon = V2Daemon(runtime)
+    task = TaskState(task_id="failed-attempt", user=admin.user_id, goal="Repair fixture")
+    task.metadata["planned_tool_call"] = {"tool_id": "native.respond", "internal_state": "PRIVATE REASONING"}
+    task.updates_md = "PRIVATE REASONING"
+    task.hierarchical_state = {"actions": [{"tool_id": "native.device_status", "status": "failed", "error": "Device unavailable"}]}
+    def event(task):
+        return CoreActivityEvent(phase=ImprovementPhase.DO, label="action", message="PRIVATE REASONING",
+            task_id=task.task_id, user=admin.user_id, integration_id="desktop", channel_target=admin.user_id,
+            progress=_task_progress_snapshot(task))
+    runtime.activity_events.append(event(task))
+    options = dict(client_id="lifecycle", user=admin.user_id, client_capabilities={"supportedCatalogIds": [ALPHONSE_DESKTOP_CATALOG_ID]})
+    first = daemon.poll_desktop(**options)
+    # A new independent task and the final update arrive in the same poll.
+    other = TaskState(task_id="independent", user=admin.user_id, goal="Read receipt")
+    runtime.activity_events.extend([event(other), event(task)])
+    daemon._publish_task_progress(StateSnapshot(metadata={"task_state": task.to_dict()}), status=status)
+    response = daemon.poll_desktop(**options, after_sequence=first["next_sequence"])
+    envelopes = [row["event"]["value"] for row in response["ui_events"] if row["event"].get("name") == "a2ui.envelope"]
+    assert envelopes[-1] == A2UiAdapter().task_progress_closed(task.task_id)
+    models = [e["updateDataModel"]["value"] for e in envelopes if "updateDataModel" in e]
+    assert "PRIVATE REASONING" not in str(envelopes)
+    assert models[-1]["status"] == status
+    assert models[-1]["tool_id"] == "native.device_status"
+    assert models[-1]["tool_name"] == "Device Status"
+    assert models[-1]["tool_status"] == "failed"
+    assert models[-1]["steps"][0]["status"] == "failed"
+    assert daemon._desktop_progress_surfaces[("lifecycle", admin.user_id)] == {"independent"}
+    # A reconnect that replays the journal ends with the same closure, never a live failed card.
+    replay = daemon.poll_desktop(**{**options, "client_id": "reconnected"})
+    assert replay["ui_events"][-1]["event"]["value"] == envelopes[-1]
+    assert daemon.poll_desktop(**options, after_sequence=response["next_sequence"])["ui_events"] == []
+
+
+def test_desktop_progress_retry_wait_and_non_desktop_terminal_guard(tmp_path):
+    from alphonse.agent_v2.core.messages import SQLiteMessageQueue
+    users = V2UserStore(":memory:")
+    admin = users.onboard(display_name="Admin", users_root=tmp_path / "users")
+    queue = SQLiteMessageQueue(":memory:")
+    runtime = build_runtime_host(user_store=users, messages=queue, schedule_store=ScheduledTaskStore(":memory:"), inference=_router())
+    daemon = V2Daemon(runtime)
+    queued = queue.enqueue(CoreMessage(timestamp=datetime.now(timezone.utc), prompt="Try status", user=admin.user_id))
+    queue.claim_next(lease_owner=daemon.daemon_id)
+    task = TaskState(task_id=queued.message_id, user=admin.user_id, metadata={"channel": {"integration_id": "desktop"}})
+    task.hierarchical_state = {"actions": [{"tool_id": "native.device_status", "status": "failed", "error": "Temporary outage"}]}
+    runtime.visible_state.update(StateSnapshot(metadata={"task_state": task.to_dict()}))
+    runtime.core.step = lambda: SimpleNamespace(status=LoopStepStatus.FAILED, queued_message_id=queued.message_id, error="temporary_outage")
+    runtime.core.clear_failure = lambda: None
+    daemon.run_once()
+    response = daemon.poll_desktop(client_id="retry", user=admin.user_id, client_capabilities={"supportedCatalogIds": [ALPHONSE_DESKTOP_CATALOG_ID]})
+    assert response["status"]["queue"]["ready"] == 0
+    assert response["status"]["queue"]["retry_wait"] == 1
+    envelopes = [row["event"]["value"] for row in response["ui_events"] if row["event"].get("name") == "a2ui.envelope"]
+    assert not any("deleteSurface" in e for e in envelopes)
+    model = next(e["updateDataModel"]["value"] for e in envelopes if "updateDataModel" in e)
+    assert model["status"] == "retrying" and model["tool_status"] == "failed"
+    task.metadata["channel"]["integration_id"] = "telegram"
+    daemon._publish_task_progress(StateSnapshot(metadata={"task_state": task.to_dict()}), status="failed")
+    assert not runtime.activity_events
