@@ -1,6 +1,7 @@
 import { HouseholdWorkspace } from "./HouseholdWorkspace";
 import { QuestionCard } from "./QuestionCard";
 import { WorkOverview } from "./WorkOverview";
+import { AtHandDrawer, useAtHand } from "./AtHandDrawer";
 import { DecisionContext } from "./DecisionContext";
 import { FormEvent, KeyboardEvent, memo, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CalendarClock, ChevronLeft, ChevronRight, FolderKanban, FolderOpen, Settings, UsersRound, Sparkles, MessageCircle, CircleHelp, PanelRightClose, PanelRightOpen, Palette, Wrench, Plug, Brain, Gauge, FileText } from "lucide-react";
@@ -106,7 +107,6 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   // Mount once per visit history so navigation preserves local forms and scroll.
   const [visited, setVisited] = useState<Set<Workspace>>(() => new Set(["conversation"]));
   const [returnWorkspace, setReturnWorkspace] = useState<Workspace>("conversation");
-  const [atHandOpen, setAtHandOpen] = useState(false);
   const [projectForView, setProjectForView] = useState({ id: "", request: 0 });
   const [memberName, setMemberName] = useState("");
   const [isAdmin, setIsAdmin] = useState(false);
@@ -114,10 +114,6 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   workspaceRef.current = workspace;
   const workspaceHostRef = useRef<HTMLDivElement>(null);
   const drawerToggleRef = useRef<HTMLButtonElement>(null);
-  const drawerCloseRef = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    if (atHandOpen) drawerCloseRef.current?.focus();
-  }, [atHandOpen]);
   const navigate = (next: Workspace) => {
     if (workspaceRequired && next !== "settings") return;
     if (next === "settings" && workspace !== "settings") setReturnWorkspace(workspace);
@@ -130,6 +126,9 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const [scheduledTaskForView, setScheduledTaskForView] = useState("");
   const [modal, setModal] = useState<Modal>(null);
   const [user, setUser] = useState("");
+  const { state: drawer, act: changeDrawer, saveFailed: drawerSaveFailed } = useAtHand(user);
+  const atHandOpen = Boolean(user && drawer.open);
+  const [questionsMember, setQuestionsMember] = useState("");
   const [workspaceRequired, setWorkspaceRequired] = useState(false);
   const [error, setError] = useState("");
   const [surfaces, setSurfaces] = useState<Record<string, import("./a2ui").A2uiSurface>>({});
@@ -229,6 +228,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       }
       setConnected(true);
       setError("");
+      setQuestionsMember(user);
       setQuestions((current) => reuseQuestions(current, response.questions));
       response.questions.forEach((question) => appendMessage({
         id: `question:${question.question_id}`,
@@ -641,7 +641,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
         <PdcaActivityChart samples={pdcaHistory} now={queueHistory.at(-1)?.at || Date.now()} />
       </aside>
       <div className="workspace-host" ref={workspaceHostRef}>
-        <div className="shell-toolbar"><span>{memberName || user || "Local household"} · {connected ? currentAvatarStateLabel : "Disconnected"}</span><button ref={drawerToggleRef} aria-label="Toggle At hand" aria-controls="at-hand" aria-expanded={atHandOpen} onClick={() => setAtHandOpen((value) => !value)}>{atHandOpen ? <PanelRightClose /> : <PanelRightOpen />} At hand</button></div>
+        <div className="shell-toolbar"><span>{memberName || user || "Local household"} · {connected ? currentAvatarStateLabel : "Disconnected"}</span><button ref={drawerToggleRef} aria-label="Toggle At hand" aria-controls="at-hand" aria-expanded={atHandOpen} disabled={!user} onClick={() => changeDrawer({ type: "visibility", open: !atHandOpen })}>{atHandOpen ? <PanelRightClose /> : <PanelRightOpen />} At hand</button></div>
         <section className="workspace-panel" tabIndex={-1} aria-label="Conversation workspace" hidden={workspace !== "conversation"}>
         <section className="conversation">
         <header className="topbar">
@@ -679,11 +679,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
             }); }}>View in conversation</button></article>) : <p>No pending questions.</p>}</section>}
       {visited.has("settings") && <section className="workspace-panel" tabIndex={-1} aria-label="Settings workspace" hidden={workspace !== "settings"}><SettingsWorkspace isAdmin={isAdmin} user={user} initialTab={settingsTab} workspaceRequired={workspaceRequired} enterToSend={enterToSend} desktopStyle={desktopStyle} desktopNotifications={desktopNotifications} onDesktopStyleChange={changeDesktopStyle} onDesktopNotificationsChange={setDesktopNotifications} onEnterToSendChange={setEnterToSend} onTimezoneChange={setTimezone} onWorkspaceConfigured={() => setWorkspaceRequired(false)} onTestDesktopNotification={() => void desktopNotifierRef.current.notify({ id: `test:${Date.now()}`, title: "Alphonse test alert", body: "Desktop notifications are ready." }, { ...desktopNotifications, onlyWhenUnfocused: false })} onClose={() => { navigate(returnWorkspace); }} /></section>}
       </div>
-      <aside id="at-hand" className="at-hand-drawer" aria-label="At hand" hidden={!atHandOpen} onKeyDown={(event) => { if (event.key === "Escape") { setAtHandOpen(false); drawerToggleRef.current?.focus(); } }}>
-        <header><h2>At hand</h2><button ref={drawerCloseRef} aria-label="Close At hand" onClick={() => { setAtHandOpen(false); drawerToggleRef.current?.focus(); }}><PanelRightClose /></button></header>
-        <div className="card"><h3>Pending questions</h3><p>{questions.length ? `${questions.length} waiting for your input` : "No pending questions"}</p><button onClick={() => navigate("attention")}>Needs your attention</button></div>
-        <div className="card"><h3>Household agenda</h3><p>Review scheduled work and its history.</p><button onClick={() => navigate("agenda")}>Open Agenda</button></div>
-      </aside>
+      <AtHandDrawer state={{ ...drawer, open: atHandOpen }} act={changeDrawer} member={user} connected={connected} questionCount={questions.length} questionsMember={questionsMember} onAttention={() => navigate("attention")} onAgenda={() => navigate("agenda")} toggleRef={drawerToggleRef} saveFailed={drawerSaveFailed} />
       {modal === "onboarding" && <OnboardingModal onComplete={(next) => { setUser(next); setIsAdmin(true); setWorkspaceRequired(false); setModal(null); void poll(); }} />}
     </main>
   );
