@@ -100,9 +100,11 @@ include the assets for installed and packaged deployments.
 
 ## Validation
 
-- All 69 desktop tests and the TypeScript/Vite production build pass.
-- 75 focused Python regressions pass across appearances, Settings lifecycle,
-  artifact storage, IPC and V3 task admission. Appearance fixtures cover install,
+- After integrating Questions and Household updates, all 82 desktop tests and
+  the TypeScript/Vite production build pass.
+- 106 focused Python regressions pass across appearances, Settings lifecycle,
+  artifact storage, IPC, V3 task admission, Questions, Household and work items.
+  Appearance fixtures cover install,
   update, removal, unsupported contracts, partial states, missing resources,
   PNG validation, traversal, absolute paths, symlink escapes before and after
   import/update, administrator restrictions, cancellation, terminal cleanup,
