@@ -16,4 +16,4 @@ if [[ ! -x "$python_bin" ]]; then
 fi
 
 cd "$root"
-"$python_bin" -m PyInstaller --onefile --name "alphonse-daemon-$target" --distpath "$(dirname "$output")" --workpath /tmp/alphonse-desktop-pyinstaller --specpath /tmp alphonse/agent_v2/daemon.py
+"$python_bin" -m PyInstaller --onefile --collect-data alphonse.agent_v2 --name "alphonse-daemon-$target" --distpath "$(dirname "$output")" --workpath /tmp/alphonse-desktop-pyinstaller --specpath /tmp alphonse/agent_v2/daemon.py

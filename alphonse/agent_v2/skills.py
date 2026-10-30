@@ -7,7 +7,7 @@ import re
 import json
 import shutil
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +29,7 @@ class SkillRecord:
     description: str
     directory: str
     instructions: str
+    appearance: dict[str, Any] | None = field(default=None, compare=False)
 
     def candidate(self) -> dict[str, str]:
         return {
@@ -226,6 +227,23 @@ class SkillStore:
         path.write_text(f"---\n{serialized}\n---\n\n{instructions}\n", encoding="utf-8")
         return self._read_skill(Path(record.directory))
 
+    def set_appearance(self, skill_id: str, preset: str) -> SkillRecord:
+        """Explicitly bind an installed skill to a shipped outfit, or remove the binding."""
+        from alphonse.agent_v2.skill_appearances import PRESETS
+
+        if preset and preset not in PRESETS:
+            raise ValueError("appearance_preset_unsupported")
+        record = self._editable(skill_id)
+        path = Path(record.directory) / SKILL_FILE
+        metadata, instructions = _parse_skill_file(path.read_text(encoding="utf-8"))
+        if preset:
+            metadata["appearance"] = {"version": 1, "preset": preset}
+        else:
+            metadata.pop("appearance", None)
+        serialized = yaml.safe_dump(metadata, allow_unicode=True, sort_keys=False).strip()
+        path.write_text(f"---\n{serialized}\n---\n\n{instructions}\n", encoding="utf-8")
+        return self._read_skill(Path(record.directory))
+
     def _editable(self, skill_id: str) -> SkillRecord:
         name = _validate_skill_name(str(skill_id or "").removeprefix("skill:"))
         target = self.skills_dir / name
@@ -248,7 +266,9 @@ class SkillStore:
             raise ValueError("skill_already_installed")
         staging = Path(tempfile.mkdtemp(prefix=".skill-install-", dir=self.skills_dir))
         try:
-            shutil.copytree(source_path, staging / record.name, dirs_exist_ok=True, symlinks=False)
+            # Preserve links so package containment still applies after import;
+            # dereferencing them could silently copy private host files inside.
+            shutil.copytree(source_path, staging / record.name, dirs_exist_ok=True, symlinks=True)
             self._read_skill(staging / record.name)
             target.parent.mkdir(parents=True, exist_ok=True)
             (staging / record.name).rename(target)
@@ -304,7 +324,7 @@ class SkillStore:
         staged_package = staging / name
         backup = staging / "previous"
         try:
-            shutil.copytree(source_path, staged_package, dirs_exist_ok=True, symlinks=False)
+            shutil.copytree(source_path, staged_package, dirs_exist_ok=True, symlinks=True)
             self._read_skill(staged_package)
             target.rename(backup)
             try:
@@ -349,6 +369,7 @@ class SkillStore:
         return SkillRecord(
             skill_id=f"skill:{name}", name=name, description=description,
             directory=str(directory.resolve()), instructions=instructions,
+            appearance=metadata.get("appearance"),
         )
 
 
