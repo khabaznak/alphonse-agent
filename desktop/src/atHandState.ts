@@ -5,7 +5,7 @@ export type DrawerState = { open: boolean; widgets: WidgetPlacement[]; dismissed
 export type ContextWidget = { id: string; kind: string; expiresAt: number };
 export const WIDGET_CATALOG = [
   { kind: "questions", title: "Pending questions", description: "Questions waiting for your input." },
-  { kind: "agenda", title: "Household agenda", description: "A shortcut to authorized scheduled work and history." },
+  { kind: "agenda", title: "Agenda", description: "Month, Week and Today views of your authorized scheduled work and history." },
 ] as const;
 export const knownWidget = (kind: string) => kind === "skill" || WIDGET_CATALOG.some((entry) => entry.kind === kind);
 export const defaultDrawer = (): DrawerState => ({ open: false, widgets: WIDGET_CATALOG.map(({ kind }) => ({ id: kind, kind, mode: "pinned" })), dismissed: [] });

@@ -830,6 +830,10 @@ class V2DaemonServer:
             return {"automation": self.daemon.create_event_automation(**params)}
         if method == "automation_catalog":
             return self.daemon.automation_catalog()
+        if method == "agenda":
+            from alphonse.agent_v2.agenda import agenda
+            return agenda(self.daemon.runtime, actor=str(params.get("actor_user_id") or ""),
+                          start_day=str(params.get("start_day") or ""), end_day=str(params.get("end_day") or ""))
         if method == "scheduled_tasks":
             status = str(params.get("status") or "").strip() or None
             return {"tasks": self.daemon.scheduled_tasks(
