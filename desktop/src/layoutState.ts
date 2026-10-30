@@ -36,9 +36,9 @@ export function avatarStateLabel(state: AvatarState): string {
   return AVATAR_STATE_LABELS[state];
 }
 
-export type Workspace = "conversation" | "household" | "projects" | "agenda" | "attention" | "settings" | "skills";
+export type Workspace = "conversation" | "household" | "projects" | "agenda" | "attention" | "settings";
 export const SETTINGS_SECTIONS = [
   ["general", "General"], ["appearance", "Appearance"], ["tools", "Tools"],
   ["integrations", "Integrations"], ["automations", "Automations"],
-  ["model", "Model"], ["system-one", "System One"], ["agent-config", "Agent configuration"],
+  ["model", "Model"], ["system-one", "System One"], ["agent-config", "Agent configuration"], ["skills", "Skills"], ["members", "Members"],
 ] as const;
