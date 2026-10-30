@@ -35,3 +35,10 @@ export function avatarState(connected: boolean, error: string, activity: string)
 export function avatarStateLabel(state: AvatarState): string {
   return AVATAR_STATE_LABELS[state];
 }
+
+export type Workspace = "conversation" | "household" | "projects" | "agenda" | "attention" | "settings" | "skills";
+export const SETTINGS_SECTIONS = [
+  ["general", "General"], ["appearance", "Appearance"], ["tools", "Tools"],
+  ["integrations", "Integrations"], ["automations", "Automations"],
+  ["model", "Model"], ["system-one", "System One"], ["agent-config", "Agent configuration"],
+] as const;
