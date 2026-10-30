@@ -4,6 +4,7 @@ export type WidgetPlacement = { id: string; kind: string; mode: WidgetMode; expi
 export type DrawerState = { open: boolean; widgets: WidgetPlacement[]; dismissed: string[] };
 export type ContextWidget = { id: string; kind: string; expiresAt: number };
 export const WIDGET_CATALOG = [
+  { kind: "care", title: "Treatments & care", description: "Authorized Doctor records, routines and recorded adherence." },
   { kind: "todos", title: "To-dos", description: "Active work and authorized skill lists." },
   { kind: "shopping", title: "Shopping list", description: "A list supplied by its owning skill." },
   { kind: "reminders", title: "Reminders", description: "Native reminder schedules and their controls." },
