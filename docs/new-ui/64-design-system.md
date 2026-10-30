@@ -55,8 +55,26 @@ existing compact chart labels and layout until the shell/workspace issues.
 - Local browser checks confirmed both font families load, zero Google Fonts
   requests, live system dark→light changes, zero active CSS animations under
   reduced motion, and themed error/disabled states. The browser preview reports
-  the expected missing-Tauri bridge error. Error/disabled states still need a
-  dedicated native workflow pass before closing #64.
+  the expected missing-Tauri bridge error.
+- Native follow-up (October 29, 2026): rebuilt the package from commit
+  `06f32291` and launched that exact `.app` with
+  `ALPHONSE_DESKTOP_DIAGNOSTIC_MODE=static` and
+  `ALPHONSE_V2_SOCKET_PATH=/tmp/alphonse-64-unavailable.sock`. Sending a test
+  message produced the real IPC error, `daemon unavailable: No such file or
+  directory (os error 2)`, without contacting the household daemon. Both skins
+  displayed readable error text and a visibly disabled Next day control; the
+  accessibility tree confirmed its disabled state. Settings also exposed
+  disabled Use macOS default and Save Workspace & time controls. The native
+  appearance selector changed Light/Dark using arrow keys and Return, with a
+  visible focus ring in both skins and readable overlay/panel surfaces.
+- A color-token contrast audit found light muted text on the user bubble at
+  4.28:1. Darkening the light muted token to `#5f6a63` raises it above 4.5:1;
+  primary text, muted text, accent-button text, and status text on their
+  corresponding surfaces meet 4.5:1 in both skins. Compact chart labels remain
+  a deliberate density exception as described above.
+
+These checks validate the design-system foundation. The static diagnostic mode
+does not establish daemon connectivity or completion of household tasks.
 
 Real household workflow acceptance remains #78. This foundation does not close
 #63 or imply reliable daily-use acceptance.
