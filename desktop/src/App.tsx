@@ -1,7 +1,7 @@
 import { HouseholdWorkspace } from "./HouseholdWorkspace";
 import { QuestionCard } from "./QuestionCard";
 import { WorkOverview } from "./WorkOverview";
-import { DecisionContext } from "./DecisionContext";
+import { TaskProgressBubble } from "./TaskProgressBubble";
 import { FormEvent, KeyboardEvent, memo, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CalendarClock, ChevronLeft, ChevronRight, FolderKanban, FolderOpen, Settings, UsersRound, Sparkles, MessageCircle, CircleHelp, PanelRightClose, PanelRightOpen, Palette, Wrench, Plug, Brain, Gauge, FileText } from "lucide-react";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
@@ -41,7 +41,7 @@ type PollResponse = {
   deliveries: Array<{ outbox_message_id: string; message: string; task_id?: string; project_id: string; created_at: string; conversation_sequence: number }>;
   questions: Question[];
   conversation_has_unseen_messages?: boolean;
-  status: { active_work: Record<string, string>; activity: { state?: string }; queue?: { ready?: number; processing?: number } };
+  status: { active_work: Record<string, string>; activity: { state?: string }; queue?: { ready?: number; processing?: number; retry_wait?: number } };
 };
 type HistoryResponse = { messages: ChatMessage[] };
 type Provider = {
@@ -74,11 +74,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const uiSequence = useRef(0);
   const daemonId = useRef("");
   const delivered = useRef(new Set<string>());
-  const progressTaskIdsRef = useRef(new Set<string>());
   const autoScrolledProgressTaskIdsRef = useRef(new Set<string>());
-  const progressStartedAtRef = useRef(new Map<string, number>());
-  const progressMeaningfulAtRef = useRef(new Map<string, number>());
-  const progressCompletionTimersRef = useRef(new Map<string, number>());
   const conversationHistoryRequestRef = useRef(0);
   const conversationHistoryLoadingRef = useRef(0);
   const activeHistoryRefreshRef = useRef(false);
@@ -142,9 +138,6 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const archivedProgressRef = useRef<Record<string, A2uiSurface>>({});
   const [archivedProgress, setArchivedProgress] = useState<Record<string, A2uiSurface>>({});
   const [progressTaskIds, setProgressTaskIds] = useState<string[]>([]);
-  const [pendingProgressMessages, setPendingProgressMessages] = useState<Record<string, ChatMessage>>({});
-  const [morphedMessageTaskIds, setMorphedMessageTaskIds] = useState<Record<string, string>>({});
-  const [heldProgressSurfaces, setHeldProgressSurfaces] = useState<Record<string, A2uiSurface>>({});
   const [enterToSend, setEnterToSend] = useState(() => window.localStorage.getItem("alphonse.desktop.enterToSend") !== "false");
   const [desktopStyle, setDesktopStyle] = useState<DesktopStyle>("system");
   const [desktopNotifications, setDesktopNotifications] = useState<DesktopNotificationPreferences>(() => readDesktopNotificationPreferences(window.localStorage));
@@ -212,17 +205,10 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       if (stale) return;
       if (!diagnosticBehavior.commitsPollResponses) return;
       if (daemonChanged) {
-        progressCompletionTimersRef.current.forEach((timer) => window.clearTimeout(timer));
-        progressCompletionTimersRef.current.clear();
-        progressTaskIdsRef.current.clear();
         autoScrolledProgressTaskIdsRef.current.clear();
-        progressStartedAtRef.current.clear();
-        progressMeaningfulAtRef.current.clear();
         archivedProgressRef.current = {};
         setArchivedProgress({});
         setProgressTaskIds([]);
-        setPendingProgressMessages({});
-        setHeldProgressSurfaces({});
         const retainedSurfaces = withoutTaskProgressSurfaces(surfacesRef.current);
         surfacesRef.current = retainedSurfaces;
         setSurfaces(retainedSurfaces);
@@ -257,10 +243,6 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       ));
       const newProgressTaskIds = taskProgressIds(response.ui_events || []);
       if (newProgressTaskIds.length) {
-        newProgressTaskIds.forEach((taskId) => {
-          progressTaskIdsRef.current.add(taskId);
-          if (!progressStartedAtRef.current.has(taskId)) progressStartedAtRef.current.set(taskId, Date.now());
-        });
         setProgressTaskIds((current) => [...current, ...newProgressTaskIds.filter((taskId) => !current.includes(taskId))]);
       }
       const progressProjection = projectTaskProgress(
@@ -269,28 +251,16 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
         response.ui_events || [],
         ["idle", "error"].includes(response.status.activity.state || "idle")
           && !Object.keys(response.status.active_work).length
-          && !response.status.queue?.processing,
+          && !response.status.queue?.processing && !response.status.queue?.ready && !response.status.queue?.retry_wait,
       );
       archivedProgressRef.current = progressProjection.archived;
       setArchivedProgress(progressProjection.archived);
-      Object.keys(progressProjection.archived).forEach((taskId) => {
-        progressTaskIdsRef.current.delete(taskId);
-        progressStartedAtRef.current.delete(taskId);
-        progressMeaningfulAtRef.current.delete(taskId);
-      });
       const projectedSurfaces = withoutDismissedSurfaces(
         reconcileQuestionSurfaces(progressProjection.surfaces, response.questions),
         dismissedScheduledSurfacesRef.current,
       );
       surfacesRef.current = projectedSurfaces;
       setSurfaces(projectedSurfaces);
-      newProgressTaskIds.forEach((taskId) => {
-        if (progressProjection.archived[taskId]) return;
-        const components = projectedSurfaces[`task-progress:${taskId}`]?.components || {};
-        if (["criteria", "intention", "tool", "result"].some((componentId) => String(components[componentId]?.text || "").trim()) || Object.keys(components).some((componentId) => componentId.startsWith("step_"))) {
-          progressMeaningfulAtRef.current.set(taskId, Date.now());
-        }
-      });
       const latest = response.events.at(-1);
       setActivity(capdActivityLabel(latest, response.status.activity.state || "idle"));
       for (const delivery of response.deliveries) {
@@ -308,39 +278,6 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
           project_id: delivery.project_id,
           sequence: delivery.conversation_sequence,
         };
-        if (delivery.task_id) {
-          if (progressTaskIdsRef.current.has(delivery.task_id)) {
-            const taskId = delivery.task_id;
-            const progressSurface = surfacesRef.current[`task-progress:${taskId}`];
-            if (progressSurface) setHeldProgressSurfaces((current) => ({ ...current, [taskId]: progressSurface }));
-            setPendingProgressMessages((current) => ({ ...current, [taskId]: completedMessage }));
-            const visibleSince = progressMeaningfulAtRef.current.get(taskId) || progressStartedAtRef.current.get(taskId) || Date.now();
-            const elapsed = Date.now() - visibleSince;
-            const finish = () => {
-              progressCompletionTimersRef.current.delete(taskId);
-              progressTaskIdsRef.current.delete(taskId);
-              progressStartedAtRef.current.delete(taskId);
-              progressMeaningfulAtRef.current.delete(taskId);
-              setMorphedMessageTaskIds((current) => ({ ...current, [completedMessage.id]: taskId }));
-              setProgressTaskIds((current) => current.filter((value) => value !== taskId));
-              setPendingProgressMessages((current) => {
-                const next = { ...current };
-                delete next[taskId];
-                return next;
-              });
-              setHeldProgressSurfaces((current) => { const next = { ...current }; delete next[taskId]; return next; });
-              const nextSurfaces = { ...surfacesRef.current };
-              delete nextSurfaces[`task-progress:${taskId}`];
-              surfacesRef.current = nextSurfaces;
-              setSurfaces(nextSurfaces);
-              appendMessage(completedMessage);
-            };
-            const remaining = Math.max(0, 1500 - elapsed);
-            if (remaining) progressCompletionTimersRef.current.set(taskId, window.setTimeout(finish, remaining)); else finish();
-            await daemonRequest("desktop_ack_delivery", { client_id: clientId, outbox_message_id: delivery.outbox_message_id });
-            continue;
-          }
-        }
         appendMessage(completedMessage);
         await daemonRequest("desktop_ack_delivery", { client_id: clientId, outbox_message_id: delivery.outbox_message_id });
       }
@@ -600,8 +537,8 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const timelineNodes: ReactNode[] = useMemo(() => buildConversationTimeline(
       messages,
       progressTaskIds.filter((taskId) => !questionTaskIds.has(taskId)),
-      pendingProgressMessages,
-      morphedMessageTaskIds,
+      {},
+      {},
       Object.keys(archivedProgress),
     ).map((item) => {
       if (item.kind === "message") {
@@ -611,9 +548,9 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
         return bubble;
       }
       const archivedSurface = archivedProgress[item.taskId];
-      const surface = archivedSurface || surfaces[`task-progress:${item.taskId}`] || heldProgressSurfaces[item.taskId];
-      return surface ? <TaskProgressBubble key={item.key} surface={surface} archived={Boolean(archivedSurface)} /> : null;
-    }), [archivedProgress, clientId, contextProjects, diagnosticBehavior.memoizesMessages, diagnosticBehavior.plainTextMessages, heldProgressSurfaces, messages, morphedMessageTaskIds, pendingProgressMessages, poll, progressTaskIds, questionTaskIds, questions, surfaces, timelineRenderVersion, timezone, user]);
+      const surface = archivedSurface || surfaces[`task-progress:${item.taskId}`];
+      return surface ? <TaskProgressBubble key={item.key} surface={surface} archived={Boolean(archivedSurface)} connected={connected} timezone={timezone} /> : null;
+    }), [archivedProgress, clientId, connected, contextProjects, diagnosticBehavior.memoizesMessages, diagnosticBehavior.plainTextMessages, messages, poll, progressTaskIds, questionTaskIds, questions, surfaces, timelineRenderVersion, timezone, user]);
 
   return (
     <main className={`app-shell desktop-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${atHandOpen ? "at-hand-open" : ""}`}>
@@ -981,39 +918,9 @@ function taskProgressIds(events: Array<{ event: { type: string; name?: string; v
   return [...ids];
 }
 
-function TaskProgressBubble({ surface, archived = false }: { surface: A2uiSurface; archived?: boolean }) {
-  const text = (id: string) => String(surface.components[id]?.text || "").trim();
-  const steps = Object.values(surface.components).filter((component) => component.id.startsWith("step_") && component.text).sort((left, right) => left.id.localeCompare(right.id, undefined, { numeric: true }));
-  const taskContext = text("task_context");
-  const criteria = text("criteria").replace(/^Acceptance criteria\n?/, "").trim();
-  const visibleCriteria = criteria === "- (none)" ? "" : criteria;
-  const Container = archived ? "details" : "div";
-  return <article className="message assistant task-progress-bubble" aria-label="Task activity" aria-live="polite">
-    <Container className="task-progress-log">
-      {archived && <summary>Work log{text("summary") ? ` · ${text("summary")}` : ""}</summary>}
-    <div className="task-progress-content">
-      {!archived && <div className="task-progress-heading"><span className="task-progress-spinner" aria-hidden="true">◌</span><strong>Alphonse is working</strong></div>}
-      {!archived && text("summary") && <p>{text("summary")}</p>}
-      {visibleCriteria && <section><small>Acceptance criteria</small><div className="task-progress-checklist"><ReactMarkdown remarkPlugins={[remarkGfm]}>{acceptanceCriteriaMarkdown(visibleCriteria)}</ReactMarkdown></div></section>}
-      {text("intention") && <section><small>Intention</small><p>{text("intention").replace(/^Intention:\s*/, "")}</p></section>}
-      {steps.length ? <section className="task-progress-trace"><small>Execution audit</small>{steps.map((step) => {
-        const [summary, ...detail] = String(step.text || "").split("\n");
-        return <details className="task-progress-step" key={step.id}><summary>{summary}</summary><pre className="task-progress-detail">{detail.filter((line) => line !== "Details:").join("\n") || "No additional action details."}</pre></details>;
-      })}</section> : <>{text("tool") && <p className="task-progress-detail">{text("tool")}</p>}{text("arguments") && <pre className="task-progress-detail">{text("arguments")}</pre>}{text("result") && <pre className="task-progress-detail">{text("result")}</pre>}</>}
-      <DecisionContext summary={text("decision_context")} manifests={(surface.dataModel.decision_context_manifests || []) as Parameters<typeof DecisionContext>[0]["manifests"]} actorUserId={String(surface.dataModel.owner_user_id || "")} taskId={String(surface.dataModel.task_id || "")} />
-      {taskContext && <details className="task-progress-context"><summary>Task state diagnostics</summary><pre className="task-progress-detail">{taskContext}</pre></details>}
-    </div>
-    </Container>
-  </article>;
-}
-
 function questionTaskId(surface: A2uiSurface): string {
   const question = surface.dataModel.question;
   return typeof question === "object" && question !== null && "task_id" in question ? String((question as { task_id?: unknown }).task_id || "") : "";
-}
-
-function acceptanceCriteriaMarkdown(value: string): string {
-  return value.split("\n").map((line) => line.replace(/^\s*\d+\s*\.\s*-?\s*(\[[ xX]\])\s*/, "- $1 ")).join("\n");
 }
 
 function ScheduledTasksModal({ embedded = false, actorUserId, initialTaskId = "", onClose }: { embedded?: boolean; actorUserId: string; initialTaskId?: string; onClose: () => void }) {

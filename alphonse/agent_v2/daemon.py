@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from alphonse.agent_v2.core.core import CoreUiEvent
+from alphonse.agent_v2.core.core import CoreUiEvent, CoreActivityEvent, ImprovementPhase, _task_progress_snapshot
 from alphonse.agent_v2.core.core import LoopStepStatus
 from alphonse.agent_v2.core.io import OutboundSelector
 from alphonse.agent_v2.core.io import channel_address_from_metadata
@@ -2009,11 +2009,7 @@ class V2Daemon:
         key = (client_id, user)
         known = self._desktop_progress_surfaces.setdefault(key, set())
         closing = self._desktop_progress_closures.pop(key, set())
-        rendered = [
-            {"event": _a2ui_custom(self._a2ui.task_progress_closed(task_id))}
-            for task_id in sorted(closing)
-        ]
-        known.difference_update(closing)
+        rendered = []
         for event in events:
             if event.get("user") != admin.user_id or event.get("integration_id") != "desktop":
                 continue
@@ -2021,8 +2017,16 @@ class V2Daemon:
             progress = event.get("progress") if isinstance(event.get("progress"), dict) else {}
             if not task_id or not progress or (project_id and str(progress.get("project_id") or "").strip() != project_id):
                 continue
+            progress = {**progress, "updated_at": str(event.get("occurred_at") or "")}
             rendered.extend({"event": _a2ui_custom(envelope)} for envelope in self._a2ui.task_progress(task_id, progress))
             known.add(task_id)
+            if str(progress.get("status") or "") in {"completed", "done", "failed", "cancelled", "abandoned"}:
+                closing.add(task_id)
+            else:
+                closing.discard(task_id)
+        # Closure follows the final update, even when both share a poll.
+        rendered.extend({"event": _a2ui_custom(self._a2ui.task_progress_closed(task_id))} for task_id in sorted(closing))
+        known.difference_update(closing)
         return rendered
 
     def _inbound_queue_status(self) -> dict[str, int]:
@@ -2030,7 +2034,7 @@ class V2Daemon:
         values = dict(counts) if isinstance(counts, dict) else {}
         ready = int(self.runtime.queue.size() or 0)
         processing = int(values.get("processing", 0) or 0)
-        return {"ready": ready, "processing": processing}
+        return {"ready": ready, "processing": processing, "retry_wait": int(values.get("retry_wait", 0) or 0)}
 
     def ui_events_since(self, *, after_sequence: int = 0, user: str, limit: int = 100) -> tuple[list[dict[str, Any]], int]:
         """Return ordered AG-UI events without changing TUI activity polling."""
@@ -2133,13 +2137,13 @@ class V2Daemon:
                     acknowledge(step.queued_message_id, lease_owner=self.daemon_id)
             if step.status == LoopStepStatus.PROCESSED:
                 self._mark_snapshot_checkpoint_terminal(snapshot, status="done")
-                self._close_terminal_task_progress(snapshot)
+                self._publish_task_progress(snapshot, status="completed")
         elif step.status == LoopStepStatus.CANCELLED and step.queued_message_id:
             acknowledge = getattr(self.runtime.queue, "ack", None)
             if callable(acknowledge):
                 acknowledge(step.queued_message_id, lease_owner=self.daemon_id)
             self._mark_snapshot_checkpoint_terminal(snapshot, status="cancelled")
-            self._close_terminal_task_progress(snapshot)
+            self._publish_task_progress(snapshot, status="cancelled")
         elif step.status == LoopStepStatus.FAILED and step.queued_message_id:
             error = str(getattr(step, "error", "") or "capd_processing_failed")
             metadata = getattr(getattr(queued, "message", None), "metadata", {}) or {}
@@ -2159,7 +2163,9 @@ class V2Daemon:
             status_for = getattr(self.runtime.queue, "status_for", None)
             terminal = non_retryable or (callable(status_for) and status_for(step.queued_message_id) == "failed")
             if terminal:
-                self._close_terminal_task_progress(snapshot)
+                self._publish_task_progress(snapshot, status="failed")
+            else:
+                self._publish_task_progress(snapshot, status="retrying")
             if scheduled_occurrence and terminal:
                 self.runtime.schedule_store.mark_occurrence_processing_failed(scheduled_occurrence, error=error)
                 self._notify_scheduled_task_failure(metadata, error=error)
@@ -2404,8 +2410,8 @@ class V2Daemon:
             final_task = TaskState.from_dict(task_state)
             self.runtime.question_store.save_task_checkpoint(final_task, status=status)
 
-    def _close_terminal_task_progress(self, snapshot: Any) -> None:
-        """Close Desktop progress cards even when CAPD produces no outbound reply."""
+    def _publish_task_progress(self, snapshot: Any, *, status: str) -> None:
+        """Publish runtime lifecycle evidence even when no outbound reply exists."""
         metadata = getattr(snapshot, "metadata", {}) if snapshot is not None else {}
         task_state = metadata.get("task_state") if isinstance(metadata, dict) else None
         if not isinstance(task_state, dict):
@@ -2414,9 +2420,20 @@ class V2Daemon:
         owner = str(task_state.get("user") or "").strip()
         if not task_id or not owner:
             return
-        for key, known in self._desktop_progress_surfaces.items():
-            if key[1] == owner and task_id in known:
-                self._desktop_progress_closures.setdefault(key, set()).add(task_id)
+        from alphonse.agent_v2.core.intelligence.task_state import TaskState
+        task = TaskState.from_dict(task_state)
+        channel = task.metadata.get("channel")
+        channel = channel if isinstance(channel, dict) else {}
+        integration = str(channel.get("integration_id") or "")
+        known_desktop = any(key[1] == owner and task_id in known for key, known in self._desktop_progress_surfaces.items())
+        if integration != "desktop" and (integration or not known_desktop):
+            return
+        task.status = task.status if status == "completed" and task.status in {"failed", "cancelled", "abandoned"} else status
+        self.runtime.activity_events.append(CoreActivityEvent(
+            phase=ImprovementPhase.ACT, label="task retry" if status == "retrying" else "task finished", message="",
+            task_id=task_id, user=owner, integration_id="desktop", channel_target=owner,
+            progress=_task_progress_snapshot(task),
+        ))
 
     def _set_activity_status(self, state: str) -> None:
         with self._active_work_lock:

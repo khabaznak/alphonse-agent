@@ -296,7 +296,7 @@ class CoreLoopContext:
             record(task, heading, content)
 
 
-_SENSITIVE_PROGRESS_KEYS = ("secret", "token", "password", "authorization", "cookie", "api_key", "apikey")
+_SENSITIVE_PROGRESS_KEYS = ("secret", "token", "password", "authorization", "cookie", "api_key", "apikey", "internal_state", "reasoning", "chain_of_thought")
 
 
 def _task_progress_snapshot(task: Any) -> dict[str, Any]:
@@ -308,7 +308,7 @@ def _task_progress_snapshot(task: Any) -> dict[str, Any]:
     latest = latest_call() if callable(latest_call) else None
     latest = latest if isinstance(latest, dict) else None
     selected = planned or latest or {}
-    execution = latest.get("execution") if isinstance(latest, dict) and isinstance(latest.get("execution"), dict) else {}
+    execution = selected.get("execution") if isinstance(selected.get("execution"), dict) else {}
     try:
         plan_calls = json.loads(str(getattr(task, "plan_json", "") or ""))
     except (TypeError, ValueError):
@@ -323,7 +323,8 @@ def _task_progress_snapshot(task: Any) -> dict[str, Any]:
         tool_id = str(call.get("tool_id") or "").strip()
         steps.append({
             "attempt": attempt,
-            "intention": _truncate_progress(str(call.get("internal_state") or ""), 500),
+            "intention": "",
+            "tool_id": tool_id,
             "tool_name": str(call.get("tool_name") or _progress_tool_label(tool_id) or ("Program (Python)" if call.get("execution_mode") == "program" else "Tool")).strip(),
             "arguments": _safe_progress_value(call.get("arguments"), limit=6000),
             "action": _safe_progress_value(call.get("program"), limit=10000) if call.get("execution_mode") == "program" else None,
@@ -339,6 +340,7 @@ def _task_progress_snapshot(task: Any) -> dict[str, Any]:
         if isinstance(item, dict) and str(item.get("subgoal_id") or "").strip()
     }
     v3_actions = [item for item in hierarchical_state.get("actions") or [] if isinstance(item, dict)]
+    intention = str(getattr(task, "goal", "") or "")
     if v3_actions:
         steps = []
         recent_actions = v3_actions[-10:]
@@ -351,6 +353,7 @@ def _task_progress_snapshot(task: Any) -> dict[str, Any]:
             steps.append({
                 "attempt": attempt,
                 "intention": _truncate_progress(subgoal_intentions.get(subgoal_id, ""), 500),
+                "tool_id": str(action.get("tool_id") or "").strip(),
                 "tool_name": _progress_tool_label(str(action.get("tool_id") or "").strip()),
                 "arguments": _safe_progress_value(action.get("arguments"), limit=6000),
                 "action": _safe_progress_value(action.get("command") or action.get("action"), limit=10000),
@@ -366,8 +369,8 @@ def _task_progress_snapshot(task: Any) -> dict[str, Any]:
         selected = {
             "tool_id": str(current.get("tool_id") or "").strip(),
             "arguments": current.get("arguments"),
-            "internal_state": subgoal_intentions.get(current_subgoal_id, ""),
         }
+        intention = subgoal_intentions.get(current_subgoal_id, "")
         execution = {
             "status": str(current.get("status") or "planned").strip(),
             "result": current_result,
@@ -381,8 +384,9 @@ def _task_progress_snapshot(task: Any) -> dict[str, Any]:
         "tool_name": str(selected.get("tool_name") or _progress_tool_label(str(selected.get("tool_id") or "").strip())).strip(),
         "tool_arguments": _safe_progress_value(selected.get("arguments") if isinstance(selected, dict) else {}),
         "tool_result": _safe_progress_value(execution.get("result") if isinstance(execution, dict) else None, limit=4000),
-        "tool_status": str(execution.get("status") or "").strip() if isinstance(execution, dict) else "",
-        "intention": _truncate_progress(str(selected.get("internal_state") or ""), 500),
+        "tool_status": str(execution.get("status") or ("planned" if selected else "")).strip() if isinstance(execution, dict) else "",
+        "intention": _truncate_progress(intention, 500),
+        "tool_id": str(selected.get("tool_id") or "").strip(),
         "steps": steps,
         "owner_user_id": str(getattr(task, "user", "") or ""),
         "decision_context_manifests": deepcopy(metadata.get("decision_context_manifests", [])),

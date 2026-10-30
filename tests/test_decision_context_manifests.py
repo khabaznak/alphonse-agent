@@ -113,8 +113,8 @@ def test_legacy_context_is_explicit_and_readable():
     envelopes = A2UiAdapter().task_progress('old', {'facts': 'old facts'})
     texts = {c['id']: c.get('text', '') for c in envelopes[1]['updateComponents']['components']}
     assert 'Legacy work log' in texts['decision_context']
-    assert 'Task state diagnostics' in texts['task_context']
-    assert 'old facts' in texts['task_context']
+    assert 'task_context' not in texts
+    assert 'old facts' not in str(envelopes)
     assert 'no call-time' in manifest_summary([])
 
 
