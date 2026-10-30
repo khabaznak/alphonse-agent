@@ -417,6 +417,22 @@ class V2Daemon:
         self._migrate_blank_project_records()
         return user.to_dict()
 
+    def household_overview(self, *, actor_user_id: str, include_personal: bool = False) -> dict[str, Any]:
+        from alphonse.agent_v2.household import household_overview
+        return household_overview(self.runtime, actor=str(actor_user_id or "").strip(), include_personal=include_personal)
+
+    def work_items(self, *, actor_user_id: str, owner_user_id: str = "", view: str = "active", limit: int = 50, offset: int = 0) -> dict[str, Any]:
+        from alphonse.agent_v2.work_items import project_work_items
+        actor = str(actor_user_id or "").strip()
+        if not actor or self.runtime.user_store.get_user(actor) is None:
+            raise PermissionError("work_actor_required")
+        owner = str(owner_user_id or actor).strip()
+        if owner != actor and not self.runtime.user_store.is_admin(actor):
+            raise PermissionError("work_owner_forbidden")
+        if self.runtime.user_store.get_user(owner) is None:
+            raise KeyError("work_owner_not_found")
+        return project_work_items(self.runtime, actor=actor, owner=owner, view=view, limit=limit, offset=offset)
+
     def scheduled_tasks(
         self,
         *,
@@ -1122,7 +1138,7 @@ class V2Daemon:
         limit: int = 100,
     ) -> dict[str, Any]:
         """Collect Desktop activity and atomically lease its pending messages."""
-        normalized_user = self._admin_user_id(user)
+        normalized_user = self._question_actor(user)
         # Desktop polling is user scoped. Project IDs remain on tasks and events
         # but never constrain the main conversation or its pending surfaces.
         normalized_project = ""
@@ -1165,6 +1181,8 @@ class V2Daemon:
             event = self._record_question_conversation_event(question)
             questions.append({
                 **question.to_dict(),
+                "metadata": {},
+                "context": self._question_context(question, normalized_user),
                 "conversation_sequence": event.sequence if event is not None else self.runtime.conversation_store.sequence_for_source_message_id(
                     f"question:{question.question_id}"
                 ),
@@ -1684,9 +1702,44 @@ class V2Daemon:
     def save_project_context(self, *, user: str, project_id: str, content: str) -> dict[str, str]:
         return self.runtime.project_store.write_project_context(project_id, content, requester_user_id=self._admin_user_id(user), requester_is_admin=True).to_dict()
 
+    def _question_context(self, question: Any, actor: str) -> dict[str, Any]:
+        # Only explicit question context crosses the respondent boundary. Never
+        # expose arbitrary task metadata, paths, executable instructions or data.
+        if question.respondent_user_id != actor:
+            raise PermissionError("question_respondent_required")
+        delivery = question.metadata.get("delivery") or {}
+        context = delivery.get("question_context") or {}
+        if not isinstance(context, dict):
+            return {}
+        artifacts = []
+        resources = self.runtime.core.artifact_resources
+        ids = context.get("artifact_ids")
+        for artifact_id in (ids[:8] if isinstance(ids, list) else []):
+            record = self.runtime.artifact_store.get(str(artifact_id))
+            if record is None or not resources.can_use(record, actor):
+                # Do not echo names or identifiers of inaccessible resources.
+                artifacts.append({"status": "unavailable"})
+                continue
+            detail = resources.describe(record, actor)
+            artifacts.append({"artifact_id": record.artifact_id, "name": record.name,
+                              "description": record.description, "status": detail["status"]})
+        return {"text": str(context.get("text") or "")[:4000], "artifacts": artifacts}
+
+    def _question_actor(self, user: str) -> str:
+        """Desktop is the local administrator channel; never rewrite a supplied actor."""
+        actor = str(user or "").strip()
+        admin = self.runtime.user_store.admin_user()
+        if not actor or (admin is not None and actor != admin.user_id):
+            raise PermissionError("question_respondent_required")
+        if admin is None and not self.runtime.user_store.is_ephemeral:
+            raise PermissionError("question_respondent_required")
+        return actor
+
     def answer_question(self, *, user: str, question_id: str, text: str = "", payload: dict[str, Any] | None = None) -> dict[str, Any]:
-        normalized_user = self._admin_user_id(user)
+        normalized_user = self._question_actor(user)
         question = self.runtime.question_store.get_question(question_id)
+        if question is not None and question.respondent_user_id != normalized_user:
+            raise PermissionError("question_respondent_required")
         if question is not None:
             self._record_question_conversation_event(question)
         if question is not None and question.kind == "datetime" and isinstance(payload, dict):
@@ -1752,8 +1805,12 @@ class V2Daemon:
             created_at=str(question.created_at or ""),
         )
 
-    def cancel_question(self, question_id: str) -> bool:
+    def cancel_question(self, question_id: str, *, user: str) -> bool:
+        actor = self._question_actor(user)
+        self.runtime.question_store.expire_questions()
         question = self.runtime.question_store.get_question(question_id)
+        if question is not None and question.respondent_user_id != actor:
+            raise PermissionError("question_respondent_required")
         cancelled = self.runtime.question_store.cancel_question(question_id)
         if cancelled:
             self.runtime.ui_events.append(
@@ -1777,7 +1834,8 @@ class V2Daemon:
     ) -> dict[str, Any]:
         """Perform a validated action from a server-owned A2UI surface."""
         client = str(client_id or "desktop").strip() or "desktop"
-        respondent = self._admin_user_id(user)
+        respondent = self._question_actor(user)
+        self.runtime.question_store.expire_questions()
         if ALPHONSE_DESKTOP_CATALOG_ID not in self._desktop_capabilities.get(client, set()):
             raise ValueError("a2ui_catalog_not_negotiated")
         values = dict(context or {})
@@ -1800,7 +1858,7 @@ class V2Daemon:
         if question is None or question.status != "pending" or question.respondent_user_id != respondent:
             raise ValueError("a2ui_question_not_available")
         if action == "cancel_question" and source == "cancel":
-            return {"cancelled": self.cancel_question(question_id)}
+            return {"cancelled": self.cancel_question(question_id, user=respondent)}
         if action != "answer_question":
             raise ValueError("a2ui_action_not_allowed")
         payload: dict[str, Any]

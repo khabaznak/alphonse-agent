@@ -160,8 +160,8 @@ class V2DaemonClient:
     def answer_question(self, *, user: str, question_id: str, text: str = "", payload: dict[str, Any] | None = None) -> dict[str, Any]:
         return self.request("answer_question", user=user, question_id=question_id, text=text, payload=dict(payload or {}))
 
-    def cancel_question(self, question_id: str) -> dict[str, Any]:
-        return self.request("cancel_question", question_id=question_id)
+    def cancel_question(self, question_id: str, *, user: str) -> dict[str, Any]:
+        return self.request("cancel_question", question_id=question_id, user=user)
 
     def a2ui_action(
         self,
@@ -655,6 +655,18 @@ class V2DaemonServer:
                     source_paths=[str(item) for item in source_paths],
                 )
             }
+        if method == "household_overview":
+            return self.daemon.household_overview(
+                actor_user_id=str(params.get("actor_user_id") or ""),
+                include_personal=params.get("include_personal") is True,
+            )
+        if method == "work_items":
+            return self.daemon.work_items(
+                actor_user_id=str(params.get("actor_user_id") or ""),
+                owner_user_id=str(params.get("owner_user_id") or ""),
+                view=str(params.get("view") or "active"),
+                limit=int(params.get("limit") or 50), offset=int(params.get("offset") or 0),
+            )
         if method == "manageable_projects":
             return {"projects": self.daemon.manageable_projects(user=str(params.get("user") or ""), status=str(params.get("status") or ""))}
         if method == "create_project":
@@ -749,7 +761,7 @@ class V2DaemonServer:
         if method == "memory_migration_status":
             return {"migration": self.daemon.memory_migration_status(user=str(params.get("user") or "local"), project_id=str(params.get("project_id") or ""))}
         if method == "pending_questions":
-            user = str(params.get("user") or "local")
+            user = self.daemon._question_actor(str(params.get("user") or ""))
             return {"questions": [question.to_dict() for question in self.daemon.runtime.question_store.list_pending_for_respondent(user)]}
         if method == "answer_question":
             payload = params.get("payload") if isinstance(params.get("payload"), dict) else {}
@@ -760,7 +772,7 @@ class V2DaemonServer:
                 payload=dict(payload),
             )
         if method == "cancel_question":
-            return {"cancelled": self.daemon.cancel_question(str(params.get("question_id") or ""))}
+            return {"cancelled": self.daemon.cancel_question(str(params.get("question_id") or ""), user=str(params.get("user") or ""))}
         if method == "a2ui_action":
             return self.daemon.a2ui_action(
                 client_id=str(params.get("client_id") or "desktop"),

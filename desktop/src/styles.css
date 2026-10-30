@@ -1070,6 +1070,47 @@ a { color: var(--accent); }
 .shell-toolbar > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .shell-toolbar > button { flex: 0 0 auto; }
 
+/* Projects and ordinary delegated work share the same hierarchy. */
+.work-overview { padding: 28px; max-width: 1100px; margin: 0 auto; }
+.work-heading { display: flex; gap: 16px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.work-overview h1 { margin: 6px 0 18px; }
+.work-overview h2 { margin-top: 26px; }
+.work-overview p, .work-overview small { color: var(--muted); }
+.work-filters, .work-pagination { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 16px 0; }
+.work-filters button[aria-pressed="true"] { background: var(--accent); color: var(--accent-contrast); }
+.work-project, .work-everyday, .work-detail { border: 1px solid var(--border); border-radius: 14px; background: var(--surface); margin: 12px 0; overflow: hidden; }
+.work-project summary { display: flex; justify-content: space-between; gap: 20px; padding: 20px; cursor: pointer; }
+.work-project summary > span { min-width: 0; overflow-wrap: anywhere; }
+.work-project small, .work-task small { display: block; margin-top: 5px; font-size: 12px; }
+.work-project progress { width: 120px; height: 7px; accent-color: var(--accent); }
+.work-project-tasks { padding: 0 18px 18px; border-top: 1px solid var(--border); }
+.work-task { display: flex; align-items: center; justify-content: space-between; text-align: left; width: 100%; gap: 16px; padding: 16px 12px; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; background: transparent; color: var(--text); }
+.work-task > span { min-width: 0; overflow-wrap: anywhere; }
+.work-task-state { flex: 0 0 34%; font-size: 12px; text-align: right; }
+.work-task.selected { box-shadow: inset 3px 0 var(--accent); background: var(--accent-soft); }
+.work-detail { padding: 22px; overflow-wrap: anywhere; }
+.work-back { margin: 16px 24px 0; }
+@media (max-width: 960px) {
+  .projects-workspace:has(.work-overview) { grid-template-columns: 190px minmax(0, 1fr); }
+  .work-overview { padding: 16px; }
+  .work-project summary { padding: 14px; flex-wrap: wrap; }
+  .work-task { flex-direction: column; align-items: stretch; }
+  .work-task-state { text-align: left; }
+}
+.projects-workspace-filters > button { grid-column: 1 / -1; }
+.desktop-shell .projects-workspace.work-overview-mode { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+.work-overview-mode > .projects-workspace-sidebar { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; padding: 12px 28px; border-right: 0; border-bottom: 1px solid var(--border); background: var(--surface); }
+.work-overview-mode .projects-workspace-heading { display: contents; }
+.work-overview-mode .projects-workspace-heading > .back-button,
+.work-overview-mode .projects-workspace-heading h2,
+.work-overview-mode .projects-workspace-list,
+.work-overview-mode .projects-workspace-filters > button,
+.work-overview-mode label[for="project-status-filter"],
+.work-overview-mode #project-status-filter { display: none; }
+.work-overview-mode .projects-workspace-heading > button:last-child { width: auto; }
+.work-overview-mode .projects-workspace-filters { display: flex; align-items: center; }
+.work-overview-mode .projects-workspace-filters select { color: var(--text); background: var(--surface-raised); border-color: var(--border); }
+.work-overview-mode .projects-workspace-filters { color: var(--muted); }
 /* Keep visited Settings screens and their scroll positions in the workspace. */
 .settings-workspace { height: 100%; min-height: 0; display: flex; flex-direction: column; }
 .settings-workspace-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding: 24px 28px 16px; border-bottom: 1px solid var(--border); }
@@ -1090,3 +1131,36 @@ a { color: var(--accent); }
 }
 .settings-workspace .embedded-workspace > header { display: none; }
 .settings-setup-notice { margin: 0; padding: 12px 28px; color: var(--muted); }
+
+/* Household follows the shared-card hierarchy, with explicit personal disclosure. */
+.household-workspace { height: 100%; overflow-y: auto; width: min(100%, 1080px); margin: 0 auto; padding: clamp(20px, 4vw, 48px); }
+.household-intro h1 { margin: 8px 0 12px; font-size: clamp(26px, 3.5vw, 38px); }
+.household-intro p, .household-footnote { color: var(--muted); }
+.household-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 20px 0 28px; }
+.household-actions [aria-pressed="true"] { background: var(--accent-soft); color: var(--text); border-color: var(--accent); }
+.household-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.household-grid .card { min-width: 0; margin: 0; padding: 24px; }
+.household-wide { grid-column: 1 / -1; }
+.household-grid header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.household-grid h2 { font-size: 19px; margin: 0 0 12px; }
+.household-grid header span, .household-grid small { font-size: 12px; color: var(--muted); }
+.household-grid ul { list-style: none; padding: 0; margin: 4px 0 16px; }
+.household-grid li { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 14px 0; border-bottom: 1px solid var(--border); }
+.household-grid li div { min-width: 0; overflow-wrap: anywhere; }
+.household-grid small { display: block; margin-top: 6px; }
+.household-grid button { flex-shrink: 0; }
+.household-footnote { font-size: 12px; margin-top: 22px; }
+@media (max-width: 1000px) { .household-grid { grid-template-columns: minmax(0, 1fr); } .household-grid li { align-items: flex-start; flex-direction: column; } }
+.pending-questions { display: grid; gap: 1rem; width: min(100%, 70ch); margin: 1rem 0; }
+.pending-questions h2 { font-size: 1.1rem; }
+.question-fields { border: 0; padding: 0; margin: 0; min-width: 0; display: grid; gap: .75rem; }
+.question-fields label { display: grid; gap: .4rem; }
+.question-fields textarea { width: 100%; resize: vertical; }
+.question-resource { padding: .75rem; margin-block: .75rem; border: 1px solid var(--border); border-radius: .6rem; overflow-wrap: anywhere; }
+.question-resource p { margin-block: .35rem; }
+.question-context { white-space: pre-wrap; overflow-wrap: anywhere; }
+.question-card:focus { outline: 2px solid var(--accent); outline-offset: 3px; }
+.pending-questions .question-card form { display: block; }
+.question-answer-legend { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.question-fields .a2ui-choice-picker label { display: flex; }
+.question-fields input[type="checkbox"] { flex: 0 0 auto; min-width: 0; }

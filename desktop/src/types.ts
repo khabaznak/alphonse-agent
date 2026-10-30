@@ -21,6 +21,9 @@ export type Delivery = {
 
 export type Question = {
   question_id: string;
+  respondent_user_id?: string;
+  expires_at?: string;
+  context?: { text?: string; artifacts?: Array<{ artifact_id?: string; name?: string; description?: string; status: string }> };
   task_id: string;
   project_id: string;
   created_at?: string;

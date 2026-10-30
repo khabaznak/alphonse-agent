@@ -1,5 +1,8 @@
 import { SkillMascot, SkillAppearanceSettings } from "./SkillMascot";
 import { BASE_CONTEXT, type AppearanceContext, type SkillAppearance } from "./skillAppearances";
+import { HouseholdWorkspace } from "./HouseholdWorkspace";
+import { QuestionCard } from "./QuestionCard";
+import { WorkOverview } from "./WorkOverview";
 import { DecisionContext } from "./DecisionContext";
 import { FormEvent, KeyboardEvent, memo, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CalendarClock, ChevronLeft, ChevronRight, FolderKanban, FolderOpen, Settings, UsersRound, Sparkles, MessageCircle, CircleHelp, PanelRightClose, PanelRightOpen, Palette, Wrench, Plug, Brain, Gauge, FileText } from "lucide-react";
@@ -20,7 +23,7 @@ import { createDesktopNotifier, DESKTOP_NOTIFICATION_PREFERENCES_KEY, notificati
 import { readDismissedScheduledSurfaces, rememberDismissedScheduledSurface, withoutDismissedSurfaces, withoutSurface } from "./dismissedSurfaces";
 import { avatarState, avatarStateLabel, capdActivityLabel, type Workspace, SETTINGS_SECTIONS } from "./layoutState";
 import { ConversationMessage, MemoizedConversationMessage } from "./ConversationMessage";
-import { reuseQuestions, withoutTaskProgressSurfaces } from "./pollState";
+import { reconcileQuestionSurfaces, reuseQuestions, withoutTaskProgressSurfaces } from "./pollState";
 import { QueueWorkloadChart } from "./QueueWorkloadChart";
 import { appendQueueSample, type QueueSample } from "./queueHistory";
 import { PdcaActivityChart } from "./PdcaActivityChart";
@@ -182,7 +185,10 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
     });
   }, []);
 
+  const pollGeneration = useRef(0);
+  const committedPollGeneration = useRef(0);
   const pollTransport = useCallback(async () => {
+    const generation = ++pollGeneration.current;
     const response = await daemonRequest<PollResponse>("desktop_poll", {
         client_id: clientId,
         user,
@@ -194,17 +200,20 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
         client_capabilities: { supportedCatalogIds: [DESKTOP_CATALOG_ID] },
         limit: 50,
     });
+    if (generation < committedPollGeneration.current) return { response, daemonChanged: false, stale: true };
+    committedPollGeneration.current = generation;
     const previousDaemonId = daemonId.current;
     const daemonChanged = Boolean(response.daemon_changed || (previousDaemonId && response.daemon_id && previousDaemonId !== response.daemon_id));
     if (response.daemon_id) daemonId.current = response.daemon_id;
     sequence.current = response.next_sequence;
     uiSequence.current = response.next_ui_sequence ?? uiSequence.current;
-    return { response, daemonChanged };
+    return { response, daemonChanged, stale: false };
   }, [clientId, conversationDay, user]);
 
   const poll = useCallback(async () => {
     try {
-      const { response, daemonChanged } = await pollTransport();
+      const { response, daemonChanged, stale } = await pollTransport();
+      if (stale) return;
       if (!diagnosticBehavior.commitsPollResponses) return;
       if (daemonChanged) {
         progressCompletionTimersRef.current.forEach((timer) => window.clearTimeout(timer));
@@ -275,7 +284,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
         progressMeaningfulAtRef.current.delete(taskId);
       });
       const projectedSurfaces = withoutDismissedSurfaces(
-        progressProjection.surfaces,
+        reconcileQuestionSurfaces(progressProjection.surfaces, response.questions),
         dismissedScheduledSurfacesRef.current,
       );
       surfacesRef.current = projectedSurfaces;
@@ -591,10 +600,9 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   };
 
   const suggestions = useMemo(() => matchingCommands(prompt), [prompt]);
-  const activeSurface = Object.values(surfaces).find((surface) => !surface.surfaceId.startsWith("task-progress:") && !progressTaskIds.includes(questionTaskId(surface)));
-  const fallbackQuestion = questions.find((question) => !surfaces[`question:${question.question_id}`]);
+  const activeSurface = Object.values(surfaces).find((surface) => !surface.surfaceId.startsWith("question:") && !surface.surfaceId.startsWith("task-progress:") && !progressTaskIds.includes(questionTaskId(surface)));
   const timelineRenderVersion = diagnosticBehavior.memoizesTimeline ? 0 : diagnosticRenderTick;
-  const questionTaskIds = new Set(questions.filter((question) => surfaces[`question:${question.question_id}`]).map((question) => question.task_id));
+  const questionTaskIds = new Set(questions.map((question) => question.task_id));
   const timelineNodes: ReactNode[] = useMemo(() => buildConversationTimeline(
       messages,
       progressTaskIds.filter((taskId) => !questionTaskIds.has(taskId)),
@@ -603,19 +611,13 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       Object.keys(archivedProgress),
     ).map((item) => {
       if (item.kind === "message") {
-        const question = questions.find((candidate) => item.message.id === `question:${candidate.question_id}`);
-        const questionSurface = question ? surfaces[`question:${question.question_id}`] : undefined;
-        if (questionSurface) return <article data-question-id={question?.question_id} className="message assistant task-question-bubble" aria-label="Question from Alphonse" key={item.key}><A2uiSurfaceView surface={questionSurface} clientId={clientId} user={user} onDone={poll} /></article>;
+        if (questions.some((question) => item.message.id === `question:${question.question_id}`)) return null;
         const Bubble = diagnosticBehavior.memoizesMessages ? MemoizedConversationMessage : ConversationMessage;
         const bubble = <Bubble key={item.key} message={item.message} timezone={timezone} projectName={contextProjects.find((projectItem) => projectItem.project_id === item.message.project_id)?.name || ""} renderMarkdown={!diagnosticBehavior.plainTextMessages} />;
-        return question ? <div className="timeline-message" data-question-id={question.question_id} key={item.key}>{bubble}</div> : bubble;
+        return bubble;
       }
       const archivedSurface = archivedProgress[item.taskId];
       const surface = archivedSurface || surfaces[`task-progress:${item.taskId}`] || heldProgressSurfaces[item.taskId];
-      const questionSurface = Object.values(surfaces).find((candidate) => questionTaskId(candidate) === item.taskId);
-      if (questionSurface) {
-        return <article data-question-id={questions.find((question) => question.task_id === item.taskId)?.question_id} className="message assistant task-question-bubble" aria-label="Question from Alphonse" key={item.key}><A2uiSurfaceView surface={questionSurface} clientId={clientId} user={user} onDone={poll} /></article>;
-      }
       return surface ? <TaskProgressBubble key={item.key} surface={surface} archived={Boolean(archivedSurface)} /> : null;
     }), [archivedProgress, clientId, contextProjects, diagnosticBehavior.memoizesMessages, diagnosticBehavior.plainTextMessages, heldProgressSurfaces, messages, morphedMessageTaskIds, pendingProgressMessages, poll, progressTaskIds, questionTaskIds, questions, surfaces, timelineRenderVersion, timezone, user]);
 
@@ -660,23 +662,21 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
         {error && <div className="error" role="alert">{error}</div>}
         <div className="timeline" ref={timelineRef} aria-live="polite">
           {timelineNodes}
+          {questions.length > 0 && <section className="pending-questions" aria-label="Pending questions"><h2>Questions for you</h2>{questions.map((question) => <QuestionCard key={`${user}:${question.question_id}`} question={question} user={user} timezone={timezone} onDone={poll} />)}</section>}
         </div>
         <section className="input-dock">
-          {activeSurface ? (
+          {activeSurface && (
             <A2uiSurfaceView surface={activeSurface} clientId={clientId} user={user} onDone={poll} onDismiss={dismissScheduledSurface} onAction={(result) => { if (result.action === "view_scheduled_task" && typeof result.scheduled_task_id === "string") { dismissScheduledSurface(activeSurface.surfaceId); setScheduledTaskForView(result.scheduled_task_id); navigate("agenda"); } }} />
-          ) : fallbackQuestion ? (
-            <QuestionCard question={fallbackQuestion} onDone={poll} />
-          ) : (
-            <form className="composer" onSubmit={submit}>
+          )}
+          <form className="composer" onSubmit={submit}>
               {suggestions.length > 0 && <div className="suggestions">{suggestions.map((item) => <button type="button" key={item} onClick={() => setPrompt(item)}>{item}</button>)}</div>}
               <textarea ref={textareaRef} value={prompt} onKeyDown={onComposerKeyDown} onChange={(event) => setPrompt(event.target.value)} placeholder="Message Alphonse... Type / for commands" rows={1} />
               <button className="send" type="submit">Send</button>
-            </form>
-          )}
+          </form>
         </section>
         </section></section>
-        {visited.has("projects") && <section className="workspace-panel" tabIndex={-1} aria-label="Projects and tasks workspace" hidden={workspace !== "projects"}><ProjectsWorkspace user={user} initialProjectId={projectForView.id} selectionRequest={projectForView.request} onClose={() => navigate("conversation")} /></section>}
-        {visited.has("household") && <section className="workspace-panel" tabIndex={-1} aria-label="Household workspace" hidden={workspace !== "household"}>{isAdmin ? <UsersModal embedded onClose={() => navigate("conversation")} /> : <p>Member management requires an administrator.</p>}</section>}
+        {visited.has("projects") && <section className="workspace-panel" tabIndex={-1} aria-label="Projects and tasks workspace" hidden={workspace !== "projects"}><ProjectsWorkspace active={workspace === "projects"} user={user} initialProjectId={projectForView.id} selectionRequest={projectForView.request} onAgenda={(id) => { setScheduledTaskForView(id); navigate("agenda"); }} onConversation={(day) => { setConversationDay(day); navigate("conversation"); }} onQuestions={() => navigate("attention")} onClose={() => navigate("conversation")} /></section>}
+        {visited.has("household") && <section className="workspace-panel" tabIndex={-1} aria-label="Household workspace" hidden={workspace !== "household"}><HouseholdWorkspace key={user} user={user} active={workspace === "household"} connected={connected} isAdmin={isAdmin} onProject={(id) => { setProjectForView((current) => ({ id, request: current.request + 1 })); navigate("projects"); }} onAgenda={(id) => { setScheduledTaskForView(id); navigate("agenda"); }} onConversation={(day) => { setConversationDay(day); navigate("conversation"); }} onQuestions={() => navigate("attention")} onMembers={() => { setSettingsTab("members"); navigate("settings"); }} /></section>}
         {visited.has("agenda") && <section className="workspace-panel" tabIndex={-1} aria-label="Agenda workspace" hidden={workspace !== "agenda"}><ScheduledTasksModal embedded actorUserId={user} initialTaskId={scheduledTaskForView} onClose={() => navigate("conversation")} /></section>}
         {visited.has("attention") && <section className="workspace-panel attention-workspace" tabIndex={-1} aria-label="Needs your attention workspace" hidden={workspace !== "attention"}><h1>Needs your attention</h1>{questions.length ? questions.map((question) => <article className="card" key={question.question_id}><p>{question.message}</p><button onClick={() => { navigate("conversation"); window.requestAnimationFrame(() => {
               const target = Array.from(document.querySelectorAll<HTMLElement>("[data-question-id]")).find((element) => element.dataset.questionId === question.question_id);
@@ -693,26 +693,6 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       {modal === "onboarding" && <OnboardingModal onComplete={(next) => { setUser(next); setIsAdmin(true); setWorkspaceRequired(false); setModal(null); void poll(); }} />}
     </main>
   );
-}
-
-function QuestionCard({ question, onDone }: { question: Question; onDone: () => Promise<void> }) {
-  const [value, setValue] = useState("");
-  const [selected, setSelected] = useState<string[]>([]);
-  const answer = async (payload: Record<string, unknown>, text = "") => {
-    await daemonRequest("answer_question", { question_id: question.question_id, payload, text });
-    await onDone();
-  };
-  const cancel = async () => {
-    await daemonRequest("cancel_question", { question_id: question.question_id });
-    await onDone();
-  };
-  return <section className="question-card"><strong>Alphonse needs your input</strong><p>{question.message}</p>
-    {question.kind === "yes_no" && <div className="question-actions"><button onClick={() => void answer({ answer: true }, "yes")}>Yes</button><button onClick={() => void answer({ answer: false }, "no")}>No</button><button className="question-cancel" onClick={() => void cancel()}>Cancel</button></div>}
-    {question.kind === "single_choice" && <><div>{question.choices.map((choice) => <button key={choice.id} onClick={() => void answer({ choice_id: choice.id }, choice.label)}>{choice.label}</button>)}</div><div className="question-actions"><button className="question-cancel" onClick={() => void cancel()}>Cancel</button></div></>}
-    {question.kind === "multi_choice" && <form onSubmit={(event) => { event.preventDefault(); void answer({ choice_ids: selected }, selected.join(", ")); }}><fieldset className="a2ui-choice-picker"><legend>Choose one or more options</legend>{question.choices.map((choice) => <label key={choice.id}><input type="checkbox" checked={selected.includes(choice.id)} onChange={(event) => setSelected((current) => event.target.checked ? [...current, choice.id] : current.filter((id) => id !== choice.id))} />{choice.label}</label>)}</fieldset><span className="question-actions"><button disabled={!selected.length}>Answer</button><button type="button" className="question-cancel" onClick={() => void cancel()}>Cancel</button></span></form>}
-    {question.kind === "datetime" && <form onSubmit={(event) => { event.preventDefault(); void answer({ datetime: value }, value); }}><input type="datetime-local" value={value} onChange={(event) => setValue(event.target.value)} aria-label="Date and time" /><span className="question-actions"><button disabled={!value}>Answer</button><button type="button" className="question-cancel" onClick={() => void cancel()}>Cancel</button></span></form>}
-    {question.kind === "open_text" && <form onSubmit={(event) => { event.preventDefault(); void answer({ text: value }, value); }}><input value={value} onChange={(event) => setValue(event.target.value)} placeholder="Your answer" /><span className="question-actions"><button>Answer</button><button type="button" className="question-cancel" onClick={() => void cancel()}>Cancel</button></span></form>}
-  </section>;
 }
 
 function ModalFrame({ title, children, tabs, className = "", embedded = false, onClose }: { title: string; children: ReactNode; tabs?: ReactNode; className?: string; embedded?: boolean; onClose: () => void }) {
@@ -1127,11 +1107,13 @@ function UsersModal({ embedded = false, onClose }: { embedded?: boolean; onClose
   </ModalFrame>;
 }
 
-function ProjectsWorkspace({ user, initialProjectId = "", selectionRequest = 0, onClose }: { user: string; initialProjectId?: string; selectionRequest?: number; onClose: () => void }) {
-  const [projects, setProjects] = useState<ManagedProject[]>([]); const [users, setUsers] = useState<ManagedUser[]>([]); const [ownerId, setOwnerId] = useState(user); const [filter, setFilter] = useState(""); const [showCreate, setShowCreate] = useState(false);
+function ProjectsWorkspace({ active, user, initialProjectId = "", selectionRequest = 0, onClose, onAgenda, onConversation, onQuestions }: { active: boolean; user: string; initialProjectId?: string; selectionRequest?: number; onClose: () => void; onAgenda: (id: string) => void; onConversation: (day: string) => void; onQuestions: () => void }) {
+  const [projects, setProjects] = useState<ManagedProject[]>([]); const [users, setUsers] = useState<ManagedUser[]>([]); const [ownerId, setOwnerId] = useState(user); const [filter, setFilter] = useState("active"); const [showCreate, setShowCreate] = useState(false);
   const [selectedProject, setSelectedProject] = useState<ManagedProject | null>(null);
+  const [projectsLoading, setProjectsLoading] = useState(true);
+  const [projectsError, setProjectsError] = useState("");
   const [name, setName] = useState(""); const [description, setDescription] = useState(""); const [visibility, setVisibility] = useState<"private" | "shared">("private"); const [rootPath, setRootPath] = useState(""); const [mode, setMode] = useState<"create" | "import">("create"); const [notice, setNotice] = useState(""); const [newMemberIds, setNewMemberIds] = useState<string[]>([]);
-  const load = useCallback(async () => { try { const [projectResult, userResult] = await Promise.all([daemonRequest<{ projects: ManagedProject[] }>("manageable_projects", { user, status: filter }), daemonRequest<{ users: ManagedUser[] }>("users")]); setProjects(projectResult.projects); setUsers(userResult.users); setOwnerId((current) => userResult.users.some((item) => item.user_id === current) ? current : userResult.users.find((item) => item.user_id === user)?.user_id || userResult.users.find((item) => item.role === "admin")?.user_id || ""); } catch (cause) { setNotice(cause instanceof Error ? cause.message : "Projects could not be loaded."); } }, [filter, user]);
+  const load = useCallback(async () => { setProjectsLoading(true); setProjectsError(""); try { const [projectResult, userResult] = await Promise.all([daemonRequest<{ projects: ManagedProject[] }>("manageable_projects", { user }), daemonRequest<{ users: ManagedUser[] }>("users")]); setProjects(projectResult.projects); setUsers(userResult.users); setOwnerId((current) => userResult.users.some((item) => item.user_id === current) ? current : userResult.users.find((item) => item.user_id === user)?.user_id || userResult.users.find((item) => item.role === "admin")?.user_id || ""); } catch (cause) { setProjectsError(cause instanceof Error ? cause.message : "Projects could not be loaded."); } finally { setProjectsLoading(false); } }, [user]);
   useEffect(() => { void load(); }, [load]);
   const refreshProjects = async (selectedId?: string) => { await load(); if (selectedId) { const latest = await daemonRequest<{ projects: ManagedProject[] }>("manageable_projects", { user }); setSelectedProject(latest.projects.find((item) => item.project_id === selectedId) || null); } };
   const createOrImport = async (event: FormEvent) => { event.preventDefault(); try { const method = mode === "import" ? "import_project" : "create_project"; const result = await daemonRequest<{ project: ManagedProject }>(method, { user, name, description, root_path: rootPath, visibility }); if (visibility === "shared" && newMemberIds.length) await daemonRequest("update_project", { user, project_id: result.project.project_id, name, description, visibility, member_user_ids: newMemberIds }); setNotice(mode === "import" ? "Project imported." : "Project created."); setShowCreate(false); await refreshProjects(result.project.project_id); } catch (cause) { setNotice(cause instanceof Error ? cause.message : "Project could not be created."); } };
@@ -1145,16 +1127,17 @@ function ProjectsWorkspace({ user, initialProjectId = "", selectionRequest = 0, 
     const project = projects.find((item) => item.project_id === initialProjectId);
     if (project) { appliedProjectId.current = requestKey; setSelectedProject(project); setShowCreate(false); setOwnerId(project.owner_user_id); }
   }, [initialProjectId, selectionRequest, projects]);
-  const visibleProjects = projects.filter((item) => item.visibility === "shared" || item.owner_user_id === ownerId);
-  return <div className="projects-workspace">
+  const ownerProjects = projects.filter((item) => item.visibility === "shared" || item.owner_user_id === ownerId);
+  const visibleProjects = ownerProjects.filter((item) => !item.is_system_home && (!filter || item.status === filter));
+  return <div className={`projects-workspace${!selectedProject && !showCreate ? " work-overview-mode" : ""}`}>
     <aside className="projects-workspace-sidebar">
-      <header className="projects-workspace-heading"><button className="back-button" onClick={onClose}>← Conversation</button><h2>Projects</h2><button onClick={() => { setShowCreate((value) => !value); setSelectedProject(null); }}>{showCreate ? "Cancel" : "+ New project"}</button></header>
-      <div className="projects-workspace-filters"><label htmlFor="project-status-filter">Show</label><select id="project-status-filter" value={filter} onChange={(event) => setFilter(event.target.value)}><option value="">All projects</option><option value="active">Active</option><option value="paused">Paused</option><option value="completed">Completed</option><option value="archived">Archived</option></select><label htmlFor="project-owner-filter">Owner</label><select id="project-owner-filter" value={ownerId} onChange={(event) => setOwnerId(event.target.value)}>{users.map((item) => <option key={item.user_id} value={item.user_id}>{item.display_name}</option>)}</select></div>
+      <header className="projects-workspace-heading"><button className="back-button" onClick={onClose}>← Conversation</button><h2>Projects &amp; Tasks</h2><button onClick={() => { setOwnerId(user); setShowCreate((value) => !value); setSelectedProject(null); }}>{showCreate ? "Cancel" : "+ New project"}</button></header>
+      <div className="projects-workspace-filters"><button onClick={() => { setSelectedProject(null); setShowCreate(false); }}>Work overview</button><label htmlFor="project-status-filter">Project list</label><select id="project-status-filter" value={filter} onChange={(event) => setFilter(event.target.value)}><option value="">All projects</option><option value="active">Active</option><option value="paused">Paused</option><option value="completed">Completed</option><option value="archived">Archived</option></select><label htmlFor="project-owner-filter">Owner</label><select id="project-owner-filter" value={ownerId} onChange={(event) => { setOwnerId(event.target.value); setSelectedProject(null); setShowCreate(false); }}>{users.map((item) => <option key={item.user_id} value={item.user_id}>{item.display_name}</option>)}</select></div>
       {showCreate && <form className="project-create" onSubmit={createOrImport}><h3>{mode === "import" ? "Import existing folder" : "New project"}</h3><div className="dialog-actions"><button type="button" onClick={() => setMode("create")}>New</button><button type="button" onClick={() => setMode("import")}>Import</button></div><div className="form-field"><label htmlFor="new-project-name">Name</label><input id="new-project-name" value={name} onChange={(event) => setName(event.target.value)} required /></div><div className="form-field"><label htmlFor="new-project-description">Description</label><input id="new-project-description" value={description} onChange={(event) => setDescription(event.target.value)} /></div><div className="form-field"><label htmlFor="new-project-visibility">Visibility</label><select id="new-project-visibility" value={visibility} onChange={(event) => setVisibility(event.target.value as "private" | "shared")}><option value="private">Private</option><option value="shared">Shared</option></select></div>{visibility === "shared" && <fieldset className="form-field"><legend>Share with family members</legend>{users.filter((item) => item.is_active && item.user_id !== ownerId).map((member) => <label key={member.user_id}><input type="checkbox" checked={newMemberIds.includes(member.user_id)} onChange={(event) => setNewMemberIds((current) => event.target.checked ? [...current, member.user_id] : current.filter((id) => id !== member.user_id))} /> {member.display_name}</label>)}</fieldset>}<div className="form-field"><label htmlFor="new-project-path">{mode === "import" ? "Existing folder" : "Parent directory (optional)"}</label><input id="new-project-path" value={rootPath} onChange={(event) => setRootPath(event.target.value)} required={mode === "import"} /></div><button>{mode === "import" ? "Import project" : "Create project"}</button></form>}
-      <nav className="projects-workspace-list" aria-label="Available projects">{visibleProjects.map((item) => <button type="button" key={item.project_id} className={selectedProject?.project_id === item.project_id ? "active" : ""} onClick={() => { setShowCreate(false); setSelectedProject(item); }}><FolderKanban size={17} /><span>{item.name}<small>{item.status} · {item.visibility === "shared" ? "Shared" : "Private"}</small></span><ChevronRight size={16} /></button>)}{!visibleProjects.length && <p>No projects found.</p>}</nav>
+      <nav className="projects-workspace-list" aria-label="Available projects">{visibleProjects.map((item) => <button type="button" key={item.project_id} className={selectedProject?.project_id === item.project_id ? "active" : ""} onClick={() => { setShowCreate(false); setSelectedProject(item); }}><FolderKanban size={17} /><span>{item.name}<small>{item.status} · {item.visibility === "shared" ? "Shared" : "Private"}</small></span><ChevronRight size={16} /></button>)}{!projectsLoading && !projectsError && !visibleProjects.length && <p>No projects found.</p>}</nav>
       {notice && <p className="projects-workspace-notice">{notice}</p>}
     </aside>
-    <section className="projects-workspace-main">{showCreate ? <div className="projects-workspace-empty"><h1>Create a project</h1><p>Fill out the project details in the sidebar.</p></div> : selectedProject ? <ProjectEditorPanel key={selectedProject.project_id} user={user} project={selectedProject} onBack={() => { setSelectedProject(null); void load(); }} onUpdated={() => void refreshProjects(selectedProject.project_id)} onClose={onClose} /> : <div className="projects-workspace-empty"><FolderKanban size={36} /><h1>Choose a project</h1><p>Select a project from the list to manage its context and files.</p></div>}</section>
+    <section className="projects-workspace-main">{projectsLoading ? <p role="status">Loading projects…</p> : projectsError ? <div role="alert"><p>{projectsError}</p><button onClick={() => void load()}>Retry projects</button></div> : showCreate ? <div className="projects-workspace-empty"><h1>Create a project</h1><p>Fill out the project details in the sidebar.</p></div> : selectedProject ? <><button className="work-back" onClick={() => setSelectedProject(null)}>← Work overview</button><ProjectEditorPanel key={selectedProject.project_id} user={user} project={selectedProject} onBack={() => { setSelectedProject(null); void load(); }} onUpdated={() => void refreshProjects(selectedProject.project_id)} onClose={onClose} /></> : <WorkOverview active={active} key={`${user}:${ownerId}`} user={user} ownerId={ownerId} projects={ownerProjects} users={users} onProject={(project) => setSelectedProject(project)} onAgenda={onAgenda} onConversation={onConversation} onQuestions={onQuestions} />}</section>
   </div>;
 }
 

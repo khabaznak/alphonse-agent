@@ -341,6 +341,45 @@ class SQLiteQuestionStore:
         )
         return version
 
+    def list_work_checkpoints(self, *, owner_id: str, view: str = "active", limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+        """Bounded owner-scoped reads; status is independent of serialized state."""
+        statuses = {
+            "active": ("queued", "running", "waiting_user"),
+            "attention": ("waiting_user", "failed"),
+            "history": ("done", "failed", "cancelled"),
+        }
+        if view not in statuses:
+            raise ValueError("work_view_invalid")
+        placeholders = ",".join("?" for _ in statuses[view])
+        status_clause = f"status IN ({placeholders})"
+        if view == "attention":
+            status_clause = (
+                f"({status_clause} OR (status IN ('queued','running') AND EXISTS ("
+                "SELECT 1 FROM json_each(json_extract(task_state_json, '$.acceptance_contract.criteria')) c "
+                "WHERE json_extract(c.value, '$.status')='blocked' "
+                "AND COALESCE(json_extract(c.value, '$.required'), 1)=1 "
+                "AND COALESCE(json_extract(c.value, '$.superseded'), 0)=0)))"
+            )
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"SELECT task_id, owner_id, project_id, status, created_at, updated_at, task_state_json "
+                f"FROM v2_task_checkpoints WHERE owner_id=? AND {status_clause} "
+                "ORDER BY updated_at DESC, task_id LIMIT ? OFFSET ?",
+                (owner_id, *statuses[view], max(1, min(100, limit)), max(0, offset)),
+            ).fetchall()
+        return [{**dict(row), "state": _json_object(row["task_state_json"])} for row in rows]
+
+    def work_project_totals(self, *, owner_id: str) -> dict[str, dict[str, int]]:
+        """Owner-scoped counts, independent of the task page or view."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT project_id, COUNT(*) AS total, SUM(status='done') AS completed, "
+                "SUM(status='failed') AS failed, SUM(status='cancelled') AS cancelled "
+                "FROM v2_task_checkpoints WHERE owner_id=? AND COALESCE(project_id, '')!='' GROUP BY project_id",
+                (owner_id,),
+            ).fetchall()
+        return {row["project_id"]: {key: int(row[key]) for key in ("total", "completed", "failed", "cancelled")} for row in rows}
+
     def load_task_checkpoint(self, task_id: str) -> TaskState | None:
         with self._connect() as conn:
             row = conn.execute(
@@ -468,7 +507,7 @@ class SQLiteQuestionStore:
 
         task = self.load_task_checkpoint(question.task_id)
         if task is None:
-            return QuestionAnswerResult(handled=True, question=question, answer=answer, message="Question answered.")
+            return QuestionAnswerResult(handled=True, question=question, invalid=True, message="The waiting task is unavailable. The question has not been answered.")
 
         task.status = "running"
         task.metadata.pop("pending_question_id", None)
@@ -487,13 +526,16 @@ class SQLiteQuestionStore:
                 """
                 UPDATE v2_questions
                 SET status = 'answered', answer_json = ?, updated_at = ?
-                WHERE question_id = ? AND respondent_user_id = ? AND status = 'pending'
+                WHERE question_id = ? AND respondent_user_id = ? AND status = 'pending' AND expires_at > ?
+                  AND EXISTS (SELECT 1 FROM v2_task_checkpoints
+                              WHERE task_id = v2_questions.task_id AND status = 'waiting_user')
                 """,
                 (
                     json.dumps(answer, sort_keys=True),
                     now,
                     question.question_id,
                     respondent,
+                    now,
                 ),
             )
             if cursor.rowcount != 1:
