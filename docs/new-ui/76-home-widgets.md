@@ -120,3 +120,11 @@ contact actions, revocation while locked, empty contacts, deduplication and
 metadata-only storage. Light 1120×760 and dark 760×600 screenshots were inspected;
 the card list and card bodies scroll independently with no horizontal overflow.
 Screenshots remain local under `output/playwright/issue-76-home-widgets*.png`.
+
+Integrated the newly merged care widgets (#75), preserving their explicit catalog
+query and protected member-scoped adapter. Final combined validation passes:
+**141 targeted Python tests**, all **118 Desktop tests**, production build, and
+the repeated browser checks above. The integration tests caught a lost care
+catalog condition during conflict resolution; it was restored before committing.
+GitHub's native dependency relationship endpoint also confirms that #8 and #69
+are the only blockers and both are closed.
