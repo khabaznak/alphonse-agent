@@ -60,7 +60,8 @@ agent session is introduced. Responses from stale requests are discarded.
   status despite stale serialized state, allowlisted output without private
   plans/metadata, owner/member/unrelated/admin reads, private and explicitly
   shared projects, cross-owner denial, pagination and limits, home/missing
-  project identity, optional/superseded blockers, and delegated answer authority.
+  project identity, optional/superseded blockers, delegated answer authority and
+  project totals across pages.
 - The containing IPC/project regressions pass, including existing project and
   schedule lifecycle/ownership controls. The #51 store regression cases pass
   on this revision; #51 remains the owner of its broader contract reconciliation.
@@ -74,4 +75,4 @@ agent session is introduced. Responses from stale requests are discarded.
   Real household end-to-end and daily-use acceptance remain #78.
 
 Final validation: 66 Desktop tests and the TypeScript/Vite production build pass;
-89 targeted Python tests pass. Vite retains the existing bundle-size advisory.
+91 targeted Python tests pass, including the newly merged Settings regressions. Vite retains the existing bundle-size advisory.
