@@ -651,6 +651,13 @@ class V2DaemonServer:
                     source_paths=[str(item) for item in source_paths],
                 )
             }
+        if method == "work_items":
+            return self.daemon.work_items(
+                actor_user_id=str(params.get("actor_user_id") or ""),
+                owner_user_id=str(params.get("owner_user_id") or ""),
+                view=str(params.get("view") or "active"),
+                limit=int(params.get("limit") or 50), offset=int(params.get("offset") or 0),
+            )
         if method == "manageable_projects":
             return {"projects": self.daemon.manageable_projects(user=str(params.get("user") or ""), status=str(params.get("status") or ""))}
         if method == "create_project":
