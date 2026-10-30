@@ -103,3 +103,10 @@ in `output/playwright/issue-69-context-cards.png` and
 The browser fixture mocks Tauri/IPC; it does not qualify real household data or
 a packaged native release. The fixture's initial missing Tauri event-cleanup
 mock was corrected and the complete browser scenarios rerun successfully.
+
+Integrated PR #94 (#9 task activity) from the current V3 branch before delivery.
+The combined build passes, all 98 Desktop tests pass, and 85 targeted Python tests
+pass. Repeated the complete delayed-response/revocation, lock/dismissal/reload,
+missing-skill and visual browser scenarios against that combined implementation;
+all passed. The existing poll-generation guard and widget reconciliation both
+remain connected after integration.
