@@ -7,6 +7,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from alphonse.agent_v2.care_widgets import CareRecords
+
 from alphonse.agent_v2.core.core import AlphonseCore
 from alphonse.agent_v2.core.core import CoreActivityEvent
 from alphonse.agent_v2.core.core import CoreUiEvent
@@ -129,6 +131,8 @@ class V2RuntimeHost:
     skill_store: SkillStore
     communication_router: CommunicationRouter
     conversation_store: SQLiteConversationStore
+    # #6 installs the protected native adapter; skill selection grants no access.
+    care_records: CareRecords | None = None
     integration_runtimes: list[Any] = field(default_factory=list)
     active_project_id: str = ""
     ui_events: list[CoreUiEvent] = field(default_factory=list)
