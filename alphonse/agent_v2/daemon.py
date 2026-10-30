@@ -417,6 +417,10 @@ class V2Daemon:
         self._migrate_blank_project_records()
         return user.to_dict()
 
+    def household_overview(self, *, actor_user_id: str, include_personal: bool = False) -> dict[str, Any]:
+        from alphonse.agent_v2.household import household_overview
+        return household_overview(self.runtime, actor=str(actor_user_id or "").strip(), include_personal=include_personal)
+
     def work_items(self, *, actor_user_id: str, owner_user_id: str = "", view: str = "active", limit: int = 50, offset: int = 0) -> dict[str, Any]:
         from alphonse.agent_v2.work_items import project_work_items
         actor = str(actor_user_id or "").strip()
