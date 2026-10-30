@@ -1130,3 +1130,7 @@ a { color: var(--accent); }
 .question-resource p { margin-block: .35rem; }
 .question-context { white-space: pre-wrap; overflow-wrap: anywhere; }
 .question-card:focus { outline: 2px solid var(--accent); outline-offset: 3px; }
+.pending-questions .question-card form { display: block; }
+.question-answer-legend { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.question-fields .a2ui-choice-picker label { display: flex; }
+.question-fields input[type="checkbox"] { flex: 0 0 auto; min-width: 0; }
