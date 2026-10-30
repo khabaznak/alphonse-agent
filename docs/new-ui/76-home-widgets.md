@@ -128,3 +128,8 @@ the repeated browser checks above. The integration tests caught a lost care
 catalog condition during conflict resolution; it was restored before committing.
 GitHub's native dependency relationship endpoint also confirms that #8 and #69
 are the only blockers and both are closed.
+
+Also integrated #74 progress/timer widgets before merging this PR. The final set
+passes **164 targeted Python tests**, all **123 Desktop tests**, the production
+build, and the complete repeated home-widget browser checks. Shared bindings and
+renderers retain activity, care, coordination, agenda and memory behavior.
