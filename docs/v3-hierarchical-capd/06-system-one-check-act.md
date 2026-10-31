@@ -43,6 +43,40 @@ strategy, including differently worded empty searches. A read-only stage declari
 still require outer recovery. These judgments neither execute tools nor alter the
 requested mission outcomes. See the [household pilot](16-household-delegation.md).
 
+Inspection before a requested mutation also asks bounded Noul
+questions: whether cumulative evidence is sufficient to plan the authorized
+operation, whether a specific unresolved field or source needs a user answer, and
+whether the latest action only inspected/read rather than attempting a mutation.
+The last judgment covers combined inspect-and-update stages: their mutation label
+does not exempt repeated reads from the inspection budget. Mutation attempts,
+unknown partial effects and verification of a just-executed mutation are excluded
+from this inspection classification.
+These questions are separate from stage success: learning that a source cannot be
+read does not make it readable or establish a mutation. Previously reviewed and
+confirmed extraction can supply evidence without automatically re-extracting its
+original source; unsupported historical transcription still cannot supply missing
+clinical facts.
+
+A confident, non-conflicting inspection resolution returns a structured handoff
+to outer planning. Six unfinished inspection actions across phases also require
+that decision, even when each action produced different output. The next phase
+must begin with the authorized operation or a specific missing-information
+question; another read-only inspection plan is rejected with one bounded
+correction. A missing-information route plans one user-interaction subgoal and
+retains only the already-exposed native question capability. System Two composes
+the question from actual evidence; Jev never generates its text or authorizes an
+effect. The handoff cannot satisfy acceptance criteria. A question remains waiting
+until the question store records an authenticated answer for that task and parked
+phase, after which planning continues from the answer and cumulative evidence.
+
+For idempotent record requests, fresh read-back can establish that every requested
+value and provenance already matches confirmed authorized input. This does not
+require a redundant write; a request for a new event or distinct write still does.
+Row existence, an unrelated old value or a status explanation is insufficient.
+If mission review still withholds completion after a prepared report, the next
+plan must resolve the unmet operation or ask a specific question, not repeat that
+report.
+
 ## Check boundary
 
 For each still-pending acceptance criterion and each bounded successful evidence
@@ -74,10 +108,16 @@ The Act recommendation also includes a bounded `mission_outcome_is_fulfilled`
 Noul judgment against resumed authenticated follow-up answers. For those resumed
 tasks, completion requires both verified acceptance evidence and this follow-up
 check; approval acknowledgment alone cannot complete an approved installation.
-This additional guard does not apply to ordinary factual questions, which retain
-normal acceptance verification. A supported factual answer may state uncertainty
-and finish. Missing, non-finite or out-of-range probabilities cannot grant closure
-of pending authenticated follow-up work.
+The same judgment now checks the original requested outcome for ordinary tasks as
+well, preventing generated acknowledgment-only criteria from replacing a requested
+persisted effect. A parallel Noul classifies whether the request requires a
+persisted mutation; when it does, response/question evidence alone cannot grant
+completion, even with a positive semantic judgment. Operational evidence is
+necessary, never sufficient: successful persisted effects still require semantic
+verification and existing deterministic scope/status checks. A supported factual
+answer may state uncertainty and finish. Missing, non-finite or out-of-range mission
+probabilities cannot grant closure. Failure of the required production mission
+review cannot fall back to acceptance-only success.
 Prepared acknowledgments are excluded from substantive outer progress, so changing
 their wording cannot keep an unfulfilled task running indefinitely.
 
@@ -92,6 +132,10 @@ answers, or ambiguous evidence cause a per-task fallback to System Two. The last
 validated settings remain unchanged after a failed validation. Structured telemetry
 records provider status, latency, model, usage, and routing metadata without logging
 the key or request contents.
+Failed Jev decision manifests also retain only a reviewed error code and exception
+type; arbitrary provider bodies and credentials are excluded. Retries apply to
+connection failures, temporary-service responses and server errors, not unchanged
+persistent HTTP requests.
 
 ## Verification
 
@@ -105,6 +149,31 @@ the key or request contents.
 
 ## Implementation log
 
+- 2026-10-31 — Further #128 live regression: a mixed read/write stage bypassed
+  the pure-read inspection guard and was followed by repeated report-only phases.
+  Inspection classification now covers observed reads within mixed stages; the
+  task-wide bound applies there too. Mission disagreement after a report requires
+  an operation or specific question. Clarified verified already-satisfied states
+  without redundant mutation. Added safe service error diagnostics and transient-
+  only retries; the historical RuntimeError's underlying code was not retained,
+  so its service cause is not established. Synthetic tests cover the mixed-stage
+  escape, idempotency, report-loop rejection and error-code privacy. Live success
+  and owner acceptance remain pending.
+- 2026-10-31 — Issue #128 inspection-loop follow-up: separated decision readiness
+  and specific missing information from inspection completion. Added the bounded
+  cross-phase inspection handoff, validation against restarting read-only phases,
+  question capability retention, and authenticated-answer release of the question
+  directive. Disposable end-to-end tests demonstrate transaction/fresh read-back
+  or a concrete question with no mutation; conflicting judgments, unrelated history
+  and acknowledged questions cannot manufacture completion or permission. Live
+  workflow success and owner acceptance remain pending.
+- 2026-10-31 — Issue #128: anchored mission review to the current request and
+  steering, including transaction/read-back for requested record updates. Plan
+  preserves persisted effects in acceptance criteria; status, acknowledgment and
+  no-write explanations cannot substitute for them. Omitted capabilities trigger
+  replanning rather than invented operational denials. Reply-only, malformed
+  judgment and qualified factual-answer regressions supplement the disposable
+  SQLite workflow tests. Live owner acceptance remains outstanding under #78.
 - 2026-09-20 — Added the Jev HTTP client and persistent settings, bounded atomic Noul
   review, advisory Choice routing, System Two fallback, masked admin IPC, desktop
   settings and validation, and structured telemetry. Full Python suite: 472 passed;

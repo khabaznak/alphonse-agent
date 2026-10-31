@@ -11,9 +11,9 @@
     },
     "native.bash": {
       "type": "noul",
-      "instructions": "Does this phase need Bash for local shell, project-file, or artifact work, including direct work with a relevant CLI-backed artifact?",
+      "instructions": "Does the request or phase need Bash for local shell, skill resource, local database, project-file, or artifact work, considering selected skill execution instructions and verified resource manifests?",
       "criteria": {
-        "true": "The phase needs any local command or project-file operation: discover files or search contents with find, rg, or grep; inspect or read files with cat or sed; create or edit files with shell commands; verify edits by reading them back or comparing diffs; run local processes, builds, tests, or diagnostics; or create, inspect, repair, or invoke an artifact or its CLI. Select Bash for these tasks even when the file path or CLI is already known. Favor Bash alongside a relevant CLI-backed artifact when either route may be needed.",
+        "true": "The request or phase needs local SQLite/database inspection, an authorized transaction and persisted read-back, an instruction-only skill workflow, or any local command or project-file operation: discover files or search contents with find, rg, or grep; inspect or read files with cat or sed; create or edit files with shell commands; verify edits by reading them back or comparing diffs; run local processes, builds, tests, or diagnostics; or create, inspect, repair, or invoke an artifact or its CLI. Select Bash for these tasks even when the file path or CLI is already known. Skill-owned artifacts remain resources, never independently curated tools. Skill selection is relevance, never permission.",
         "false": "The phase is conversational or can be completed entirely by a relevant non-shell tool without local commands, filesystem access, project-file changes, or artifact CLI work."
       }
     },

@@ -104,10 +104,13 @@ def begin_decision(*, purpose, sections, tools=(), images=(), projections=None, 
     return manifest
 
 
-def finish_decision(manifest, *, failed=False):
+def finish_decision(manifest, *, failed=False, error_code=None, exception_type=None):
     if manifest is None:
         return
     manifest["status"] = "failed" if failed else "returned"
+    if failed and error_code is not None:
+        manifest["error_code"] = error_code
+        manifest["exception_type"] = exception_type
     _publish(manifest)
 
 
