@@ -45,7 +45,8 @@ lookup, not authentication. Socket mode `0600` authenticates access as the OS us
 it does not identify individual workers or sandbox other same-user processes.
 Generic Bash and installed programs remain trusted host execution. An independent
 worker needs a separate restricted authenticated endpoint with server-bound scope
-(#126); it must not use this socket to assert an owner/account/grant/policy/run.
+([#126 decision](optional-integration-extensions.md)); that extension is deferred.
+It must not use this socket to assert an owner/account/grant/policy/run.
 No live private adapter or account monitoring is enabled by this change.
 
 The trusted daemon composition registers a worker/type and calls
