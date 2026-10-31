@@ -66,7 +66,7 @@ def prune_operational_data(
             (
                 "automation_executions",
                 "v2_automation_executions",
-                "DELETE FROM v2_automation_executions WHERE status='enqueued' AND updated_at < ?",
+                "DELETE FROM v2_automation_executions WHERE status IN ('completed','cancelled','failed') AND updated_at < ?",
             ),
             (
                 "communication_threads",
