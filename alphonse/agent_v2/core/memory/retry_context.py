@@ -73,10 +73,15 @@ def prepare_retry_continuity(task, context) -> None:
             candidate_id = exchanges[index][0].source.source_id
             labels = [f'{item.source.role} [{str(item.source.observed_at or "")[:10]}; {item.source.provenance}]:\n' for item in items]
             available = max(0, window_budget - sum(len(label) for label in labels) - 100)
-            sizes = [min(40, len(item.content), available // max(1, len(items))) for item in items]
+            sizes = [min(20, len(item.content), available // max(1, len(items))) for item in items]
             remaining = available - sum(sizes)
-            # Preserve a short approval/request preview and spend remaining
-            # space on substantive payloads rather than repeated role/ID labels.
+            # Keep the user's actual request/approval directive visible before
+            # spending the rest on the substantive assistant extraction.
+            for position, item in enumerate(items):
+                if item.source.role == 'user':
+                    extra = min(remaining, min(160, len(item.content)) - sizes[position])
+                    sizes[position] += extra
+                    remaining -= extra
             for position in sorted(range(len(items)), key=lambda i: len(items[i].content), reverse=True):
                 extra = min(remaining, len(items[position].content) - sizes[position])
                 sizes[position] += extra
@@ -94,7 +99,10 @@ def prepare_retry_continuity(task, context) -> None:
         if not candidates:
             selection['status'] = 'unavailable'
             return
-        chosen = list(select(request=request, candidates=list(reversed(candidates))))
+        decision = select(request=request, candidates=list(reversed(candidates)))
+        if callable(getattr(decision, 'to_metadata', None)):
+            selection['decision'] = decision.to_metadata()
+        chosen = list(decision)
         if context.is_cancelled():
             raise SystemOneUnavailableError('v3_retry_context_cancelled')
         if not chosen:

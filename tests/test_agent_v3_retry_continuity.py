@@ -188,14 +188,23 @@ def test_provider_selects_only_bounded_candidate_ids_and_rejects_invalid_judgmen
     seen = []
     def transport(url, key, payload, timeout):
         seen.append(payload)
-        return {'answers': {q: {'type': 'noul', 'noul': .99 if q == 'retry_origin_1' else .01} for q in payload['questions']}}
+        if any(key.startswith('source_window_') for key in payload['questions']):
+            return {'answers': {key: {'type': 'noul', 'noul': .99} for key in payload['questions']}}
+        if 'retry_origin' in payload['questions']:
+            return {'answers': {'retry_origin': {'type': 'choice', 'choice': 'candidate_1', 'probabilities': {'candidate_1': .99, 'none': .01}}}}
+        return {'answers': {'retry_origin_supported': {'type': 'noul', 'noul': .99}}}
     provider = JevCriterionDecisionProvider(SystemOneSettings(api_key='fixture'), transport=transport)
-    candidates = [{'id': 'old', 'content': 'Older similar record'}, {'id': 'approved', 'content': 'Reviewed payload and user confirmation'}]
-    assert provider.select_retry_context(request='Try saving the new prescription again', candidates=candidates) == ('approved',)
+    candidates = [{'id': 'old', 'content': 'Older similar record'}, {'id': 'approved', 'content': 'Reviewed payload and user confirmation; one name uncertain'}]
+    result = provider.select_retry_context(request='Try saving the new prescription again', candidates=candidates)
+    assert tuple(result) == ('approved',)
+    assert result.to_metadata() == {'choice': 'candidate_1', 'choice_confidence': .99, 'support_probability': .99, 'threshold': .8, 'eligible_candidate_count': 2}
     assert all(q['type'] == 'noul' for q in seen[0]['questions'].values())
-    assert 'never permission' in seen[0]['questions']['retry_origin_1']['instructions']
-    provider.client.transport = lambda *args: {'answers': {'retry_origin_0': {'type': 'noul', 'noul': True}}}
-    with pytest.raises(ValueError, match='retry_selection_invalid'):
+    assert seen[-2]['questions']['retry_origin']['type'] == 'choice'
+    assert seen[-1]['questions']['retry_origin_supported']['type'] == 'noul'
+    assert len(seen[-1]['state']['candidates']) == 1 and seen[-1]['state']['candidates'][0]['id'] == 'approved'
+    assert 'not whether every field' in seen[-1]['questions']['retry_origin_supported']['instructions']
+    provider.client.transport = lambda url,key,payload,timeout: ({'answers': {key: {'type': 'noul', 'noul': .99} for key in payload['questions']}} if 'retry_origin' not in payload['questions'] else {'answers': {'retry_origin': {'type': 'choice', 'choice': 'unknown', 'probabilities': {'unknown': 1.0}}}})
+    with pytest.raises(ValueError, match='retry_comparison_invalid'):
         provider.select_retry_context(request='Again', candidates=candidates[:1])
 
 
@@ -389,3 +398,96 @@ def test_revoked_origin_blocks_an_already_planned_operation_before_action_select
     outcome = PhaseExecutor(action_selector=lambda *_: pytest.fail('Revoked source must block before selecting or executing a command')).run(task, state, context)
     assert outcome.blockers == ('retry_source_requires_user_input',)
     assert not state.actions
+
+
+@pytest.mark.parametrize('choice,choice_probability,support,expected,calls', [
+    ('candidate_0', .99, .99, True, 3),
+    ('candidate_0', .79, .99, False, 2),
+    ('candidate_0', .99, .79, False, 3),
+    ('none', .99, .99, False, 2),
+    ('ambiguous', .99, .99, False, 2),
+])
+def test_comparison_and_support_each_keep_the_existing_confidence_threshold(choice, choice_probability, support, expected, calls):
+    seen = []
+    def transport(url, key, payload, timeout):
+        seen.append(payload)
+        if any(key.startswith('source_window_') for key in payload['questions']):
+            return {'answers': {key: {'type': 'noul', 'noul': .99} for key in payload['questions']}}
+        if 'retry_origin' in payload['questions']:
+            residual = 'none' if choice != 'none' else 'ambiguous'
+            return {'answers': {'retry_origin': {'type': 'choice', 'choice': choice,
+                'probabilities': {choice: choice_probability, residual: 1.0-choice_probability}}}}
+        return {'answers': {'retry_origin_supported': {'type': 'noul', 'noul': support}}}
+    provider = JevCriterionDecisionProvider(SystemOneSettings(api_key='fixture', yes_threshold=.8), transport=transport)
+    result = provider.select_retry_context(request='Retry the reviewed update', candidates=[{'id': 'source', 'content': 'Source and confirmation'}])
+    assert bool(tuple(result)) == expected and len(seen) == calls
+    assert result.threshold == provider.settings.yes_threshold == .8
+
+
+@pytest.mark.parametrize('value', [True, None, float('nan'), float('inf'), -1, 2])
+def test_invalid_independent_support_cannot_select_a_source(value):
+    def transport(url, key, payload, timeout):
+        if any(key.startswith('source_window_') for key in payload['questions']):
+            return {'answers': {key: {'type': 'noul', 'noul': .99} for key in payload['questions']}}
+        if 'retry_origin' in payload['questions']:
+            return {'answers': {'retry_origin': {'type': 'choice', 'choice': 'candidate_0', 'probabilities': {'candidate_0': 1.0}}}}
+        return {'answers': {'retry_origin_supported': {'type': 'noul', 'noul': value}}}
+    provider = JevCriterionDecisionProvider(SystemOneSettings(api_key='fixture'), transport=transport)
+    with pytest.raises(ValueError, match='retry_selection_invalid'):
+        provider.select_retry_context(request='Retry', candidates=[{'id': 'source', 'content': 'Reviewed source'}])
+
+
+def test_source_form_screening_excludes_failed_and_uncertain_windows():
+    seen = []
+    def transport(url, key, payload, timeout):
+        seen.append(payload)
+        if any(key.startswith('source_window_') for key in payload['questions']):
+            assert len(payload['state']['candidates']) == len(payload['questions']) == 1
+            key = next(iter(payload['questions']))
+            index = int(key.removeprefix('source_window_'))
+            return {'answers': {key: {'type': 'noul', 'noul': [.1,.5,.99][index]}}}
+        if 'retry_origin' in payload['questions']:
+            assert [c['choice_id'] for c in payload['state']['candidates']] == ['candidate_2']
+            assert 'candidate_0' not in payload['questions']['retry_origin']['criteria']
+            return {'answers': {'retry_origin': {'type': 'choice', 'choice': 'candidate_2', 'probabilities': {'candidate_2': .99,'none': .01}}}}
+        return {'answers': {'retry_origin_supported': {'type': 'noul', 'noul': .99}}}
+    provider=JevCriterionDecisionProvider(SystemOneSettings(api_key='fixture',yes_threshold=.8,no_threshold=.2),transport=transport)
+    result=provider.select_retry_context(request='Retry reviewed source',candidates=[
+        {'id':'failure','content':'The attempt failed'}, {'id':'uncertain','content':'Possibly substantive original input'},
+        {'id':'reviewed','content':'Original payload and confirmation'},
+    ])
+    assert tuple(result)==('reviewed',) and result.eligible_candidate_count==1 and result.threshold==.8
+
+
+def test_parallel_source_screening_keeps_manifests_and_checkpoint_in_disposable_store(tmp_path):
+    from threading import Barrier
+    from alphonse.agent_v2.core.context_manifests import manifest_scope
+    from alphonse.agent_v2.core.questions import SQLiteQuestionStore
+
+    barrier = Barrier(8, timeout=5)
+    def transport(url, key, payload, timeout):
+        question_id = next(iter(payload['questions']))
+        if question_id.startswith('source_window_'):
+            assert len(payload['state']['candidates']) == 1
+            barrier.wait()
+            return {'answers': {question_id: {'type': 'noul', 'noul': .99 if question_id.endswith('_7') else .01}}}
+        if question_id == 'retry_origin':
+            assert set(payload['questions'][question_id]['criteria']) == {'candidate_7', 'none', 'ambiguous'}
+            return {'answers': {question_id: {'type': 'choice', 'choice': 'candidate_7', 'probabilities': {'candidate_7': .99, 'none': .01}}}}
+        return {'answers': {question_id: {'type': 'noul', 'noul': .99}}}
+
+    provider = JevCriterionDecisionProvider(SystemOneSettings(api_key='fixture'), transport=transport)
+    store = SQLiteQuestionStore(tmp_path / 'manifest-checkpoints.sqlite')
+    task = retry_task()
+    context = CoreLoopContext(messages=InMemoryMessageQueue(), question_store=store)
+    with manifest_scope(task, context):
+        result = provider.select_retry_context(request='Retry the reviewed fixture', candidates=[
+            {'id': f'fixture-{i}', 'content': 'Reviewed payload and confirmation' if i == 7 else 'Only a failed retry'}
+            for i in range(8)
+        ])
+    assert tuple(result) == ('fixture-7',)
+    manifests = task.metadata['decision_context_manifests']
+    assert len(manifests) == 10 and all(m['status'] == 'returned' for m in manifests)
+    assert {m['sources'][0]['source_id'] for m in manifests if m['purpose'] == 'retry_context_screening'} == {
+        f'fixture-{i}' for i in range(8)
+    }
