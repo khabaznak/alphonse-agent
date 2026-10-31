@@ -37,10 +37,17 @@ def test_event_fanout_filters_deduplicates_and_prunes_history() -> None:
     result = store.publish(worker_id="plant-monitor", event_id="e1", event_type="plant.soil_humidity", event_version="1", occurred_at="2026-07-24T00:00:00Z", payload={"plant_id": "fern", "humidity": 10})
     assert set(result["matches"]) == {first.automation_id, second.automation_id}
     assert store.publish(worker_id="plant-monitor", event_id="e1", event_type="plant.soil_humidity", event_version="1", occurred_at="2026-07-24T00:00:00Z", payload={"plant_id": "fern", "humidity": 10})["duplicate"] is True
-    assert len(store.claim_event_executions()) == 2
+    executions = store.claim_event_executions()
+    assert len(executions) == 2
     store.publish(worker_id="plant-monitor", event_id="e2", event_type="plant.soil_humidity", event_version="1", occurred_at="2026-07-24T00:01:00Z", payload={"plant_id": "orchid", "humidity": 20})
     store.publish(worker_id="plant-monitor", event_id="e3", event_type="plant.soil_humidity", event_version="1", occurred_at="2026-07-24T00:02:00Z", payload={"plant_id": "orchid", "humidity": 30})
+    # Active execution evidence survives the history count bound.
+    assert [item["source_event_id"] for item in store.list_events()] == ["e3", "e2", "e1"]
+    for execution in executions:
+        store.cancel_execution(execution["execution_id"])
+    store.prune_history()
     assert [item["source_event_id"] for item in store.list_events()] == ["e3", "e2"]
+    assert store.publish(worker_id="plant-monitor", event_id="e1", event_type="plant.soil_humidity", event_version="1", occurred_at="2026-07-24T00:00:00Z", payload={"plant_id": "fern", "humidity": 10})["duplicate"] is True
 
 
 def test_daemon_enqueues_event_automation_with_structured_event_metadata() -> None:

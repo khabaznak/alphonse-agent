@@ -103,7 +103,11 @@ def test_legacy_migration_is_backed_up_validated_and_idempotent(tmp_path) -> Non
     assert {item.name for item in sources}.issubset({item.name for item in backup_directory.iterdir()})
     with connect_database(target) as connection:
         assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
-        assert connection.execute("SELECT COUNT(*) FROM v2_schema_migrations").fetchone()[0] == 2
+        migrations = {row[0] for row in connection.execute("SELECT migration_id FROM v2_schema_migrations")}
+        assert migrations == {
+            "2026-07-30-unified-v2-database", "2026-07-30-unified-schema-v1",
+            "event_execution_leases_v1",
+        }
 
 
 def test_failed_migration_does_not_modify_legacy_database(tmp_path) -> None:

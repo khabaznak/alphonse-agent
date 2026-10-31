@@ -3,18 +3,20 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import sqlite3
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Protocol
 from uuid import uuid4
+from threading import RLock
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError, ValidationError
 
-from alphonse.agent_v2.database import connect_database, default_database_path
+from alphonse.agent_v2.database import connect_database, default_database_path, record_migration, ensure_schema_migrations
 
 
 def _now() -> str:
@@ -107,6 +109,7 @@ class EventAutomationStore:
 
     def __init__(self, db_path: str | Path = ":memory:") -> None:
         self.db_path = str(db_path)
+        self._lock = RLock()
         self._authorities: dict[str, ManagedEventAuthority] = {}
         self._memory: sqlite3.Connection | None = None
         if self.db_path == ":memory:":
@@ -287,43 +290,131 @@ class EventAutomationStore:
         source_id = str(event_id or "").strip()
         if not source_id: return {"accepted": False, "reason": "event_id_required"}
         now = _now(); event_key = f"event_{uuid4().hex}"
-        with self._connect() as conn:
-            duplicate = conn.execute("SELECT event_key,envelope_json FROM v2_event_history WHERE worker_id=? AND source_event_id=?", (worker.worker_id, source_id)).fetchone()
-            if duplicate and envelope is not None and _obj(duplicate["envelope_json"]) != asdict(envelope):
+        automations = self.list_automations()
+        matches = [automation for automation in automations if automation.status == "active"
+                   and ((envelope is None and "source_scope" not in automation.trigger)
+                        or (envelope is not None and self._subscription_authorized(automation, envelope, "subscription")))
+                   and _matches(automation, definition.event_type, definition.version, payload)]
+        with self._lock, self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            duplicate = conn.execute("SELECT event_key,accepted_at,scope_digest FROM v2_event_receipts WHERE worker_id=? AND source_event_id=?", (worker.worker_id, source_id)).fetchone()
+            scope_digest = hashlib.sha256(json.dumps(asdict(envelope), sort_keys=True).encode()).hexdigest() if envelope else ""
+            if duplicate and duplicate["scope_digest"] != scope_digest:
                 return {"accepted": False, "reason": "event_scope_denied"}
-            if duplicate: return {"accepted": True, "duplicate": True, "event_key": str(duplicate[0]), "matches": []}
+            if duplicate:
+                age = datetime.now(timezone.utc) - datetime.fromisoformat(duplicate["accepted_at"])
+                if age > timedelta(days=90):
+                    return {"accepted": False, "duplicate": True, "reason": "event_replay_expired", "event_key": str(duplicate[0]), "matches": []}
+                return {"accepted": True, "duplicate": True, "event_key": str(duplicate[0]), "matches": []}
+            conn.execute("INSERT INTO v2_event_receipts(worker_id,source_event_id,event_key,accepted_at,scope_digest) VALUES(?,?,?,?,?)", (worker.worker_id, source_id, event_key, now, scope_digest))
             conn.execute("INSERT INTO v2_event_history(event_key,worker_id,source_event_id,event_type,event_version,occurred_at,payload_json,dispatch_count,created_at) VALUES(?,?,?,?,?,?,?,?,?)", (event_key, worker.worker_id, source_id, definition.event_type, definition.version, str(occurred_at or now), json.dumps(payload, sort_keys=True), 0, now))
             if envelope is not None:
                 conn.execute("UPDATE v2_event_history SET envelope_json=? WHERE event_key=?", (json.dumps(asdict(envelope), sort_keys=True), event_key))
-            matches = [automation for automation in self.list_automations() if automation.status == "active"
-                       and ((envelope is None and "source_scope" not in automation.trigger)
-                            or (envelope is not None and self._subscription_authorized(automation, envelope, "subscription")))
-                       and _matches(automation, definition.event_type, definition.version, payload)]
             for automation in matches:
                 conn.execute("INSERT INTO v2_automation_executions(execution_id,automation_id,event_key,status,created_at,updated_at) VALUES(?,?,?,?,?,?)", (f"automation_execution_{uuid4().hex[:16]}", automation.automation_id, event_key, "pending", now, now))
             conn.execute("UPDATE v2_event_history SET dispatch_count=? WHERE event_key=?", (len(matches), event_key))
             self._prune_history(conn, definition)
         return {"accepted": True, "duplicate": False, "event_key": event_key, "matches": [item.automation_id for item in matches]}
 
-    def claim_event_executions(self, *, limit: int = 100) -> list[dict[str, Any]]:
-        with self._connect() as conn:
-            rows = conn.execute("SELECT x.execution_id,x.automation_id,x.event_key,a.owner_user_id,a.project_id,a.prompt,a.origin_channel_json,e.worker_id,e.source_event_id,e.event_type,e.event_version,e.occurred_at,e.payload_json,e.envelope_json,a.status AS automation_status FROM v2_automation_executions x JOIN v2_automations a ON a.automation_id=x.automation_id JOIN v2_event_history e ON e.event_key=x.event_key WHERE x.status='pending' ORDER BY x.created_at LIMIT ?", (max(1, min(int(limit), 1000)),)).fetchall()
-            eligible = []
+    def claim_event_executions(self, *, limit: int = 100, worker_id: str = "default",
+                               lease_seconds: float = 30, now: datetime | None = None) -> list[dict[str, Any]]:
+        current = now or datetime.now(timezone.utc)
+        timestamp = current.isoformat()
+        with self._lock, self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            rows = conn.execute("""
+                SELECT x.*,a.owner_user_id,a.project_id,a.prompt,a.origin_channel_json,
+                       e.worker_id,e.source_event_id,e.event_type,e.event_version,e.occurred_at,e.payload_json,e.envelope_json,a.status AS automation_status
+                FROM v2_automation_executions x JOIN v2_automations a USING(automation_id)
+                JOIN v2_event_history e USING(event_key)
+                WHERE x.status='pending' OR (x.status='retry_wait' AND x.next_attempt_at<=?)
+                   OR (x.status='claimed' AND x.lease_expires_at<=?)
+                ORDER BY x.created_at,x.execution_id LIMIT ?
+            """, (timestamp, timestamp, max(1, min(int(limit), 1000)))).fetchall()
+            result = []
             for row in rows:
-                envelope = _envelope(row["envelope_json"])
-                worker = self.get_worker(str(row["worker_id"]))
-                allowed = (row["automation_status"] == "active" and worker is not None and worker.enabled
-                           and (not self.is_private_type(str(row["event_type"])) or envelope is not None)
-                           and (not row["envelope_json"] or (envelope is not None and self._subscription_authorized(self.get_automation(str(row["automation_id"])), envelope, "dispatch"))))
-                if allowed:
-                    eligible.append(row)
-                else:
-                    conn.execute("UPDATE v2_automation_executions SET status='denied',updated_at=? WHERE execution_id=?", (_now(), row["execution_id"]))
-            for row in eligible: conn.execute("UPDATE v2_automation_executions SET status='claimed',updated_at=? WHERE execution_id=?", (_now(), str(row["execution_id"])))
-        return [dict(row) for row in eligible]
+                token = uuid4().hex
+                conn.execute("""UPDATE v2_automation_executions SET status='claimed',lease_owner=?,
+                    lease_token=?,lease_expires_at=?,attempt_count=attempt_count+1,updated_at=?
+                    WHERE execution_id=?""",
+                    (worker_id, token, (current + timedelta(seconds=max(1, lease_seconds))).isoformat(),
+                     timestamp, row["execution_id"]))
+                result.append({**dict(row), "lease_owner": worker_id, "lease_token": token,
+                               "attempt_count": int(row["attempt_count"]) + 1})
+        # Current authority is checked after committing the bounded claim.
+        # No external service callback runs under the write transaction.
+        eligible = []
+        for execution in result:
+            if self.dispatch_authorized(execution):
+                eligible.append(execution)
+            else:
+                with self._lock, self._connect() as conn:
+                    conn.execute("""UPDATE v2_automation_executions SET status='denied',updated_at=?
+                        WHERE execution_id=? AND status='claimed' AND lease_token=?""",
+                        (_now(), execution["execution_id"], execution["lease_token"]))
+        return eligible
 
-    def mark_execution_enqueued(self, execution_id: str, message_id: str) -> None:
-        with self._connect() as conn: conn.execute("UPDATE v2_automation_executions SET status='enqueued',queued_message_id=?,updated_at=? WHERE execution_id=?", (str(message_id), _now(), str(execution_id)))
+    def dispatch_authorized(self, execution: dict[str, Any]) -> bool:
+        envelope = _envelope(str(execution.get("envelope_json") or ""))
+        automation = self.get_automation(str(execution["automation_id"]))
+        worker = self.get_worker(str(execution["worker_id"]))
+        return bool(automation and automation.status == "active" and worker and worker.enabled
+                    and (not self.is_private_type(str(execution["event_type"])) or envelope is not None)
+                    and (not self.is_managed_worker(str(execution["worker_id"])) or envelope is not None)
+                    and (not execution.get("envelope_json")
+                         or (envelope is not None and self._subscription_authorized(automation, envelope, "dispatch"))))
+
+    def mark_execution_enqueued(self, execution_id: str, message_id: str, *, lease_token: str) -> bool:
+        with self._lock, self._connect() as conn:
+            return conn.execute("""UPDATE v2_automation_executions SET status='queued',queued_message_id=?,
+                updated_at=?,lease_owner='',lease_expires_at='' WHERE execution_id=?
+                AND status='claimed' AND lease_token=? AND lease_expires_at>?""",
+                (message_id, _now(), execution_id, lease_token, _now())).rowcount == 1
+
+    def retry_execution(self, execution_id: str, *, lease_token: str, now: datetime,
+                        max_attempts: int = 5) -> None:
+        # No provider exception text: receipts must not accumulate private content.
+        with self._lock, self._connect() as conn:
+            row = conn.execute("SELECT attempt_count FROM v2_automation_executions WHERE execution_id=? AND status='claimed' AND lease_token=?",
+                               (execution_id, lease_token)).fetchone()
+            if row is None:
+                return
+            attempts = int(row[0])
+            conn.execute("""UPDATE v2_automation_executions SET status=?,next_attempt_at=?,
+                lease_owner='',lease_expires_at='',updated_at=? WHERE execution_id=? AND lease_token=?""",
+                ("failed" if attempts >= max_attempts else "retry_wait",
+                 (now + timedelta(seconds=min(3600, 5 * 2 ** min(attempts - 1, 10)))).isoformat(),
+                 now.isoformat(), execution_id, lease_token))
+
+    def get_execution(self, execution_id: str) -> dict[str, Any] | None:
+        with self._lock, self._connect() as conn:
+            row = conn.execute("SELECT * FROM v2_automation_executions WHERE execution_id=?", (execution_id,)).fetchone()
+        return dict(row) if row else None
+
+    def active_executions(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        with self._lock, self._connect() as conn:
+            rows = conn.execute("""SELECT * FROM v2_automation_executions
+                WHERE status IN ('queued','processing') ORDER BY updated_at LIMIT ?""", (limit,)).fetchall()
+        return [dict(row) for row in rows]
+
+    def execution_lifecycle(self, execution_id: str, status: str) -> None:
+        if status not in {"queued", "processing", "completed", "cancelled", "failed"}:
+            raise ValueError("invalid_execution_status")
+        with self._lock, self._connect() as conn:
+            conn.execute("""UPDATE v2_automation_executions SET status=?,updated_at=?
+                WHERE execution_id=? AND status IN ('queued','processing')""", (status, _now(), execution_id))
+
+    def cancel_execution(self, execution_id: str) -> bool:
+        """Fence future handoffs; callers also cancel its stable queue identity."""
+        with self._lock, self._connect() as conn:
+            return conn.execute("""UPDATE v2_automation_executions SET status='cancelled',
+                lease_token='',updated_at=? WHERE execution_id=?
+                AND status NOT IN ('completed','cancelled','failed','denied')""", (_now(), execution_id)).rowcount == 1
+
+    def prune_history(self) -> None:
+        with self._lock, self._connect() as conn:
+            for row in conn.execute("SELECT * FROM v2_event_types").fetchall():
+                self._prune_history(conn, _event_type(row))
 
     def expand_event(self, event_key: str, *, actor_user_id: str, project_id: str) -> dict[str, Any] | None:
         """Recheck current authority on every source expansion, including queued refs."""
@@ -362,10 +453,10 @@ class EventAutomationStore:
         return result
 
     def _prune_history(self, conn: sqlite3.Connection, definition: EventTypeRecord) -> None:
-        conn.execute("DELETE FROM v2_event_history WHERE event_key IN (SELECT event_key FROM v2_event_history WHERE event_type=? AND event_version=? ORDER BY created_at DESC LIMIT -1 OFFSET ?)", (definition.event_type, definition.version, definition.max_history))
+        conn.execute("DELETE FROM v2_event_history WHERE NOT EXISTS (SELECT 1 FROM v2_automation_executions x WHERE x.event_key=v2_event_history.event_key AND x.status NOT IN ('completed','cancelled','failed','denied')) AND event_key IN (SELECT event_key FROM v2_event_history WHERE event_type=? AND event_version=? ORDER BY created_at DESC LIMIT -1 OFFSET ?)", (definition.event_type, definition.version, definition.max_history))
 
     def _connect(self):
-        if self._memory is not None: return _Connection(self._memory)
+        if self._memory is not None: return _Connection(self._memory, self._lock)
         return connect_database(self.db_path)
 
     def _ensure_schema(self) -> None:
@@ -383,6 +474,34 @@ class EventAutomationStore:
             if "envelope_json" not in columns:
                 conn.execute("ALTER TABLE v2_event_history ADD COLUMN envelope_json TEXT NOT NULL DEFAULT ''")
 
+        with self._connect() as conn:
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(v2_automation_executions)")}
+            for name, definition in {
+                "lease_owner": "TEXT NOT NULL DEFAULT ''", "lease_token": "TEXT NOT NULL DEFAULT ''",
+                "lease_expires_at": "TEXT NOT NULL DEFAULT ''", "attempt_count": "INTEGER NOT NULL DEFAULT 0",
+                "next_attempt_at": "TEXT NOT NULL DEFAULT ''",
+            }.items():
+                if name not in columns:
+                    conn.execute(f"ALTER TABLE v2_automation_executions ADD COLUMN {name} {definition}")
+            conn.execute("""CREATE TABLE IF NOT EXISTS v2_event_receipts(
+                worker_id TEXT NOT NULL,source_event_id TEXT NOT NULL,event_key TEXT NOT NULL,
+                accepted_at TEXT NOT NULL,scope_digest TEXT NOT NULL DEFAULT '',PRIMARY KEY(worker_id,source_event_id)) STRICT""")
+            conn.execute("""INSERT OR IGNORE INTO v2_event_receipts(worker_id,source_event_id,event_key,accepted_at)
+                SELECT worker_id,source_event_id,event_key,created_at FROM v2_event_history""")
+            for row in conn.execute("SELECT worker_id,source_event_id,envelope_json FROM v2_event_history WHERE envelope_json!=''"):
+                digest = hashlib.sha256(json.dumps(json.loads(row["envelope_json"]), sort_keys=True).encode()).hexdigest()
+                conn.execute("UPDATE v2_event_receipts SET scope_digest=? WHERE worker_id=? AND source_event_id=? AND scope_digest=''",
+                             (digest, row["worker_id"], row["source_event_id"]))
+            conn.execute("UPDATE v2_automation_executions SET status='queued' WHERE status='enqueued'")
+            conn.execute("CREATE INDEX IF NOT EXISTS v2_execution_dispatch ON v2_automation_executions(status,next_attempt_at,lease_expires_at)")
+            conn.execute("CREATE INDEX IF NOT EXISTS v2_execution_event ON v2_automation_executions(event_key,status)")
+            # Old pruning could remove evidence for claimed/pending work. Do not
+            # invent payloads or silently report those historical losses as success.
+            conn.execute("""UPDATE v2_automation_executions SET status='failed',updated_at=?
+                WHERE status IN ('pending','claimed','retry_wait') AND NOT EXISTS
+                (SELECT 1 FROM v2_event_history e WHERE e.event_key=v2_automation_executions.event_key)""", (_now(),))
+            ensure_schema_migrations(conn)
+            record_migration(conn, "event_execution_leases_v1")
 
 def _envelope(value: str) -> EventEnvelope | None:
     if not value:
@@ -395,9 +514,14 @@ def _envelope(value: str) -> EventEnvelope | None:
 
 
 class _Connection:
-    def __init__(self, conn): self.conn = conn
-    def __enter__(self): return self.conn
-    def __exit__(self, typ, value, tb): self.conn.commit() if typ is None else self.conn.rollback(); return False
+    def __init__(self, conn, lock): self.conn = conn; self.lock = lock
+    def __enter__(self): self.lock.acquire(); return self.conn
+    def __exit__(self, typ, value, tb):
+        try:
+            self.conn.commit() if typ is None else self.conn.rollback()
+        finally:
+            self.lock.release()
+        return False
 
 
 def _worker(row): return WorkerRecord(str(row["worker_id"]), str(row["display_name"]), list(json.loads(row["allowed_event_types_json"])), bool(row["enabled"]), str(row["created_at"]), str(row["updated_at"])) if row else None

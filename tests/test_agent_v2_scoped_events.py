@@ -221,3 +221,51 @@ def test_authority_exceptions_fail_closed_and_type_pause_blocks_dispatch():
     authority.authorize = unavailable
     assert publish(store, event_id="new") == {"accepted": False, "reason": "event_scope_denied"}
     assert store.list_events(actor_user_id="alice") == []
+
+
+def test_scoped_receipt_survives_payload_pruning_and_rejects_scope_reuse(tmp_path):
+    store, authority = setup(tmp_path / "events.db")
+    store.register_event_type(event_type="mail.candidates", version="1", schema={"type": "object"}, max_history=1)
+    first = publish(store)
+    publish(store, event_id="e2")
+    assert store.read_event(first["event_key"], actor_user_id="alice") is None
+    assert publish(store)["duplicate"]
+    authority.runs["run1"] = replace(envelope(), connection_id="different-account")
+    assert publish(store)["reason"] == "event_scope_denied"
+
+
+def test_scoped_lease_recovery_rechecks_revocation_without_new_publication(tmp_path):
+    from datetime import datetime, timedelta, timezone
+    from alphonse.agent_v2.core.messages.sqlite_queue import SQLiteMessageQueue
+    from alphonse.agent_v2.services.event_worker import EventDispatchWorker
+
+    store, authority = setup(tmp_path / "events.db")
+    subscribe(store)
+    publish(store)
+    start = datetime.now(timezone.utc)
+    claimed = store.claim_event_executions(now=start)[0]
+    authority.active["grant"] = False
+    queue = SQLiteMessageQueue(tmp_path / "events.db")
+    calls = []
+    worker = EventDispatchWorker(store=store, messages=queue, dispatch=lambda x: calls.append(x),
+                                 worker_id="restarted")
+    assert worker.run_once(now=start + timedelta(seconds=31)) == []
+    assert calls == []
+    assert store.get_execution(claimed["execution_id"])["status"] == "denied"
+
+
+def test_authority_callbacks_run_without_database_write_transaction(tmp_path):
+    from alphonse.agent_v2.database import connect_database
+
+    path = tmp_path / "events.db"
+    store, authority = setup(path)
+    authorize = authority.authorize
+    def check(envelope, **values):
+        with connect_database(path) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute("UPDATE v2_event_workers SET display_name='Available'")
+        return authorize(envelope, **values)
+    authority.authorize = check
+    subscribe(store)
+    publish(store)
+    assert len(store.claim_event_executions()) == 1
