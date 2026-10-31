@@ -163,10 +163,19 @@ class V2Daemon:
         self._last_retention_at: datetime | None = None
         self._ag_ui = AgUiAdapter(question_store=self.runtime.question_store)
         self._a2ui = A2UiAdapter()
+        from alphonse.agent_v2.services.project_check_worker import ProjectCheckDispatcher, ProjectCheckWorker
+        self.project_check_dispatcher = (
+            ProjectCheckDispatcher(self.runtime.schedule_store, self.runtime.project_checks)
+            if self.runtime.project_checks is not None else None
+        )
+        self.project_check_worker = (
+            ProjectCheckWorker(self.project_check_dispatcher) if self.project_check_dispatcher is not None else None
+        )
         self.scheduler = ScheduledTaskWorker(
             store=self.runtime.schedule_store,
             messages=self.runtime.queue,
             worker_id=self.daemon_id,
+            project_check_handler=self.project_check_dispatcher,
             on_message_queued=lambda: None,
             on_direct_delivery=self._deliver_scheduled_reminder,
             memory_session_resolver=lambda project_id, identity, owner: self.runtime.memory_session_store.ensure_system(project_id=project_id, identity=identity, created_by_user_id=owner).session_id if project_id else "",
@@ -205,6 +214,8 @@ class V2Daemon:
                 on_outbox_delivered=self._on_outbox_delivered,
                 on_outbox_failed=self._on_outbox_failed,
             )
+            if self.project_check_worker is not None:
+                self.project_check_worker.start()
             self.scheduler.start()
             self.event_dispatcher.start()
             self._processor_thread = threading.Thread(target=self._process_loop, name="alphonse-v2-core", daemon=True)
@@ -221,6 +232,8 @@ class V2Daemon:
         self._stop.set()
         self.ipc.stop()
         self.scheduler.stop()
+        if self.project_check_worker is not None:
+            self.project_check_worker.stop()
         self.event_dispatcher.stop()
         stop_runtime_integrations(self.runtime)
         if self._processor_thread is not None and self._processor_thread.is_alive():

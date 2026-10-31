@@ -566,3 +566,60 @@ baseline rather than attributing those failures to this documentation change.
 Skipped legacy cases and these synthetic tests establish no real-provider effects,
 secure-backend implementation or end-to-end proactive-check readiness. Record the
 final documentation commit and relevant checks on the implementation PR.
+
+## Deterministic project-check scheduling (#113)
+
+`ScheduledTaskStore` now migrates old rows to `job_kind=prompt`, version 1,
+without changing prompts, IDs, direct delivery or PDCA recurrence. The daemon's
+existing scheduler installs revision-specific `project_check` schedules from
+persisted active policies. Installation is recoverable and idempotent: payloads
+are immutable `{policy_id, policy_revision}` references, and dispatch always
+rechecks current authority. A crash between the policy and schedule databases
+cannot authorize an old revision against new scope. A connection by itself
+creates no schedule.
+
+`ProjectCheckDispatcher` upserts one durable receipt per occurrence in the
+scheduler database. It records the actor/project, pinned grants, query digest,
+original retrieval window, independent acquisition/analysis checkpoints, consumed
+budgets, gaps and terminal outcome. Duplicate scheduler handoffs reconnect to
+that receipt. One live run per policy is enforced by a unique SQLite index;
+overlaps become terminal partial receipts, while independently authorized
+policies sharing an account remain independent.
+
+`ProjectCheckWorker` runs on a separate daemon-managed thread. Scheduler ticks
+perform no source acquisition or inference. Pending, leased and retry-wait runs
+recover without a new publication. Claims increment a lease generation; every
+checkpoint and terminal write compares generation, owner, unexpired lease and
+state. Operations heartbeat their leases while in flight. Cancellation is
+owner-scoped and invalidates the generation. Consumed read/model/runtime budgets
+survive retries; continuations do not reset them. Retries use five attempts and
+5-second exponential backoff and never spill outside the original window.
+
+Trusted adapters use `CheckContext.perform` for **each** fetch, page, attachment,
+retry, continuation and analysis operation. It checks window, cancellation,
+revision, account/grant, project lifecycle and remaining budgets before the call
+and again afterwards. Adapters must pass `context.deadline` and remaining budgets
+to their transport, disable transport-level implicit retries, persist accepted
+evidence before returning checkpoints, and use separately scoped provider
+cursors. In-flight reads cannot be recalled. Valid results are checkpointed before
+the post-call time fence, leaving partial progress at the boundary; an expired or
+superseded lease cannot commit. No analysis or subsequent read starts off-window.
+The production adapter is deliberately uninstalled until #114: execution records
+`blocked/acquisition_adapter_unavailable`, never successful no-match.
+
+Windows are half-open local-day intervals, bounded by policy and project duration.
+Default missed-run behavior skips late triggers and advances to the next allowed
+occurrence; one second of scheduler polling tolerance is allowed. A wider late
+start requires the policy's explicitly authorized `bounded_late` interval and
+still cannot extend retrieval past the original window. Offline backlogs coalesce
+into one missed-window receipt rather than replaying every occurrence. Unfinished
+runs expire as partial; the next window creates a new logical run and never
+silently resumes an old cursor.
+
+Recurrence skips nonexistent DST local times and records a durable owner-scoped
+`nonexistent_local_time` gap (`list_schedule_gaps`); repeated times fire once at
+the earlier offset. `ProjectCheckDispatcher.status` requires an authenticated
+owner session and reports stale pending work and expired/offline leases. These
+are trusted service APIs; they are not exposed through unauthenticated legacy
+IPC. Provider evidence, publication and outbox completion remain separate stages
+owned by #114 and its dependent issues; scheduler acceptance is not completion.
