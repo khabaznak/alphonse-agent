@@ -4,8 +4,11 @@ Status: implementation contract for [#105](https://github.com/khabaznak/alphonse
 Baseline: `e224e368b7bb80f556b51b7b4411bb60e4c4a4a4` (current main inspected for this contract).
 This document is the delivery contract. Requirements below are future work unless
 identified as shipped. #109 secure credential storage and #110 member-owned account
-grants/binding resolution and #112 validated project-policy persistence/lifecycle fences
-now ship; see [project policies](project-config.md#authorized-proactive-checks-112) and [binding implementation](skill-bindings.md#member-owned-connections-and-bounded-grants-110). The per-issue dependencies in #104 govern delivery.
+grants/binding resolution, #111 managed Google/Microsoft OAuth lifecycle APIs, and
+#112 validated project-policy persistence/lifecycle fences now ship; see
+[OAuth implementation](oauth-accounts.md), [project policies](project-config.md#authorized-proactive-checks-112)
+and [binding implementation](skill-bindings.md#member-owned-connections-and-bounded-grants-110).
+The per-issue dependencies in #104 govern delivery.
 
 ## Outcome and non-negotiable boundaries
 

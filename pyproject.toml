@@ -21,5 +21,6 @@ include = ["alphonse*"]
 "alphonse.agent_v2" = ["builtin_skills/**/*"]
 
 [project.optional-dependencies]
+accounts-oauth = ["requests-oauthlib>=2,<3"]
 credentials-desktop = ["keyring>=25,<26; sys_platform == 'darwin'"]
 credentials-headless = ["cryptography>=45,<47"]
