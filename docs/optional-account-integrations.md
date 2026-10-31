@@ -304,7 +304,7 @@ and sizes. Message links authorize no arbitrary browsing or credential forwardin
 Provider text is external untrusted data, separate from runtime constraints and
 stored prompts; it cannot change permissions, recipients or tool activation.
 
-#106 adds a server-owned versioned event envelope: `publication_id`, registered
+#106 implements the fail-closed event gate (see [managed event boundary](local_event_workers.md#managed-private-event-boundary-106)). Live authority services/adapters remain #110/#112/#113 and provider work. The server-owned versioned event envelope contains: `publication_id`, registered
 worker binding, authenticated owner, connection/grant, project/policy revision,
 check-run ID, type/version and occurrence/observation times. Bind from trusted run
 state, not worker payload assertions. Scope-filter matching/history/status before

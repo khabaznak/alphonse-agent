@@ -1612,10 +1612,21 @@ class V2Daemon:
             event_type=str(values.get("event_type") or ""), event_version=str(values.get("event_version") or ""),
             occurred_at=str(values.get("occurred_at") or ""), payload=dict(values.get("payload") or {}),
         )
-        if not result.get("accepted") or result.get("duplicate"):
-            return result
-        self.event_dispatcher.run_once()
+        self._dispatch_event_publication(result)
         return result
+
+    def publish_managed_event(self, **values: Any) -> dict[str, Any]:
+        """In-process adapter entrypoint; deliberately absent from generic IPC."""
+        assert self.event_store is not None
+        result = self.event_store.publish_managed(**values)
+        self._dispatch_event_publication(result)
+        return result
+
+    def _dispatch_event_publication(self, result: dict[str, Any]) -> None:
+        assert self.event_store is not None
+        if not result.get("accepted") or result.get("duplicate"):
+            return
+        self.event_dispatcher.run_once()
 
     def _enqueue_event_execution(self, execution: dict[str, Any]) -> str:
         payload = _event_payload(execution)
@@ -1633,15 +1644,19 @@ class V2Daemon:
 
     def register_event_worker(self, **values: Any) -> dict[str, Any]:
         assert self.event_store is not None
+        if self.event_store.is_managed_worker(str(values.get("worker_id") or "")):
+            raise PermissionError("managed_adapter_required")
         return self.event_store.register_worker(worker_id=str(values.get("worker_id") or ""), display_name=str(values.get("display_name") or ""), allowed_event_types=[str(item) for item in values.get("allowed_event_types", []) if str(item)], enabled=bool(values.get("enabled", True))).to_dict()
 
     def register_event_type(self, **values: Any) -> dict[str, Any]:
         assert self.event_store is not None
+        if self.event_store.is_private_type(str(values.get("event_type") or "")):
+            raise PermissionError("managed_adapter_required")
         return self.event_store.register_event_type(event_type=str(values.get("event_type") or ""), version=str(values.get("version") or ""), schema=dict(values.get("schema") or {}), max_history=int(values.get("max_history") or 500), enabled=bool(values.get("enabled", True))).to_dict()
 
     def create_event_automation(self, **values: Any) -> dict[str, Any]:
         assert self.event_store is not None
-        owner = self._admin_user_id(str(values.get("owner_user_id") or values.get("user") or ""))
+        owner = self._admin_user_id("local")
         project_id = str(values.get("project_id") or "").strip()
         project = self.runtime.project_store.get_project(project_id, requester_user_id=owner, requester_is_admin=self.runtime.user_store.is_admin(owner))
         if project is None:
@@ -1650,12 +1665,31 @@ class V2Daemon:
 
     def automation_catalog(self) -> dict[str, Any]:
         assert self.event_store is not None
+        actor = self._admin_user_id("local")
         schedules = [
             {"automation_id": task.scheduled_task_id, "name": task.name, "trigger_kind": "schedule", "status": task.status, "trigger": dict(task.schedule)}
-            for task in self.runtime.schedule_store.list_tasks(limit=1000)
+            for task in self.runtime.schedule_store.list_tasks(owner_user_id=actor, limit=1000)
         ]
-        events = [{**item.to_dict(), "trigger_kind": "event"} for item in self.event_store.list_automations()]
-        return {"workers": [item.to_dict() for item in self.event_store.list_workers()], "event_types": [item.to_dict() for item in self.event_store.list_event_types()], "automations": schedules + events, "events": self.event_store.list_events(limit=100)}
+        events = [item.to_dict() for item in self.event_store.visible_automations(actor_user_id=actor)]
+        workers = [
+            item.to_dict() for item in self.event_store.list_workers()
+            if not self.event_store.is_managed_worker(item.worker_id)
+            and not any(self.event_store.is_private_type(kind) for kind in item.allowed_event_types)
+        ]
+        event_types = [
+            item.to_dict() for item in self.event_store.list_event_types()
+            if not self.event_store.is_private_type(item.event_type)
+        ]
+        return {
+            "workers": workers, "event_types": event_types,
+            "automations": schedules + events,
+            "events": self.event_store.list_events(limit=100, actor_user_id=actor),
+        }
+
+    def expand_automation_event(self, event_key: str) -> dict[str, Any] | None:
+        assert self.event_store is not None
+        actor = self._admin_user_id("local")
+        return self.event_store.read_event(event_key, actor_user_id=actor)
 
     def read_project_context(self, *, user: str, project_id: str) -> dict[str, str]:
         user = self._admin_user_id(user)
@@ -2650,6 +2684,7 @@ def _json_object(value: Any) -> dict[str, Any]:
 
 
 def _event_payload(execution: dict[str, Any]) -> dict[str, Any]:
+    envelope = _json_object(execution.get("envelope_json"))
     return {
         "event_key": str(execution.get("event_key") or ""),
         "worker_id": str(execution.get("worker_id") or ""),
@@ -2657,7 +2692,10 @@ def _event_payload(execution: dict[str, Any]) -> dict[str, Any]:
         "event_type": str(execution.get("event_type") or ""),
         "event_version": str(execution.get("event_version") or ""),
         "occurred_at": str(execution.get("occurred_at") or ""),
-        "payload": _json_object(execution.get("payload_json")),
+        # Private content is expanded through the current authority gate, never
+        # copied into a queue/checkpoint where revocation could be bypassed.
+        "payload": {} if envelope else _json_object(execution.get("payload_json")),
+        **({"envelope": envelope, "requires_expansion": True} if envelope else {}),
     }
 
 
