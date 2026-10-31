@@ -68,7 +68,7 @@ def f(tmp_path):
 
 def begin(f, provider='google', connection='one'):
     record = f.store.get(connection)
-    result = f.service.begin(f.owner, connection_id=connection, provider=provider, capabilities=['mail.read'],
+    result = f.service.begin(f.owner, connection_id=connection, provider=provider, capabilities=['mail_read'],
                             expected_revision=record.connection['revision'] if record else 0)
     client = f.service.clients[provider]
     return client.config.redirect_uri + '?' + urlencode({'state': client.state, 'code': 'disposable-code'})
@@ -85,10 +85,10 @@ def revision(f):
 def authorization(f):
     from datetime import datetime, timedelta, timezone
     f.accounts.save_grant(f.owner, grant_id='grant', connection_id='one', expected_revision=0,
-        beneficiary_user_id='owner', operations=['mail.read'], resources=['mailbox'], recipient_user_ids=[],
+        beneficiary_user_id='owner', operations=['mail_read'], resources=['mailbox'], recipient_user_ids=[],
         expires_at=(datetime.now(timezone.utc) + timedelta(days=1)).isoformat())
-    return dict(connection_id='one', grant_id='grant', operation='mail.read', resources=['mailbox'],
-                recipient_user_ids=[], required_scopes=[SCOPES['google']['mail.read']], expected_grant_revision=1)
+    return dict(connection_id='one', grant_id='grant', operation='mail_read', resources=['mailbox'],
+                recipient_user_ids=[], required_scopes=[SCOPES['google']['mail_read']], expected_grant_revision=1)
 
 
 def expire(f):
@@ -102,8 +102,8 @@ def expire(f):
 def test_connect_minimal_scopes_and_secret_free_health(f, provider):
     health = connect(f, provider)
     assert health['status'] == 'connected'
-    assert health['capabilities'] == ['mail.read']
-    assert set(f.service.clients[provider].scopes) == {'openid', SCOPES[provider]['mail.read']} | ({'offline_access'} if provider == 'microsoft' else set())
+    assert health['capabilities'] == ['mail_read']
+    assert set(f.service.clients[provider].scopes) == {'openid', SCOPES[provider]['mail_read']} | ({'offline_access'} if provider == 'microsoft' else set())
     assert not {'credential_ref', 'secrets', 'config', 'provider_subject'} & health.keys()
     assert 'disposable-' not in json.dumps(health)
     assert f.store.get('one').secrets == {}
@@ -204,6 +204,7 @@ def test_refresh_serialized_across_services_and_rotation_saved(f):
     args = authorization(f)
     expire(f)
     other = OAuthService(f.accounts, f.configs, client_factory=FakeProvider)
+    authority_revision = revision(f)
     started, release = threading.Event(), threading.Event()
     f.service.clients['google'].on_refresh = lambda: (started.set(), release.wait(5))
     result = []
@@ -217,6 +218,7 @@ def test_refresh_serialized_across_services_and_rotation_saved(f):
         release.set()
         thread.join(5)
     assert result == ['rotated-access']
+    assert revision(f) == authority_revision
     assert other.token(f.owner, authorization=args) == 'rotated-access'
     assert f.service.clients['google'].refresh_count == 1
     assert other.clients['google'].refresh_count == 0
@@ -228,7 +230,7 @@ def test_refresh_serialized_across_services_and_rotation_saved(f):
 def test_revoked_consent_and_redacted_errors(f, provider, caplog):
     connect(f, provider)
     args = authorization(f)
-    args['required_scopes'] = [SCOPES[provider]['mail.read']]
+    args['required_scopes'] = [SCOPES[provider]['mail_read']]
     expire(f)
     class Revoked(Exception):
         error = 'invalid_grant'
@@ -278,7 +280,7 @@ def test_real_library_transport_pkce_no_secrets_and_no_debug_leak(f, provider, m
     pytest.importorskip('requests_oauthlib')
     client = ProviderClient(next(c for c in f.configs if c.provider == provider))
     f.service.clients[provider] = client
-    result = f.service.begin(f.owner, connection_id='one', provider=provider, capabilities=['mail.read'], expected_revision=0)
+    result = f.service.begin(f.owner, connection_id='one', provider=provider, capabilities=['mail_read'], expected_revision=0)
     params = parse_qs(urlsplit(result['authorization_url']).query)
     state = params['state'][0]
     verifier = f.service.pending[state].verifier
@@ -302,7 +304,7 @@ def test_real_library_transport_pkce_no_secrets_and_no_debug_leak(f, provider, m
                 assert body['code'] == ['disposable-code']
             else:
                 assert body['refresh_token'] == ['transport-refresh-secret']
-            scope = 'Mail.Read' if provider == 'microsoft' else SCOPES[provider]['mail.read']
+            scope = 'Mail.Read' if provider == 'microsoft' else SCOPES[provider]['mail_read']
             response._content = json.dumps(dict(access_token='transport-access-secret', refresh_token='transport-refresh-secret',
                 expires_in=3600, token_type='Bearer', scope=scope)).encode()
         else:
@@ -314,7 +316,7 @@ def test_real_library_transport_pkce_no_secrets_and_no_debug_leak(f, provider, m
     health = f.service.complete(f.owner, client.config.redirect_uri + '?' + urlencode({'state': state, 'code': 'disposable-code'}))
     assert health['status'] == 'connected'
     args = authorization(f)
-    args['required_scopes'] = [SCOPES[provider]['mail.read']]
+    args['required_scopes'] = [SCOPES[provider]['mail_read']]
     expire(f)
     assert f.service.token(f.owner, authorization=args) == 'transport-access-secret'
     assert len(calls) == 3  # Exchange, identity, refresh; no monitoring.
@@ -334,7 +336,7 @@ def test_missing_dependency_is_opt_in_and_safe(f, monkeypatch):
     monkeypatch.setattr(builtins, '__import__', missing)
     service = OAuthService(f.accounts, f.configs)  # No library import at construction.
     with pytest.raises(OAuthError, match='setup_unavailable'):
-        service.begin(f.owner, connection_id='one', provider='google', capabilities=['mail.read'], expected_revision=0)
+        service.begin(f.owner, connection_id='one', provider='google', capabilities=['mail_read'], expected_revision=0)
     assert not f.backend.data
 
 
@@ -402,11 +404,11 @@ def test_managed_binding_redacts_individual_tokens(f, tmp_path):
     skills.create_skill('fixture', 'Disposable', 'Synthetic only')
     bindings = SkillBindings(f.store, f.accounts.users, skills)
     bindings.configure(actor_id='owner', owner_id='owner', binding_id='binding', skill_id='skill:fixture',
-        kind='account', target='one', grant_id='grant', capabilities=('mail.read',),
-        required_scopes=(SCOPES['google']['mail.read'],))
+        kind='account', target='one', grant_id='grant', capabilities=('mail_read',),
+        required_scopes=(SCOPES['google']['mail_read'],))
     bindings.select(actor_id='owner', skill_id='skill:fixture', name='mail', binding_id='binding')
     result = bindings.use_account(f.owner, request=dict(skill_id='skill:fixture', name='mail',
-        operation='mail.read', resources=['mailbox'], recipient_user_ids=[]),
+        operation='mail_read', resources=['mailbox'], recipient_user_ids=[]),
         operation=lambda handle, credentials: {'echo': credentials['access_token'], 'refresh': credentials['refresh_token']})
     assert 'disposable-access' not in json.dumps(result)
     assert 'disposable-refresh' not in json.dumps(result)
@@ -437,3 +439,44 @@ def test_provider_revocation_transport_is_narrow(f, monkeypatch):
     assert calls == [('https://oauth2.googleapis.com/revoke', {'data': {'token': 'disposable-refresh'}, 'timeout': 20})]
     assert not ProviderClient(f.configs[1]).revoke(token)
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize('action', ['pause', 'disconnect'])
+def test_project_policy_survives_rotation_and_stops_on_lifecycle_change(f, tmp_path, action):
+    from datetime import datetime, timedelta, timezone
+    from alphonse.agent_v2.core.projects import ProjectStore
+    from alphonse.agent_v2.skills import SkillStore
+    from alphonse.agent_v2.skill_bindings import SkillBindings
+    from alphonse.agent_v2.project_checks import ProjectCheckService
+    connect(f)
+    skills = SkillStore(tmp_path / 'skills')
+    skills.create_skill('fixture', 'Disposable', 'Synthetic only')
+    bindings = SkillBindings(f.store, f.accounts.users, skills)
+    projects = ProjectStore(str(tmp_path / 'projects.db'))
+    project = projects.create_project(name='School', root_path=str(tmp_path / 'school'), owner_user_id='owner')
+    now = datetime.now(timezone.utc)
+    f.accounts.save_grant(f.owner, grant_id='project-grant', connection_id='one', expected_revision=0,
+        beneficiary_user_id='owner', operations=['mail_read'], resources=['mailbox'], recipient_user_ids=[],
+        expires_at=(now + timedelta(days=2)).isoformat(), project_id=project.project_id)
+    bindings.configure(actor_id='owner', owner_id='owner', binding_id='binding', skill_id='skill:fixture',
+        kind='account', target='one', grant_id='project-grant', capabilities=('mail_read',),
+        required_scopes=(SCOPES['google']['mail_read'],))
+    bindings.select(actor_id='owner', skill_id='skill:fixture', name='mail', binding_id='binding')
+    checks = ProjectCheckService(projects, bindings)
+    policy = checks.save(f.owner, activate=True, authorization_reference='conversation:explicit', definition=dict(
+        project_id=project.project_id,
+        source_bindings=[dict(skill_id='skill:fixture', role='mail', binding_id='binding', connection_id='one',
+                              grant_id='project-grant', operation='mail_read', resources=['mailbox'])],
+        query={'text': 'school'}, trigger={'kind': 'schedule', 'weekdays': [0], 'local_time': '08:00'},
+        timezone='America/Mexico_City', retrieval_window={'weekdays': [0], 'start': '08:00', 'end': '09:00'},
+        duration={'ongoing': False, 'starts_at': (now - timedelta(days=1)).isoformat(), 'ends_at': (now + timedelta(days=1)).isoformat()},
+        budgets=dict(max_pages=5, max_items=100, max_bytes=1000000, max_model_calls=2, max_runtime_seconds=60),
+        recipient_user_ids=[], skill_hints=['skill:fixture']))
+    expire(f)
+    args = dict(connection_id='one', grant_id='project-grant', operation='mail_read', resources=['mailbox'],
+                recipient_user_ids=[], required_scopes=[SCOPES['google']['mail_read']], project_id=project.project_id)
+    assert f.service.token(f.owner, authorization=args) == 'rotated-access'
+    assert checks.guard(policy['policy_id'], expected_revision=policy['revision'])
+    getattr(f.service, action)(f.owner, 'one', revision(f))
+    with pytest.raises(PermissionError):
+        checks.guard(policy['policy_id'], expected_revision=policy['revision'])

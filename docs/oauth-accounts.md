@@ -69,7 +69,9 @@ supplied by a model. `health` is a redacted Python API ready for that projection
 
 A durable SQLite per-connection lease serializes refresh across service instances
 and processes. Rotation is persisted by connection-revision and credential-generation
-CAS before tokens can be used. Pause/disconnect/reconnect cannot be overwritten by
+CAS before tokens can be used. Routine token rotation preserves the account
+authority revision pinned by project policies; only changed consent/scopes/lifecycle
+advances it. Pause/disconnect/reconnect cannot be overwritten by
 an old response. Failed/indeterminate refresh or persistence requires reconnect;
 known `server_error`/`temporarily_unavailable` responses remain retryable. A crashed
 worker leaves a fail-closed lease; explicit reconnect fences its revision and clears
@@ -83,7 +85,8 @@ errors are static codes; callback URLs and provider descriptions are not returne
 Google uses authorization code + PKCE, `openid` and only the selected capability
 scopes, with `access_type=offline` and explicit consent/account choice. Microsoft
 uses authorization code + PKCE, `openid`, `offline_access` and only selected Graph
-capabilities. The initial capabilities are read-only mail and calendar events.
+capabilities. The initial capabilities are `mail_read` and `calendar_read`, matching the project
+policy operation contract: read-only mail and calendar events.
 Graph's short resource scope names are canonicalized only against our explicit
 allowlist. OIDC/refresh issuance scopes are not treated as resource permissions;
 missing capability scopes or refresh consent fail closed. Unused ID tokens are not

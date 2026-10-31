@@ -26,11 +26,11 @@ class OAuthError(ValueError):
 
 SCOPES = {
     'google': {
-        'mail.read': 'https://www.googleapis.com/auth/gmail.readonly',
-        'calendar.read': 'https://www.googleapis.com/auth/calendar.events.readonly',
+        'mail_read': 'https://www.googleapis.com/auth/gmail.readonly',
+        'calendar_read': 'https://www.googleapis.com/auth/calendar.events.readonly',
     },
-    'microsoft': {'mail.read': 'https://graph.microsoft.com/Mail.Read',
-                  'calendar.read': 'https://graph.microsoft.com/Calendars.Read'},
+    'microsoft': {'mail_read': 'https://graph.microsoft.com/Mail.Read',
+                  'calendar_read': 'https://graph.microsoft.com/Calendars.Read'},
 }
 ENDPOINTS = {
     'google': ('https://accounts.google.com/o/oauth2/v2/auth',
@@ -231,9 +231,13 @@ class OAuthService:
         if capabilities is None:
             capabilities = record.connection['capabilities']
         scopes = scopes if scopes is not None else record.connection['granted_scopes']
+        # Credential rotation is not a change of account authority. Preserve
+        # the revision pinned by project policies on ordinary healthy refresh.
+        authority_changed = (subject is not None or capabilities != record.connection['capabilities']
+                             or scopes != record.connection['granted_scopes'])
         value = dict(record.connection)
         value.update(provider_subject=subject or value['provider_subject'], capabilities=capabilities,
-                     granted_scopes=scopes, status='connected', health_code='healthy', revision=value['revision'] + 1)
+                     granted_scopes=scopes, status='connected', health_code='healthy', revision=value['revision'] + int(authority_changed))
         from alphonse.agent_v2.integrations.store import _now_iso
         value.update(updated_at=_now_iso(), last_success_at=_now_iso())
         generation = record.credential_generation + 1
