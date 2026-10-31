@@ -74,10 +74,16 @@ The Act recommendation also includes a bounded `mission_outcome_is_fulfilled`
 Noul judgment against resumed authenticated follow-up answers. For those resumed
 tasks, completion requires both verified acceptance evidence and this follow-up
 check; approval acknowledgment alone cannot complete an approved installation.
-This additional guard does not apply to ordinary factual questions, which retain
-normal acceptance verification. A supported factual answer may state uncertainty
-and finish. Missing, non-finite or out-of-range probabilities cannot grant closure
-of pending authenticated follow-up work.
+The same judgment now checks the original requested outcome for ordinary tasks as
+well, preventing generated acknowledgment-only criteria from replacing a requested
+persisted effect. A parallel Noul classifies whether the request requires a
+persisted mutation; when it does, response/question evidence alone cannot grant
+completion, even with a positive semantic judgment. Operational evidence is
+necessary, never sufficient: successful persisted effects still require semantic
+verification and existing deterministic scope/status checks. A supported factual
+answer may state uncertainty and finish. Missing, non-finite or out-of-range mission
+probabilities cannot grant closure. Failure of the required production mission
+review cannot fall back to acceptance-only success.
 Prepared acknowledgments are excluded from substantive outer progress, so changing
 their wording cannot keep an unfulfilled task running indefinitely.
 
@@ -105,6 +111,13 @@ the key or request contents.
 
 ## Implementation log
 
+- 2026-10-31 — Issue #128: anchored mission review to the current request and
+  steering, including transaction/read-back for requested record updates. Plan
+  preserves persisted effects in acceptance criteria; status, acknowledgment and
+  no-write explanations cannot substitute for them. Omitted capabilities trigger
+  replanning rather than invented operational denials. Reply-only, malformed
+  judgment and qualified factual-answer regressions supplement the disposable
+  SQLite workflow tests. Live owner acceptance remains outstanding under #78.
 - 2026-09-20 — Added the Jev HTTP client and persistent settings, bounded atomic Noul
   review, advisory Choice routing, System Two fallback, masked admin IPC, desktop
   settings and validation, and structured telemetry. Full Python suite: 472 passed;

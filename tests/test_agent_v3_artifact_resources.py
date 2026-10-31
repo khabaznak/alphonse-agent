@@ -96,11 +96,14 @@ def test_permissions_selection_and_disabled_checks_happen_before_shell_execution
         resources.require_ready(record.artifact_id, "alex", [skill.skill_id])
 
 
-def test_private_artifact_sections_do_not_leak_into_another_users_skill_prompt(setup):
+@pytest.mark.parametrize("projected", [False, True])
+def test_private_artifact_sections_do_not_leak_into_another_users_skill_prompt(setup, monkeypatch, projected):
     skills, skill, _, _, resources = setup
     record, root = register(setup, instructions="PRIVATE_ARTIFACT_INSTRUCTION")
     task = TaskState(user="gaby", metadata={"v3_skill_selection": {"selected_skill_ids": [skill.skill_id]}})
-    text, _ = selected_skill_guidance(task, CoreLoopContext(messages=InMemoryMessageQueue(), skill_store=skills, artifact_resources=resources))
+    from alphonse.agent_v2.core.intelligence.v3.context import task_context_for_decision
+    monkeypatch.setenv("ALPHONSE_V3_CONTEXT_PROJECTIONS", str(int(projected)))
+    text = task_context_for_decision(task, CoreLoopContext(messages=InMemoryMessageQueue(), skill_store=skills, artifact_resources=resources), purpose="curation")
     assert "PRIVATE_ARTIFACT_INSTRUCTION" not in text
     assert str(root) not in text
     assert record.artifact_id not in text

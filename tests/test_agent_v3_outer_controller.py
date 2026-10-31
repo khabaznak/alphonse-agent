@@ -123,7 +123,7 @@ def test_same_evidence_does_not_discard_a_current_response():
 
 
 @pytest.mark.parametrize("authenticated_followup", [False, True])
-def test_followup_completion_guard_does_not_become_a_global_confidence_gate(authenticated_followup):
+def test_mission_guard_catches_unfulfilled_effects_with_or_without_followup(authenticated_followup):
     task = _task()
     task.metadata["prepared_user_response"] = {"message": "I acknowledged your request."}
     if authenticated_followup:
@@ -145,9 +145,9 @@ def test_followup_completion_guard_does_not_become_a_global_confidence_gate(auth
     review, decision = V3OuterController().review_and_route(task, state,
         PhaseOutcome("solar", PhaseStatus.PHASE_COMPLETE), context)
     assert review.status == PhaseReviewStatus.PHASE_VERIFIED_TASK_COMPLETE
-    assert decision.action == (StrategicAction.REPLAN if authenticated_followup else StrategicAction.COMPLETE)
-    assert task.status == ("running" if authenticated_followup else "completed")
-    assert task.metadata["v3_route"] == ("strategic_replan" if authenticated_followup else "respond_and_end")
+    assert decision.action == StrategicAction.REPLAN
+    assert task.status == "running"
+    assert task.metadata["v3_route"] == "strategic_replan"
 
 
 def test_completed_phase_with_unmet_criteria_routes_to_next_phase() -> None:
@@ -645,3 +645,55 @@ def test_dc1_closure_directive_cannot_turn_failed_verification_into_success():
     assert task.status != 'completed'
     assert decision.action == StrategicAction.REPLAN
     assert provider.requests == []
+
+
+@pytest.mark.parametrize('requires_effect', [False, True])
+def test_reply_only_evidence_cannot_complete_persisted_effect_but_can_answer_fact(requires_effect):
+    task = TaskState(user='alex', goal='Save the reviewed record' if requires_effect else 'Explain the uncertain result')
+    task.set_acceptance_contract_from_markdown('1.- [ ] Request is acknowledged')
+    task.metadata['prepared_user_response'] = {'message': 'Here is the qualified answer.'}
+    phase = PhasePlan('reply', 'Reply', (PhaseSubgoal(
+        'reply', 'Reply', 'user_response', allowed_capabilities=('user_response',),
+        allowed_side_effects=(SideEffectClass.USER_RESPONSE,),
+    ),), criterion_ids=('ac-1',), authorized_capabilities=('user_response',))
+    state = new_tactical_state(phase)
+    state.status = PhaseStatus.PHASE_COMPLETE
+    state.completed_subgoal_ids = ['reply']
+    state.evidence.append({'evidence_ref': 'response:1', 'subgoal_id': 'reply', 'tool_id': 'native.respond',
+                           'status': 'success', 'result': {'message': 'Here is the qualified answer.'}})
+
+    class PositiveJev(_SystemOne):
+        def recommend_act(self, **kwargs):
+            return SystemOneActRecommendation('complete', .99, True, 'All criteria satisfied', answers={
+                'mission_outcome_is_fulfilled': .99, 'mission_requires_persisted_effect': .99 if requires_effect else .01,
+            })
+
+    context, _ = _context()
+    context.system_one = PositiveJev(SystemOneReviewResult(({
+        'criterion_id': 'ac-1', 'status': 'satisfied', 'evidence_refs': ['response:1'],
+    },), ()))
+    _, decision = V3OuterController().review_and_route(task, state, PhaseOutcome('reply', PhaseStatus.PHASE_COMPLETE), context)
+    assert decision.action == (StrategicAction.REPLAN if requires_effect else StrategicAction.COMPLETE)
+
+
+@pytest.mark.parametrize('probability', [None, float('nan'), float('inf'), -1, 2])
+def test_invalid_required_mission_judgment_withholds_completion(probability):
+    task = _task()
+    task.metadata['prepared_user_response'] = {'message': 'Done'}
+    context, _ = _context()
+
+    class InvalidJev(_SystemOne):
+        requires_mission_outcome_review = True
+
+        def recommend_act(self, **kwargs):
+            return SystemOneActRecommendation('complete', .99, True, 'Complete', answers={
+                'mission_outcome_is_fulfilled': probability,
+            })
+
+    context.system_one = InvalidJev(SystemOneReviewResult(({
+        'criterion_id': 'ac-1', 'status': 'satisfied', 'evidence_refs': ['tactical-action:edit'],
+    },), ()))
+    _, decision = V3OuterController().review_and_route(task, _completed_state(),
+        PhaseOutcome('solar', PhaseStatus.PHASE_COMPLETE), context)
+    assert decision.action == StrategicAction.REPLAN
+    assert task.status != 'completed'

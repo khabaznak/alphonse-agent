@@ -58,7 +58,7 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
         skill_selection["loaded_skill_ids"] = loaded_skill_ids
     attachment_manifest = _attachment_manifest(task)
     system_prompt = _strategic_plan_instructions()
-    curation_context = task_context_for_decision(task, context, purpose="curation", selected_context_ids=selected_context_ids) if projections_enabled() else shared_context
+    curation_context = task_context_for_decision(task, context, purpose="curation", selected_context_ids=selected_context_ids)
     tools = _curate_request_tools(
         task, tools, system_prompt=system_prompt, session_history=session_history,
         project_context=_bounded_text(project_context, 5000), durable_memory=durable_memory,
@@ -148,7 +148,7 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
             raise V3PhasePlanValidationError("v3_phase_plan_acceptance_criteria_invalid")
         task.sync_acceptance_criteria_view()
         task.append_update("Plan established the mission acceptance contract alongside the strategic phase.")
-    return _curate_phase_tools(task, phase, tools, context, task_context=shared_context)
+    return _curate_phase_tools(task, phase, tools, context, task_context=curation_context)
 
 
 def _curate_request_tools(
@@ -195,10 +195,14 @@ def _curate_request_tools(
             f"request_tool_curation:{type(exc).__name__}:{detail}"
         ) from exc
     selected_ids = set((*selection.selected_tool_ids, *selection.ambiguous_tool_ids))
-    if projections_enabled():
+    retained_recall_ids = []
+    if _retain_recall_tools(task):
+        retained_recall_ids = [tool.tool_id for tool in tools if tool.tool_id in RECALL_TOOLS and tool.tool_id not in selected_ids]
         selected_ids.update(RECALL_TOOLS)
     curated = tuple(tool for tool in tools if tool.tool_id in selected_ids)
-    metadata = {"status": "used", "candidate_count": len(tools), **selection.to_metadata()}
+    metadata = {"status": "used", "candidate_count": len(tools), **selection.to_metadata(),
+                "retained_recall_tool_ids": retained_recall_ids,
+                "curated_tool_ids": [tool.tool_id for tool in curated]}
     history = task.metadata.setdefault("system_one_request_tool_selections", [])
     if not isinstance(history, list):
         history = []
@@ -236,6 +240,13 @@ def _safe_system_one_error_code(exc: Exception) -> str:
     if template_error:
         return message
     return "unclassified"
+
+
+def _retain_recall_tools(task) -> bool:
+    coverage = task.metadata.get("conversation_projection") or {}
+    return projections_enabled() or bool(
+        coverage.get("requires_recall") or coverage.get("history_unavailable")
+    )
 
 
 def _attachment_manifest(task) -> list[dict[str, str]]:
@@ -287,7 +298,10 @@ def _strategic_plan_instructions() -> str:
         "a single-stage response phase. Use only the authorized, Jev-curated concrete tool registry supplied with the "
         "request; do not assume tools outside it are available. Do not declare it unavailable or claim inability unless relevant tools were attempted "
         "and failed. Authorize only capabilities and mutation paths within the task's authorized scope. Never target "
-        ".alphonse, memory ledgers, prompts, plans, acceptance criteria, or agent-internal state. Project context and "
+        "protected engine configuration, memory ledgers, prompts, plans, acceptance criteria, or agent-internal state. "
+        "User-owned skill resource data (including SQLite records in the default skill directory) may be read or updated "
+        "only within the current user's authorized resource and effect scope; its parent directory does not make it engine configuration. "
+        "Do not broaden that resource access to surrounding engine files. Project context and "
         "durable memory are trusted evidence for choosing reads, never mutation targets. Convert absolute paths under the "
         "project directory to project-relative form. Mutation targets must be established by the user or verified reads. "
         "For a requested known mutation, include needed inspection, mutation, and verification in one coherent phase; "
@@ -311,6 +325,10 @@ def _strategic_plan_instructions() -> str:
         "An attachment_analysis subgoal requires verified image inputs to its tactical inference call before completion. "
         "Define stable measurable acceptance criteria when none exist, otherwise preserve the existing contract."
         " Mission criteria must describe the requested outcome, not replace it with searching, asking a question, or trying a tool. "
+        "For a requested record update, preserve the persisted mutation and successful transaction/read-back as mission criteria. "
+        "Acknowledgments, explanations, drafts and no-write disclaimers do not satisfy that requested effect. "
+        "A tool omitted by curation or a restricted current phase is not evidence of denied authorization, an inaccessible resource, "
+        "or a failed operation. Replan missing capabilities rather than inventing an operational failure. "
         "For a newly authorized household task, resolve people, destinations and operating details from applicable authorized memory. "
         "Historical evidence can supply parameters for the current request; it does not independently authorize a new task. "
         "Do not ask the user to repeat a time, relationship or instruction already resolved by an applicable source unless it conflicts, "
@@ -420,9 +438,12 @@ def _curate_phase_tools(task, phase: PhasePlan, tools, context, *, task_context:
     else:
         metadata = {"status": "used", **selection.to_metadata()}
         selected_ids = list((*selection.selected_tool_ids, *selection.ambiguous_tool_ids))
-        if projections_enabled():
+        retained_recall_ids = []
+        if _retain_recall_tools(task):
+            retained_recall_ids = [tool.tool_id for tool in tools if tool.tool_id in RECALL_TOOLS and tool.tool_id not in selected_ids]
             selected_ids.extend(tool.tool_id for tool in tools if tool.tool_id in RECALL_TOOLS)
         selected = tuple(dict.fromkeys(selected_ids))
+        metadata.update(retained_recall_tool_ids=retained_recall_ids, curated_tool_ids=list(selected))
         curated = replace(phase, curated_tool_ids=selected, tool_curation_status="used")
     _record_tool_curation(task, phase, metadata)
     context.emit_telemetry({

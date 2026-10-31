@@ -23,6 +23,7 @@ from alphonse.agent_v2.core.intelligence.v3.context import prepare_context_curat
 from alphonse.agent_v2.core.intelligence.v3.context import recent_conversation_for_curation
 from alphonse.agent_v2.core.intelligence.v3.context import task_context_for_decision
 from alphonse.agent_v2.core.intelligence.v3.context import task_context_addenda
+from alphonse.agent_v2.core.intelligence.v3.context import conversation_coverage
 from alphonse.agent_v2.core.intelligence.v3.context import selected_skill_guidance
 from alphonse.agent_v2.core.intelligence.v3.context import skill_candidates_for_curation
 
@@ -168,6 +169,7 @@ class HierarchicalCAPDProcessor:
                     "invariant_context": invariant_context,
                     "selected_context": selected_shared_context,
                     "additional_context": task_context_addenda(task),
+                    "conversation_coverage": conversation_coverage(task),
                 }
                 if projections_enabled():
                     kwargs["decision_context"] = lambda ids: task_context_for_decision(

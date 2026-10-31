@@ -211,6 +211,17 @@ that phase unless new evidence and the phase contract make them relevant.
 
 ## Implementation log
 
+- 2026-10-31 — Issue #128: default request and phase curation now receive bounded,
+  access-filtered selected skill instructions and verified resource manifests with
+  source receipts, matching the projection path. Structured conversation coverage
+  reaches admission; omission/unavailable-history signals retain already-exposed
+  recall tools through both curation passes. Bash relevance explicitly includes
+  instruction-only skill workflows and SQLite transactions/read-back. Engine
+  configuration stays protected; authorized user resource data inside a skill
+  directory is not automatically engine state. Disposable SQLite regressions cover
+  both context paths, commits, read-only denial, unavailable databases and rollback.
+  No owner data or generated artifact was modified. Live workflow retest and #78
+  owner acceptance remain open; synthetic evidence does not close those gates.
 - 2026-09-20 — Added the capability catalog, deterministic reveal policy, attachment,
   project, mutation, side-effect, and integration prerequisites, schema/tool budgets,
   structured reveal events, and executor enforcement. Full suite: 445 passed.

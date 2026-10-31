@@ -6,6 +6,7 @@ from alphonse.agent_v2.core.context_inventory import source, prompt_receipt
 
 import json
 import inspect
+import math
 from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any
@@ -78,7 +79,8 @@ class V3OuterController:
         act_directive = task.metadata.get("act_directive")
         act_directive = act_directive if isinstance(act_directive, dict) else {}
         desired = str(act_directive.get("terminal_outcome") or "failed")
-        closure_allowed = desired == "failed" or review.status == PhaseReviewStatus.PHASE_VERIFIED_TASK_COMPLETE
+        # Successful closure must still pass the mission-outcome review below.
+        closure_allowed = desired == "failed"
         if review.status != PhaseReviewStatus.CANCELLED and closure_allowed and act_directive.get("closure_only") and task.has_prepared_user_response():
             decision = StrategicDecision(
                 StrategicAction.FAIL if desired == "failed" else StrategicAction.COMPLETE,
@@ -114,7 +116,7 @@ class V3OuterController:
                 decision, recommendation = _recommend_act(task, state, outcome, review, context)
             except SystemOneUnavailableError:
                 if (getattr(context.system_one, "requires_mission_outcome_review", False)
-                        and task.metadata.get("v3_resumption_evidence")):
+                        and review.status == PhaseReviewStatus.PHASE_VERIFIED_TASK_COMPLETE):
                     raise
                 decision = decide_next_action(review)
         else:
@@ -314,8 +316,26 @@ def _recommend_act(task, state, outcome, review: PhaseReview, context):
     answers = recommendation.answers
     yes_threshold = float(getattr(recommendation, "yes_threshold", 0.8))
     mission_fulfilled = answers.get("mission_outcome_is_fulfilled")
-    if (action == "complete" and task.metadata.get("v3_resumption_evidence")
-            and isinstance(mission_fulfilled, (int, float)) and mission_fulfilled < yes_threshold):
+    valid_mission_judgment = (type(mission_fulfilled) in {int, float}
+                             and math.isfinite(mission_fulfilled) and 0 <= mission_fulfilled <= 1)
+    requires_effect = answers.get("mission_requires_persisted_effect", 0.0)
+    # A semantic positive cannot manufacture execution evidence out of a reply.
+    # Successful operational evidence is necessary, never sufficient: the
+    # mission judgment and existing scope/verification checks still apply.
+    missing_effect_evidence = (
+        type(requires_effect) in {int, float} and math.isfinite(requires_effect)
+        and requires_effect >= yes_threshold
+        and not any(
+            item.get("status") == "success" and item.get("tool_id")
+            and item["tool_id"] not in {"native.respond", "native.ask_question"}
+            for item in state.evidence.entries
+        )
+    )
+    mission_unfulfilled = valid_mission_judgment and mission_fulfilled < yes_threshold
+    required_judgment_missing = (
+        getattr(context.system_one, "requires_mission_outcome_review", False) and not valid_mission_judgment
+    )
+    if action == "complete" and (mission_unfulfilled or missing_effect_evidence or required_judgment_missing):
         action = "replan"
     elif action == "fail_explain" and review.status == PhaseReviewStatus.PHASE_VERIFIED_TASK_INCOMPLETE:
         # A completed phase is not the same as a completed mission. If the
