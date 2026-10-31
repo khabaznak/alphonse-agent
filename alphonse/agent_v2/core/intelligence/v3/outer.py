@@ -502,6 +502,7 @@ def _system_two_acceptance_review(
 ) -> dict[str, Any]:
     if context.inference is None:
         raise SystemOneUnavailableError("acceptance_review_unavailable")
+    from .context_manifests import event_input_metadata
     request = InferenceRequest(
         prompt=(
             "Review the verified evidence against the immutable acceptance criteria. Return JSON with an updates array. "
@@ -509,9 +510,11 @@ def _system_two_acceptance_review(
             "Do not invent evidence or rewrite criteria.\n\n"
             f"Acceptance contract: {json.dumps(contract or task.ensure_acceptance_contract(), ensure_ascii=False)}\n"
             f"Phase: {json.dumps(state.phase.to_dict(), ensure_ascii=False)}\n"
-            f"Verified evidence: {json.dumps(state.evidence.to_dict(), ensure_ascii=False)}"
+            f"Verified evidence: {json.dumps(state.evidence.to_dict(), ensure_ascii=False)}\n"
+            f"Source context (not verified effects): {_task_context(task, context)}"
         ),
         purpose=InferencePurpose.PHASE_REVIEW,
+        metadata=event_input_metadata(task, "review"),
         project_id=task.project_id,
         user=task.user,
         task_id=task.task_id,
@@ -529,7 +532,7 @@ def _system_two_acceptance_review(
 def _task_context(task, context) -> str:
     selection = task.metadata.get("v3_context_selection")
     selected_ids = selection.get("selected_context_ids", []) if isinstance(selection, dict) else []
-    return task_context_for_decision(task, context, selected_context_ids=selected_ids)
+    return task_context_for_decision(task, context, selected_context_ids=selected_ids, stage="review")
 
 
 def _evaluate_system_one_with_context(system_one, *, contract, phase, evidence, task_context):

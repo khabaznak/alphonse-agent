@@ -236,6 +236,7 @@ class CoreLoopContext:
     skill_store: Any | None = None
     artifact_resources: Any | None = None
     skill_bindings: Any | None = None
+    event_store: Any | None = None
     consumed_message_ids: list[str] = field(default_factory=list)
 
     def consume_message(self, selector: MessageSelector | None = None) -> QueuedMessage | None:
@@ -525,6 +526,7 @@ class AlphonseCore:
     skill_store: Any | None = None
     artifact_resources: Any | None = None
     skill_bindings: Any | None = None
+    event_store: Any | None = None
     question_store: Any | None = None
     project_store: Any | None = None
     schedule_store: Any | None = None
@@ -630,6 +632,7 @@ class AlphonseCore:
                 skill_store=self.skill_store,
                 artifact_resources=self.artifact_resources,
                 skill_bindings=self.skill_bindings,
+                event_store=self.event_store,
                 question_store=self.question_store,
                 project_store=self.project_store,
                 schedule_store=self.schedule_store,

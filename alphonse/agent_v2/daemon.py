@@ -127,6 +127,7 @@ class V2Daemon:
             if schedule_db_path == ":memory:"
             else EventAutomationStore(schedule_db_path)
         )
+        self.runtime.core.event_store = self.event_store
         self.daemon_id = str(self.daemon_id or "").strip() or f"daemon-{uuid4().hex[:12]}"
         if hasattr(self.runtime.queue, "lease_owner"):
             self.runtime.queue.lease_owner = self.daemon_id
