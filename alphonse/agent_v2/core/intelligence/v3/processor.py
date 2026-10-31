@@ -23,8 +23,10 @@ from alphonse.agent_v2.core.intelligence.v3.context import prepare_context_curat
 from alphonse.agent_v2.core.intelligence.v3.context import recent_conversation_for_curation
 from alphonse.agent_v2.core.intelligence.v3.context import task_context_for_decision
 from alphonse.agent_v2.core.intelligence.v3.context import task_context_addenda
+from alphonse.agent_v2.core.intelligence.v3.context import conversation_coverage
 from alphonse.agent_v2.core.intelligence.v3.context import selected_skill_guidance
 from alphonse.agent_v2.core.intelligence.v3.context import skill_candidates_for_curation
+from alphonse.agent_v2.core.memory.retry_context import prepare_retry_continuity, retry_continuity_context
 
 if TYPE_CHECKING:
     from alphonse.agent_v2.core.core import CoreLoopContext, IntelligenceProcessor
@@ -72,6 +74,7 @@ class HierarchicalCAPDProcessor:
                         # Re-running the parked subgoal would merely ask the same
                         # question again. Replan from the answer while retaining the
                         # earlier phase evidence in v3_phase_history.
+                        _resume_inspection_from_answer(task, state)
                         task.hierarchical_state = {}
                         state = self._new_state(task, context)
                     elif state.status.value in {"planned", "running"}:
@@ -82,8 +85,10 @@ class HierarchicalCAPDProcessor:
                     state = self._new_state(task, context)
                     self._persist(task, context)
             except (V3PhasePlanValidationError, SystemOneUnavailableError) as exc:
-                task.status = "failed"
-                task.outcome = {"status": "failure", "reason": str(exc)}
+                cancelled = context.is_cancelled()
+                task.status = "cancelled" if cancelled else "failed"
+                task.outcome = {"status": "cancelled" if cancelled else "failure",
+                                "reason": "Task cancelled." if cancelled else str(exc)}
                 self._persist(task, context)
                 break
             try:
@@ -101,13 +106,17 @@ class HierarchicalCAPDProcessor:
             evidence_after = _successful_evidence_signatures(task.metadata.get("v3_phase_history"))
             evidence_progress = bool(evidence_after - evidence_before) or bool(_satisfied_criterion_ids(task) - satisfied_before)
             review_status = str(getattr(getattr(review, "status", None), "value", ""))
+            inspection_handoff = (
+                (task.metadata.get("v3_inspection_resolution") or {}).get("phase_id") == state.phase.phase_id
+                and any(blocker.startswith("inspection_") for blocker in outcome.blockers)
+            )
             if "tactical_stage_no_new_progress" in set(outcome.blockers):
                 evidence_progress = False
             mission_answer = (task.metadata.get("system_one_act_recommendation") or {}).get("answers", {}).get("mission_outcome_is_fulfilled")
             threshold = float(getattr(getattr(context.system_one, "settings", None), "yes_threshold", 0.8))
             mission_unfulfilled = (bool(task.metadata.get("v3_resumption_evidence"))
                                   and isinstance(mission_answer, (int, float)) and mission_answer < threshold)
-            if (review_status in {
+            if not inspection_handoff and (review_status in {
                 "phase_blocked", "verification_failed", "phase_verified_task_incomplete",
             } or mission_unfulfilled or task.metadata.get("v3_route") == "strategic_replan") and not evidence_progress:
                 no_progress_phases += 1
@@ -136,6 +145,7 @@ class HierarchicalCAPDProcessor:
         """Acknowledge a new human task once, or satisfy it with a direct reply."""
         if not _is_initial_human_task(task):
             return False
+        prepare_retry_continuity(task, context)
         existing = task.metadata.get("v3_admission")
         if isinstance(existing, dict) and existing.get("completed") is True:
             return str(existing.get("route") or "") == "direct_response" and task.status == "completed"
@@ -148,6 +158,9 @@ class HierarchicalCAPDProcessor:
         if not isinstance(existing_selection, dict):
             invariant_context, candidates = prepare_context_curation(task, context)
             recent_context = recent_conversation_for_curation(task, context)
+            retry_context = retry_continuity_context(task, context)
+            if retry_context:
+                recent_context = recent_context + "\n\n" + retry_context
         else:
             selection_ids = existing_selection.get("selected_context_ids", [])
             selected_shared_context = task_context_for_decision(
@@ -168,6 +181,7 @@ class HierarchicalCAPDProcessor:
                     "invariant_context": invariant_context,
                     "selected_context": selected_shared_context,
                     "additional_context": task_context_addenda(task),
+                    "conversation_coverage": conversation_coverage(task),
                 }
                 if projections_enabled():
                     kwargs["decision_context"] = lambda ids: task_context_for_decision(
@@ -502,12 +516,17 @@ class HierarchicalCAPDProcessor:
                 else:
                     task.metadata.pop("v3_failure_response", None)
             if not task.metadata.get("v3_failure_response"):
+                plan_invalid = str((task.outcome or {}).get("reason") or "").startswith("v3_phase_plan_invalid:")
                 task.metadata["v3_failure_response"] = {
                     "source": "v3_failure_fallback",
                     "communication_reviewed": True,
-                    "message": "I couldn't complete this task because a required step failed. "
+                    "message": ("I couldn't start the next operation because its execution plan was invalid. "
+                               "The requested result remains unverified. This planning error does not establish "
+                               "that the resource is missing or that access was denied. Any earlier completed work has been preserved."
+                               if plan_invalid else
+                               "I couldn't complete this task because a required step failed. "
                                "The requested result has not been fully verified. Any completed work has been preserved. "
-                               "Review the failed action in the work log and ask me to retry once the blocker is resolved.",
+                               "Review the failed action in the work log and ask me to retry once the blocker is resolved."),
                 }
             HierarchicalCAPDProcessor._persist(task, context)
         status = (
@@ -550,6 +569,26 @@ class EngineRoutingProcessor:
 
     def process(self, task: "TaskState", context: "CoreLoopContext") -> ProcessingResult:
         return (self.v3 if task.intelligence_engine == "hierarchical_v3" else self.v2).process(task, context)
+
+
+def _resume_inspection_from_answer(task: "TaskState", state: TacticalState) -> None:
+    directive = task.metadata.get("act_directive") or {}
+    if not directive.get("inspection_resolution"):
+        return
+    answered = any(
+        isinstance(receipt, dict) and receipt.get("kind") == "authenticated_question_answer"
+        and receipt.get("task_id") == str(task.task_id or task.message_id or "")
+        and receipt.get("phase_id") == state.phase.phase_id
+        for receipt in task.metadata.get("v3_resumption_evidence", [])
+    )
+    if answered:
+        # Only the question store's authenticated receipt for this parked phase
+        # releases the question directive. Historical text cannot reset it.
+        task.metadata["act_directive"] = {
+            "action": "replan", "rationale": "Use the authenticated answer with existing evidence to continue the original authorized request; do not repeat the answered question.",
+        }
+        task.metadata.pop("v3_inspection_resolution", None)
+        task.metadata.pop("v3_update_inspection_actions", None)
 
 
 def _is_initial_human_task(task: "TaskState") -> bool:

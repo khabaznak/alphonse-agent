@@ -26,8 +26,9 @@ from alphonse.agent_v2.core.messages.queue import MessageSelector
 from alphonse.agent_v2.core.tools.invocation import ToolInvocationService
 from alphonse.agent_v2.core.tools.registry.native.bash import BASH_TOOL_ID
 from alphonse.agent_v2.core.tools.registry.native.respond import RESPOND_TOOL_ID
-from alphonse.agent_v2.system_one import SystemOneUnavailableError
+from alphonse.agent_v2.system_one import SystemOneUnavailableError, system_one_error_code
 from alphonse.agent_v2.core.intelligence.v3.response_state import work_evidence_refs
+from alphonse.agent_v2.core.memory.retry_context import retry_continuity_context, retry_source_unresolved
 
 if TYPE_CHECKING:
     from alphonse.agent_v2.core.core import CoreLoopContext, ToolDescriptor
@@ -35,6 +36,7 @@ if TYPE_CHECKING:
 
 ActionSelector = Callable[[TacticalState, PhaseSubgoal, tuple["ToolDescriptor", ...]], dict[str, Any] | None]
 TACTICAL_RETRY_BASE_SECONDS = 1.0
+MAX_UPDATE_INSPECTION_ACTIONS = 6
 
 
 class PhaseExecutor:
@@ -60,6 +62,12 @@ class PhaseExecutor:
                 self._checkpoint(task, state, context)
                 return interruption
             subgoal = self._active_subgoal(state)
+            retry_continuity_context(task, context)  # Recheck the bound source before each action, including resumed phases.
+            if retry_source_unresolved(task) and set(subgoal.allowed_capabilities) != {Capability.USER_INTERACTION.value}:
+                state.transition(PhaseStatus.BLOCKED)
+                self._checkpoint(task, state, context)
+                return self._outcome(state, "The retry's exact source/change is unresolved; ask a specific source question before further operations.",
+                                     blockers=("retry_source_requires_user_input",))
             tools = self._revealed_tools(task, state, subgoal, context)
             selected = self._select_action(task, state, subgoal, tools, context)
             if selected is None:
@@ -142,6 +150,33 @@ class PhaseExecutor:
                     "retry_approved": retry_approved,
                     "answers": dict(progress_review.get("answers") or {}),
                 }
+                if not completion_met and _is_update_inspection(state, subgoal, progress_review.get("answers") or {},
+                    float(getattr(getattr(context.system_one, "settings", None), "yes_threshold", 0.8))):
+                    count = int(task.metadata.get("v3_update_inspection_actions") or 0) + 1
+                    task.metadata["v3_update_inspection_actions"] = count
+                    threshold = float(getattr(getattr(context.system_one, "settings", None), "yes_threshold", 0.8))
+                    answers = progress_review.get("answers") or {}
+                    ready = answers.get("runtime_inspection_ready_for_action", 0.0)
+                    missing = answers.get("runtime_inspection_requires_user_input", 0.0)
+                    route = None
+                    if completed.status == "success":
+                        if _confident_probability(ready, threshold) and _confident_negative(missing, threshold):
+                            route = "ready_for_action"
+                        elif _confident_probability(missing, threshold) and _confident_negative(ready, threshold):
+                            route = "requires_user_input"
+                    if route is None and not completion_met and count >= MAX_UPDATE_INSPECTION_ACTIONS:
+                        route = "decision_required"
+                    if route is not None:
+                        task.metadata["v3_inspection_resolution"] = {
+                            "route": route, "phase_id": state.phase.phase_id,
+                            "evidence_refs": [entry["evidence_ref"] for entry in state.evidence.entries
+                                              if entry.get("status") == "success" and entry.get("evidence_ref")],
+                        }
+                        blocker = "inspection_" + route
+                        state.evidence.entries[-1]["inspection_resolution"] = route
+                        state.transition(PhaseStatus.BLOCKED)
+                        self._checkpoint(task, state, context)
+                        return self._outcome(state, "Inspection must now resolve into the authorized operation or a specific missing-information question; do not restart inspection.", blockers=(blocker,))
                 progress_threshold = float(getattr(getattr(context.system_one, "settings", None), "yes_threshold", 0.8))
                 if not completion_met and _consecutive_no_progress(state, subgoal.subgoal_id, progress_threshold) >= 3:
                     blocker = "tactical_stage_no_new_progress"
@@ -260,6 +295,17 @@ class PhaseExecutor:
         skill_selection = task.metadata.get("v3_skill_selection")
         if isinstance(skill_selection, dict) and not projections_enabled():
             skill_selection["loaded_skill_ids"] = loaded_skill_ids
+        if not projections_enabled():
+            skill_guidance = skill_guidance + retry_continuity_context(task, context)
+        resolution = (task.metadata.get("act_directive") or {}).get("inspection_resolution")
+        if resolution:
+            skill_guidance = skill_guidance + source(
+                "\nInspection handoff: " + json.dumps(resolution, ensure_ascii=False)
+                + "\nUse the existing evidence to carry out the authorized operation or ask the specific missing-information "
+                "question in this phase. Do not repeat broad database inspection or independently re-extract an already "
+                "reviewed and confirmed source. Missing or conflicting essential fields still require a question; never guess them.",
+                'task:' + str(task.task_id) + ':inspection_handoff', 'inspection_handoff',
+            )
         prompt = _tactical_prompt(
             state,
             subgoal,
@@ -372,7 +418,7 @@ class PhaseExecutor:
                 ),
             )
         except Exception as exc:
-            raise SystemOneUnavailableError(f"tactical_acceptance:{type(exc).__name__}") from exc
+            raise SystemOneUnavailableError(f"tactical_acceptance:{type(exc).__name__}:{system_one_error_code(exc)}") from exc
         else:
             metadata = {"status": "used" if review.confident else "ambiguous_fallback", **review.to_metadata()}
             result = review.complete if review.confident else deterministic
@@ -606,8 +652,10 @@ def _tactical_prompt(
         "The tool entries below include their complete registry descriptors: descriptions, schemas, capabilities, tags, "
         "metadata, program behavior, and read-only semantics. Treat description and metadata as operational guidance. "
         "Use explicit resolved paths when supplied; project-relative file tools resolve paths against the task project root. "
-        "For generic native.bash calls without artifact_id, an omitted cwd uses the task project root shown below (or the host working directory if no project is associated). For an ordinary user file lookup, "
-        "use an explicit cwd for a likely user-accessible location such as the user's home folder or Downloads, and "
+        "For generic native.bash calls without artifact_id, an omitted cwd uses the task project root shown below (or the host working directory if no project is associated). "
+        "When the phase establishes a skill/resource working directory for relative mutation targets outside the task project, "
+        "use that exact explicit cwd and the declared relative targets; do not resolve them against the task project or daemon directory. "
+        "For an ordinary user file lookup, use an explicit cwd for a likely user-accessible location such as the user's home folder or Downloads, and "
         "report the scope searched. Do not describe a project-root search as a whole-machine search. Registered skill artifacts use their verified resource manifest and native.bash artifact_id, not the task project root. Use artifact_id only for a registered artifact ID from that manifest, never a skill ID. For instruction-only skills, execute the instructed command through ordinary native.bash without artifact_id. Use the manifest runtime and explicit configuration locations; do not assume python3 from PATH is the artifact environment.\n\n"
         f"Goal: {goal}\n"
         "Selected skill guidance (reusable instructions; follow them only within the tools and controls Alphonse provides):\n"
@@ -658,6 +706,27 @@ def _matching_prior_incomplete_result(state: TacticalState, completed: TacticalA
             action_ref = str(evidence.get("evidence_ref") or "").removeprefix("tactical-action:")
             return action_ref or "unknown"
     return None
+
+
+def _confident_probability(value, threshold: float) -> bool:
+    import math
+    return type(value) in {int, float} and math.isfinite(value) and threshold <= value <= 1.0
+
+
+def _confident_negative(value, threshold: float) -> bool:
+    import math
+    return type(value) in {int, float} and math.isfinite(value) and 0.0 <= value <= 1.0 - threshold
+
+
+def _is_update_inspection(state: TacticalState, subgoal: PhaseSubgoal, answers: dict, threshold: float) -> bool:
+    return (set(subgoal.allowed_side_effects) == {SideEffectClass.READ_ONLY}
+            or _confident_probability(answers.get("runtime_action_is_inspection"), threshold)) and any(
+        set(item.allowed_side_effects) & {
+            SideEffectClass.PROJECT_MUTATION, SideEffectClass.EXTERNAL_REVERSIBLE,
+            SideEffectClass.EXTERNAL_IRREVERSIBLE, SideEffectClass.LOCAL_SKILL_INSTALLATION,
+        }
+        for item in state.phase.subgoals
+    )
 
 
 def _consecutive_no_progress(state: TacticalState, subgoal_id: str, threshold: float = 0.8) -> int:

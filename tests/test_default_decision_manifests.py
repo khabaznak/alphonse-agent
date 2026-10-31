@@ -84,9 +84,9 @@ def test_default_admission_planning_curation_and_both_reviews_match_call_inputs(
         _system_two_acceptance_review(task, state, context)
     manifests = deepcopy(task.metadata['decision_context_manifests'])
     purposes = {m['purpose'] for m in manifests}
-    assert {'admission_curation', 'admission', 'phase_planning', 'tool_curation_request', 'tool_curation_phase', 'completion_review', 'phase_review'} <= purposes
+    assert {'admission_curation', 'admission', 'phase_planning', 'tool_curation_request', 'tool_curation_phase', 'completion_review', 'phase_review', 'recall_selection', 'retry_context_selection'} <= purposes
     assert all(m['provenance'] == 'source_manifest' and m['context_builder_version'] == 'call-input-v2' for m in manifests)
-    jev_rows = [m for m in manifests if m['purpose'] in {'admission_curation', 'admission', 'task_acknowledgement', 'tool_curation_request', 'tool_curation_phase', 'completion_review'}]
+    jev_rows = [m for m in manifests if m['purpose'] in {'admission_curation', 'admission', 'task_acknowledgement', 'tool_curation_request', 'tool_curation_phase', 'completion_review', 'recall_selection', 'retry_context_selection'}]
     assert len(jev_rows) == len(calls)
     for row, call in zip(jev_rows, calls):
         assert_ranges(row, {**call['state'], 'questions': call['questions']})
