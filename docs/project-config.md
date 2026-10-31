@@ -55,3 +55,13 @@ Jev's System One context curation receives only authorized project-config
 candidates. It can select multiple projects; every candidate whose relevance
 probability meets the configured threshold is retained, including equal-scoring
 candidates. Project files and config are data, not instructions or authorization.
+
+## Optional account checks
+
+The [optional-account implementation contract](optional-account-integrations.md)
+defines separate persisted, revisioned policies for project-directed proactive
+checks. This is future work, not an extension already supported by this config
+schema. Editing goals may invalidate a policy for review; editing this file or
+sharing a project can never activate monitoring, select an account, expand an
+account grant or add notification recipients. Ordinary authorized one-off account
+queries remain project-optional. Connecting an account starts no proactive work.
