@@ -22,8 +22,11 @@ _INVARIANT_GLOBAL_SECTIONS = {
 }
 
 
-def prepare_context_curation(task: "TaskState", context: "CoreLoopContext") -> tuple[str, list[dict[str, str]]]:
+def prepare_context_curation(task: "TaskState", context: "CoreLoopContext", *, stage: str = "curation", include_event: bool = True) -> tuple[str, list[dict[str, str]]]:
     """Return always-included context and bounded optional context candidates."""
+    from .event_evidence import render_event_evidence
+    from .context_manifests import record_context_input
+    event = render_event_evidence(task, context, stage=stage) if include_event else ""
     sections: list[str] = []
     active_projects = _visible_active_projects(task, context)
     recent_text = _recent_conversation(task, context)
@@ -53,7 +56,11 @@ def prepare_context_curation(task: "TaskState", context: "CoreLoopContext") -> t
         candidate = _project_candidate_for_record(project, context)
         if candidate is not None:
             candidates.append(candidate)
-    return "\n\n".join(sections)[:12000], candidates[:64]
+    prefix = event + "\n\n" if event else ""
+    invariant = prefix + "\n\n".join(sections)[:max(0, 12000 - len(prefix))]
+    if include_event:
+        record_context_input(task, stage, invariant)
+    return invariant, candidates[:64]
 
 
 def conversation_context(
@@ -61,9 +68,10 @@ def conversation_context(
     context: "CoreLoopContext",
     *,
     selected_context_ids: list[str] | tuple[str, ...] = (),
+    stage: str = "decision",
 ) -> str:
     """Render invariant context plus the optional candidates selected at admission."""
-    invariant, candidates = prepare_context_curation(task, context)
+    invariant, candidates = prepare_context_curation(task, context, stage=stage)
     selected = set(str(item) for item in selected_context_ids)
     sections = [invariant] if invariant else []
     for candidate in candidates:
@@ -77,11 +85,15 @@ def task_context_for_decision(
     context: "CoreLoopContext",
     *,
     selected_context_ids: list[str] | tuple[str, ...] = (),
+    stage: str = "decision",
 ) -> str:
     """Render the shared task context used by Jev and System Two."""
-    sections = [conversation_context(task, context, selected_context_ids=selected_context_ids)]
+    sections = [conversation_context(task, context, selected_context_ids=selected_context_ids, stage=stage)]
     sections.extend(task_context_addenda(task))
-    return "\n\n".join(sections)[:36000]
+    from .context_manifests import record_context_input
+    rendered = "\n\n".join(sections)[:36000]
+    record_context_input(task, stage, rendered)
+    return rendered
 
 
 def task_context_addenda(task: "TaskState") -> list[str]:
@@ -100,7 +112,7 @@ def task_context_addenda(task: "TaskState") -> list[str]:
 def selected_project_context(task: "TaskState", context: "CoreLoopContext") -> str:
     selection = task.metadata.get("v3_context_selection")
     selected = set(selection.get("selected_context_ids", [])) if isinstance(selection, dict) else set()
-    _invariant, candidates = prepare_context_curation(task, context)
+    _invariant, candidates = prepare_context_curation(task, context, include_event=False)
     blocks = [f"{item['title']}:\n{item['content']}" for item in candidates if item.get("id", "").startswith("project:") and item.get("id") in selected]
     return "\n\n".join(blocks)
 

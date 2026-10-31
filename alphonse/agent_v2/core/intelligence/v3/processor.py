@@ -15,6 +15,7 @@ from alphonse.agent_v2.core.intelligence.v3.planner import plan_phase
 from alphonse.agent_v2.core.intelligence.v3.planner import V3PhasePlanValidationError
 from alphonse.agent_v2.system_one import SystemOneUnavailableError
 from alphonse.agent_v2.skill_resources import SkillActivationError
+from .event_evidence import EventEvidenceDenied
 from alphonse.agent_v2.core.intelligence.v3.revealing import ToolRevealPolicy
 from alphonse.agent_v2.core.intelligence.v3.context import prepare_context_curation
 from alphonse.agent_v2.core.intelligence.v3.context import recent_conversation_for_curation
@@ -42,7 +43,7 @@ class HierarchicalCAPDProcessor:
         task.intelligence_schema_version = 3
         try:
             admitted = self._admit_initial_human_task(task, context)
-        except SkillActivationError as exc:
+        except (SkillActivationError, EventEvidenceDenied) as exc:
             task.status = "failed"
             task.outcome = {"status": "failure", "reason": str(exc)}
             self._persist(task, context)
@@ -70,7 +71,7 @@ class HierarchicalCAPDProcessor:
                 else:
                     state = self._new_state(task, context)
                     self._persist(task, context)
-            except (V3PhasePlanValidationError, SystemOneUnavailableError) as exc:
+            except (V3PhasePlanValidationError, SystemOneUnavailableError, EventEvidenceDenied) as exc:
                 task.status = "failed"
                 task.outcome = {"status": "failure", "reason": str(exc)}
                 self._persist(task, context)
@@ -80,7 +81,7 @@ class HierarchicalCAPDProcessor:
                 evidence_before = _successful_evidence_refs(task.metadata.get("v3_phase_history"))
                 self._append_history(task, state, outcome.to_dict())
                 review, decision = self.outer.review_and_route(task, state, outcome, context)
-            except SystemOneUnavailableError as exc:
+            except (SystemOneUnavailableError, EventEvidenceDenied) as exc:
                 task.status = "failed"
                 task.outcome = {"status": "failure", "reason": str(exc)}
                 self._persist(task, context)

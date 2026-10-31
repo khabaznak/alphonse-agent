@@ -44,7 +44,7 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
     context_selection = task.metadata.get("v3_context_selection")
     selected_context_ids = context_selection.get("selected_context_ids", []) if isinstance(context_selection, dict) else []
     shared_context = task_context_for_decision(
-        task, context, selected_context_ids=selected_context_ids,
+        task, context, selected_context_ids=selected_context_ids, stage="planning",
     )
     skill_guidance, loaded_skill_ids = selected_skill_guidance(task, context)
     skill_selection = task.metadata.get("v3_skill_selection")
@@ -56,6 +56,10 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
         task, tools, system_prompt=system_prompt, session_history=session_history,
         project_context=_bounded_text(project_context, 5000), durable_memory=durable_memory,
         attachment_manifest=attachment_manifest, context=context, task_context=shared_context,
+    )
+    # Curation may outlive a grant or policy window. Re-expand before System Two.
+    shared_context = task_context_for_decision(
+        task, context, selected_context_ids=selected_context_ids, stage="planning",
     )
     catalog = sorted({capability for tool in tools for capability in tool_capabilities(tool)})
     capability_descriptions = ToolRevealPolicy().capability_descriptions
@@ -97,10 +101,12 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
         "use with fresh skill activation; pinned old tasks must reselect/replan. "
         f"\nPhasePlan JSON Schema: {json.dumps(contract_schema, ensure_ascii=False, sort_keys=True)}"
     )
+    from .context_manifests import event_input_metadata
     result = context.inference.generate_json(
         InferenceRequest(
             prompt=prompt,
             purpose=InferencePurpose.PHASE_PLANNING,
+            metadata=event_input_metadata(task, "planning"),
             project_id=task.project_id,
             user=task.user,
             task_id=task.task_id,
@@ -146,6 +152,12 @@ def _curate_request_tools(
             "candidate_count": 0,
         })
         return ()
+    if task.metadata.get("event") is not None:
+        selection = task.metadata.get("v3_context_selection") or {}
+        task_context = task_context_for_decision(
+            task, context, selected_context_ids=selection.get("selected_context_ids", []),
+            stage="request_tool_curation",
+        )
     jev = context.system_one
     curate = getattr(jev, "curate_request_tools", None) if jev is not None else None
     try:
@@ -384,6 +396,12 @@ def _ingest_relevant_messages(task: "TaskState", context: "CoreLoopContext") -> 
 
 
 def _curate_phase_tools(task, phase: PhasePlan, tools, context, *, task_context: str = "") -> PhasePlan:
+    if task.metadata.get("event") is not None:
+        selection = task.metadata.get("v3_context_selection") or {}
+        task_context = task_context_for_decision(
+            task, context, selected_context_ids=selection.get("selected_context_ids", []),
+            stage="phase_tool_curation",
+        )
     if context.system_one is None or not hasattr(context.system_one, "select_plan_tools"):
         raise SystemOneUnavailableError("tool_curation_unavailable")
     try:
