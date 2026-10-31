@@ -43,10 +43,15 @@ class InMemoryMessageQueue:
         self._lock = RLock()
         self._messages: list[QueuedMessage] = []
         self._sequence = count(1)
+        self._identities: dict[str, QueuedMessage] = {}
 
     def enqueue(self, message: CoreMessage, *, message_id: str | None = None) -> QueuedMessage:
         queued = QueuedMessage(message=message, message_id=str(message_id or uuid4()), sequence=next(self._sequence))
         with self._lock:
+            if queued.message_id in self._identities:
+                return self._identities[queued.message_id]
+            if message_id is not None:
+                self._identities[queued.message_id] = queued
             self._messages.append(queued)
         return queued
 

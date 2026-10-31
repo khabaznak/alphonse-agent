@@ -56,6 +56,7 @@ from alphonse.agent_v2.interfaces.a2ui import question_id_from_surface
 from alphonse.agent_v2.interfaces.a2ui import surface_id_for_question
 from alphonse.agent_v2.interfaces.ag_ui import AgUiAdapter
 from alphonse.agent_v2.services.scheduled_worker import ScheduledTaskWorker
+from alphonse.agent_v2.services.event_worker import EventDispatchWorker
 from alphonse.agent_v2.services.killswitch import KillSwitchAuditStore
 from alphonse.agent_v2.services.killswitch import KillSwitchCoordinator
 from alphonse.agent_v2.users import V2UserStore
@@ -169,6 +170,10 @@ class V2Daemon:
             on_direct_delivery=self._deliver_scheduled_reminder,
             memory_session_resolver=lambda project_id, identity, owner: self.runtime.memory_session_store.ensure_system(project_id=project_id, identity=identity, created_by_user_id=owner).session_id if project_id else "",
         )
+        self.event_dispatcher = EventDispatchWorker(
+            store=self.event_store, messages=self.runtime.queue,
+            dispatch=self._enqueue_event_execution, worker_id=self.daemon_id,
+        )
         self.ipc = V2DaemonServer(self)
 
     def start(self) -> None:
@@ -200,6 +205,7 @@ class V2Daemon:
                 on_outbox_failed=self._on_outbox_failed,
             )
             self.scheduler.start()
+            self.event_dispatcher.start()
             self._processor_thread = threading.Thread(target=self._process_loop, name="alphonse-v2-core", daemon=True)
             self._processor_thread.start()
         except Exception:
@@ -214,6 +220,7 @@ class V2Daemon:
         self._stop.set()
         self.ipc.stop()
         self.scheduler.stop()
+        self.event_dispatcher.stop()
         stop_runtime_integrations(self.runtime)
         if self._processor_thread is not None and self._processor_thread.is_alive():
             self._processor_thread.join(timeout=5)
@@ -1620,15 +1627,21 @@ class V2Daemon:
         assert self.event_store is not None
         if not result.get("accepted") or result.get("duplicate"):
             return
-        for execution in self.event_store.claim_event_executions():
-            payload = _event_payload(execution)
-            queued = self.runtime.channel.queue_message(
-                prompt=str(execution["prompt"]), user=str(execution["owner_user_id"]), project_id=str(execution["project_id"]),
-                memory_session_id=self.runtime.memory_session_store.ensure_system(project_id=str(execution["project_id"]), identity=str(execution["automation_id"]), created_by_user_id=str(execution["owner_user_id"])).session_id,
-                metadata={"source": "event_automation", "automation_id": str(execution["automation_id"]), "automation_execution_id": str(execution["execution_id"]), "event": payload, "channel": _json_object(execution.get("origin_channel_json"))},
-                message_id=f"event:{execution['execution_id']}",
-            )
-            self.event_store.mark_execution_enqueued(str(execution["execution_id"]), queued.message_id)
+        self.event_dispatcher.run_once()
+
+    def _enqueue_event_execution(self, execution: dict[str, Any]) -> str:
+        payload = _event_payload(execution)
+        queued = self.runtime.channel.queue_message(
+            prompt=str(execution["prompt"]), user=str(execution["owner_user_id"]), project_id=str(execution["project_id"]),
+            memory_session_id=self.runtime.memory_session_store.ensure_system(
+                project_id=str(execution["project_id"]), identity=str(execution["automation_id"]),
+                created_by_user_id=str(execution["owner_user_id"])).session_id,
+            metadata={"source": "event_automation", "automation_id": str(execution["automation_id"]),
+                      "automation_execution_id": str(execution["execution_id"]), "event": payload,
+                      "channel": _json_object(execution.get("origin_channel_json"))},
+            message_id=f"event:{execution['execution_id']}",
+        )
+        return queued.message_id
 
     def register_event_worker(self, **values: Any) -> dict[str, Any]:
         assert self.event_store is not None
@@ -2077,6 +2090,10 @@ class V2Daemon:
         self._set_active_work(queued)
         if queued is not None:
             self._set_activity_status("working")
+        event_metadata = getattr(getattr(queued, "message", None), "metadata", {}) or {}
+        event_execution_id = str(event_metadata.get("automation_execution_id") or "")
+        if event_execution_id:
+            self.event_store.execution_lifecycle(event_execution_id, "processing")
         with self.runtime.presence_projector.processing(queued):
             step = self.runtime.core.step()
             if step.status in {
@@ -2112,14 +2129,20 @@ class V2Daemon:
             if step.queued_message_id:
                 acknowledge = getattr(self.runtime.queue, "ack", None)
                 if callable(acknowledge):
-                    acknowledge(step.queued_message_id, lease_owner=self.daemon_id)
+                    if event_execution_id and step.status in {LoopStepStatus.PARKED, LoopStepStatus.WAITING}:
+                        acknowledge(step.queued_message_id, lease_owner=self.daemon_id, outcome="processing")
+                    else:
+                        acknowledge(step.queued_message_id, lease_owner=self.daemon_id)
             if step.status == LoopStepStatus.PROCESSED:
                 self._mark_snapshot_checkpoint_terminal(snapshot, status="done")
                 self._close_terminal_task_progress(snapshot)
         elif step.status == LoopStepStatus.CANCELLED and step.queued_message_id:
             acknowledge = getattr(self.runtime.queue, "ack", None)
             if callable(acknowledge):
-                acknowledge(step.queued_message_id, lease_owner=self.daemon_id)
+                if event_execution_id:
+                    acknowledge(step.queued_message_id, lease_owner=self.daemon_id, outcome="cancelled")
+                else:
+                    acknowledge(step.queued_message_id, lease_owner=self.daemon_id)
             self._mark_snapshot_checkpoint_terminal(snapshot, status="cancelled")
             self._close_terminal_task_progress(snapshot)
         elif step.status == LoopStepStatus.FAILED and step.queued_message_id:
@@ -2148,6 +2171,15 @@ class V2Daemon:
             elif terminal and queued is not None:
                 self._notify_inbound_failure(queued, error=error, task_state=snapshot.metadata.get("task_state"))
             self.runtime.core.clear_failure()
+        if event_execution_id:
+            status_for = getattr(self.runtime.queue, "status_for", None)
+            if callable(status_for):
+                self.event_dispatcher.reconcile(event_execution_id, status_for(queued.message_id))
+            elif step.status in {LoopStepStatus.PROCESSED, LoopStepStatus.CANCELLED, LoopStepStatus.FAILED}:
+                self.event_store.execution_lifecycle(event_execution_id, {
+                    LoopStepStatus.PROCESSED: "completed", LoopStepStatus.CANCELLED: "cancelled",
+                    LoopStepStatus.FAILED: "failed",
+                }[step.status])
         if step.status != LoopStepStatus.BUSY:
             self.kill_switch.clear(str(step.queued_message_id or ""))
             self._set_active_work(None)
@@ -2353,6 +2385,15 @@ class V2Daemon:
         metadata = getattr(snapshot, "metadata", {}) if snapshot is not None else {}
         task_state = metadata.get("task_state") if isinstance(metadata, dict) else None
         task_id = str(task_state.get("task_id") or "").strip() if isinstance(task_state, dict) else ""
+        task_metadata = task_state.get("metadata", {}) if isinstance(task_state, dict) else {}
+        execution_id = str(task_metadata.get("automation_execution_id") or "")
+        if execution_id:
+            outcome = {"done": "completed", "cancelled": "cancelled", "failed": "failed"}.get(status)
+            if outcome:
+                finish = getattr(self.runtime.queue, "finish_event", None)
+                if callable(finish):
+                    finish(f"event:{execution_id}", outcome)
+                self.event_store.execution_lifecycle(execution_id, outcome)
         if task_id:
             from alphonse.agent_v2.core.intelligence.task_state import TaskState
 

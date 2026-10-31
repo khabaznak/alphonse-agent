@@ -6,6 +6,7 @@ import json
 import os
 import sqlite3
 import time
+from threading import RLock
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,7 @@ class SQLiteMessageQueue:
 
     def __init__(self, db_path: str | Path = ":memory:", *, lease_owner: str = "default") -> None:
         self.db_path = str(db_path)
+        self._lock = RLock()
         self.lease_owner = str(lease_owner or "default").strip() or "default"
         self._memory_connection: sqlite3.Connection | None = None
         if self.db_path == ":memory:":
@@ -35,6 +37,12 @@ class SQLiteMessageQueue:
     def enqueue(self, message: CoreMessage, *, message_id: str | None = None) -> QueuedMessage:
         queued = QueuedMessage(message=message, message_id=str(message_id or QueuedMessage(message).message_id))
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if queued.message_id.startswith("event:"):
+                receipt = conn.execute("SELECT status FROM v2_inbound_receipts WHERE message_id=?", (queued.message_id,)).fetchone()
+                if receipt is not None:
+                    return queued
+                conn.execute("INSERT INTO v2_inbound_receipts VALUES(?,?,?)", (queued.message_id, "pending", _now_iso()))
             conn.execute(
                 """
                 INSERT INTO v2_inbound_messages (
@@ -144,17 +152,43 @@ class SQLiteMessageQueue:
             ).fetchone()
         return _row_to_message(updated) if updated is not None else None
 
-    def ack(self, message_id: str, lease_owner: str | None = None) -> bool:
+    def ack(self, message_id: str, lease_owner: str | None = None, *, outcome: str = "completed") -> bool:
+        if outcome not in {"completed", "cancelled", "processing"}:
+            raise ValueError("invalid_queue_outcome")
         owner = str(lease_owner or self.lease_owner or "default").strip() or "default"
         with self._connect() as conn:
-            cursor = conn.execute(
-                """
-                DELETE FROM v2_inbound_messages
-                WHERE message_id = ? AND status = 'processing' AND lease_owner = ?
-                """,
-                (str(message_id or "").strip(), owner),
-            )
+            cursor = conn.execute("""DELETE FROM v2_inbound_messages
+                WHERE message_id=? AND status='processing' AND lease_owner=?""", (message_id, owner))
+            if cursor.rowcount:
+                conn.execute("UPDATE v2_inbound_receipts SET status=?,updated_at=? WHERE message_id=?",
+                             (outcome, _now_iso(), message_id))
             return cursor.rowcount == 1
+
+    def finish_event(self, message_id: str, outcome: str) -> None:
+        if outcome not in {"completed", "cancelled", "failed"}:
+            raise ValueError("invalid_queue_outcome")
+        with self._connect() as conn:
+            conn.execute("""UPDATE v2_inbound_receipts SET status=?,updated_at=?
+                WHERE message_id=? AND status='processing'""", (outcome, _now_iso(), message_id))
+
+    def cancel_event(self, message_id: str) -> bool:
+        """Create a tombstone even if cancellation races the first insertion."""
+        if not message_id.startswith("event:"):
+            raise ValueError("event_message_required")
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            receipt = conn.execute("SELECT status FROM v2_inbound_receipts WHERE message_id=?", (message_id,)).fetchone()
+            if receipt is not None and receipt[0] in {"completed", "failed", "processing"}:
+                return False
+            row = conn.execute("SELECT status FROM v2_inbound_messages WHERE message_id=?", (message_id,)).fetchone()
+            if row is not None and row[0] == "processing":
+                return False  # Active CAPD cancellation uses the daemon kill switch.
+            conn.execute("DELETE FROM v2_inbound_messages WHERE message_id=?", (message_id,))
+            conn.execute("""INSERT INTO v2_inbound_receipts VALUES(?,?,?)
+                ON CONFLICT(message_id) DO UPDATE SET status=CASE
+                WHEN status='completed' THEN status ELSE 'cancelled' END,updated_at=excluded.updated_at""",
+                (message_id, "cancelled", _now_iso()))
+            return True
 
     def retry(
         self,
@@ -198,12 +232,14 @@ class SQLiteMessageQueue:
                     owner,
                 ),
             )
+            if cursor.rowcount and terminal:
+                conn.execute("UPDATE v2_inbound_receipts SET status='failed',updated_at=? WHERE message_id=?", (_now_iso(), message_id))
             return cursor.rowcount == 1
 
     def requeue(self, message_id: str) -> bool:
         return self.retry(message_id, next_attempt_at=_now())
 
-    def reclaim_expired(self, *, now: datetime | None = None) -> int:
+    def reclaim_expired(self, *, now: datetime | None = None, exclude_owner: str = "") -> int:
         timestamp = (now or _now()).isoformat()
         with self._connect() as conn:
             cursor = conn.execute(
@@ -214,12 +250,13 @@ class SQLiteMessageQueue:
                     lease_owner = '',
                     lease_expires_at = ''
                 WHERE status = 'processing'
+                  AND (? = '' OR lease_owner != ?)
                   AND (
                     (lease_expires_at != '' AND lease_expires_at <= ?)
                     OR (lease_owner = '' AND lease_expires_at = '')
                   )
                 """,
-                (timestamp,),
+                (exclude_owner, exclude_owner, timestamp),
             )
             return int(cursor.rowcount)
 
@@ -254,6 +291,8 @@ class SQLiteMessageQueue:
                 "SELECT status FROM v2_inbound_messages WHERE message_id=?",
                 (str(message_id or "").strip(),),
             ).fetchone()
+            if row is None:
+                row = conn.execute("SELECT status FROM v2_inbound_receipts WHERE message_id=?", (str(message_id),)).fetchone()
         return str(row["status"] or "") if row is not None else ""
 
     def turns_ahead(self, message_id: str) -> int:
@@ -286,7 +325,7 @@ class SQLiteMessageQueue:
 
     def _connect(self) -> sqlite3.Connection:
         if self._memory_connection is not None:
-            return _ConnectionProxy(self._memory_connection)
+            return _ConnectionProxy(self._memory_connection, self._lock)
         path = Path(self.db_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         return connect_database(path)
@@ -295,6 +334,9 @@ class SQLiteMessageQueue:
         with self._connect() as conn:
             conn.executescript(
                 """
+                CREATE TABLE IF NOT EXISTS v2_inbound_receipts (
+                  message_id TEXT PRIMARY KEY,status TEXT NOT NULL,updated_at TEXT NOT NULL
+                ) STRICT;
                 CREATE TABLE IF NOT EXISTS v2_inbound_messages (
                   message_id TEXT PRIMARY KEY,
                   sequence INTEGER NOT NULL,
@@ -318,6 +360,8 @@ class SQLiteMessageQueue:
                 ) STRICT;
                 """
             )
+            conn.execute("""INSERT OR IGNORE INTO v2_inbound_receipts
+                SELECT message_id,status,queued_at FROM v2_inbound_messages WHERE message_id LIKE 'event:%'""")
             _ensure_columns(
                 conn,
                 "v2_inbound_messages",
@@ -333,17 +377,22 @@ class SQLiteMessageQueue:
 
 
 class _ConnectionProxy:
-    def __init__(self, connection: sqlite3.Connection) -> None:
+    def __init__(self, connection: sqlite3.Connection, lock: RLock) -> None:
         self.connection = connection
+        self.lock = lock
 
     def __enter__(self) -> sqlite3.Connection:
+        self.lock.acquire()
         return self.connection
 
     def __exit__(self, exc_type: object, exc: object, tb: object) -> bool:
-        if exc_type is None:
-            self.connection.commit()
-        else:
-            self.connection.rollback()
+        try:
+            if exc_type is None:
+                self.connection.commit()
+            else:
+                self.connection.rollback()
+        finally:
+            self.lock.release()
         return False
 
 
