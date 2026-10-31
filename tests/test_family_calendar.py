@@ -267,16 +267,17 @@ def test_freebusy_errors_are_not_free():
             run(request, lambda *args: response)
 
 
-def test_package_binding_boundary_rechecks_actor_account_and_grant(tmp_path):
+def test_package_binding_boundary_rechecks_actor_account_and_grant(tmp_path, secure_vault):
     users = V2UserStore(tmp_path / 'users.sqlite')
     users.onboard(display_name='Admin', user_id='owner', users_root=tmp_path / 'profiles')
     users.create_user(display_name='Member', user_id='member')
     users.create_user(display_name='Other', user_id='other')
     skills = SkillStore(tmp_path / 'skills')
     assert skills.get('skill:family-calendar') is not None
-    integrations = SQLiteIntegrationStore(tmp_path / 'accounts.sqlite')
+    integrations = SQLiteIntegrationStore(tmp_path / 'accounts.sqlite', credential_vault=secure_vault)
     integrations.upsert(integration_id='synthetic-google', provider_key='google-calendar', display_name='Synthetic',
-                        enabled=True, secrets={'refresh_token': 'synthetic-refresh', 'client_id': 'synthetic-client', 'client_secret': 'synthetic-secret'})
+                        enabled=True)
+    integrations.install_credentials('synthetic-google', {'refresh_token': 'synthetic-refresh', 'client_id': 'synthetic-client', 'client_secret': 'synthetic-secret'}, expected_generation=0)
     resolver = SkillBindings(integrations, users, skills)
     request = create()
     resolver.configure(actor_id='owner', owner_id='member', binding_id='calendar-test',
@@ -366,7 +367,7 @@ def test_main_uses_managed_credentials_and_real_http_encoding_without_logging(mo
     assert len(calls) == 4  # OAuth, initial GET, insert, readback.
 
 
-def test_native_bash_runs_shipped_package_without_catalog_or_network(tmp_path):
+def test_native_bash_runs_shipped_package_without_catalog_or_network(tmp_path, secure_vault):
     from alphonse.agent_v2.core.core import ToolExecutionContext
     from alphonse.agent_v2.core.intelligence.task_state import TaskState
     from alphonse.agent_v2.core.messages import InMemoryMessageQueue
@@ -374,9 +375,9 @@ def test_native_bash_runs_shipped_package_without_catalog_or_network(tmp_path):
     users = V2UserStore(tmp_path / 'users.sqlite')
     users.onboard(display_name='Owner', user_id='owner', users_root=tmp_path / 'profiles')
     skills = SkillStore(tmp_path / 'skills with spaces')
-    integrations = SQLiteIntegrationStore(tmp_path / 'accounts.sqlite')
-    integrations.upsert(integration_id='synthetic', provider_key='google-calendar', display_name='Synthetic', enabled=True,
-                        secrets={'refresh_token': 'synthetic-secret'})
+    integrations = SQLiteIntegrationStore(tmp_path / 'accounts.sqlite', credential_vault=secure_vault)
+    integrations.upsert(integration_id='synthetic', provider_key='google-calendar', display_name='Synthetic', enabled=True)
+    integrations.install_credentials('synthetic', {'refresh_token': 'synthetic-secret'}, expected_generation=0)
     resolver = SkillBindings(integrations, users, skills)
     resolver.configure(actor_id='owner', owner_id='owner', binding_id='calendar-test', skill_id='skill:family-calendar',
                        kind='account', target='synthetic', required_secrets=('refresh_token',),

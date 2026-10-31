@@ -26,7 +26,8 @@ scopes from the OAuth response, not a requested-scope assumption. Missing refres
 token or partial scope grants require reconnection. Keep client files in protected
 host storage, outside installed/exportable skills.
 
-Persist credentials directly to the existing integration store; for example:
+Configure a secure credential backend first (see `docs/secure-credentials.md`).
+Persist only metadata in the integration store; for example:
 
 ```python
 # Authenticated setup context only; never log creds or call to_dict(mask_secrets=False).
@@ -34,8 +35,11 @@ integrations.upsert(
     integration_id=chosen_account_id, provider_key="google-calendar",
     display_name=chosen_display_name, enabled=True,
     config={"granted_scopes": " ".join(actual_granted_scopes)},
-    secrets={"client_id": creds.client_id, "client_secret": creds.client_secret,
-             "refresh_token": creds.refresh_token},
+)
+integrations.install_credentials(
+    chosen_account_id,
+    {"client_id": creds.client_id, "client_secret": creds.client_secret,
+     "refresh_token": creds.refresh_token}, expected_generation=0,
 )
 bindings.configure(
     actor_id=authenticated_admin_id, owner_id=authenticated_member_id,

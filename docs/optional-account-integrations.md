@@ -345,6 +345,10 @@ resource argument, never another tool definition.
 
 ## Credentials and supported deployment decision — #109, #111
 
+#109 implementation: [secure credential storage and operations](secure-credentials.md).
+Credential references, vault backends and generation fencing are available; OAuth
+consent, provider refresh serialization and account/grant services remain #110/#111.
+
 Desktop v1 targets macOS with the daemon's OS user accessing macOS Keychain.
 Headless v1 targets Linux with an explicitly configured encrypted file backend:
 AEAD-encrypted credential records, owner-only directory/file permissions and an
