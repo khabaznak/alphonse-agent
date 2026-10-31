@@ -8,6 +8,13 @@ Bash. There are no calendar tools, script manifests or catalog entries. Package
 exports contain no account state. See its references for connection, request and
 authorization procedures. No automatic invitations are supported.
 
+Future project-scoped read context and incremental sync extend this package under
+the [optional-account implementation contract](optional-account-integrations.md)
+(#119). They reuse its account bindings and preserve exact write authorization,
+readback and retry guards. The current script is not a proactive acquisition worker
+and does not yet enforce per-page project retrieval windows or secure credential
+references. No new Calendar tool or per-account registry is required.
+
 ## Synthetic validation
 
 Run `python3 -m pytest -q tests/test_family_calendar.py tests/test_agent_v2_skill_bindings.py

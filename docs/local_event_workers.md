@@ -4,6 +4,12 @@ Workers are same-host sidecars that publish validated facts to Alphonse through
 the v2 daemon's owner-only Unix socket. They do not access the queue database
 and cannot submit arbitrary prompts.
 
+This is the shipped local sensor contract. Optional private-account events need
+the additional scoped publication, retention and recoverable-dispatch requirements
+in [optional account integrations](optional-account-integrations.md). Those
+extensions are future work; the owner-only socket does not authenticate individual
+worker processes or authorize mailbox access.
+
 ## Registration
 
 Before publishing, an administrator registers:

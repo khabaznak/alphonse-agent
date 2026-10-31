@@ -19,6 +19,13 @@ that integration's `secrets`; no new credential vault or per-script catalog is
 created. Existing integration storage is local SQLite, not encrypted secret
 storage. Protect it with the host's existing file/account protections.
 
+The [optional-account implementation contract](optional-account-integrations.md)
+extends these same bindings and explicit member choices with owned connections,
+revisioned capability grants and secure credential references. That is planned
+work, not current secure storage support. New optional OAuth connections must use
+the qualified secure backend when implemented; no parallel binding system or
+implicit project-derived access is introduced.
+
 The current integration records have no per-member ownership. Therefore only an
 active administrator from `V2UserStore` may provision bindings, including attaching
 an existing household account to a member. An owner or active administrator can
