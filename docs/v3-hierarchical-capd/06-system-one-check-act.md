@@ -43,9 +43,14 @@ strategy, including differently worded empty searches. A read-only stage declari
 still require outer recovery. These judgments neither execute tools nor alter the
 requested mission outcomes. See the [household pilot](16-household-delegation.md).
 
-Read-only inspection before a requested mutation also asks two bounded Noul
+Inspection before a requested mutation also asks bounded Noul
 questions: whether cumulative evidence is sufficient to plan the authorized
-operation, and whether a specific unresolved field or source needs a user answer.
+operation, whether a specific unresolved field or source needs a user answer, and
+whether the latest action only inspected/read rather than attempting a mutation.
+The last judgment covers combined inspect-and-update stages: their mutation label
+does not exempt repeated reads from the inspection budget. Mutation attempts,
+unknown partial effects and verification of a just-executed mutation are excluded
+from this inspection classification.
 These questions are separate from stage success: learning that a source cannot be
 read does not make it readable or establish a mutation. Previously reviewed and
 confirmed extraction can supply evidence without automatically re-extracting its
@@ -63,6 +68,14 @@ the question from actual evidence; Jev never generates its text or authorizes an
 effect. The handoff cannot satisfy acceptance criteria. A question remains waiting
 until the question store records an authenticated answer for that task and parked
 phase, after which planning continues from the answer and cumulative evidence.
+
+For idempotent record requests, fresh read-back can establish that every requested
+value and provenance already matches confirmed authorized input. This does not
+require a redundant write; a request for a new event or distinct write still does.
+Row existence, an unrelated old value or a status explanation is insufficient.
+If mission review still withholds completion after a prepared report, the next
+plan must resolve the unmet operation or ask a specific question, not repeat that
+report.
 
 ## Check boundary
 
@@ -119,6 +132,10 @@ answers, or ambiguous evidence cause a per-task fallback to System Two. The last
 validated settings remain unchanged after a failed validation. Structured telemetry
 records provider status, latency, model, usage, and routing metadata without logging
 the key or request contents.
+Failed Jev decision manifests also retain only a reviewed error code and exception
+type; arbitrary provider bodies and credentials are excluded. Retries apply to
+connection failures, temporary-service responses and server errors, not unchanged
+persistent HTTP requests.
 
 ## Verification
 
@@ -132,6 +149,16 @@ the key or request contents.
 
 ## Implementation log
 
+- 2026-10-31 — Further #128 live regression: a mixed read/write stage bypassed
+  the pure-read inspection guard and was followed by repeated report-only phases.
+  Inspection classification now covers observed reads within mixed stages; the
+  task-wide bound applies there too. Mission disagreement after a report requires
+  an operation or specific question. Clarified verified already-satisfied states
+  without redundant mutation. Added safe service error diagnostics and transient-
+  only retries; the historical RuntimeError's underlying code was not retained,
+  so its service cause is not established. Synthetic tests cover the mixed-stage
+  escape, idempotency, report-loop rejection and error-code privacy. Live success
+  and owner acceptance remain pending.
 - 2026-10-31 — Issue #128 inspection-loop follow-up: separated decision readiness
   and specific missing information from inspection completion. Added the bounded
   cross-phase inspection handoff, validation against restarting read-only phases,

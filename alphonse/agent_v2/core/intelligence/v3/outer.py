@@ -17,7 +17,7 @@ from alphonse.agent_v2.core.tools.registry import ToolExposurePolicy
 from alphonse.agent_v2.core.inference import InferencePurpose, InferenceRequest
 from alphonse.agent_v2.core.intelligence.acceptance_contract import apply_status_patch
 from alphonse.agent_v2.core.intelligence.v3.contracts import PhaseOutcome, PhaseStatus, SideEffectClass, TacticalState
-from alphonse.agent_v2.system_one import SystemOneUnavailableError
+from alphonse.agent_v2.system_one import SystemOneUnavailableError, system_one_error_code
 from alphonse.agent_v2.core.intelligence.v3.context import task_context_for_decision
 from alphonse.agent_v2.core.intelligence.v3.projections import enabled as projections_enabled
 
@@ -194,6 +194,16 @@ class V3OuterController:
                 task.metadata["v3_route"] = "plan_next_phase"
         elif decision.action == StrategicAction.REPLAN:
             task.metadata["act_directive"] = {"action": "replan", "rationale": decision.reason}
+            if (review.status == PhaseReviewStatus.PHASE_VERIFIED_TASK_COMPLETE and task.has_prepared_user_response()
+                    and recommendation is not None
+                    and type(recommendation.answers.get("mission_outcome_is_fulfilled")) in {int, float}
+                    and recommendation.answers["mission_outcome_is_fulfilled"] < float(getattr(recommendation, "yes_threshold", 0.8))):
+                # Repeating a prepared report cannot resolve disagreement about
+                # the requested outcome. Require an operation or a precise question.
+                task.metadata["act_directive"]["inspection_resolution"] = {
+                    "route": "decision_required", "phase_id": state.phase.phase_id,
+                    "evidence_refs": list(review.evidence_refs),
+                }
             task.metadata["v3_route"] = "strategic_replan"
         elif decision.action == StrategicAction.ASK_USER:
             task.metadata["act_directive"] = {"action": "ask_user", "rationale": decision.reason}
@@ -325,7 +335,7 @@ def _recommend_act(task, state, outcome, review: PhaseReview, context):
     try:
         recommendation = context.system_one.recommend_act(state=input_state)
     except Exception as exc:
-        raise SystemOneUnavailableError(f"act_recommendation:{type(exc).__name__}") from exc
+        raise SystemOneUnavailableError(f"act_recommendation:{type(exc).__name__}:{system_one_error_code(exc)}") from exc
     action = str(recommendation.action)
     recommended_action = action
     answers = recommendation.answers

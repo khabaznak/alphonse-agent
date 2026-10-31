@@ -697,3 +697,31 @@ def test_invalid_required_mission_judgment_withholds_completion(probability):
         PhaseOutcome('solar', PhaseStatus.PHASE_COMPLETE), context)
     assert decision.action == StrategicAction.REPLAN
     assert task.status != 'completed'
+
+
+def test_mission_disagreement_after_prepared_report_requires_action_or_specific_question():
+    from alphonse.agent_v2.core.intelligence.v3.planner import _validate_inspection_handoff
+    task = _task()
+    task.metadata['prepared_user_response'] = {'message': 'The existing record has been verified.'}
+    context, _ = _context()
+
+    class Unresolved(_SystemOne):
+        def recommend_act(self, **kwargs):
+            return SystemOneActRecommendation('complete', .99, True, 'Complete', answers={
+                'mission_outcome_is_fulfilled': .66, 'mission_requires_persisted_effect': .54,
+            })
+
+    context.system_one = Unresolved(SystemOneReviewResult(({
+        'criterion_id': 'ac-1', 'status': 'satisfied', 'evidence_refs': ['tactical-action:edit'],
+    },), ()))
+    _, decision = V3OuterController().review_and_route(task, _completed_state(),
+        PhaseOutcome('solar', PhaseStatus.PHASE_COMPLETE), context)
+    assert decision.action == StrategicAction.REPLAN
+    directive = task.metadata['act_directive']
+    assert directive['inspection_resolution']['route'] == 'decision_required'
+    report = PhasePlan('repeat-report', 'Repeat report', (PhaseSubgoal(
+        'report', 'Repeat report', 'response', allowed_capabilities=('user_response',),
+        allowed_side_effects=(SideEffectClass.USER_RESPONSE,),
+    ),), authorized_capabilities=('user_response',))
+    with pytest.raises(ValueError, match='inspection_handoff_requires_action_or_question'):
+        _validate_inspection_handoff(report, directive)

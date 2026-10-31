@@ -26,7 +26,7 @@ from alphonse.agent_v2.core.messages.queue import MessageSelector
 from alphonse.agent_v2.core.tools.invocation import ToolInvocationService
 from alphonse.agent_v2.core.tools.registry.native.bash import BASH_TOOL_ID
 from alphonse.agent_v2.core.tools.registry.native.respond import RESPOND_TOOL_ID
-from alphonse.agent_v2.system_one import SystemOneUnavailableError
+from alphonse.agent_v2.system_one import SystemOneUnavailableError, system_one_error_code
 from alphonse.agent_v2.core.intelligence.v3.response_state import work_evidence_refs
 
 if TYPE_CHECKING:
@@ -143,7 +143,8 @@ class PhaseExecutor:
                     "retry_approved": retry_approved,
                     "answers": dict(progress_review.get("answers") or {}),
                 }
-                if not completion_met and _is_update_inspection(state, subgoal):
+                if not completion_met and _is_update_inspection(state, subgoal, progress_review.get("answers") or {},
+                    float(getattr(getattr(context.system_one, "settings", None), "yes_threshold", 0.8))):
                     count = int(task.metadata.get("v3_update_inspection_actions") or 0) + 1
                     task.metadata["v3_update_inspection_actions"] = count
                     threshold = float(getattr(getattr(context.system_one, "settings", None), "yes_threshold", 0.8))
@@ -408,7 +409,7 @@ class PhaseExecutor:
                 ),
             )
         except Exception as exc:
-            raise SystemOneUnavailableError(f"tactical_acceptance:{type(exc).__name__}") from exc
+            raise SystemOneUnavailableError(f"tactical_acceptance:{type(exc).__name__}:{system_one_error_code(exc)}") from exc
         else:
             metadata = {"status": "used" if review.confident else "ambiguous_fallback", **review.to_metadata()}
             result = review.complete if review.confident else deterministic
@@ -708,8 +709,9 @@ def _confident_negative(value, threshold: float) -> bool:
     return type(value) in {int, float} and math.isfinite(value) and 0.0 <= value <= 1.0 - threshold
 
 
-def _is_update_inspection(state: TacticalState, subgoal: PhaseSubgoal) -> bool:
-    return set(subgoal.allowed_side_effects) == {SideEffectClass.READ_ONLY} and any(
+def _is_update_inspection(state: TacticalState, subgoal: PhaseSubgoal, answers: dict, threshold: float) -> bool:
+    return (set(subgoal.allowed_side_effects) == {SideEffectClass.READ_ONLY}
+            or _confident_probability(answers.get("runtime_action_is_inspection"), threshold)) and any(
         set(item.allowed_side_effects) & {
             SideEffectClass.PROJECT_MUTATION, SideEffectClass.EXTERNAL_REVERSIBLE,
             SideEffectClass.EXTERNAL_IRREVERSIBLE, SideEffectClass.LOCAL_SKILL_INSTALLATION,

@@ -69,6 +69,17 @@ class SystemOneUnavailableError(RuntimeError):
         super().__init__(f"system_one_unavailable{suffix}")
 
 
+def system_one_error_code(exc: Exception) -> str:
+    """Retain only reviewed provider codes, never response bodies or credentials."""
+    message = str(exc).strip()
+    if message in {"system_one_api_key_required", "system_one_api_key_invalid", "system_one_request_invalid",
+                   "system_one_response_invalid", "system_one_connection_failed"}:
+        return message
+    if re.fullmatch(r"system_one_(?:temporarily_unavailable|http_error):[0-9]{3}", message):
+        return message
+    return "unclassified"
+
+
 @dataclass(frozen=True)
 class SystemOneSettings:
     enabled: bool = False
@@ -220,8 +231,12 @@ class TypeSafeSystemOneClient:
             try:
                 response = self.transport(self.api_url, self.api_key, payload, self.timeout_seconds)
                 break
-            except RuntimeError:
-                if attempt >= SYSTEM_ONE_RETRIES:
+            except RuntimeError as exc:
+                code = system_one_error_code(exc)
+                transient = (code == "system_one_connection_failed"
+                             or code.startswith("system_one_temporarily_unavailable:")
+                             or bool(re.fullmatch(r"system_one_http_error:5[0-9]{2}", code)))
+                if not transient or attempt >= SYSTEM_ONE_RETRIES:
                     raise
                 sleep(SYSTEM_ONE_RETRY_BACKOFF_SECONDS * (attempt + 1))
         answers = response.get("answers") if isinstance(response, dict) else None
@@ -400,8 +415,8 @@ class JevCriterionDecisionProvider:
         manifest = begin_decision(purpose=purpose, sections=sections, tools=tools, sources=sources, omissions=omissions)
         try:
             response = self.client.evaluate(state=state, questions=questions)
-        except Exception:
-            finish_decision(manifest, failed=True)
+        except Exception as exc:
+            finish_decision(manifest, failed=True, error_code=system_one_error_code(exc), exception_type=type(exc).__name__)
             raise
         finish_decision(manifest)
         return response
@@ -971,7 +986,7 @@ class JevCriterionDecisionProvider:
                 "type": "noul",
                 "instructions": "Has the current requested mission outcome, including authenticated_followups, actually been fulfilled? Compare the original request and steering with execution evidence even when generated acceptance criteria say complete. Judge missing requested work, not certainty of underlying facts: a supported factual answer may state uncertainty and finish.",
                 "criteria": {
-                    "true": "The requested operation has successful execution and verification evidence (including persisted transaction/read-back for record updates), or the request only needed an answer, proposal or explanation which has been supplied with appropriate qualifications.",
+                    "true": "The requested operation has successful execution and verification evidence (including persisted transaction/read-back for record updates), or fresh direct read-back proves every requested value and provenance already matches the authorized desired state and the request does not require a new event or distinct write. An already-satisfied record needs no redundant mutation. Alternatively, the request only needed an answer, proposal or explanation which has been supplied with appropriate qualifications.",
                     "false": "A requested authorized effect remains undone. Acknowledgment, a draft, status explanation or no-write disclaimer cannot substitute for a persisted update. Failed, denied, unavailable or rolled-back operations do not establish success. A capability listed in available_tool_ids is not unavailable merely because curation or the current phase omitted it. Historical context cannot grant permission.",
                 },
             },
@@ -1130,7 +1145,7 @@ class JevCriterionDecisionProvider:
         # (such as reading CLI help). They cannot substitute for the declared
         # subgoal's completion condition. Jev judges that condition separately.
         runtime_question_id = "runtime_declared_subgoal_complete"
-        inspection_ids = {"runtime_inspection_ready_for_action", "runtime_inspection_requires_user_input"}
+        inspection_ids = {"runtime_inspection_ready_for_action", "runtime_inspection_requires_user_input", "runtime_action_is_inspection"}
         if any(question.get("question_id") in {runtime_question_id, "runtime_action_added_progress", *inspection_ids} for question in supplied):
             raise ValueError("system_one_tactical_reserved_question_id")
         supplied.append({
@@ -1138,7 +1153,7 @@ class JevCriterionDecisionProvider:
             "type": "noul",
             "instructions": "Does the complete observed execution log establish the declared stage_goal objective, required_output_type and completion condition? Judge the original stage goal, not merely the latest action's narrower acceptance questions.",
             "criteria": {
-                "true": "The observed results satisfy the declared stage goal and required output. All necessary operations have actually occurred; preparatory help or discovery alone is insufficient for a requested read or mutation.",
+                "true": "The observed results satisfy the declared stage goal and required output. All necessary operations have actually occurred. For an idempotent record update, fresh read-back may prove every requested value and provenance already matches confirmed authorized input, so no redundant write is needed. A request for a new event or distinct write still requires execution. Preparatory help, row existence or unrelated historical values alone are insufficient.",
                 "false": "The results establish only preparation, tool discovery, a partial attempt, a failed operation, or a narrower action goal while the declared stage remains unfinished.",
             },
         })
@@ -1149,13 +1164,21 @@ class JevCriterionDecisionProvider:
         # Inspection can resolve a decision without proving that an unreadable
         # source became readable. These advisory judgments never satisfy an
         # acceptance criterion, authorize a mutation, or compose a user question.
-        if set(subgoal.get("allowed_side_effects") or []) == {"read_only"} and any(
+        if any(
             set(item.get("allowed_side_effects") or []) & {
                 "project_mutation", "external_reversible", "external_irreversible", "local_skill_installation",
             }
             for item in phase.get("subgoals", []) if isinstance(item, dict)
         ):
             supplied.extend([
+                {
+                    "question_id": "runtime_action_is_inspection", "type": "noul",
+                    "instructions": "Was the latest action only read-only discovery, recall, schema/row inspection or source extraction, including when the stage also permits mutation? Classify observed work, not the stage label.",
+                    "criteria": {
+                        "true": "The action only reads or inspects, without a write, transaction, external effect or possibly partial mutation. A combined inspect-and-update stage may still be performing only reads.",
+                        "false": "The action performs or attempts a mutation, verifies its own just-executed mutation, has uncertain partial effects, or is only a user response/question. Do not turn a write attempt into an inspection retry.",
+                    },
+                },
                 {
                     "question_id": "runtime_inspection_ready_for_action", "type": "noul",
                     "instructions": "Does cumulative authorized evidence resolve the target, source and fields sufficiently for the requested operation to be planned now, without more inspection? Judge readiness only, not permission or successful execution.",

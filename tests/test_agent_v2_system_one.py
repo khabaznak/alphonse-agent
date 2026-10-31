@@ -573,3 +573,38 @@ def test_failure_wording_review_cannot_turn_failed_state_into_success(probabilit
         return {"answers": {"honest_failure": {"type": "noul", "noul": probability}}}
     provider = JevCriterionDecisionProvider(SystemOneSettings(api_key="secret"), transport=transport)
     assert provider.review_task_failure(message="Update it", explanation="Could not update: service offline. Try again later.") is expected
+
+
+@pytest.mark.parametrize('code,attempts', [
+    ('system_one_http_error:413', 1), ('system_one_http_error:400', 1),
+    ('unexpected failure with PRIVATE_PROVIDER_BODY', 1),
+    ('system_one_temporarily_unavailable:529', 4), ('system_one_http_error:503', 4),
+    ('system_one_connection_failed', 4),
+])
+def test_provider_failure_diagnostics_are_safe_and_only_transient_errors_retry(monkeypatch, code, attempts):
+    from alphonse.agent_v2 import system_one
+    from alphonse.agent_v2.core.context_manifests import manifest_scope
+    from alphonse.agent_v2.core.core import CoreLoopContext
+    from alphonse.agent_v2.core.intelligence.task_state import TaskState
+    from alphonse.agent_v2.core.messages import InMemoryMessageQueue
+    calls = []
+    sleeps = []
+    monkeypatch.setattr(system_one, 'sleep', sleeps.append)
+
+    def transport(*args):
+        calls.append(True)
+        raise RuntimeError(code)
+
+    task = TaskState(user='fixture', task_id='diagnostics')
+    context = CoreLoopContext(messages=InMemoryMessageQueue())
+    provider = JevCriterionDecisionProvider(SystemOneSettings(api_key='PRIVATE_API_KEY'), transport=transport)
+    with manifest_scope(task, context), pytest.raises(RuntimeError):
+        provider.recommend_act(state={'goal': 'Inspect fixture'})
+    assert len(calls) == attempts
+    assert len(sleeps) == attempts - 1
+    manifest = task.metadata['decision_context_manifests'][-1]
+    assert manifest['status'] == 'failed'
+    assert manifest['exception_type'] == 'RuntimeError'
+    assert manifest['error_code'] == ('unclassified' if 'PRIVATE_PROVIDER_BODY' in code else code)
+    assert 'PRIVATE_PROVIDER_BODY' not in str(task.metadata)
+    assert 'PRIVATE_API_KEY' not in str(task.metadata)
