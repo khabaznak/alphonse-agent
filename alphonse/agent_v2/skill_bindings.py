@@ -295,13 +295,14 @@ class SkillBindings:
                 account = self.integrations.get(row["target"])
                 if account is None or not account.enabled:
                     raise ValueError("skill_binding_account_unavailable")
-                if any(not isinstance(item, str) for item in account.secrets.values()):
+                credentials = self.integrations.resolve_credentials(account)
+                if any(not isinstance(item, str) for item in credentials.values()):
                     raise ValueError("skill_binding_credential_invalid")
-                if any(not account.secrets.get(key) for key in requirements["secrets"]):
+                if any(not credentials.get(key) for key in requirements["secrets"]):
                     raise ValueError("skill_binding_credential_missing")
                 value.update(provider=account.provider_key, configuration={**account.config, **value["configuration"]},
-                             credentials={key: account.secrets[key] for key in requirements["secrets"]})
-                secrets.extend(item for item in account.secrets.values() if item)
+                             credentials={key: credentials[key] for key in requirements["secrets"]})
+                secrets.extend(item for item in credentials.values() if item)
             elif row["kind"] == "data":
                 path = Path(row["target"])
                 if not path.exists() or path.resolve() != path:

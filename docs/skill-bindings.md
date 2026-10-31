@@ -173,3 +173,13 @@ cross-user denial, explicit sharing/removal, inactive actors/owners, account and
 credential revocation/missing records, missing/retargeted data, package lifecycle
 preservation, missing dependencies, selected-skill checks, native/Bash redaction
 and redaction before timeout/output clipping.
+
+## Secure optional-account credentials
+
+Account bindings preserve their explicit integration targets and ACLs when an
+account adopts a secure credential reference. The trusted resolver loads the
+current generation only after authorization and passes only required credential
+keys to managed execution. Metadata/readiness never includes the vault payload.
+A locked/missing backend fails closed with a static status; no plaintext fallback
+or provider-based account substitution occurs. See [secure credential storage](secure-credentials.md)
+for deployment, explicit legacy migration, rotation and offline disconnect.
