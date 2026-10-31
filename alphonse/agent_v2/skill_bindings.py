@@ -348,6 +348,31 @@ class SkillBindings:
                              account.connection['revision'], grant['revision'], account.provider_key,
                              operation, tuple(resources), tuple(recipient_user_ids))
 
+    def use_account(self, session: AccountSession, *, request: dict[str, Any],
+                    operation: Callable[[AccountHandle, dict[str, Any]], Any]) -> Any:
+        """Trusted provider adapter only; never expose credentials to model arguments.
+
+        The adapter must honor handle.operation/resources/recipients and call again
+        for every page. A handle is a snapshot, not a reusable authorization token.
+        """
+        handle = self.resolve_account(session, **request)
+        account = self.integrations.get(handle.connection_id)
+        credentials = self.integrations.resolve_credentials(account)
+        # Credential/backend work may race revocation or a choice change. Recheck
+        # immediately before handing control to the bounded provider adapter.
+        if self.resolve_account(session, **request) != handle:
+            raise PermissionError('skill_binding_account_changed')
+        redactor = ExecutionBindings({}, tuple(v for v in credentials.values() if isinstance(v, str)))
+        try:
+            result = operation(handle, credentials)
+            result = json.loads(json.dumps(result, ensure_ascii=False, allow_nan=False))
+        except Exception:
+            raise RuntimeError('skill_binding_operation_failed') from None
+        # A revoked audience cannot receive an in-flight result.
+        if self.resolve_account(session, **request) != handle:
+            raise PermissionError('skill_binding_account_changed')
+        return redactor.redact(result)
+
     def prepare(self, *, actor_id: str, skill_id: str, names: list[str]) -> ExecutionBindings:
         """For trusted native execution only; never expose the payload to an LLM."""
         self._actor(actor_id)
@@ -380,13 +405,14 @@ class SkillBindings:
                     raise ValueError("skill_binding_account_unavailable")
                 if account.connection:
                     raise PermissionError('skill_binding_managed_service_required')
-                if any(not isinstance(item, str) for item in account.secrets.values()):
+                credentials = self.integrations.resolve_credentials(account)
+                if any(not isinstance(item, str) for item in credentials.values()):
                     raise ValueError("skill_binding_credential_invalid")
-                if any(not account.secrets.get(key) for key in requirements["secrets"]):
+                if any(not credentials.get(key) for key in requirements["secrets"]):
                     raise ValueError("skill_binding_credential_missing")
                 value.update(provider=account.provider_key, configuration={**account.config, **value["configuration"]},
-                             credentials={key: account.secrets[key] for key in requirements["secrets"]})
-                secrets.extend(item for item in account.secrets.values() if item)
+                             credentials={key: credentials[key] for key in requirements["secrets"]})
+                secrets.extend(item for item in credentials.values() if item)
             elif row["kind"] == "data":
                 path = Path(row["target"])
                 if not path.exists() or path.resolve() != path:

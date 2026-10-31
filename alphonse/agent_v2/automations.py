@@ -430,6 +430,33 @@ class EventAutomationStore:
         return {**dict(row), "payload": _obj(row["payload_json"]),
                 "envelope": asdict(envelope) if envelope else None}
 
+    def expand_execution_event(self, execution_id: str, event_key: str, *,
+                               message_id: str, actor_user_id: str,
+                               project_id: str) -> dict[str, Any] | None:
+        """Resolve a queued reference against the server-owned subscription/run."""
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM v2_automation_executions WHERE execution_id=?",
+                               (execution_id,)).fetchone()
+        if (row is None or row["event_key"] != event_key or row["status"] not in {"queued", "processing"}
+                or row["queued_message_id"] != message_id):
+            return None
+        automation = self.get_automation(str(row["automation_id"]))
+        if (automation is None or automation.status != "active"
+                or automation.owner_user_id != actor_user_id or automation.project_id != project_id):
+            return None
+        event = self.expand_event(event_key, actor_user_id=actor_user_id, project_id=project_id)
+        if event is None:
+            return None
+        envelope = _envelope(event.get("envelope_json"))
+        if envelope is not None and not self._subscription_authorized(automation, envelope, "expansion"):
+            return None
+        worker = self.get_worker(str(event["worker_id"]))
+        definition = self.get_event_type(str(event["event_type"]), str(event["event_version"]))
+        if (not worker or not worker.enabled or not definition or not definition.enabled
+                or event["event_type"] not in worker.allowed_event_types):
+            return None
+        return event
+
     def read_event(self, event_key: str, *, actor_user_id: str) -> dict[str, Any] | None:
         with self._connect() as conn:
             row = conn.execute("SELECT envelope_json FROM v2_event_history WHERE event_key=?", (event_key,)).fetchone()

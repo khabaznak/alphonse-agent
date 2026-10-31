@@ -19,3 +19,7 @@ include = ["alphonse*"]
 
 [tool.setuptools.package-data]
 "alphonse.agent_v2" = ["builtin_skills/**/*"]
+
+[project.optional-dependencies]
+credentials-desktop = ["keyring>=25,<26; sys_platform == 'darwin'"]
+credentials-headless = ["cryptography>=45,<47"]

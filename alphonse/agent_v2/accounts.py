@@ -65,15 +65,38 @@ class AccountService:
     def _owner(self, session: AccountSession, connection) -> None:
         self._active(session.actor_user_id)
         self._active(connection['owner_user_id'])
+        if connection['schema_version'] != 1:
+            raise ValueError('account_schema_unsupported')
         if session.actor_user_id != connection['owner_user_id']:
             raise PermissionError('account_owner_required')
 
+    def create_connection(self, session: AccountSession, *, connection_id: str,
+                          provider_key: str, provider_subject: str, display_name: str) -> dict[str, Any]:
+        """Reserve a new exact ID with its authenticated owner before consent setup."""
+        self._active(session.actor_user_id)
+        if not all(isinstance(v, str) and v.strip() for v in
+                   (connection_id, provider_key, provider_subject, display_name)):
+            raise ValueError('account_connection_invalid')
+        now = _now_iso()
+        value = dict(schema_version=1, owner_user_id=session.actor_user_id,
+                     provider_subject=provider_subject, capabilities=[], granted_scopes=[],
+                     status='reauth_required', health_code='consent_required', last_success_at='',
+                     revision=1, created_at=now, updated_at=now)
+        with self.integrations._connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            if conn.execute('SELECT 1 FROM v2_integrations WHERE integration_id=?', (connection_id,)).fetchone():
+                raise ValueError('account_connection_exists')
+            conn.execute('''INSERT INTO v2_integrations
+                (integration_id, provider_key, display_name, enabled, connection_json, created_at, updated_at)
+                VALUES (?, ?, ?, 1, ?, ?, ?)''',
+                (connection_id, provider_key.strip().lower(), display_name, json.dumps(value, sort_keys=True), now, now))
+        return value
+
     def save_connection(self, session: AccountSession, *, connection_id: str,
                         expected_revision: int, provider_subject: str, capabilities: list[str],
-                        granted_scopes: list[str], credential_ref: str,
-                        credential_generation: int = 1, status: str = 'connected',
+                        granted_scopes: list[str], status: str = 'connected',
                         health_code: str = 'healthy', last_success_at: str = '',
-                        revocation_pending: bool = False) -> dict[str, Any]:
+                        reconcile_owner_user_id: str | None = None) -> dict[str, Any]:
         """Explicitly adopt a secret-free integration or revise its managed state.
 
         Credential provisioning/migration belongs to the secure credential service.
@@ -84,28 +107,32 @@ class AccountService:
         if record is None:
             raise ValueError('account_connection_missing')
         old = record.connection
+        owner = reconcile_owner_user_id or session.actor_user_id
+        self._active(owner)
         if old:
+            if owner != old['owner_user_id']:
+                raise ValueError('account_identity_immutable')
             self._owner(session, old)
             if provider_subject != old['provider_subject']:
                 raise ValueError('account_identity_immutable')
+        elif not self.users.is_admin(session.actor_user_id):
+            raise PermissionError('account_legacy_reconciliation_admin_required')
         elif record.secrets:
             raise ValueError('account_secure_migration_required')
-        if (not provider_subject.strip() or not credential_ref.strip() or credential_generation < 1
-                or status not in {'connected', 'paused', 'reauth_required', 'disconnected'}):
+        if (not provider_subject.strip() or status not in {'connected', 'paused', 'reauth_required', 'disconnected'}):
             raise ValueError('account_connection_invalid')
-        if old and credential_generation < old['credential_generation']:
-            raise ValueError('account_credential_generation_stale')
-        if old and credential_ref != old['credential_ref'] and credential_generation <= old['credential_generation']:
-            raise ValueError('account_credential_generation_stale')
+        if last_success_at:
+            _deadline(last_success_at)
+        if status == 'connected' and (not record.enabled or not record.credential_ref or record.credential_deletion_pending):
+            raise ValueError('account_secure_credentials_required')
         revision = old.get('revision', 0)
         if expected_revision != revision:
             raise ValueError('account_revision_conflict')
         now = _now_iso()
-        value = dict(schema_version=1, owner_user_id=session.actor_user_id,
+        value = dict(schema_version=1, owner_user_id=owner,
                      provider_subject=provider_subject, capabilities=_strings(capabilities),
-                     granted_scopes=_strings(granted_scopes), credential_ref=credential_ref,
-                     credential_generation=credential_generation, status=status, health_code=health_code,
-                     last_success_at=last_success_at, revocation_pending=bool(revocation_pending),
+                     granted_scopes=_strings(granted_scopes), status=status, health_code=health_code,
+                     last_success_at=last_success_at,
                      revision=revision + 1, created_at=old.get('created_at', now), updated_at=now)
         with self.integrations._connect() as conn:
             cursor = conn.execute('''UPDATE v2_integrations SET connection_json=?, updated_at=?
@@ -120,6 +147,8 @@ class AccountService:
                         grant.update(revoked_at=now, updated_at=now, revision=row['revision'] + 1)
                         conn.execute('UPDATE v2_account_grants SET definition=?, revision=? WHERE grant_id=?',
                                      (json.dumps(grant), grant['revision'], row['grant_id']))
+        if status == 'disconnected':
+            self.integrations.disconnect_credentials(connection_id, expected_generation=record.credential_generation)
         return value
 
     def save_grant(self, session: AccountSession, *, grant_id: str, connection_id: str,
@@ -141,6 +170,11 @@ class AccountService:
             raise ValueError('account_grant_invalid')
         now = _now_iso()
         with self.integrations._connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            current = conn.execute('SELECT enabled, connection_json FROM v2_integrations WHERE integration_id=?', (connection_id,)).fetchone()
+            if (not current or not current['enabled'] or json.loads(current['connection_json']) != record.connection
+                    or record.connection['status'] != 'connected'):
+                raise PermissionError('account_connection_unavailable')
             row = conn.execute('SELECT * FROM v2_account_grants WHERE grant_id=?', (grant_id,)).fetchone()
             old = json.loads(row['definition']) if row else {}
             if old and (old['connection_id'] != connection_id or old['beneficiary_user_id'] != beneficiary_user_id
@@ -165,14 +199,16 @@ class AccountService:
 
     def revoke_grant(self, session: AccountSession, *, grant_id: str, expected_revision: int) -> None:
         with self.integrations._connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
             row = conn.execute('SELECT * FROM v2_account_grants WHERE grant_id=?', (grant_id,)).fetchone()
             if not row:
                 raise ValueError('account_grant_missing')
             grant = json.loads(row['definition'])
-            record = self.integrations.get(grant['connection_id'])
-            if not record or not record.connection:
+            record = conn.execute('SELECT connection_json FROM v2_integrations WHERE integration_id=?',
+                                  (grant['connection_id'],)).fetchone()
+            if not record or not json.loads(record['connection_json']):
                 raise ValueError('account_connection_missing')
-            self._owner(session, record.connection)
+            self._owner(session, json.loads(record['connection_json']))
             grant.update(revoked_at=_now_iso(), updated_at=_now_iso(), revision=expected_revision + 1)
             cursor = conn.execute('UPDATE v2_account_grants SET revision=?, definition=? WHERE grant_id=? AND revision=?',
                                  (expected_revision + 1, json.dumps(grant), grant_id, expected_revision))
@@ -191,7 +227,8 @@ class AccountService:
         connection = record.connection
         self._active(connection['owner_user_id'])
         if (connection['schema_version'] != 1 or connection['status'] != 'connected'
-                or connection['health_code'] != 'healthy' or not connection['credential_ref']):
+                or connection['health_code'] != 'healthy' or not record.credential_ref
+                or record.credential_deletion_pending):
             raise PermissionError('account_connection_unavailable')
         with self.integrations._connect() as conn:
             row = conn.execute('SELECT definition FROM v2_account_grants WHERE grant_id=?', (grant_id,)).fetchone()
@@ -211,4 +248,7 @@ class AccountService:
             raise PermissionError('account_grant_denied')
         for recipient in recipients:
             self._active(recipient)
+        if self.integrations.credential_vault.health(record.credential_ref, connection_id,
+                                                      record.credential_generation) != 'available':
+            raise PermissionError('account_credentials_unavailable')
         return record, grant

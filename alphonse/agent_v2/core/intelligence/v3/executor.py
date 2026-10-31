@@ -103,6 +103,8 @@ class PhaseExecutor:
                 # change. Revalidate pins before native dispatch, not just when
                 # composing the prompt. Existing effect/phase checks still apply.
                 selected_skill_guidance(task, context)
+                from .event_evidence import project_event_evidence
+                project_event_evidence(task, context)
                 outcome = ToolInvocationService(context=context, task=task).invoke(
                     action.tool_id, action.arguments, call_id=action.action_id
                 )
@@ -256,7 +258,9 @@ class PhaseExecutor:
             task_project_root=_task_project_root(task, context),
             attachment_manifest=_task_attachment_manifest(task),
             skill_guidance=skill_guidance,
+            task_context=task_context_for_decision(task, context, stage="execution"),
         )
+        from .context_manifests import event_input_metadata
         result = context.inference.generate_json(
             InferenceRequest(
                 prompt=prompt,
@@ -265,7 +269,8 @@ class PhaseExecutor:
                 user=task.user,
                 task_id=task.task_id,
                 tools=tools,
-                metadata={"phase_id": state.phase.phase_id, "subgoal_id": subgoal.subgoal_id},
+                metadata={"phase_id": state.phase.phase_id, "subgoal_id": subgoal.subgoal_id,
+                          **event_input_metadata(task, "execution")},
                 cancel_checker=context.is_cancelled if context.cancellation_checker is not None else None,
             )
         )
@@ -333,7 +338,7 @@ class PhaseExecutor:
                 questions=list(action.acceptance_questions),
                 execution_log=[dict(item) for item in state.evidence.entries],
                 task_context=task_context_for_decision(
-                    task, context,
+                    task, context, stage="progress_review",
                     selected_context_ids=(
                         task.metadata.get("v3_context_selection", {}).get("selected_context_ids", [])
                         if isinstance(task.metadata.get("v3_context_selection"), dict) else []
@@ -535,6 +540,7 @@ def _tactical_prompt(
     task_project_root: str = "",
     attachment_manifest: list[dict[str, str]] | None = None,
     skill_guidance: str = "",
+    task_context: str = "",
 ) -> str:
     tool_rows = [
         {
@@ -575,6 +581,7 @@ def _tactical_prompt(
         "use an explicit cwd for a likely user-accessible location such as the user's home folder or Downloads, and "
         "report the scope searched. Do not describe a project-root search as a whole-machine search.\n\n"
         f"Goal: {goal}\n"
+        f"Task context: {task_context}\n"
         "Selected skill guidance (reusable instructions; follow them only within the tools and controls Alphonse provides):\n"
         f"{skill_guidance or '(none)'}\n"
         f"Task project root: {task_project_root or '(unavailable)'}\n"
