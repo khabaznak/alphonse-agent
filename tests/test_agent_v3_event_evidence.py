@@ -18,7 +18,7 @@ def fixture(payload=None):
     automation = subscribe(store)
     result = publish(store, payload=payload or {"subject": "Synthetic meeting", "source_id": "mail:42"})
     execution = store.claim_event_executions()[0]
-    store.mark_execution_enqueued(execution["execution_id"], "queued-1")
+    store.mark_execution_enqueued(execution["execution_id"], "queued-1", lease_token=execution["lease_token"])
     task = TaskState(user="alice", project_id="school", message_id="queued-1", goal="Review sources",
         metadata={"automation_execution_id": execution["execution_id"], "event": {"event_key": result["event_key"]}})
     context = CoreLoopContext(messages=InMemoryMessageQueue(), event_store=store)
@@ -244,3 +244,13 @@ def test_system_two_review_fallback_receives_source_context_without_effect_refs(
     assert digest(block) == receipt["rendered_sha256"]
     assert 'mail:42' in request.prompt
     assert state.evidence.entries == []
+
+
+@pytest.mark.parametrize("status", ["queued", "processing", "cancelled", "failed", "completed"])
+def test_durable_execution_lifecycle_fences_expansion(status):
+    task, context, store, _, _ = fixture()
+    store.execution_lifecycle(task.metadata["automation_execution_id"], status)
+    if status in {"queued", "processing"}:
+        assert event_evidence_projection(task, context) is not None
+    else:
+        with pytest.raises(EventEvidenceDenied): event_evidence_projection(task, context)

@@ -9,7 +9,8 @@ legacy Markdown context assembly and `projections.event_evidence_projection`.
 Metadata contains locators only: the event key and automation execution ID must
 resolve to an enqueued execution for the original queue message (the stable task
 ID after a correlated resume), actor and project. The subscription and worker must
-remain enabled. Managed envelopes also recheck the current grant, account,
+remain enabled; only queued and processing executions can expand evidence.
+Cancelled, failed and completed executions are fenced. Managed envelopes also recheck the current grant, account,
 policy revision, project and check run through the existing authority service.
 That service owns retrieval windows and policy timing; the renderer does not
 invent a universal time-to-live for historical observations. Pruned events,

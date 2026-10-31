@@ -437,7 +437,7 @@ class EventAutomationStore:
         with self._connect() as conn:
             row = conn.execute("SELECT * FROM v2_automation_executions WHERE execution_id=?",
                                (execution_id,)).fetchone()
-        if (row is None or row["event_key"] != event_key or row["status"] != "enqueued"
+        if (row is None or row["event_key"] != event_key or row["status"] not in {"queued", "processing"}
                 or row["queued_message_id"] != message_id):
             return None
         automation = self.get_automation(str(row["automation_id"]))
