@@ -21,6 +21,7 @@ class IntegrationConfigRecord:
     enabled: bool
     config: dict[str, Any] = field(default_factory=dict)
     secrets: dict[str, Any] = field(default_factory=dict, repr=False)
+    connection: dict[str, Any] = field(default_factory=dict)
     created_at: str = ""
     updated_at: str = ""
 
@@ -32,6 +33,7 @@ class IntegrationConfigRecord:
             "enabled": self.enabled,
             "config": dict(self.config),
             "secrets": _masked_secrets(self.secrets) if mask_secrets else dict(self.secrets),
+            "connection": dict(self.connection),
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -78,16 +80,25 @@ class SQLiteIntegrationStore:
         now = _now_iso()
         with self._connect() as conn:
             existing = conn.execute(
-                "SELECT created_at FROM v2_integrations WHERE integration_id = ?",
+                "SELECT * FROM v2_integrations WHERE integration_id = ?",
                 (integration,),
             ).fetchone()
+            if existing is not None and existing["provider_key"] != provider:
+                raise ValueError("integration_identity_immutable")
+            connection = str(existing["connection_json"]) if existing is not None else '{}'
+            if _json_object(connection):
+                # Managed account metadata/credentials can only change through AccountService.
+                if (bool(existing["enabled"]) != bool(enabled)
+                        or json.loads(existing["config_json"]) != dict(config or {})
+                        or json.loads(existing["secret_json"]) != dict(secrets or {})):
+                    raise PermissionError("managed_connection_service_required")
             created_at = str(existing["created_at"]) if existing is not None else now
             conn.execute(
                 """
                 INSERT OR REPLACE INTO v2_integrations (
                   integration_id, provider_key, display_name, enabled,
-                  config_json, secret_json, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                  config_json, secret_json, connection_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     integration,
@@ -96,6 +107,7 @@ class SQLiteIntegrationStore:
                     1 if enabled else 0,
                     json.dumps(dict(config or {}), sort_keys=True),
                     json.dumps(dict(secrets or {}), sort_keys=True),
+                    connection,
                     created_at,
                     now,
                 ),
@@ -155,6 +167,9 @@ class SQLiteIntegrationStore:
         return [_record_from_row(row) for row in rows if _record_from_row(row) is not None]
 
     def set_enabled(self, integration_id: str, enabled: bool) -> IntegrationConfigRecord:
+        record = self.get(integration_id)
+        if record and record.connection:
+            raise PermissionError("managed_connection_service_required")
         with self._connect() as conn:
             cursor = conn.execute(
                 """
@@ -213,6 +228,9 @@ class SQLiteIntegrationStore:
                   ON v2_integrations (provider_key, enabled);
                 """
             )
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(v2_integrations)")}
+            if "connection_json" not in columns:
+                conn.execute("ALTER TABLE v2_integrations ADD COLUMN connection_json TEXT NOT NULL DEFAULT '{}'")
 
 
 def _record_from_row(row: sqlite3.Row | None) -> IntegrationConfigRecord | None:
@@ -223,6 +241,7 @@ def _record_from_row(row: sqlite3.Row | None) -> IntegrationConfigRecord | None:
         provider_key=str(row["provider_key"]),
         display_name=str(row["display_name"]),
         enabled=bool(row["enabled"]),
+        connection=_json_object(row["connection_json"]),
         config=_json_object(row["config_json"]),
         secrets=_json_object(row["secret_json"]),
         created_at=str(row["created_at"]),

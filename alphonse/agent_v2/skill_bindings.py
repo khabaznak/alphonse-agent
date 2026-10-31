@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+from alphonse.agent_v2.accounts import AccountHandle, AccountService, AccountSession, _strings
 from alphonse.agent_v2.integrations.store import SQLiteIntegrationStore
 from alphonse.agent_v2.skills import SkillStore
 from alphonse.agent_v2.users import V2UserStore
@@ -48,15 +49,15 @@ class ExecutionBindings:
 class SkillBindings:
     """Persist references/ACLs in the existing integration DB; never copy secrets.
 
-    Integration records are household/admin managed and have no actor ownership.
-    Only an active administrator can provision a binding. Owners may share/revoke
-    it afterward. Consumers resolve again immediately before use.
+    Legacy integrations remain administrator provisioned. Managed accounts require
+    a separate owner-issued grant intersected with the binding ACL at every use.
     """
 
     def __init__(self, integrations: SQLiteIntegrationStore, users: V2UserStore, skills: SkillStore):
         self.integrations = integrations
         self.users = users
         self.skills = skills
+        self.accounts = AccountService(integrations, users)
         with integrations._connect() as conn:
             conn.executescript("""
                 CREATE TABLE IF NOT EXISTS v2_skill_bindings (
@@ -78,6 +79,10 @@ class SkillBindings:
                     PRIMARY KEY(actor_id, skill_id, name)
                 );
             """)
+
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(v2_skill_bindings)")}
+            if "revision" not in columns:
+                conn.execute("ALTER TABLE v2_skill_bindings ADD COLUMN revision INTEGER NOT NULL DEFAULT 1")
 
     def _actor(self, actor_id: str) -> None:
         user = self.users.get_user(actor_id)
@@ -102,10 +107,14 @@ class SkillBindings:
 
     def configure(self, *, actor_id: str, binding_id: str, skill_id: str, owner_id: str,
                   kind: str, target: str = "", configuration: dict[str, Any] | None = None,
-                  required_secrets: tuple[str, ...] = (), executables: tuple[str, ...] = ()) -> None:
+                  required_secrets: tuple[str, ...] = (), executables: tuple[str, ...] = (),
+                  grant_id: str = "", required_scopes: tuple[str, ...] = (),
+                  capabilities: tuple[str, ...] = ()) -> None:
         """Trusted admin setup; configuration MUST be non-secret. No file writes."""
         self._actor(actor_id)
-        if not self.users.is_admin(actor_id):
+        account = self.integrations.get(target) if kind == "account" else None
+        managed_owner = account and account.connection.get('owner_user_id') == actor_id
+        if not managed_owner and not self.users.is_admin(actor_id):
             raise PermissionError("skill_binding_admin_required")
         self._actor(owner_id)
         if not _NAME.fullmatch(binding_id):
@@ -138,6 +147,12 @@ class SkillBindings:
         if any(not isinstance(item, str) or not item for item in (*required_secrets, *executables)):
             raise ValueError("skill_binding_requirements_invalid")
         requirements = {"secrets": list(required_secrets), "executables": list(executables)}
+        if grant_id or required_scopes or capabilities:
+            if kind != 'account' or not account or not account.connection or not grant_id or required_secrets:
+                raise ValueError('skill_binding_managed_requirements_invalid')
+            requirements.update(grant_id=grant_id, scopes=_strings(required_scopes), capabilities=_strings(capabilities))
+        if account and account.connection and not grant_id:
+            raise ValueError('skill_binding_grant_required')
         with self.integrations._connect() as conn:
             if conn.execute("SELECT 1 FROM v2_skill_bindings WHERE binding_id = ?", (binding_id,)).fetchone():
                 raise ValueError("skill_binding_already_exists")
@@ -228,16 +243,22 @@ class SkillBindings:
             raise ValueError("skill_binding_data_inside_package")
 
     def set_access(self, binding_id: str, *, actor_id: str, shared_with: tuple[str, ...] = (),
-                   enabled: bool = True) -> None:
+                   enabled: bool = True, expected_revision: int | None = None) -> None:
         self._actor(actor_id)
         row = self._get(binding_id)
         if row["owner_id"] != actor_id and not self.users.is_admin(actor_id):
             raise PermissionError("skill_binding_access_denied")
         for user_id in shared_with:
             self._actor(user_id)
+        managed = row['kind'] == 'account' and self.integrations.get(row['target'])
+        if managed and managed.connection and expected_revision is None:
+            raise ValueError('skill_binding_revision_required')
+        revision = row['revision'] if expected_revision is None else expected_revision
         with self.integrations._connect() as conn:
-            conn.execute("UPDATE v2_skill_bindings SET shared_with = ?, enabled = ? WHERE binding_id = ?",
-                         (json.dumps(sorted(set(shared_with))), int(enabled), binding_id))
+            cursor = conn.execute("UPDATE v2_skill_bindings SET shared_with = ?, enabled = ?, revision=revision+1 WHERE binding_id = ? AND revision=?",
+                         (json.dumps(sorted(set(shared_with))), int(enabled), binding_id, revision))
+            if cursor.rowcount != 1:
+                raise ValueError('skill_binding_revision_conflict')
 
     def _get(self, binding_id: str) -> Any:
         with self.integrations._connect() as conn:
@@ -267,11 +288,73 @@ class SkillBindings:
             conn.execute("INSERT OR REPLACE INTO v2_skill_binding_choices VALUES (?, ?, ?, ?)",
                          (actor_id, skill_id, name, binding_id))
 
+    def attach_grant(self, session: AccountSession, *, binding_id: str, grant_id: str,
+                     expected_revision: int, required_scopes: tuple[str, ...],
+                     capabilities: tuple[str, ...]) -> None:
+        """Explicit legacy reconciliation; keep the binding and every choice intact."""
+        row = self._get(binding_id)
+        account = self.integrations.get(row['target']) if row['kind'] == 'account' else None
+        if not account or not account.connection or not grant_id:
+            raise ValueError('skill_binding_managed_requirements_invalid')
+        self.accounts._owner(session, account.connection)
+        requirements = json.loads(row['requirements'])
+        requirements.update(grant_id=grant_id, scopes=_strings(required_scopes),
+                            capabilities=_strings(capabilities), secrets=[])
+        with self.integrations._connect() as conn:
+            cursor = conn.execute('UPDATE v2_skill_bindings SET requirements=?, revision=revision+1 WHERE binding_id=? AND revision=?',
+                                  (json.dumps(requirements), binding_id, expected_revision))
+            if cursor.rowcount != 1:
+                raise ValueError('skill_binding_revision_conflict')
+
+    def resolve_account(self, session: AccountSession, *, skill_id: str, name: str,
+                        operation: str, resources: list[str], recipient_user_ids: list[str],
+                        project_id: str | None = None, expected_binding_id: str | None = None,
+                        expected_connection_id: str | None = None, expected_grant_id: str | None = None,
+                        expected_grant_revision: int | None = None) -> AccountHandle:
+        """Trusted managed adapter entry point. Re-resolve for each page/operation.
+
+        Policies must supply their pinned IDs/revision. Ad hoc calls need no project.
+        Returned constraints must be applied by the provider adapter, never widened.
+        """
+        actor = session.actor_user_id
+        self._actor(actor)
+        if self.skills.get(skill_id) is None:
+            raise ValueError('skill_binding_skill_missing')
+        if not self.skills.can_use(skill_id, actor):
+            raise PermissionError('skill_binding_skill_denied')
+        with self.integrations._connect() as conn:
+            choice = conn.execute('SELECT binding_id FROM v2_skill_binding_choices WHERE actor_id=? AND skill_id=? AND name=?',
+                                  (actor, skill_id, name)).fetchone()
+        if not choice:
+            raise ValueError('skill_binding_choice_missing')
+        row = self._get(choice['binding_id'])
+        self._authorize(row, actor)
+        requirements = json.loads(row['requirements'])
+        grant_id = requirements.get('grant_id', '')
+        if (row['skill_id'] != skill_id or row['kind'] != 'account' or not grant_id
+                or operation not in requirements.get('capabilities', [])
+                or (expected_binding_id is not None and row['binding_id'] != expected_binding_id)
+                or (expected_connection_id is not None and row['target'] != expected_connection_id)
+                or (expected_grant_id is not None and grant_id != expected_grant_id)):
+            raise PermissionError('skill_binding_account_constraints_denied')
+        for executable in requirements['executables']:
+            if not shutil.which(executable):
+                raise ValueError('skill_binding_dependency_missing')
+        account, grant = self.accounts.authorize(session, connection_id=row['target'], grant_id=grant_id,
+            operation=operation, resources=resources, recipient_user_ids=recipient_user_ids,
+            required_scopes=requirements.get('scopes', []), project_id=project_id,
+            expected_grant_revision=expected_grant_revision)
+        return AccountHandle(account.integration_id, row['binding_id'], grant_id,
+                             account.connection['revision'], grant['revision'], account.provider_key,
+                             operation, tuple(resources), tuple(recipient_user_ids))
+
     def prepare(self, *, actor_id: str, skill_id: str, names: list[str]) -> ExecutionBindings:
         """For trusted native execution only; never expose the payload to an LLM."""
         self._actor(actor_id)
         if self.skills.get(skill_id) is None:
             raise ValueError("skill_binding_skill_missing")
+        if not self.skills.can_use(skill_id, actor_id):
+            raise PermissionError('skill_binding_skill_denied')
         values: dict[str, Any] = {}
         secrets: list[str] = []
         for name in names:
@@ -295,6 +378,8 @@ class SkillBindings:
                 account = self.integrations.get(row["target"])
                 if account is None or not account.enabled:
                     raise ValueError("skill_binding_account_unavailable")
+                if account.connection:
+                    raise PermissionError('skill_binding_managed_service_required')
                 if any(not isinstance(item, str) for item in account.secrets.values()):
                     raise ValueError("skill_binding_credential_invalid")
                 if any(not account.secrets.get(key) for key in requirements["secrets"]):
