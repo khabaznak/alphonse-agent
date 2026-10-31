@@ -136,6 +136,7 @@ class V2Daemon:
         self._memory_migration_thread: threading.Thread | None = None
         self._lock_file: Any | None = None
         self._lifecycle_lock = threading.RLock()
+        self._optional_account_service = None
         self._stopped = False
         self._last_processor_error = ""
         self._active_work_lock = threading.RLock()
@@ -1880,6 +1881,30 @@ class V2Daemon:
             except ValueError:
                 continue
         return rendered
+
+    def optional_accounts(self, session):
+        """Trusted setup/adapter API; session must come from authenticated context.
+
+        Intentionally absent from legacy IPC, whose payload `user` is not an
+        authenticated actor. #121 can project health and invoke setup with a
+        trusted AccountSession. Never serialize this service or its token API.
+        """
+        from alphonse.agent_v2.accounts import AccountService, AccountSession
+        from alphonse.agent_v2.integrations.oauth import ClientConfig, OAuthService
+        if not isinstance(session, AccountSession):
+            raise PermissionError("account_trusted_session_required")
+        accounts = AccountService(self.runtime.integration_store, self.runtime.user_store)
+        accounts._active(session.actor_user_id)
+        with self._lifecycle_lock:
+            if self._optional_account_service is None:
+                clients = []
+                for provider in ("google", "microsoft"):
+                    prefix = "ALPHONSE_" + provider.upper() + "_OAUTH_"
+                    client_id, redirect = os.environ.get(prefix + "CLIENT_ID", ""), os.environ.get(prefix + "REDIRECT_URI", "")
+                    if client_id or redirect:
+                        clients.append(ClientConfig(provider, client_id, redirect))
+                self._optional_account_service = OAuthService(accounts, clients)
+            return self._optional_account_service
 
     def list_integrations(self) -> list[dict[str, Any]]:
         records = {record.provider_key: record for record in self.runtime.integration_store.list()}
