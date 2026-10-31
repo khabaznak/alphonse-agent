@@ -2,8 +2,9 @@
 
 Status: implementation contract for [#105](https://github.com/khabaznak/alphonse-agent/issues/105), 2026-10-31. Reconciles the October 30 design snapshot in [delivery index #104](https://github.com/khabaznak/alphonse-agent/issues/104).
 Baseline: `e224e368b7bb80f556b51b7b4411bb60e4c4a4a4` (current main inspected for this contract).
-This document implements no new runtime behavior. Requirements below are future
-work unless identified as shipped. The per-issue dependencies in #104 govern delivery.
+This document is the delivery contract. Requirements below are future work unless
+identified as shipped. #109 secure credential storage and #110 member-owned account
+grants/binding resolution now ship; see [binding implementation](skill-bindings.md#member-owned-connections-and-bounded-grants-110). The per-issue dependencies in #104 govern delivery.
 
 ## Outcome and non-negotiable boundaries
 

@@ -23,6 +23,7 @@ class IntegrationConfigRecord:
     enabled: bool
     config: dict[str, Any] = field(default_factory=dict)
     secrets: dict[str, Any] = field(default_factory=dict, repr=False)
+    connection: dict[str, Any] = field(default_factory=dict)
     credential_ref: str = ""
     credential_generation: int = 0
     revocation_pending: bool = False
@@ -38,6 +39,7 @@ class IntegrationConfigRecord:
             "enabled": self.enabled,
             "config": dict(self.config),
             "secrets": _masked_secrets(self.secrets) if mask_secrets else dict(self.secrets),
+            "connection": dict(self.connection),
             "credential_ref": self.credential_ref,
             "credential_generation": self.credential_generation,
             "revocation_pending": self.revocation_pending,
@@ -96,6 +98,14 @@ class SQLiteIntegrationStore:
                 "SELECT * FROM v2_integrations WHERE integration_id = ?",
                 (integration,),
             ).fetchone()
+            if existing is not None and existing["provider_key"] != provider:
+                if existing['credential_generation'] and not _json_object(existing['connection_json']):
+                    raise CredentialError('credential_managed_account_protected')
+                raise ValueError("integration_identity_immutable")
+            if existing is not None and _json_object(existing['connection_json']):
+                if (bool(existing['enabled']) != bool(enabled)
+                        or _json_object(existing['config_json']) != dict(config or {}) or secrets):
+                    raise PermissionError('managed_connection_service_required')
             if existing is not None and existing["credential_generation"]:
                 if provider != existing["provider_key"] or secrets or (enabled and not existing["enabled"]):
                     raise CredentialError("credential_managed_account_protected")
@@ -193,13 +203,28 @@ class SQLiteIntegrationStore:
         Provider revocation is a separate adapter concern; never claim it succeeded.
         """
         with self._connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
             cursor = conn.execute("""UPDATE v2_integrations SET enabled=0,
                 credential_generation=credential_generation+1, revocation_pending=1,
                 credential_deletion_pending=1, secret_json='{}', updated_at=?
                 WHERE integration_id=? AND credential_generation=?""",
                 (_now_iso(), integration_id, expected_generation))
-        if cursor.rowcount != 1:
-            raise CredentialError("credential_generation_conflict")
+            if cursor.rowcount != 1:
+                raise CredentialError("credential_generation_conflict")
+            row = conn.execute('SELECT connection_json FROM v2_integrations WHERE integration_id=?', (integration_id,)).fetchone()
+            connection = _json_object(row['connection_json'])
+            if connection:
+                now = _now_iso()
+                if connection['status'] != 'disconnected':
+                    connection.update(status='disconnected', revision=connection['revision'] + 1, updated_at=now)
+                    conn.execute('UPDATE v2_integrations SET connection_json=? WHERE integration_id=?',
+                                 (json.dumps(connection, sort_keys=True), integration_id))
+                for grant_row in conn.execute('SELECT * FROM v2_account_grants WHERE connection_id=?', (integration_id,)).fetchall():
+                    grant = json.loads(grant_row['definition'])
+                    if not grant['revoked_at']:
+                        grant.update(revoked_at=now, updated_at=now, revision=grant_row['revision'] + 1)
+                        conn.execute('UPDATE v2_account_grants SET definition=?, revision=? WHERE grant_id=?',
+                                     (json.dumps(grant), grant['revision'], grant_row['grant_id']))
         return self.retry_credential_deletion(integration_id)
 
     def retry_credential_deletion(self, integration_id: str) -> IntegrationConfigRecord:
@@ -268,6 +293,8 @@ class SQLiteIntegrationStore:
 
     def set_enabled(self, integration_id: str, enabled: bool) -> IntegrationConfigRecord:
         record = self.get(integration_id)
+        if record and record.connection:
+            raise PermissionError('managed_connection_service_required')
         if enabled and record and record.credential_generation and not record.enabled:
             raise CredentialError("credential_reconnect_required")
         with self._connect() as conn:
@@ -332,7 +359,8 @@ class SQLiteIntegrationStore:
 
             conn.execute("BEGIN IMMEDIATE")
             columns = {row[1] for row in conn.execute("PRAGMA table_info(v2_integrations)")}
-            for name, definition in (("credential_ref", "TEXT NOT NULL DEFAULT ''"),
+            for name, definition in (("connection_json", "TEXT NOT NULL DEFAULT '{}'"),
+                                     ("credential_ref", "TEXT NOT NULL DEFAULT ''"),
                                      ("credential_generation", "INTEGER NOT NULL DEFAULT 0"),
                                      ("revocation_pending", "INTEGER NOT NULL DEFAULT 0"),
                                      ("credential_deletion_pending", "INTEGER NOT NULL DEFAULT 0")):
@@ -348,6 +376,7 @@ def _record_from_row(row: sqlite3.Row | None) -> IntegrationConfigRecord | None:
         provider_key=str(row["provider_key"]),
         display_name=str(row["display_name"]),
         enabled=bool(row["enabled"]),
+        connection=_json_object(row["connection_json"]),
         config=_json_object(row["config_json"]),
         secrets=_json_object(row["secret_json"]),
         credential_ref=str(row["credential_ref"]),

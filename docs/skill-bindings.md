@@ -14,19 +14,18 @@ private databases or host configuration in the package.
 `v2_skill_bindings` holds skill-level account/data/configuration references, owner,
 explicit audience, enabled state and requirements; `v2_skill_binding_choices`
 holds each member's explicit mapping from `(actor, skill, role)` to a binding.
-Account references point to the existing integration ID. Credentials remain in
-that integration's `secrets`; no new credential vault or per-script catalog is
-created. Existing integration storage is local SQLite, not encrypted secret
-storage. Protect it with the host's existing file/account protections.
+Account references point to the existing integration ID. Unmigrated legacy
+credentials remain in integration `secrets`; managed OAuth credentials use #109's
+secure vault references. No per-script catalog is created. Legacy secret JSON is
+local SQLite, not encrypted secret storage. Protect it with the host's existing file/account protections.
 
 The [optional-account implementation contract](optional-account-integrations.md)
 extends these same bindings and explicit member choices with owned connections,
-revisioned capability grants and secure credential references. That is planned
-work, not current secure storage support. New optional OAuth connections must use
+revisioned capability grants and secure credential references. Secure storage shipped in #109; member-owned grant enforcement is described below. New optional OAuth connections must use
 the qualified secure backend when implemented; no parallel binding system or
 implicit project-derived access is introduced.
 
-The current integration records have no per-member ownership. Therefore only an
+Legacy integration records have no per-member ownership. Therefore only an
 active administrator from `V2UserStore` may provision bindings, including attaching
 an existing household account to a member. An owner or active administrator can
 share or revoke that binding. Provisioning a different location/account requires
@@ -183,3 +182,83 @@ keys to managed execution. Metadata/readiness never includes the vault payload.
 A locked/missing backend fails closed with a static status; no plaintext fallback
 or provider-based account substitution occurs. See [secure credential storage](secure-credentials.md)
 for deployment, explicit legacy migration, rotation and offline disconnect.
+
+## Member-owned connections and bounded grants (#110)
+
+`AccountService` now extends the existing integration ID with versioned connection
+metadata: immutable member owner/provider subject, normalized capabilities, actual
+provider scopes, status, health, last success, revision and timestamps. Credential
+references/generations and revocation/deletion state remain in the secure columns
+introduced by #109; they are not duplicated in binding configuration. The additive
+`connection_json` column defaults to `{}` for legacy integrations. Migration never
+infers ownership from an address, selected skill, project or existing binding.
+
+The supported management boundary is trusted host Python, as with #36. Construct
+`AccountSession` only from authenticated channel/task identity, never from model
+arguments. There is deliberately no new IPC method accepting an asserted member ID;
+the existing owner-only local socket is a trusted same-OS-user boundary, not
+independent household-member authentication. Desktop management is #121. Provider
+adapters use this same service; connection setup creates no schedules or monitoring.
+
+Explicit setup proceeds in this order:
+
+1. Use `create_connection(session, connection_id=..., provider_key=...,
+   provider_subject=..., display_name=...)` to reserve a new ID for the authenticated
+   member before consent (revision 1, `reauth_required`). Install credentials via
+   the #109 secure credential service. No new plaintext OAuth values are accepted.
+2. Call `AccountService.save_connection(session, connection_id=..., expected_revision=1,
+   provider_subject=..., capabilities=[...], granted_scopes=[...])` to reconcile
+   ownership explicitly. For existing unowned integrations only an authenticated
+   administrator may reconcile ownership (`expected_revision=0`) after secure
+   migration; `reconcile_owner_user_id` explicitly names its verified member owner.
+   This field cannot transfer an already owned connection. Existing subjects/owners/
+   provider keys cannot be retargeted.
+3. The connection owner calls `save_grant` with stable grant ID, exact connection,
+   beneficiary, operations, resources, recipients, optional project, expiry and
+   expected revision (`0` creates). Empty recipients permit no disclosure. Lists
+   use exact identifiers; wildcards are rejected. Only this owner can issue/expand
+   or revoke grants, including when a different member is household administrator.
+4. Configure an account binding with `grant_id`, `capabilities` and
+   `required_scopes`. An account owner can provision their own managed connection;
+   legacy provisioning remains administrator-only. For existing bindings use
+   `attach_grant(session, binding_id=..., grant_id=..., expected_revision=...,
+   capabilities=(...), required_scopes=(...))`. This preserves all IDs and choices.
+5. Each member explicitly selects their role with the existing `select` API.
+   Binding sharing and the beneficiary grant both apply; neither replaces the other.
+
+`resolve_account(session, skill_id=..., name=..., operation=..., resources=[...],
+recipient_user_ids=[...], project_id=None)` rechecks the installed skill's usability,
+active actor/binding owner/connection owner, ACL, exact choice, enabled connection,
+status, backend health, grant beneficiary/project/expiry/revocation, operations,
+resources, recipients and provider scopes. It returns an `AccountHandle` with exact
+IDs, revisions and permitted request constraints, without configuration or tokens.
+No choice means setup is required, even when only one account exists; adding another
+account with the same provider/name never changes a selection. Projects are optional
+for ad hoc reads; a project-specific grant matches only that exact project. Project
+membership, Jev relevance and editable package/configuration content confer no grant.
+
+Trusted provider adapters call `use_account(session, request={...}, operation=callback)`
+per operation/page. They must enforce the handle's bounded operation/resources and
+recipient constraints. Only the in-process trusted callback receives secure credentials;
+results are JSON-normalized/redacted, provider errors are static, and authority is
+checked before and after the callback. A handle is a snapshot, not a reusable bearer
+capability. There is no transaction spanning provider I/O: revocation cannot undo a
+request already issued, but denies subsequent pages and returning an in-flight result.
+Policies must pass pinned `expected_binding_id`, `expected_connection_id`,
+`expected_grant_id` and `expected_grant_revision`; a role change or revision mismatch
+requires review rather than retargeting. Provider acquisition remains its own workstream.
+
+Owned accounts cannot use legacy unrestricted `prepare/use` credential delivery.
+Existing unmigrated and secure-but-unowned #36/#41 bindings retain their protected-host
+compatibility path until explicit reconciliation. Generic Bash is still a trusted
+host capability, not an OS sandbox; these checks protect managed access, not against
+malicious code running as the same OS user.
+
+Grant revisions fence updates and revocation. Managed binding ACL changes require
+`expected_revision`; legacy ACL callers remain compatible. Scope narrowing is checked
+on the next use. Both connection-service disconnect and direct secure-credential
+disconnect fence use and revoke dependent grants. Offline deletion/revocation state
+uses #109's existing behavior; no provider revocation success is claimed. Reconnecting
+credentials/consent belongs to #111 and never resurrects a revoked grant. Package
+update/export/uninstall cannot change grants or choices; uninstall blocks use until
+an available skill is installed again. No private grant/connection state is exported.

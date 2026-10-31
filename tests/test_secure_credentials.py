@@ -41,10 +41,14 @@ def test_encrypted_roundtrip_restart_and_metadata_only_projections(store, tmp_pa
                    [r.to_dict() for r in reopened.list()]]
     assert SECRET not in json.dumps(projections, ensure_ascii=False)
     assert SECRET not in repr(record)
-    for path in tmp_path.rglob('*'):
-        if path.is_file():
-            assert SECRET.encode() not in path.read_bytes()
-            assert b'disposable-client' not in path.read_bytes()
+    # Keep a database reader alive while inspecting SQLite sidecars. Otherwise
+    # GC can close the last connection and remove WAL between is_file/read_bytes.
+    with store._connect() as reader:
+        reader.execute('SELECT * FROM v2_integrations').fetchall()
+        for path in tmp_path.rglob('*'):
+            if path.is_file():
+                assert SECRET.encode() not in path.read_bytes()
+                assert b'disposable-client' not in path.read_bytes()
     with store._connect() as conn:
         assert conn.execute("SELECT secret_json FROM v2_integrations WHERE integration_id='one'").fetchone()[0] == '{}'
 
