@@ -47,6 +47,11 @@ class EventDispatchWorker:
             return self._tick(now or datetime.now(timezone.utc))
 
     def _tick(self, now: datetime) -> list[dict[str, str]]:
+        # Startup may precede the old inbound lease deadline. Revisit orphaned
+        # leases every tick, while preserving this daemon's active model calls.
+        reclaim = getattr(self.messages, "reclaim_expired", None)
+        if callable(reclaim):
+            reclaim(now=now, exclude_owner=self.worker_id)
         status_for = getattr(self.messages, "status_for", lambda _: "")
         for execution in self.store.active_executions(limit=self.batch_size):
             self.reconcile(execution["execution_id"], status_for(execution["queued_message_id"]))

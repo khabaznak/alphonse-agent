@@ -406,3 +406,31 @@ def test_cancellation_inside_inflight_handoff_never_enqueues(tmp_path):
     identity = worker.run_once()[0]["execution_id"]
     assert queue.size() == 0
     assert store.get_execution(identity)["status"] == "cancelled"
+
+
+def test_tick_recovers_inbound_lease_that_expires_after_restart(tmp_path):
+    path = tmp_path / "events.db"
+    store = setup_store(path)
+    publish(store)
+    queue = SQLiteMessageQueue(path, lease_owner="old-daemon")
+    dispatcher(store, queue).run_once()
+    queued = queue.dequeue()
+    restarted = dispatcher(EventAutomationStore(path), SQLiteMessageQueue(path, lease_owner="new-daemon"))
+    now = datetime.now(timezone.utc)
+    restarted.run_once(now=now)
+    assert restarted.messages.size() == 0
+    restarted.run_once(now=now + timedelta(seconds=61))
+    assert restarted.messages.peek().message_id == queued.message_id
+
+
+def test_tick_preserves_current_daemon_long_running_model_call(tmp_path):
+    path = tmp_path / "events.db"
+    store = setup_store(path)
+    publish(store)
+    queue = SQLiteMessageQueue(path, lease_owner="test")
+    worker = dispatcher(store, queue)
+    worker.run_once()
+    queued = queue.dequeue()
+    worker.run_once(now=datetime.now(timezone.utc) + timedelta(seconds=120))
+    assert queue.status_for(queued.message_id) == "processing"
+    assert queue.size() == 0

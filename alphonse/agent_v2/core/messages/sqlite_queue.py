@@ -239,7 +239,7 @@ class SQLiteMessageQueue:
     def requeue(self, message_id: str) -> bool:
         return self.retry(message_id, next_attempt_at=_now())
 
-    def reclaim_expired(self, *, now: datetime | None = None) -> int:
+    def reclaim_expired(self, *, now: datetime | None = None, exclude_owner: str = "") -> int:
         timestamp = (now or _now()).isoformat()
         with self._connect() as conn:
             cursor = conn.execute(
@@ -250,12 +250,13 @@ class SQLiteMessageQueue:
                     lease_owner = '',
                     lease_expires_at = ''
                 WHERE status = 'processing'
+                  AND (? = '' OR lease_owner != ?)
                   AND (
                     (lease_expires_at != '' AND lease_expires_at <= ?)
                     OR (lease_owner = '' AND lease_expires_at = '')
                   )
                 """,
-                (timestamp,),
+                (exclude_owner, exclude_owner, timestamp),
             )
             return int(cursor.rowcount)
 

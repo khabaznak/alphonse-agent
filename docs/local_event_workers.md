@@ -140,7 +140,9 @@ It polls every second, claims at most 100 executions per tick, recovers expired
 30-second leases, and retries handoff errors after 5, 10, 20, 40 seconds (capped
 at one hour), with at most five attempts. Each claim gets a new token; stale
 callbacks cannot mark a newer claim enqueued. Each tick also reconciles a bounded
-batch of queued/processing executions. Neither polling nor publication invokes
+batch of queued/processing executions. It revisits expired inbound leases left by
+previous daemon owners, including leases that expire after startup; it excludes
+the current daemon's owner so long-running model calls are not stolen. Neither polling nor publication invokes
 a provider/model while holding a database transaction. Publication requests an
 immediate bounded tick; background recovery does not depend on another event.
 
@@ -152,7 +154,9 @@ queue message during handoff recovery. Normal V3 checkpoint recovery keeps the
 same CAPD task identity. Parked/waiting tasks remain processing until the original
 task's checkpoint reaches a terminal state. Terminal failures also survive queue
 payload cleanup. Receipts contain identities, status and timestamps, not prompts,
-event payloads or provider exception text.
+event payloads or provider exception text. Publication receipts also retain a
+scope fingerprint, so pruning cannot turn a reused ID into a different account,
+grant or project publication.
 
 `EventDispatchWorker.cancel(execution_id)` is the internal cancellation entrypoint
 for work not actively executing: it writes a queue tombstone before fencing the
