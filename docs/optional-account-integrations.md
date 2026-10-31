@@ -464,9 +464,14 @@ contract does not assert provider approval or qualified production OAuth support
 
 Optional provider modules/dependencies load only when enabled. Missing SDK/backend
 cannot break unrelated daemon startup, existing sensors, reminders or messaging.
-Continuous polling, provider push, independent workers, MCP transport and hosted
-availability are #126 decisions. No connection implicitly enables any of them;
-push is at most a validated hint to retrieve within existing grants/windows.
+The [#126 extension decision](optional-integration-extensions.md) defers continuous
+polling, provider push, independent restricted workers and MCP transport for this
+milestone. Local scheduled operation is the first path to qualify. That decision
+records reopening triggers, conformance gates and rollout ownership; it implements
+none of the deferred interfaces. Hosted availability and a general third-party
+plugin marketplace require separate explicit user approval outside this milestone.
+No connection implicitly enables monitoring; any future push is only a validated
+hint to retrieve within existing grants/windows.
 
 ## Supported surfaces and terminal retirement
 
