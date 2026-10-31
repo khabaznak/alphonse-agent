@@ -26,6 +26,7 @@ from alphonse.agent_v2.core.intelligence.v3.context import task_context_addenda
 from alphonse.agent_v2.core.intelligence.v3.context import conversation_coverage
 from alphonse.agent_v2.core.intelligence.v3.context import selected_skill_guidance
 from alphonse.agent_v2.core.intelligence.v3.context import skill_candidates_for_curation
+from alphonse.agent_v2.core.memory.retry_context import prepare_retry_continuity, retry_continuity_context
 
 if TYPE_CHECKING:
     from alphonse.agent_v2.core.core import CoreLoopContext, IntelligenceProcessor
@@ -144,6 +145,7 @@ class HierarchicalCAPDProcessor:
         """Acknowledge a new human task once, or satisfy it with a direct reply."""
         if not _is_initial_human_task(task):
             return False
+        prepare_retry_continuity(task, context)
         existing = task.metadata.get("v3_admission")
         if isinstance(existing, dict) and existing.get("completed") is True:
             return str(existing.get("route") or "") == "direct_response" and task.status == "completed"
@@ -156,6 +158,9 @@ class HierarchicalCAPDProcessor:
         if not isinstance(existing_selection, dict):
             invariant_context, candidates = prepare_context_curation(task, context)
             recent_context = recent_conversation_for_curation(task, context)
+            retry_context = retry_continuity_context(task, context)
+            if retry_context:
+                recent_context = recent_context + "\n\n" + retry_context
         else:
             selection_ids = existing_selection.get("selected_context_ids", [])
             selected_shared_context = task_context_for_decision(

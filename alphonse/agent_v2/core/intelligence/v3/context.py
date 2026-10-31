@@ -12,6 +12,7 @@ from alphonse.agent_v2.core.context_inventory import ContextText, source, combin
 from alphonse.agent_v2.agent_config import parse_global_context_sections
 from alphonse.agent_v2.core.memory.formatting import bound_context_record, bound_memory_context, join_context_sections
 from alphonse.agent_v2.core.memory.continuity import active_task_continuity
+from alphonse.agent_v2.core.memory.retry_context import retry_continuity_context
 
 if TYPE_CHECKING:
     from alphonse.agent_v2.core.core import CoreLoopContext
@@ -94,7 +95,8 @@ def task_context_for_decision(
 
     if enabled():
         return project(task, context, purpose=purpose, selected_context_ids=selected_context_ids)
-    sections = [active_task_continuity(task), conversation_context(task, context, selected_context_ids=selected_context_ids)]
+    sections = [active_task_continuity(task), retry_continuity_context(task, context),
+                conversation_context(task, context, selected_context_ids=selected_context_ids)]
     sections.extend(task_context_addenda(task))
     result = join_context_sections(sections, 36000)
     if purpose == "curation":

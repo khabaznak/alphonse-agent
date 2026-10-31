@@ -71,6 +71,47 @@ The existing runtime boundaries remain authoritative:
 
 ## Validation and limits
 
+### Retry-originating payloads (#128, 2026-10-31)
+
+`core/memory/retry_context.py` supplements the immediate tail for a current request
+that Jev judges to depend on earlier context. It considers at most 200 owner-scoped
+events, applies visibility checks before constructing candidates, and asks bounded
+Noul questions about at most 64 adjacent-exchange windows. Selection previews share
+a 48,000-character budget across the candidates so repeated failure reports cannot
+consume the budget before the original request is considered. Previews are for
+selection only: the selected sources are reloaded whole before use. Disconnected
+qualifying episodes remain ambiguous rather than being merged by topical similarity.
+
+The binding stores a current-request/steering fingerprint and canonical source IDs,
+never cached prescription contents or imported mutation authority. Every prompt
+rechecks source access and existence. Missing antecedents withhold the whole bundle
+rather than displaying approval without the payload it approved. Selected sources
+fit whole within 16,000 characters/32 records; otherwise context reports the limit
+and requires targeted recall or a concrete source question. Current attachments
+take precedence over historical source selection. New steering invalidates the
+binding. The default path and the opt-in projection both supply source receipts
+to admission, tool curation, planning, execution and review; projection inputs are
+required records and therefore cannot be silently evicted by optional history.
+An unresolved or revoked binding cannot fall back to writing an older similar
+record: Plan must produce one specific source/change question, with its native
+capability retained only within runtime exposure. The executor rechecks bound
+sources before each action, including resumed phases, and blocks an already
+planned operation if the originating payload becomes unavailable.
+
+This selects task parameters for the current authorized retry. It does not resume
+an old failed task, copy its authorization, prove that a record was written, or
+modify any skill/artifact program. Jev selects bounded sources only; System Two
+composes plans and operations, and deterministic ownership, scope, cancellation
+and effect checks remain authoritative.
+
+Synthetic regressions place a reviewed October prescription and its confirmation
+behind forty failed retries, alongside an older September treatment and another
+owner's private records. Both context paths recover the October source and retain
+its uncertainty; a disposable SQLite transaction and fresh read-back preserve the
+older record and create the requested new one. The regressions also cover restart,
+revocation, ambiguity, fresh attachments, steering changes and whole-source limits.
+No synthetic test calls a live provider or writes household records.
+
 Eleven new synthetic tests cover complete exchange omissions and manifests,
 repeated short answers, retry/pronoun antecedents, channel and midnight changes,
 multiline and legacy checkpoints, tiny budgets, task restart/plan compaction,

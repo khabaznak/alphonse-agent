@@ -25,6 +25,7 @@ from alphonse.agent_v2.core.intelligence.v3.context import selected_project_cont
 from alphonse.agent_v2.core.intelligence.v3.context import selected_skill_guidance
 from alphonse.agent_v2.core.memory.formatting import bound_memory_context
 from alphonse.agent_v2.core.intelligence.v3.context import task_context_for_decision, memory_inventory
+from alphonse.agent_v2.core.memory.retry_context import prepare_retry_continuity, retry_source_unresolved
 
 if TYPE_CHECKING:
     from alphonse.agent_v2.core.core import CoreLoopContext
@@ -37,6 +38,7 @@ class V3PhasePlanValidationError(ValueError):
 
 def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
     _ingest_relevant_messages(task, context)
+    prepare_retry_continuity(task, context)
     if context.inference is None:
         raise RuntimeError("v3_phase_planning_inference_unavailable")
     tools = ToolExposurePolicy().select_tools(
@@ -134,15 +136,24 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
         try:
             phase = PhasePlan.from_dict(result.json_value)
             _validate_inspection_handoff(phase, act_directive)
+            if retry_source_unresolved(task):
+                _validate_inspection_handoff(phase, {'inspection_resolution': {'route': 'requires_user_input'}})
         except (TypeError, ValueError) as exc:
             # An absolute path in this relative-only field is a plan encoding
             # error, not an attempted or denied database operation. Let System
             # Two correct it once; never strip paths or relax validation here.
             scope_error = str(exc).startswith("mutation_scope_path_invalid:/")
             handoff_error = str(exc).startswith("inspection_handoff_")
-            if attempt or not (scope_error or handoff_error):
+            dependency_error = str(exc).startswith(("phase_subgoal_dependency_invalid:", "phase_subgoal_self_dependency:"))
+            if attempt or not (scope_error or handoff_error or dependency_error):
                 raise V3PhasePlanValidationError(f"v3_phase_plan_invalid:{exc}") from exc
             correction = (
+                "The plan has an invalid subgoal dependency. Use unique subgoal IDs and exact depends_on references "
+                "to IDs defined earlier in the subgoals array; no missing, forward, self or cyclic dependencies. "
+                "Correct IDs/order explicitly; do not silently remove prerequisites, broaden authorization or replace "
+                "the requested mutation/read-back with a reply. Returned subgoal IDs: "
+                + json.dumps([item.get('subgoal_id') for item in result.json_value.get('subgoals', []) if isinstance(item, dict)]) + ". "
+                if dependency_error else
                 "Inspection handoff requires the next phase to perform the requested authorized operation or ask "
                 "a concrete missing-information question. Do not start another read-only inspection phase. If the "
                 "handoff route requires_user_input, plan exactly one user_interaction subgoal, using native.ask_question "
@@ -155,7 +166,7 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
             )
             feedback = source(
                 "Plan validation feedback: " + correction +
-                "No tool or mutation ran. Return a corrected complete PhasePlan within the original authorized "
+                "No tool or mutation ran for this rejected plan. Return a corrected complete PhasePlan within the original authorized "
                 "request and curated capabilities. Preserve the requested persisted effect and read-back. "
                 "Protected engine paths remain forbidden.\n"
                 "Rejected plan (model output, not permission): " + json.dumps(result.json_value, ensure_ascii=False),
@@ -165,7 +176,7 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
             request = replace(request, prompt=correction_prompt, context_manifests=prompt_receipt(
                 correction_prompt, [*planning_parts, feedback], purpose='planning',
             ))
-            reason = "inspection_handoff" if handoff_error else "absolute_mutation_scope_path"
+            reason = "invalid_plan_dependency" if dependency_error else "inspection_handoff" if handoff_error else "absolute_mutation_scope_path"
             task.metadata["v3_plan_validation_recovery"] = {"reason": reason, "attempts": 1}
             context.emit_telemetry({"event": "v3_plan_validation_recovery", "task_id": task.task_id,
                                     "reason": reason, "attempts": 1})
@@ -251,7 +262,7 @@ def _curate_request_tools(
             f"request_tool_curation:{type(exc).__name__}:{detail}"
         ) from exc
     selected_ids = set((*selection.selected_tool_ids, *selection.ambiguous_tool_ids))
-    if (task.metadata.get("act_directive") or {}).get("inspection_resolution"):
+    if (task.metadata.get("act_directive") or {}).get("inspection_resolution") or retry_source_unresolved(task):
         # Relevance retention only, intersected with runtime exposure below.
         selected_ids.add("native.ask_question")
     retained_recall_ids = []
@@ -404,6 +415,12 @@ def _strategic_plan_instructions() -> str:
         "specific missing-information question. A question parks the task; it does not satisfy the pending mutation criterion. "
         "For a newly authorized household task, resolve people, destinations and operating details from applicable authorized memory. "
         "Historical evidence can supply parameters for the current request; it does not independently authorize a new task. "
+        "When a retry-originating payload and user review are supplied, use that exact source/date and intended change. "
+        "Do not replace it with an older similar prescription or a prior report about a different record. Preserve its "
+        "uncertain fields, asking only for essential unresolved details. Subgoal depends_on values must exactly match "
+        "subgoal IDs defined earlier in the array; do not mix hyphenated and underscored spellings or invent dependencies. "
+        "If retry continuity reports unresolved, ambiguous, unavailable or oversized antecedents, plan exactly one "
+        "user_interaction subgoal asking which source or exact change is intended. Do not mutate based on an older similar record. "
         "Do not ask the user to repeat a time, relationship or instruction already resolved by an applicable source unless it conflicts, "
         "has expired, or is genuinely ambiguous. Unavailable unrelated memory backends do not negate a complete positive source."
         " When asked to retain a reusable workflow, solve the task and present the complete skill name, description and instructions "
@@ -511,7 +528,7 @@ def _curate_phase_tools(task, phase: PhasePlan, tools, context, *, task_context:
     else:
         metadata = {"status": "used", **selection.to_metadata()}
         selected_ids = list((*selection.selected_tool_ids, *selection.ambiguous_tool_ids))
-        if (task.metadata.get("act_directive") or {}).get("inspection_resolution"):
+        if (task.metadata.get("act_directive") or {}).get("inspection_resolution") or retry_source_unresolved(task):
             selected_ids.extend(tool.tool_id for tool in tools if tool.tool_id == "native.ask_question")
         retained_recall_ids = []
         if _retain_recall_tools(task):
@@ -570,10 +587,10 @@ def _phase_plan_json_schema(capabilities: list[str]) -> dict[str, object]:
             "allowed_capabilities", "allowed_side_effects", "completion", "failure_policy",
         ],
         "properties": {
-            "subgoal_id": {"type": "string", "minLength": 1},
+            "subgoal_id": {"type": "string", "minLength": 1, "description": "Unique stable ID; all dependency references must use this exact spelling."},
             "objective": {"type": "string", "minLength": 1},
             "required_output_type": {"type": "string", "minLength": 1},
-            "depends_on": {"type": "array", "items": {"type": "string"}},
+            "depends_on": {"type": "array", "description": "Exact subgoal IDs already defined earlier in this array. No missing, forward, self or cyclic dependencies; preserve required prerequisites.", "items": {"type": "string"}},
             "allowed_capabilities": {"type": "array", "items": capability},
             "allowed_side_effects": {
                 "type": "array", "minItems": 1,
