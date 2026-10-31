@@ -168,8 +168,13 @@ class V2Daemon:
             ProjectCheckDispatcher(self.runtime.schedule_store, self.runtime.project_checks)
             if self.runtime.project_checks is not None else None
         )
+        from alphonse.agent_v2.services.source_acquisition import SourceAcquisition
+        self.source_acquisition = (SourceAcquisition(self.project_check_dispatcher, self.event_store,
+            clock=lambda: datetime.now(timezone.utc)) if self.project_check_dispatcher is not None else None)
         self.project_check_worker = (
-            ProjectCheckWorker(self.project_check_dispatcher) if self.project_check_dispatcher is not None else None
+            ProjectCheckWorker(self.project_check_dispatcher, adapter=self.source_acquisition,
+                               on_results=self.source_acquisition.publish_ready)
+            if self.source_acquisition is not None else None
         )
         self.scheduler = ScheduledTaskWorker(
             store=self.runtime.schedule_store,
