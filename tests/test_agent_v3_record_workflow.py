@@ -1,6 +1,7 @@
 """Issue #128: disposable skill/SQLite workflow, no providers or household data."""
 from pathlib import Path
 import shlex
+from copy import deepcopy
 import sqlite3
 import sys
 from types import SimpleNamespace
@@ -26,7 +27,8 @@ from alphonse.agent_v2.system_one import SystemOneToolRegistrySelection, SystemO
 
 @pytest.mark.parametrize('projected', [False, True])
 @pytest.mark.parametrize('operation', ['commit', 'denied', 'unavailable', 'rollback'])
-def test_confirmed_record_update_reaches_shell_and_verifies_transaction(tmp_path, monkeypatch, projected, operation):
+@pytest.mark.parametrize('invalid_plan_first', [False, True])
+def test_confirmed_record_update_reaches_shell_and_verifies_transaction(tmp_path, monkeypatch, projected, operation, invalid_plan_first):
     monkeypatch.setenv('ALPHONSE_V3_CONTEXT_PROJECTIONS', str(int(projected)))
     skills = SkillStore(tmp_path / '.alphonse' / 'skills')
     skill = skills.create_skill('fixture-records', 'Maintain disposable records',
@@ -42,7 +44,7 @@ def test_confirmed_record_update_reaches_shell_and_verifies_transaction(tmp_path
         metadata={'v3_skill_selection': {'selected_skill_ids': [skill.skill_id]}})
     phase = dict(schema_version=3, phase_id='write-record', objective='Persist reviewed record and read back',
         acceptance_criteria=['Record 1 is persisted as reviewed and verified by fresh read-back'], criterion_ids=['ac-1'],
-        authorized_capabilities=['local_shell'], mutation_scope={'allowed_paths': [], 'allow_external_effects': True},
+        authorized_capabilities=['local_shell'], mutation_scope={'allowed_paths': ['records.sqlite'], 'allow_external_effects': True},
         originating_decision='Current confirmed request; selected skill provides workflow only', subgoals=[dict(
             subgoal_id='write', objective='Transaction and persisted read-back', required_output_type='verified_record',
             depends_on=[], allowed_capabilities=['local_shell'], allowed_side_effects=['external_reversible'],
@@ -71,10 +73,27 @@ def test_confirmed_record_update_reaches_shell_and_verifies_transaction(tmp_path
     registry = InMemoryToolRegistry()
     registry.register(build_bash_tool_definition())
     registry.register(build_respond_tool_definition())
+    planning_requests = []
+
+    def generate_json(request):
+        planning_requests.append(request)
+        candidate = deepcopy(phase)
+        if invalid_plan_first and len(planning_requests) == 1:
+            candidate['mutation_scope']['allowed_paths'] = [str(database)]
+        if len(planning_requests) == 2:
+            assert 'No tool or mutation ran' in request.prompt
+            assert 'Do not drop the mutation target' in request.prompt
+            with sqlite3.connect(database) as db:
+                assert db.execute('SELECT value FROM records WHERE id=1').fetchone()[0] == 'old'
+            assert any(r['source_type'] == 'plan_validation' for manifest in request.context_manifests for r in manifest['records'])
+        return SimpleNamespace(json_value=candidate)
+
     context = CoreLoopContext(messages=InMemoryMessageQueue(), skill_store=skills, tools=registry, system_one=Jev(),
-        inference=SimpleNamespace(generate_json=lambda request: SimpleNamespace(json_value=phase)))
+        inference=SimpleNamespace(generate_json=generate_json))
     planned = plan_phase(task, context)
     assert planned.curated_tool_ids == ('native.bash',)
+    assert planned.mutation_scope.allowed_paths == ('records.sqlite',)
+    assert len(planning_requests) == (2 if invalid_plan_first else 1)
     assert 'persisted' in task.acceptance_criteria_md
     for text in seen:
         included = [r for r in text.records if r['status'] == 'included' and r['source_id'] == ('skills:selected' if projected else skill.skill_id)]
@@ -183,3 +202,63 @@ def test_short_confirmed_followup_selects_antecedent_skill_with_coverage_receipt
     assert result.selected_skill_ids == (relevant.skill_id,)
     assert result.primary_skill_ids == (relevant.skill_id,)
     assert captured
+
+
+@pytest.mark.parametrize('path,attempts', [('/synthetic/records.sqlite', 2), ('../escape.sqlite', 1), ('.alphonse/settings.sqlite', 1)])
+def test_scope_recovery_is_bounded_and_never_disables_path_validation(path, attempts):
+    from alphonse.agent_v2.core.intelligence.v3.planner import V3PhasePlanValidationError
+    requests = []
+    invalid = dict(schema_version=3, phase_id='invalid', objective='Update synthetic record',
+        acceptance_criteria=['Record persisted and read back'], criterion_ids=['ac-1'],
+        authorized_capabilities=['local_shell'], mutation_scope={'allowed_paths': [path], 'allow_external_effects': False},
+        subgoals=[dict(subgoal_id='write', objective='Update synthetic record', required_output_type='record',
+            allowed_capabilities=['local_shell'], allowed_side_effects=['project_mutation'], completion={'kind': 'output_present'})])
+
+    def generate(request):
+        requests.append(request)
+        return SimpleNamespace(json_value=deepcopy(invalid))
+
+    task = TaskState(user='alex', goal='Save the synthetic record', task_id='validation')
+    task.set_acceptance_contract_from_markdown('1.- [ ] The record is persisted and read back')
+    contract = deepcopy(task.acceptance_contract)
+    context = CoreLoopContext(messages=InMemoryMessageQueue(), inference=SimpleNamespace(generate_json=generate))
+    with pytest.raises(V3PhasePlanValidationError, match='mutation_scope_path_'):
+        plan_phase(task, context)
+    assert len(requests) == attempts
+    assert task.acceptance_contract == contract
+    assert not task.hierarchical_state
+
+
+def test_plan_validation_failure_is_reported_as_planning_not_database_denial():
+    from alphonse.agent_v2.core.intelligence.v3.processor import HierarchicalCAPDProcessor
+    task = TaskState(user='alex', goal='Update the synthetic record', status='failed',
+        outcome={'status': 'failure', 'reason': 'v3_phase_plan_invalid:mutation_scope_path_invalid:/private/synthetic.sqlite'})
+    context = CoreLoopContext(messages=InMemoryMessageQueue())
+    result = HierarchicalCAPDProcessor._result(task, context)
+    message = task.metadata['v3_failure_response']['message']
+    assert result.status.value == 'failed'
+    assert 'execution plan was invalid' in message
+    assert 'does not establish' in message
+    assert '/private/synthetic.sqlite' not in message
+
+
+def test_cancellation_after_rejected_plan_prevents_correction_and_remains_cancelled():
+    from alphonse.agent_v2.core.intelligence.v3.processor import HierarchicalCAPDProcessor
+    cancelled = [False]
+    requests = []
+
+    def generate(request):
+        requests.append(request)
+        cancelled[0] = True
+        return SimpleNamespace(json_value=dict(schema_version=3, phase_id='invalid', objective='Update fixture',
+            mutation_scope={'allowed_paths': ['/fixture/records.sqlite']}, subgoals=[dict(
+                subgoal_id='write', objective='Write fixture', required_output_type='record', completion={'kind': 'output_present'})]))
+
+    task = TaskState(user='alex', goal='Update the synthetic record')
+    context = CoreLoopContext(messages=InMemoryMessageQueue(), inference=SimpleNamespace(generate_json=generate),
+                              cancellation_checker=lambda: cancelled[0])
+    result = HierarchicalCAPDProcessor().process(task, context)
+    assert result.status.value == 'cancelled'
+    assert task.status == 'cancelled'
+    assert len(requests) == 1
+    assert not task.hierarchical_state

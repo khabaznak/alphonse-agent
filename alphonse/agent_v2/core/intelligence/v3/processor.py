@@ -83,8 +83,10 @@ class HierarchicalCAPDProcessor:
                     state = self._new_state(task, context)
                     self._persist(task, context)
             except (V3PhasePlanValidationError, SystemOneUnavailableError) as exc:
-                task.status = "failed"
-                task.outcome = {"status": "failure", "reason": str(exc)}
+                cancelled = context.is_cancelled()
+                task.status = "cancelled" if cancelled else "failed"
+                task.outcome = {"status": "cancelled" if cancelled else "failure",
+                                "reason": "Task cancelled." if cancelled else str(exc)}
                 self._persist(task, context)
                 break
             try:
@@ -504,12 +506,17 @@ class HierarchicalCAPDProcessor:
                 else:
                     task.metadata.pop("v3_failure_response", None)
             if not task.metadata.get("v3_failure_response"):
+                plan_invalid = str((task.outcome or {}).get("reason") or "").startswith("v3_phase_plan_invalid:")
                 task.metadata["v3_failure_response"] = {
                     "source": "v3_failure_fallback",
                     "communication_reviewed": True,
-                    "message": "I couldn't complete this task because a required step failed. "
+                    "message": ("I couldn't start the next operation because its execution plan was invalid. "
+                               "The requested result remains unverified. This planning error does not establish "
+                               "that the resource is missing or that access was denied. Any earlier completed work has been preserved."
+                               if plan_invalid else
+                               "I couldn't complete this task because a required step failed. "
                                "The requested result has not been fully verified. Any completed work has been preserved. "
-                               "Review the failed action in the work log and ask me to retry once the blocker is resolved.",
+                               "Review the failed action in the work log and ask me to retry once the blocker is resolved."),
                 }
             HierarchicalCAPDProcessor._persist(task, context)
         status = (

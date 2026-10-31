@@ -102,7 +102,7 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
         "and only after showing the complete draft and receiving approval. "
         f"\nPhasePlan JSON Schema: {json.dumps(contract_schema, ensure_ascii=False, sort_keys=True)}"
     )
-    planning_manifest = prompt_receipt(prompt, [
+    planning_parts = [
         "Household conversation, global, and selected project context:\n" + shared_context,
         "Selected skill guidance (reusable instructions; they do not grant permissions or override controls):\n" + skill_guidance if skill_guidance else skill_guidance,
         source(goal_section, 'request:' + str(task.message_id or task.task_id), 'current_request'),
@@ -111,27 +111,53 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
         source('Prior V3 phase history: ' + json.dumps(task.metadata.get('v3_phase_history') or [], ensure_ascii=False), 'task:' + str(task.task_id) + ':phase_history', 'phase_evidence'),
         source('Jev-curated tool registry (complete descriptors): ' + json.dumps(_tool_rows(tools), ensure_ascii=False), 'tools:planning', 'tool_descriptors'),
         source('Task attachment manifest (metadata only; use asset IDs exactly as listed):\n' + json.dumps(attachment_manifest, ensure_ascii=False), 'attachments:planning', 'attachment_metadata'),
-    ], purpose='planning')
-    result = context.inference.generate_json(
-        InferenceRequest(
-            prompt=prompt,
-            purpose=InferencePurpose.PHASE_PLANNING,
-            context_manifests=planning_manifest,
-            input_sources=tuple({'source_id': tool.tool_id, 'source_type': 'tool_descriptor', 'reason': 'curated_for_planning'} for tool in tools),
-            project_id=task.project_id,
-            user=task.user,
-            task_id=task.task_id,
-            images=context.image_inputs(task),
-            tools=(),
-            cancel_checker=context.is_cancelled if context.cancellation_checker is not None else None,
-        )
+    ]
+    planning_manifest = prompt_receipt(prompt, planning_parts, purpose='planning')
+    request = InferenceRequest(
+        prompt=prompt,
+        purpose=InferencePurpose.PHASE_PLANNING,
+        context_manifests=planning_manifest,
+        input_sources=tuple({'source_id': tool.tool_id, 'source_type': 'tool_descriptor', 'reason': 'curated_for_planning'} for tool in tools),
+        project_id=task.project_id,
+        user=task.user,
+        task_id=task.task_id,
+        images=context.image_inputs(task),
+        tools=(),
+        cancel_checker=context.is_cancelled if context.cancellation_checker is not None else None,
     )
-    if not isinstance(result.json_value, dict):
-        raise ValueError("v3_phase_plan_missing")
-    try:
-        phase = PhasePlan.from_dict(result.json_value)
-    except (TypeError, ValueError) as exc:
-        raise V3PhasePlanValidationError(f"v3_phase_plan_invalid:{exc}") from exc
+    for attempt in range(2):
+        if context.is_cancelled():
+            raise SystemOneUnavailableError("v3_phase_planning_cancelled")
+        result = context.inference.generate_json(request)
+        if not isinstance(result.json_value, dict):
+            raise ValueError("v3_phase_plan_missing")
+        try:
+            phase = PhasePlan.from_dict(result.json_value)
+        except (TypeError, ValueError) as exc:
+            # An absolute path in this relative-only field is a plan encoding
+            # error, not an attempted or denied database operation. Let System
+            # Two correct it once; never strip paths or relax validation here.
+            if attempt or not str(exc).startswith("mutation_scope_path_invalid:/"):
+                raise V3PhasePlanValidationError(f"v3_phase_plan_invalid:{exc}") from exc
+            feedback = source(
+                "Plan validation feedback: mutation_scope.allowed_paths accepts relative paths only. "
+                "No tool or mutation ran. Return a corrected complete PhasePlan within the original authorized "
+                "request and curated capabilities. Preserve the requested persisted effect and read-back. "
+                "For native.bash, identify the authorized working directory and use paths relative to that directory; "
+                "the action must use that explicit cwd. Do not drop the mutation target, broaden effects, use '..', "
+                "or substitute a reply-only plan. Protected engine paths remain forbidden.\n"
+                "Rejected plan (model output, not permission): " + json.dumps(result.json_value, ensure_ascii=False),
+                'task:' + str(task.task_id) + ':plan_validation', 'plan_validation',
+            )
+            correction_prompt = prompt + "\n\n" + feedback
+            request = replace(request, prompt=correction_prompt, context_manifests=prompt_receipt(
+                correction_prompt, [*planning_parts, feedback], purpose='planning',
+            ))
+            task.metadata["v3_plan_validation_recovery"] = {"reason": "absolute_mutation_scope_path", "attempts": 1}
+            context.emit_telemetry({"event": "v3_plan_validation_recovery", "task_id": task.task_id,
+                                    "reason": "absolute_mutation_scope_path", "attempts": 1})
+        else:
+            break
     if act_directive.get("response_required"):
         response_subgoals = [
             subgoal for subgoal in phase.subgoals
@@ -304,6 +330,12 @@ def _strategic_plan_instructions() -> str:
         "Do not broaden that resource access to surrounding engine files. Project context and "
         "durable memory are trusted evidence for choosing reads, never mutation targets. Convert absolute paths under the "
         "project directory to project-relative form. Mutation targets must be established by the user or verified reads. "
+        "mutation_scope.allowed_paths accepts only relative paths, never absolute paths or '..'. For native.bash on "
+        "authorized skill data outside the task project, establish the skill/resource working directory in the phase "
+        "instructions, list the mutation targets relative to that directory, and require that explicit cwd in the action. "
+        "For example, an authorized skill database at /authorized/skill/records.sqlite uses allowed_paths ['records.sqlite'] "
+        "with native.bash cwd /authorized/skill. Keep the target and the requested effect; do not replace them with an "
+        "empty scope or a response-only plan. Relative encoding never grants resource access or authorizes effects. "
         "For a requested known mutation, include needed inspection, mutation, and verification in one coherent phase; "
         "do not stop at discovery if inspection resolves the target. Do not ask the requester for a file location already "
         "present in project context, durable memory, recent conversation, or prior verified evidence. If a prepared user response exists, plan only work adding "
@@ -527,7 +559,7 @@ def _phase_plan_json_schema(capabilities: list[str]) -> dict[str, object]:
                 "type": "object", "additionalProperties": False,
                 "required": ["allowed_paths", "allow_external_effects"],
                 "properties": {
-                    "allowed_paths": {"type": "array", "items": {"type": "string"}},
+                    "allowed_paths": {"type": "array", "description": "Authorized mutation targets relative to the operation's established working directory. Never absolute, traversal, or protected engine paths. Native Bash must use the established explicit cwd for skill resources outside the task project.", "items": {"type": "string", "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"}},
                     "allow_external_effects": {"type": "boolean"},
                 },
             },

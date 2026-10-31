@@ -211,6 +211,16 @@ that phase unless new evidence and the phase contract make them relevant.
 
 ## Implementation log
 
+- 2026-10-31 — Follow-up on #128: the live retry retained the relevant skill and
+  Bash but failed before execution because Plan put an absolute resource path in
+  the relative-only mutation scope. Added explicit skill-resource cwd/relative-path
+  guidance to Plan, its schema and tactical prompts, plus one bounded System Two
+  correction for that encoding error. The rejected plan never executes; repeated
+  invalid output, traversal and protected paths still fail deterministic validation.
+  Corrected-plan SQLite regressions cover transaction/read-back and all failure
+  cases on both context paths. Failure fallback distinguishes invalid planning
+  from resource absence or access denial. No private resource or record content is
+  included here; live success and owner acceptance remain unverified.
 - 2026-10-31 — Issue #128: default request and phase curation now receive bounded,
   access-filtered selected skill instructions and verified resource manifests with
   source receipts, matching the projection path. Structured conversation coverage
