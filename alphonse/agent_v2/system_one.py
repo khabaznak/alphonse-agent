@@ -1130,7 +1130,8 @@ class JevCriterionDecisionProvider:
         # (such as reading CLI help). They cannot substitute for the declared
         # subgoal's completion condition. Jev judges that condition separately.
         runtime_question_id = "runtime_declared_subgoal_complete"
-        if any(question.get("question_id") in {runtime_question_id, "runtime_action_added_progress"} for question in supplied):
+        inspection_ids = {"runtime_inspection_ready_for_action", "runtime_inspection_requires_user_input"}
+        if any(question.get("question_id") in {runtime_question_id, "runtime_action_added_progress", *inspection_ids} for question in supplied):
             raise ValueError("system_one_tactical_reserved_question_id")
         supplied.append({
             "question_id": runtime_question_id,
@@ -1145,6 +1146,33 @@ class JevCriterionDecisionProvider:
             str(question.get("question_id") or f"acceptance_{index + 1}").strip()
             for index, question in enumerate(supplied)
         }
+        # Inspection can resolve a decision without proving that an unreadable
+        # source became readable. These advisory judgments never satisfy an
+        # acceptance criterion, authorize a mutation, or compose a user question.
+        if set(subgoal.get("allowed_side_effects") or []) == {"read_only"} and any(
+            set(item.get("allowed_side_effects") or []) & {
+                "project_mutation", "external_reversible", "external_irreversible", "local_skill_installation",
+            }
+            for item in phase.get("subgoals", []) if isinstance(item, dict)
+        ):
+            supplied.extend([
+                {
+                    "question_id": "runtime_inspection_ready_for_action", "type": "noul",
+                    "instructions": "Does cumulative authorized evidence resolve the target, source and fields sufficiently for the requested operation to be planned now, without more inspection? Judge readiness only, not permission or successful execution.",
+                    "criteria": {
+                        "true": "The needed details are supported by applicable evidence, including previously reviewed/confirmed extraction. No material unresolved contradiction or missing essential field prevents the next authorized operation. Re-reading the original source is unnecessary unless a specific gap requires it.",
+                        "false": "An essential target, field or source is missing, disputed or unsupported. Mere database accessibility or an unverified historical transcription is insufficient.",
+                    },
+                },
+                {
+                    "question_id": "runtime_inspection_requires_user_input", "type": "noul",
+                    "instructions": "Has inspection identified a specific essential missing or conflicting detail that requires a user answer, rather than another variation of the same database read, document extraction or source search?",
+                    "criteria": {
+                        "true": "The log identifies a concrete unresolved field, conflicting value or unusable source; available evidence and attempted routes cannot resolve it. System Two can ask specifically for that information or a legible source.",
+                        "false": "Sufficient applicable evidence already exists, or a concrete untried source/action is likely to resolve the gap. Generic uncertainty or another reworded inspection is not a specific missing detail.",
+                    },
+                },
+            ])
         supplied.append({
             "question_id": "runtime_action_added_progress", "type": "noul",
             "instructions": "Compared with the earlier entries in tool_execution_log, did the latest action add meaningful new evidence or enable a concrete next step toward the declared stage goal?",

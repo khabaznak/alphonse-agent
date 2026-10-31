@@ -133,19 +133,31 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
             raise ValueError("v3_phase_plan_missing")
         try:
             phase = PhasePlan.from_dict(result.json_value)
+            _validate_inspection_handoff(phase, act_directive)
         except (TypeError, ValueError) as exc:
             # An absolute path in this relative-only field is a plan encoding
             # error, not an attempted or denied database operation. Let System
             # Two correct it once; never strip paths or relax validation here.
-            if attempt or not str(exc).startswith("mutation_scope_path_invalid:/"):
+            scope_error = str(exc).startswith("mutation_scope_path_invalid:/")
+            handoff_error = str(exc).startswith("inspection_handoff_")
+            if attempt or not (scope_error or handoff_error):
                 raise V3PhasePlanValidationError(f"v3_phase_plan_invalid:{exc}") from exc
+            correction = (
+                "Inspection handoff requires the next phase to perform the requested authorized operation or ask "
+                "a concrete missing-information question. Do not start another read-only inspection phase. If the "
+                "handoff route requires_user_input, plan exactly one user_interaction subgoal, using native.ask_question "
+                "to name only the specific missing fields, conflicting values or unusable source identified in the evidence. "
+                "Do not request generic permission again or ask the user to repeat already confirmed details. "
+                if handoff_error else
+                "mutation_scope.allowed_paths accepts relative paths only. For native.bash, identify the authorized "
+                "working directory and use paths relative to that directory; the action must use that explicit cwd. "
+                "Do not drop the mutation target, broaden effects, use '..', or substitute a reply-only plan. "
+            )
             feedback = source(
-                "Plan validation feedback: mutation_scope.allowed_paths accepts relative paths only. "
+                "Plan validation feedback: " + correction +
                 "No tool or mutation ran. Return a corrected complete PhasePlan within the original authorized "
                 "request and curated capabilities. Preserve the requested persisted effect and read-back. "
-                "For native.bash, identify the authorized working directory and use paths relative to that directory; "
-                "the action must use that explicit cwd. Do not drop the mutation target, broaden effects, use '..', "
-                "or substitute a reply-only plan. Protected engine paths remain forbidden.\n"
+                "Protected engine paths remain forbidden.\n"
                 "Rejected plan (model output, not permission): " + json.dumps(result.json_value, ensure_ascii=False),
                 'task:' + str(task.task_id) + ':plan_validation', 'plan_validation',
             )
@@ -153,9 +165,10 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
             request = replace(request, prompt=correction_prompt, context_manifests=prompt_receipt(
                 correction_prompt, [*planning_parts, feedback], purpose='planning',
             ))
-            task.metadata["v3_plan_validation_recovery"] = {"reason": "absolute_mutation_scope_path", "attempts": 1}
+            reason = "inspection_handoff" if handoff_error else "absolute_mutation_scope_path"
+            task.metadata["v3_plan_validation_recovery"] = {"reason": reason, "attempts": 1}
             context.emit_telemetry({"event": "v3_plan_validation_recovery", "task_id": task.task_id,
-                                    "reason": "absolute_mutation_scope_path", "attempts": 1})
+                                    "reason": reason, "attempts": 1})
         else:
             break
     if act_directive.get("response_required"):
@@ -175,6 +188,23 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
         task.sync_acceptance_criteria_view()
         task.append_update("Plan established the mission acceptance contract alongside the strategic phase.")
     return _curate_phase_tools(task, phase, tools, context, task_context=curation_context)
+
+
+def _validate_inspection_handoff(phase: PhasePlan, directive: dict) -> None:
+    resolution = directive.get("inspection_resolution") or {}
+    route = resolution.get("route")
+    if route not in {"ready_for_action", "requires_user_input", "decision_required"}:
+        return
+    first = phase.subgoals[0]
+    question = set(first.allowed_capabilities) == {Capability.USER_INTERACTION.value}
+    if route == "requires_user_input":
+        if not question or len(phase.subgoals) != 1:
+            raise ValueError("inspection_handoff_requires_specific_question")
+    elif not question and not set(first.allowed_side_effects) & {
+        SideEffectClass.PROJECT_MUTATION, SideEffectClass.EXTERNAL_REVERSIBLE,
+        SideEffectClass.EXTERNAL_IRREVERSIBLE, SideEffectClass.LOCAL_SKILL_INSTALLATION,
+    }:
+        raise ValueError("inspection_handoff_requires_action_or_question")
 
 
 def _curate_request_tools(
@@ -221,6 +251,9 @@ def _curate_request_tools(
             f"request_tool_curation:{type(exc).__name__}:{detail}"
         ) from exc
     selected_ids = set((*selection.selected_tool_ids, *selection.ambiguous_tool_ids))
+    if (task.metadata.get("act_directive") or {}).get("inspection_resolution"):
+        # Relevance retention only, intersected with runtime exposure below.
+        selected_ids.add("native.ask_question")
     retained_recall_ids = []
     if _retain_recall_tools(task):
         retained_recall_ids = [tool.tool_id for tool in tools if tool.tool_id in RECALL_TOOLS and tool.tool_id not in selected_ids]
@@ -361,6 +394,14 @@ def _strategic_plan_instructions() -> str:
         "Acknowledgments, explanations, drafts and no-write disclaimers do not satisfy that requested effect. "
         "A tool omitted by curation or a restricted current phase is not evidence of denied authorization, an inaccessible resource, "
         "or a failed operation. Replan missing capabilities rather than inventing an operational failure. "
+        "Inspection is a decision stage: sufficient evidence leads to the authorized operation; a specific unresolved "
+        "field or source leads to native.ask_question. Existing reviewed and confirmed extraction may support the requested "
+        "record update; do not independently re-extract the original document unless a specific contradiction or missing "
+        "essential field requires it. Never invent clinical details or treat unsupported historical transcription as confirmation. "
+        "When Act carries inspection_resolution, use its cumulative evidence and do not restart inspection. For "
+        "requires_user_input, plan exactly one user_interaction subgoal and ask only for the specific missing information. "
+        "For ready_for_action or decision_required, the first subgoal must perform the authorized operation or ask a "
+        "specific missing-information question. A question parks the task; it does not satisfy the pending mutation criterion. "
         "For a newly authorized household task, resolve people, destinations and operating details from applicable authorized memory. "
         "Historical evidence can supply parameters for the current request; it does not independently authorize a new task. "
         "Do not ask the user to repeat a time, relationship or instruction already resolved by an applicable source unless it conflicts, "
@@ -470,6 +511,8 @@ def _curate_phase_tools(task, phase: PhasePlan, tools, context, *, task_context:
     else:
         metadata = {"status": "used", **selection.to_metadata()}
         selected_ids = list((*selection.selected_tool_ids, *selection.ambiguous_tool_ids))
+        if (task.metadata.get("act_directive") or {}).get("inspection_resolution"):
+            selected_ids.extend(tool.tool_id for tool in tools if tool.tool_id == "native.ask_question")
         retained_recall_ids = []
         if _retain_recall_tools(task):
             retained_recall_ids = [tool.tool_id for tool in tools if tool.tool_id in RECALL_TOOLS and tool.tool_id not in selected_ids]

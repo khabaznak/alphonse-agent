@@ -43,6 +43,27 @@ strategy, including differently worded empty searches. A read-only stage declari
 still require outer recovery. These judgments neither execute tools nor alter the
 requested mission outcomes. See the [household pilot](16-household-delegation.md).
 
+Read-only inspection before a requested mutation also asks two bounded Noul
+questions: whether cumulative evidence is sufficient to plan the authorized
+operation, and whether a specific unresolved field or source needs a user answer.
+These questions are separate from stage success: learning that a source cannot be
+read does not make it readable or establish a mutation. Previously reviewed and
+confirmed extraction can supply evidence without automatically re-extracting its
+original source; unsupported historical transcription still cannot supply missing
+clinical facts.
+
+A confident, non-conflicting inspection resolution returns a structured handoff
+to outer planning. Six unfinished inspection actions across phases also require
+that decision, even when each action produced different output. The next phase
+must begin with the authorized operation or a specific missing-information
+question; another read-only inspection plan is rejected with one bounded
+correction. A missing-information route plans one user-interaction subgoal and
+retains only the already-exposed native question capability. System Two composes
+the question from actual evidence; Jev never generates its text or authorizes an
+effect. The handoff cannot satisfy acceptance criteria. A question remains waiting
+until the question store records an authenticated answer for that task and parked
+phase, after which planning continues from the answer and cumulative evidence.
+
 ## Check boundary
 
 For each still-pending acceptance criterion and each bounded successful evidence
@@ -111,6 +132,14 @@ the key or request contents.
 
 ## Implementation log
 
+- 2026-10-31 — Issue #128 inspection-loop follow-up: separated decision readiness
+  and specific missing information from inspection completion. Added the bounded
+  cross-phase inspection handoff, validation against restarting read-only phases,
+  question capability retention, and authenticated-answer release of the question
+  directive. Disposable end-to-end tests demonstrate transaction/fresh read-back
+  or a concrete question with no mutation; conflicting judgments, unrelated history
+  and acknowledged questions cannot manufacture completion or permission. Live
+  workflow success and owner acceptance remain pending.
 - 2026-10-31 — Issue #128: anchored mission review to the current request and
   steering, including transaction/read-back for requested record updates. Plan
   preserves persisted effects in acceptance criteria; status, acknowledgment and

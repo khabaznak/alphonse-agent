@@ -73,6 +73,7 @@ class HierarchicalCAPDProcessor:
                         # Re-running the parked subgoal would merely ask the same
                         # question again. Replan from the answer while retaining the
                         # earlier phase evidence in v3_phase_history.
+                        _resume_inspection_from_answer(task, state)
                         task.hierarchical_state = {}
                         state = self._new_state(task, context)
                     elif state.status.value in {"planned", "running"}:
@@ -104,13 +105,17 @@ class HierarchicalCAPDProcessor:
             evidence_after = _successful_evidence_signatures(task.metadata.get("v3_phase_history"))
             evidence_progress = bool(evidence_after - evidence_before) or bool(_satisfied_criterion_ids(task) - satisfied_before)
             review_status = str(getattr(getattr(review, "status", None), "value", ""))
+            inspection_handoff = (
+                (task.metadata.get("v3_inspection_resolution") or {}).get("phase_id") == state.phase.phase_id
+                and any(blocker.startswith("inspection_") for blocker in outcome.blockers)
+            )
             if "tactical_stage_no_new_progress" in set(outcome.blockers):
                 evidence_progress = False
             mission_answer = (task.metadata.get("system_one_act_recommendation") or {}).get("answers", {}).get("mission_outcome_is_fulfilled")
             threshold = float(getattr(getattr(context.system_one, "settings", None), "yes_threshold", 0.8))
             mission_unfulfilled = (bool(task.metadata.get("v3_resumption_evidence"))
                                   and isinstance(mission_answer, (int, float)) and mission_answer < threshold)
-            if (review_status in {
+            if not inspection_handoff and (review_status in {
                 "phase_blocked", "verification_failed", "phase_verified_task_incomplete",
             } or mission_unfulfilled or task.metadata.get("v3_route") == "strategic_replan") and not evidence_progress:
                 no_progress_phases += 1
@@ -559,6 +564,26 @@ class EngineRoutingProcessor:
 
     def process(self, task: "TaskState", context: "CoreLoopContext") -> ProcessingResult:
         return (self.v3 if task.intelligence_engine == "hierarchical_v3" else self.v2).process(task, context)
+
+
+def _resume_inspection_from_answer(task: "TaskState", state: TacticalState) -> None:
+    directive = task.metadata.get("act_directive") or {}
+    if not directive.get("inspection_resolution"):
+        return
+    answered = any(
+        isinstance(receipt, dict) and receipt.get("kind") == "authenticated_question_answer"
+        and receipt.get("task_id") == str(task.task_id or task.message_id or "")
+        and receipt.get("phase_id") == state.phase.phase_id
+        for receipt in task.metadata.get("v3_resumption_evidence", [])
+    )
+    if answered:
+        # Only the question store's authenticated receipt for this parked phase
+        # releases the question directive. Historical text cannot reset it.
+        task.metadata["act_directive"] = {
+            "action": "replan", "rationale": "Use the authenticated answer with existing evidence to continue the original authorized request; do not repeat the answered question.",
+        }
+        task.metadata.pop("v3_inspection_resolution", None)
+        task.metadata.pop("v3_update_inspection_actions", None)
 
 
 def _is_initial_human_task(task: "TaskState") -> bool:

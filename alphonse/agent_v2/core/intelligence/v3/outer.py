@@ -121,6 +121,19 @@ class V3OuterController:
                 decision = decide_next_action(review)
         else:
             decision = decide_next_action(review)
+        inspection = task.metadata.get("v3_inspection_resolution") or {}
+        inspection_handoff = (
+            review.status == PhaseReviewStatus.PHASE_BLOCKED
+            and inspection.get("phase_id") == state.phase.phase_id
+            and any(blocker.startswith("inspection_") for blocker in outcome.blockers)
+        )
+        if inspection_handoff:
+            missing = inspection.get("route") == "requires_user_input"
+            decision = StrategicDecision(
+                StrategicAction.ASK_USER if missing else StrategicAction.REPLAN,
+                "Ask only for the specific unresolved information identified by inspection." if missing else
+                "Resolve the existing inspection evidence into the authorized operation or a specific missing-information question; do not repeat inspection.",
+            )
         if context.is_cancelled():
             review = PhaseReview(state.phase.phase_id, PhaseReviewStatus.CANCELLED, "Task cancelled.")
             decision = decide_next_action(review)
@@ -199,6 +212,8 @@ class V3OuterController:
             task.status = "failed"
             task.outcome = {"status": "failure", "reason": decision.reason, "phase_id": state.phase.phase_id}
             task.metadata["v3_route"] = "end"
+        if inspection_handoff and task.metadata.get("v3_route") == "strategic_replan":
+            task.metadata["act_directive"]["inspection_resolution"] = dict(inspection)
         return review, decision
 
 

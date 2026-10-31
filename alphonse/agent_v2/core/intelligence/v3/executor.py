@@ -35,6 +35,7 @@ if TYPE_CHECKING:
 
 ActionSelector = Callable[[TacticalState, PhaseSubgoal, tuple["ToolDescriptor", ...]], dict[str, Any] | None]
 TACTICAL_RETRY_BASE_SECONDS = 1.0
+MAX_UPDATE_INSPECTION_ACTIONS = 6
 
 
 class PhaseExecutor:
@@ -142,6 +143,32 @@ class PhaseExecutor:
                     "retry_approved": retry_approved,
                     "answers": dict(progress_review.get("answers") or {}),
                 }
+                if not completion_met and _is_update_inspection(state, subgoal):
+                    count = int(task.metadata.get("v3_update_inspection_actions") or 0) + 1
+                    task.metadata["v3_update_inspection_actions"] = count
+                    threshold = float(getattr(getattr(context.system_one, "settings", None), "yes_threshold", 0.8))
+                    answers = progress_review.get("answers") or {}
+                    ready = answers.get("runtime_inspection_ready_for_action", 0.0)
+                    missing = answers.get("runtime_inspection_requires_user_input", 0.0)
+                    route = None
+                    if completed.status == "success":
+                        if _confident_probability(ready, threshold) and _confident_negative(missing, threshold):
+                            route = "ready_for_action"
+                        elif _confident_probability(missing, threshold) and _confident_negative(ready, threshold):
+                            route = "requires_user_input"
+                    if route is None and not completion_met and count >= MAX_UPDATE_INSPECTION_ACTIONS:
+                        route = "decision_required"
+                    if route is not None:
+                        task.metadata["v3_inspection_resolution"] = {
+                            "route": route, "phase_id": state.phase.phase_id,
+                            "evidence_refs": [entry["evidence_ref"] for entry in state.evidence.entries
+                                              if entry.get("status") == "success" and entry.get("evidence_ref")],
+                        }
+                        blocker = "inspection_" + route
+                        state.evidence.entries[-1]["inspection_resolution"] = route
+                        state.transition(PhaseStatus.BLOCKED)
+                        self._checkpoint(task, state, context)
+                        return self._outcome(state, "Inspection must now resolve into the authorized operation or a specific missing-information question; do not restart inspection.", blockers=(blocker,))
                 progress_threshold = float(getattr(getattr(context.system_one, "settings", None), "yes_threshold", 0.8))
                 if not completion_met and _consecutive_no_progress(state, subgoal.subgoal_id, progress_threshold) >= 3:
                     blocker = "tactical_stage_no_new_progress"
@@ -260,6 +287,15 @@ class PhaseExecutor:
         skill_selection = task.metadata.get("v3_skill_selection")
         if isinstance(skill_selection, dict) and not projections_enabled():
             skill_selection["loaded_skill_ids"] = loaded_skill_ids
+        resolution = (task.metadata.get("act_directive") or {}).get("inspection_resolution")
+        if resolution:
+            skill_guidance = skill_guidance + source(
+                "\nInspection handoff: " + json.dumps(resolution, ensure_ascii=False)
+                + "\nUse the existing evidence to carry out the authorized operation or ask the specific missing-information "
+                "question in this phase. Do not repeat broad database inspection or independently re-extract an already "
+                "reviewed and confirmed source. Missing or conflicting essential fields still require a question; never guess them.",
+                'task:' + str(task.task_id) + ':inspection_handoff', 'inspection_handoff',
+            )
         prompt = _tactical_prompt(
             state,
             subgoal,
@@ -660,6 +696,26 @@ def _matching_prior_incomplete_result(state: TacticalState, completed: TacticalA
             action_ref = str(evidence.get("evidence_ref") or "").removeprefix("tactical-action:")
             return action_ref or "unknown"
     return None
+
+
+def _confident_probability(value, threshold: float) -> bool:
+    import math
+    return type(value) in {int, float} and math.isfinite(value) and threshold <= value <= 1.0
+
+
+def _confident_negative(value, threshold: float) -> bool:
+    import math
+    return type(value) in {int, float} and math.isfinite(value) and 0.0 <= value <= 1.0 - threshold
+
+
+def _is_update_inspection(state: TacticalState, subgoal: PhaseSubgoal) -> bool:
+    return set(subgoal.allowed_side_effects) == {SideEffectClass.READ_ONLY} and any(
+        set(item.allowed_side_effects) & {
+            SideEffectClass.PROJECT_MUTATION, SideEffectClass.EXTERNAL_REVERSIBLE,
+            SideEffectClass.EXTERNAL_IRREVERSIBLE, SideEffectClass.LOCAL_SKILL_INSTALLATION,
+        }
+        for item in state.phase.subgoals
+    )
 
 
 def _consecutive_no_progress(state: TacticalState, subgoal_id: str, threshold: float = 0.8) -> int:
