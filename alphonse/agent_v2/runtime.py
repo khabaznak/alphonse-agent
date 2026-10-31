@@ -54,6 +54,7 @@ from alphonse.agent_v2.media_tools_settings import SQLiteMediaToolsSettingsStore
 from alphonse.agent_v2.assets import SQLiteAssetStore
 from alphonse.agent_v2.artifacts import SQLiteArtifactStore
 from alphonse.agent_v2.skill_bindings import SkillBindings
+from alphonse.agent_v2.project_checks import ProjectCheckService
 from alphonse.agent_v2.artifact_resources import ArtifactResources
 from alphonse.agent_v2.skills import SkillStore
 from alphonse.agent_v2.memory_settings import SQLiteMemorySettingsStore
@@ -130,6 +131,7 @@ class V2RuntimeHost:
     skill_store: SkillStore
     communication_router: CommunicationRouter
     conversation_store: SQLiteConversationStore
+    project_checks: ProjectCheckService | None = None
     integration_runtimes: list[Any] = field(default_factory=list)
     active_project_id: str = ""
     ui_events: list[CoreUiEvent] = field(default_factory=list)
@@ -318,6 +320,7 @@ def build_runtime_host(
         skill_bindings=skill_bindings,
     )
     runtime = V2RuntimeHost(
+        project_checks=ProjectCheckService(project_store, skill_bindings),
         user=str(user or (user_store.admin_user().user_id if user_store.admin_user() else "local")).strip() or "local",
         queue=queue,
         channel=channel,

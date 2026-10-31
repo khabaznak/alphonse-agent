@@ -536,6 +536,37 @@ class ProjectStore:
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_v2_projects_one_system_home "
                 "ON v2_projects(owner_user_id) WHERE is_system_home=1"
             )
+            # Persist a monotonic authority fence independently of timestamps.
+            # A pause/resume or membership change between worker calls must still
+            # invalidate old work, even if the final project state looks the same.
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS v2_project_authority_revisions (
+                    project_id TEXT PRIMARY KEY, revision INTEGER NOT NULL
+                );
+                INSERT OR IGNORE INTO v2_project_authority_revisions
+                    SELECT project_id, 1 FROM v2_projects;
+                CREATE TRIGGER IF NOT EXISTS project_authority_created AFTER INSERT ON v2_projects
+                BEGIN
+                    INSERT INTO v2_project_authority_revisions VALUES (NEW.project_id, 1)
+                    ON CONFLICT(project_id) DO UPDATE SET revision=revision+1;
+                END;
+                CREATE TRIGGER IF NOT EXISTS project_authority_updated AFTER UPDATE ON v2_projects
+                BEGIN
+                    UPDATE v2_project_authority_revisions SET revision=revision+1 WHERE project_id=NEW.project_id;
+                END;
+                CREATE TRIGGER IF NOT EXISTS project_authority_deleted AFTER DELETE ON v2_projects
+                BEGIN
+                    UPDATE v2_project_authority_revisions SET revision=revision+1 WHERE project_id=OLD.project_id;
+                END;
+                CREATE TRIGGER IF NOT EXISTS project_authority_member_added AFTER INSERT ON v2_project_members
+                BEGIN
+                    UPDATE v2_project_authority_revisions SET revision=revision+1 WHERE project_id=NEW.project_id;
+                END;
+                CREATE TRIGGER IF NOT EXISTS project_authority_member_removed AFTER DELETE ON v2_project_members
+                BEGIN
+                    UPDATE v2_project_authority_revisions SET revision=revision+1 WHERE project_id=OLD.project_id;
+                END;
+            """)
             # Add the structured config beside existing files without opening,
             # rewriting, renaming, or removing the legacy context Markdown.
             existing = conn.execute("SELECT root_path, owner_user_id, description FROM v2_projects").fetchall()
