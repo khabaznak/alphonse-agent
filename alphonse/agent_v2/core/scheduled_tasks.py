@@ -6,10 +6,11 @@ import json
 import os
 import sqlite3
 import hashlib
-from dataclasses import dataclass
+import threading
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Callable
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -51,9 +52,15 @@ class ScheduledTaskRecord:
     last_run_at: str | None
     created_at: str
     updated_at: str
+    job_kind: str = "prompt"
+    job_version: int = 1
+    payload: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "job_kind": self.job_kind,
+            "job_version": self.job_version,
+            "payload": dict(self.payload),
             "scheduled_task_id": self.scheduled_task_id,
             "owner_user_id": self.owner_user_id,
             "project_id": self.project_id,
@@ -131,9 +138,10 @@ class ScheduledTaskStore:
 
     def __init__(self, db_path: str | None = ":memory:") -> None:
         self.db_path = str(db_path or ":memory:")
+        self._memory_lock = threading.RLock()
         self._memory_connection: sqlite3.Connection | None = None
         if self.db_path == ":memory:":
-            self._memory_connection = sqlite3.connect(":memory:")
+            self._memory_connection = sqlite3.connect(":memory:", check_same_thread=False)
             self._memory_connection.row_factory = sqlite3.Row
         self._ensure_schema()
 
@@ -148,7 +156,10 @@ class ScheduledTaskStore:
         project_id: str = "",
         name: str,
         description: str = "",
-        prompt: str,
+        prompt: str = "",
+        job_kind: str = "prompt",
+        job_version: int = 1,
+        payload: dict[str, Any] | None = None,
         schedule_kind: ScheduleKind,
         run_at: str | None = None,
         rrule: str | None = None,
@@ -167,7 +178,18 @@ class ScheduledTaskStore:
             raise ValueError("scheduled_task_owner_required")
         if not name_value:
             raise ValueError("scheduled_task_name_required")
-        if not prompt_value:
+        if job_kind not in {"prompt", "project_check"} or type(job_version) is not int or job_version != 1:
+            raise ValueError("unsupported_job_version")
+        payload = dict(payload or {})
+        if job_kind == "project_check":
+            if (set(payload) != {"policy_id", "policy_revision"}
+                    or not isinstance(payload["policy_id"], str) or not payload["policy_id"]
+                    or type(payload["policy_revision"]) is not int or payload["policy_revision"] < 1
+                    or prompt_value):
+                raise ValueError("project_check_payload_invalid")
+        elif payload:
+            raise ValueError("scheduled_prompt_payload_invalid")
+        if job_kind == "prompt" and not prompt_value:
             raise ValueError("scheduled_task_prompt_required")
         project_value = str(project_id or "").strip()
         mode = str(delivery_mode or "pdca").strip().lower()
@@ -192,9 +214,11 @@ class ScheduledTaskStore:
             timezone_name=timezone_value,
         )
         current = now or _now_utc()
-        next_run_at = compute_next_run_at(schedule=schedule, timezone_name=timezone_value, after=current)
+        gaps: list[str] = []
+        next_run_at = compute_next_run_at(schedule=schedule, timezone_name=timezone_value, after=current, on_gap=gaps.append)
         now_text = _now_iso()
         record = ScheduledTaskRecord(
+            job_kind=job_kind, job_version=job_version, payload=payload,
             scheduled_task_id=f"scheduled_task_{uuid4().hex[:16]}",
             owner_user_id=owner,
             project_id=project_value,
@@ -219,11 +243,12 @@ class ScheduledTaskStore:
                     INSERT INTO v2_scheduled_tasks (
                       scheduled_task_id, owner_user_id, project_id, name, description, prompt,
                       schedule_json, origin_channel_json, timezone, status, next_run_at, last_run_at, created_at, updated_at,
-                      delivery_mode, idempotency_key
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                      delivery_mode, idempotency_key, job_kind, job_version, payload_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     _task_values(record),
                 )
+                self._write_schedule_gaps(conn, record, gaps)
             except sqlite3.IntegrityError:
                 if not key:
                     raise
@@ -518,6 +543,7 @@ class ScheduledTaskStore:
                     """,
                     (attempt, owner, lease_until, now_text, occurrence_key),
                 )
+                gaps: list[str] = []
                 updated_task = task
                 if str(task.schedule.get("kind") or "") == "once":
                     updated_task = _replace_task(task, next_run_at=None)
@@ -527,9 +553,10 @@ class ScheduledTaskStore:
                         next_run_at=compute_next_run_at(
                             schedule=task.schedule,
                             timezone_name=task.timezone,
-                            after=current,
+                            after=current, on_gap=gaps.append,
                         ),
                     )
+                self._write_schedule_gaps(conn, task, gaps)
                 self._save_task_connection(conn, updated_task)
                 claimed.append(
                     ScheduledOccurrence(
@@ -592,7 +619,7 @@ class ScheduledTaskStore:
                         task=task,
                         occurrence_key=str(row["occurrence_key"]),
                         run_id=str(row["run_id"]),
-                        scheduled_run_at=str(row["occurrence_key"]).rsplit(":", 1)[-1],
+                        scheduled_run_at=str(row["occurrence_key"])[len(task.scheduled_task_id) + 1:],
                         attempt_count=attempt,
                         lease_owner=owner,
                         lease_expires_at=lease_until,
@@ -655,7 +682,7 @@ class ScheduledTaskStore:
                         task=task,
                         occurrence_key=str(row["occurrence_key"]),
                         run_id=str(row["run_id"]),
-                        scheduled_run_at=str(row["occurrence_key"]).rsplit(":", 1)[-1],
+                        scheduled_run_at=str(row["occurrence_key"])[len(task.scheduled_task_id) + 1:],
                         attempt_count=attempt,
                         lease_owner=owner,
                         lease_expires_at=lease_until,
@@ -860,9 +887,21 @@ class ScheduledTaskStore:
                 ),
             )
 
+    def _write_schedule_gaps(self, conn: sqlite3.Connection, task: ScheduledTaskRecord, gaps: list[str]) -> None:
+        conn.executemany(
+            "INSERT OR IGNORE INTO v2_scheduled_task_gaps VALUES (?, ?, ?, 'nonexistent_local_time')",
+            [(task.scheduled_task_id, value, task.timezone) for value in gaps])
+
+    def list_schedule_gaps(self, scheduled_task_id: str, *, owner_user_id: str) -> list[dict[str, str]]:
+        if self.get_task_for_owner(scheduled_task_id, owner_user_id=owner_user_id) is None:
+            raise PermissionError("scheduled_task_owner_required")
+        with self._connect() as conn:
+            return [dict(row) for row in conn.execute(
+                "SELECT * FROM v2_scheduled_task_gaps WHERE scheduled_task_id=? ORDER BY local_time", (scheduled_task_id,))]
+
     def _connect(self) -> sqlite3.Connection:
         if self._memory_connection is not None:
-            return _ConnectionProxy(self._memory_connection)
+            return _ConnectionProxy(self._memory_connection, self._memory_lock)
         path = Path(self.db_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         return connect_database(path)
@@ -871,6 +910,11 @@ class ScheduledTaskStore:
         with self._connect() as conn:
             conn.executescript(
                 """
+                CREATE TABLE IF NOT EXISTS v2_scheduled_task_gaps (
+                  scheduled_task_id TEXT NOT NULL, local_time TEXT NOT NULL,
+                  timezone TEXT NOT NULL, reason TEXT NOT NULL,
+                  PRIMARY KEY(scheduled_task_id, local_time)
+                ) STRICT;
                 CREATE TABLE IF NOT EXISTS v2_scheduled_tasks (
                   scheduled_task_id TEXT PRIMARY KEY,
                   owner_user_id TEXT NOT NULL,
@@ -923,6 +967,11 @@ class ScheduledTaskStore:
                   ON v2_scheduled_task_executions (scheduled_task_id, started_at);
                 """
             )
+            for name, definition in [("job_kind", "TEXT NOT NULL DEFAULT 'prompt'"),
+                                     ("job_version", "INTEGER NOT NULL DEFAULT 1"),
+                                     ("payload_json", "TEXT NOT NULL DEFAULT '{}'" )]:
+                if name not in {str(r[1]) for r in conn.execute("PRAGMA table_info(v2_scheduled_tasks)")}:
+                    conn.execute(f"ALTER TABLE v2_scheduled_tasks ADD COLUMN {name} {definition}")
             columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(v2_scheduled_tasks)").fetchall()}
             if "origin_channel_json" not in columns:
                 conn.execute(
@@ -1021,6 +1070,8 @@ class ScheduledTaskRunner:
         return outcomes
 
     def _queue_task(self, task: ScheduledTaskRecord, *, now: datetime) -> dict[str, Any]:
+        if task.job_kind != "prompt" or task.job_version != 1:
+            raise ValueError("typed_job_requires_scheduled_worker")
         run_id = f"scheduled_run_{uuid4().hex[:16]}"
         started_at = _now_iso()
         try:
@@ -1074,7 +1125,8 @@ class ScheduledTaskRunner:
             }
 
 
-def compute_next_run_at(*, schedule: dict[str, Any], timezone_name: str, after: datetime) -> str | None:
+def compute_next_run_at(*, schedule: dict[str, Any], timezone_name: str, after: datetime,
+                        on_gap: Callable[[str], None] | None = None) -> str | None:
     kind = str(schedule.get("kind") or "").strip()
     if kind == "once":
         run_at = _parse_datetime(str(schedule.get("run_at") or ""), timezone_name=timezone_name)
@@ -1094,9 +1146,17 @@ def compute_next_run_at(*, schedule: dict[str, Any], timezone_name: str, after: 
         dtstart = dtstart.astimezone(tz)
     rule = rrulestr(rrule_value, dtstart=dtstart)
     next_local = rule.after(_as_utc(after).astimezone(tz), inc=False)
-    if next_local is None:
-        return None
-    return _as_utc(next_local).isoformat()
+    while next_local is not None:
+        candidate = next_local.replace(fold=0)
+        utc = _as_utc(candidate)
+        roundtrip = utc.astimezone(tz)
+        if (roundtrip.replace(tzinfo=None) == candidate.replace(tzinfo=None)
+                and utc > _as_utc(after)):
+            return utc.isoformat()
+        if roundtrip.replace(tzinfo=None) != candidate.replace(tzinfo=None) and on_gap is not None:
+            on_gap(candidate.isoformat())
+        next_local = rule.after(next_local, inc=False)
+    return None
 
 
 def schedule_summary(schedule: dict[str, Any]) -> str:
@@ -1109,17 +1169,21 @@ def schedule_summary(schedule: dict[str, Any]) -> str:
 
 
 class _ConnectionProxy:
-    def __init__(self, conn: sqlite3.Connection) -> None:
-        self._conn = conn
+    def __init__(self, conn: sqlite3.Connection, lock: Any) -> None:
+        self._conn, self._lock = conn, lock
 
     def __enter__(self) -> sqlite3.Connection:
+        self._lock.acquire()
         return self._conn
 
     def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
-        if exc_type is None:
-            self._conn.commit()
-        else:
-            self._conn.rollback()
+        try:
+            if exc_type is None:
+                self._conn.commit()
+            else:
+                self._conn.rollback()
+        finally:
+            self._lock.release()
 
 
 def _build_schedule(
@@ -1170,6 +1234,8 @@ def _task_from_row(row: sqlite3.Row | None) -> ScheduledTaskRecord | None:
     schedule = json.loads(str(row["schedule_json"] or "{}"))
     origin_channel = json.loads(str(row["origin_channel_json"] or "{}"))
     return ScheduledTaskRecord(
+        job_kind=str(row["job_kind"]), job_version=int(row["job_version"]),
+        payload=json.loads(row["payload_json"]),
         scheduled_task_id=str(row["scheduled_task_id"]),
         owner_user_id=str(row["owner_user_id"]),
         project_id=str(row["project_id"] or ""),
@@ -1231,6 +1297,7 @@ def _task_values(record: ScheduledTaskRecord) -> tuple[Any, ...]:
         record.updated_at,
         record.delivery_mode,
         record.idempotency_key,
+        record.job_kind, record.job_version, json.dumps(record.payload, sort_keys=True),
     )
 
 
@@ -1238,6 +1305,7 @@ def _replace_task(task: ScheduledTaskRecord, **values: Any) -> ScheduledTaskReco
     data = task.to_dict()
     data.update(values)
     return ScheduledTaskRecord(
+        job_kind=data["job_kind"], job_version=data["job_version"], payload=dict(data["payload"]),
         scheduled_task_id=str(data["scheduled_task_id"]),
         owner_user_id=str(data["owner_user_id"]),
         project_id=str(data["project_id"] or ""),

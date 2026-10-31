@@ -38,8 +38,10 @@ class ScheduledTaskWorker:
         worker_id: str | None = None,
         on_failure: Callable[[ScheduledOccurrence, str], None] | None = None,
         on_direct_delivery: Callable[[ScheduledOccurrence], str] | None = None,
+        project_check_handler: Any | None = None,
         memory_session_resolver: Callable[[str, str, str], str] | None = None,
     ) -> None:
+        self.project_check_handler = project_check_handler
         self.store = store
         self.messages = messages
         self.runner = ScheduledTaskRunner(store=store, messages=messages)
@@ -73,6 +75,8 @@ class ScheduledTaskWorker:
 
     def run_once(self, *, now: datetime | None = None) -> list[dict[str, Any]]:
         current = now or datetime.now(timezone.utc)
+        if self.project_check_handler is not None:
+            self.project_check_handler.sync(now=current)
         occurrences = self.store.claim_due_occurrences(
             worker_id=self.worker_id,
             now=current,
@@ -112,6 +116,19 @@ class ScheduledTaskWorker:
 
     def _dispatch(self, occurrence: ScheduledOccurrence, now: datetime) -> dict[str, Any]:
         try:
+            if occurrence.task.job_kind != "prompt":
+                if occurrence.task.job_kind != "project_check" or occurrence.task.job_version != 1:
+                    self.store.mark_occurrence_failed(occurrence.occurrence_key, error="unsupported_job_version")
+                    return {"status": "blocked", "error_code": "unsupported_job_version"}
+                if self.project_check_handler is None:
+                    raise RuntimeError("project_check_handler_unavailable")
+                result = self.project_check_handler.dispatch(occurrence, now=now)
+                self.store.mark_occurrence_enqueued(occurrence.occurrence_key, worker_id=self.worker_id,
+                                                   message_id=result["check_run_id"])
+                return result
+            if occurrence.task.job_version != 1:
+                self.store.mark_occurrence_failed(occurrence.occurrence_key, error="unsupported_job_version")
+                return {"status": "blocked", "error_code": "unsupported_job_version"}
             if occurrence.task.delivery_mode == "direct":
                 if self.on_direct_delivery is None:
                     raise RuntimeError("scheduled_direct_delivery_unavailable")
