@@ -604,7 +604,8 @@ evidence before returning checkpoints, and use separately scoped provider
 cursors. In-flight reads cannot be recalled. Valid results are checkpointed before
 the post-call time fence, leaving partial progress at the boundary; an expired or
 superseded lease cannot commit. No analysis or subsequent read starts off-window.
-The production adapter is deliberately uninstalled until #114: execution records
+The #114 acquisition framework is installed with an empty provider registry until
+#117–#120 supply qualified adapters: execution records
 `blocked/acquisition_adapter_unavailable`, never successful no-match.
 
 Windows are half-open local-day intervals, bounded by policy and project duration.
@@ -623,3 +624,65 @@ owner session and reports stale pending work and expired/offline leases. These
 are trusted service APIs; they are not exposed through unauthenticated legacy
 IPC. Provider evidence, publication and outbox completion remain separate stages
 owned by #114 and its dependent issues; scheduler acceptance is not completion.
+
+### Bounded source acquisition — #114
+
+`integrations/acquisition.py` defines the native read-only adapter contract for
+health, capabilities, search, change iteration, source expansion and attachments.
+`ReadContext` contains the authenticated executing session, resolved account
+handle, exact resource constraints, deadline and remaining page/item/byte limits.
+Adapters must honor these limits at their transport, including response decoding,
+and must disable implicit retries and redirects/credential forwarding. Adapter
+versions are mandatory and invalidate old cursors. No provider adapter is enabled
+by this framework; #117–#120 supply and qualify those implementations. An optional
+connection alone still creates no job and performs no read.
+
+`services/source_acquisition.py` runs through the existing leased
+`ProjectCheckWorker`. It reuses account binding resolution and policy guards;
+provider exceptions remain content-free operational error codes. Every accepted
+page, normalized evidence record, source-stream cursor and run acquisition
+checkpoint commits in one SQLite transaction fenced by the active lease generation.
+A crash before commit repeats the read; a crash after commit resumes at the saved
+cursor, including a final page accepted before process death. Source identity is
+connection/resource/provider-ID/version; scoped evidence references additionally
+bind the run and policy. Page receipts preserve accepted evidence IDs and coverage.
+No provider cursor or content is used as an analysis checkpoint.
+
+Cursor scope includes the policy, executing principal, exact source binding and
+grants, query digest and adapter version. A changed query, resource, grant/binding
+scope or adapter version starts the policy's explicit bounded initial lookback.
+Expired cursors permit one bounded resync per source/run and record a coverage gap;
+resync cannot certify coverage outside that bounded history. Incomplete provider
+coverage, budget stops and cursor stalls are partial/failure conditions. Empty,
+fully covered acquisition requires no triage and records quiet `no_match`.
+Nonempty completed acquisition records `coverage.processing=pending`: the existing
+scoped event passes references to downstream required triage/CAPD, supplied by
+#115/#116. Acquisition completion does not claim model processing or delivery
+success. Classification and CAPD record separate monotonic sets of evidence IDs
+in `v2_source_processing`, with current authority and analysis-window checks;
+failed processing cannot rewind acquisition or discard accepted messages.
+
+Normalized MIME is inert structured text with alternative parts and quotes
+preserved. Script/style/embedded-object contents and image/link execution are
+excluded; source links are HTTPS conveniences without embedded credentials.
+Attachments require exact granted resources, an explicit supported content type
+(text, CSV or PDF), and at most 5 MiB within remaining run limits. Reads return
+bytes to trusted native code, never execute them. Provider adapters must validate
+the actual attachment type and scope; declared names/links are not authority.
+Raw MIME is not retained. Normalized content expires after seven days; the worker
+redacts expired, cancelled or revoked evidence while retaining content-free
+provenance. Source tombstones redact prior cached versions. Expiry, revoked access
+and off-window analysis deny content expansion before returning bytes. Cleanup
+also runs on worker ticks when no new job is available. No active-run retention
+extension is enabled by this implementation.
+
+`account.check_result` is a managed private event with one stable
+`source-result:<check-run-id>` identity. The aggregate policy envelope is resolved
+from the durable run; all contributing grants and sources must still validate.
+Events contain run references and coverage, never messages or opaque cursors.
+Publication is retried from terminal receipts through the existing event store's
+replay deduplication. Crash after event acceptance and before local publication
+receipt therefore produces one event. No-match/cancellation stays quiet. A result
+whose authority was revoked remains visible only through authorized operational
+status; revocation never grants permission to publish private evidence. Existing
+event dispatch, subscriptions, queue and outbox remain the downstream path.

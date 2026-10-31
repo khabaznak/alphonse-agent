@@ -47,7 +47,8 @@ class CheckStopped(Exception):
 class CheckStep:
     """Provider evidence persistence belongs to the adapter; cursors stay separate.
 
-    Only return complete once all required analysis has durably finished. An
+    Complete closes this worker's assigned acquisition/analysis stage. Downstream
+    classification and CAPD keep independent durable processing receipts. An
     unavailable adapter, an empty error response or a budget stop is never no_match.
     """
     acquisition_checkpoint: dict | None = None
@@ -55,6 +56,7 @@ class CheckStep:
     items: int = 0
     bytes_read: int = 0
     complete: bool = False
+    no_match: bool = False
 
 
 class ProjectCheckDispatcher:
@@ -322,15 +324,18 @@ class ProjectCheckWorker:
     """One bounded step at a time, separate from the scheduler's dispatch thread."""
     def __init__(self, dispatcher: ProjectCheckDispatcher, *, adapter: Callable[[CheckContext], CheckStep] | None = None,
                  clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc), lease_seconds: float = 30,
-                 max_attempts: int = 5):
+                 max_attempts: int = 5, on_results: Callable[[], None] | None = None):
         self.dispatcher, self.adapter, self.clock = dispatcher, adapter, clock
         self.lease_seconds, self.max_attempts = lease_seconds, max_attempts
+        self.on_results = on_results
         self.owner = 'acquisition-' + uuid4().hex
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self.last_error = ''
 
     def run_once(self) -> dict | None:
+        if self.on_results is not None:
+            self.on_results()
         run = self.dispatcher.claim(self.owner, self.clock(), self.lease_seconds)
         if run is None:
             return None
@@ -343,11 +348,14 @@ class ProjectCheckWorker:
             if self.adapter is None:
                 raise CheckStopped('blocked', 'acquisition_adapter_unavailable')
             result = self.adapter(context)
-            if not context.operation_count:
+            if not context.operation_count and not run['coverage'].get('acquisition_complete'):
                 raise CheckStopped('failed', 'unguarded_adapter_step')
             context.guard()
             if result.complete:
-                run.update(outcome='complete', error_code='')
+                if result.no_match and (run['items'] or run['coverage']['gaps']
+                        or not run['coverage'].get('acquisition_complete')):
+                    raise CheckStopped('failed', 'invalid_no_match')
+                run.update(outcome='no_match' if result.no_match else 'complete', error_code='')
             else:
                 state = 'pending'
                 # Continuations do not consume retry attempts.
@@ -370,12 +378,14 @@ class ProjectCheckWorker:
                     state = 'retry_wait'
         if state == 'terminal':
             run['finished_at'] = self.clock().isoformat()
-            if run['outcome'] != 'complete':
+            if run['outcome'] not in {'complete', 'no_match'}:
                 run['coverage']['gaps'].append(run['error_code'])
         try:
             self.dispatcher.save(run, now=self.clock(), state=state, lease_seconds=self.lease_seconds)
         except CheckStopped:
             pass  # Cancellation/new lease won; its receipt is authoritative.
+        if self.on_results is not None:
+            self.on_results()
         return self.dispatcher.get(run['check_run_id'])
 
     def start(self) -> None:
