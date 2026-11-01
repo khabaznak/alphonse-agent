@@ -206,18 +206,18 @@ class TypeSafeSystemOneClient:
         self.timeout_seconds = max(1.0, float(timeout_seconds))
         self.transport = transport or _http_transport
 
-    def evaluate(self, *, state: Any, questions: dict[str, Any]) -> dict[str, Any]:
+    def evaluate(self, *, state: Any, questions: dict[str, Any], retries: int = SYSTEM_ONE_RETRIES) -> dict[str, Any]:
         if not self.api_key:
             raise ValueError("system_one_api_key_required")
         if not questions:
             raise ValueError("system_one_questions_required")
         payload = {"state": state, "model": self.model, "questions": questions}
-        for attempt in range(SYSTEM_ONE_RETRIES + 1):
+        for attempt in range(retries + 1):
             try:
                 response = self.transport(self.api_url, self.api_key, payload, self.timeout_seconds)
                 break
             except RuntimeError:
-                if attempt >= SYSTEM_ONE_RETRIES:
+                if attempt >= retries:
                     raise
                 sleep(SYSTEM_ONE_RETRY_BACKOFF_SECONDS * (attempt + 1))
         answers = response.get("answers") if isinstance(response, dict) else None
@@ -366,6 +366,16 @@ class _StaticJevToolRegistry:
 
 
 class JevCriterionDecisionProvider:
+    def triage_project_check(self, *, goal, candidates, timeout_seconds):
+        from alphonse.agent_v2.project_triage import evaluate
+        client = TypeSafeSystemOneClient(api_url=self.settings.api_url,
+            api_key=self.settings.api_key, model=self.settings.model,
+            timeout_seconds=timeout_seconds, transport=self.client.transport)
+        class BoundedClient:
+            def evaluate(self, **kwargs):
+                return client.evaluate(**kwargs, retries=0)
+        return evaluate(BoundedClient(), goal=goal, candidates=candidates)
+
     def __init__(self, settings: SystemOneSettings, *, transport: Transport | None = None) -> None:
         self.settings = _normalize_settings(settings)
         self.client = TypeSafeSystemOneClient(
