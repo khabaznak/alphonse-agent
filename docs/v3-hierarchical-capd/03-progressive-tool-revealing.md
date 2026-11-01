@@ -256,6 +256,13 @@ See [artifact resource storage and migration](../skill-artifact-resources.md).
 
 ## Standard skill activation and resource inspection (#34)
 
+Activated skills also receive a secret-free manifest of currently authorized
+managed account operations/resources from their explicit actor/project-scoped
+binding choices. Selection and manifest presence confer no execution rights;
+managed adapter calls recheck grants before and after I/O. No account or script
+becomes a tool, and Calendar keeps its existing package path. See
+[project-check triage and capability exposure](../project-check-triage.md).
+
 Activated packages contribute their complete essential instructions to direct
 responses, strategic planning and tactical execution, with atomic budget failure
 instead of clipping. Jev scores authorized package metadata for multiple core and

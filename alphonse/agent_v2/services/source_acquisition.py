@@ -26,7 +26,7 @@ def digest(value):
 
 
 class SourceAcquisition:
-    def __init__(self, dispatcher, events, *, adapters=None, clock):
+    def __init__(self, dispatcher, events, *, adapters=None, clock, triage_provider=None):
         self.dispatcher, self.events, self.clock = dispatcher, events, clock
         self.adapters = dict(adapters or {})
         with dispatcher.store._connect() as conn:
@@ -58,6 +58,10 @@ class SourceAcquisition:
         events.register_worker(worker_id=WORKER, display_name='Native source acquisition', allowed_event_types=[EVENT],
             enabled=old_worker.enabled if old_worker else True)
         events.bind_managed_adapter(WORKER, self)
+        self.triage = None
+        if triage_provider is not None:
+            from alphonse.agent_v2.services.project_triage import ProjectTriage
+            self.triage = ProjectTriage(self, triage_provider)
 
     def _policy(self, run):
         return self.dispatcher.policies.guard(run['policy_id'], expected_revision=run['policy_revision'], now=self.clock())
@@ -80,7 +84,7 @@ class SourceAcquisition:
         if index == len(policy['source_bindings']) and ctx.run['coverage'].get('acquisition_complete'):
             if ctx.run['coverage']['gaps']:
                 raise CheckStopped('partial', 'incomplete_source_coverage')
-            return CheckStep(complete=True, no_match=ctx.run['items'] == 0)
+            return self.triage(ctx) if self.triage else CheckStep(complete=True, no_match=ctx.run['items'] == 0)
         source = policy['source_bindings'][index]
         context = self._context(ctx, policy, source)
         adapter = self.adapters.get(context.grant.provider_key)
@@ -252,7 +256,8 @@ class SourceAcquisition:
                        items=receipt['items'], bytes_read=receipt['bytes_read'])
         if done and coverage['gaps']:
             raise CheckStopped('partial', 'incomplete_source_coverage')
-        return CheckStep(acquisition_checkpoint=checkpoint, complete=done, no_match=done and ctx.run['items'] == 0)
+        return CheckStep(acquisition_checkpoint=checkpoint, complete=done and self.triage is None,
+                         no_match=done and ctx.run['items'] == 0 and self.triage is None)
 
     def evidence(self, session, run_id):
         run = self.dispatcher.get(run_id)
@@ -339,7 +344,9 @@ class SourceAcquisition:
         with self.dispatcher.store._connect() as conn:
             rows = conn.execute("""SELECT r.check_run_id FROM v2_project_check_runs r
                 LEFT JOIN v2_source_publish_attempts a ON a.check_run_id=r.check_run_id
-                WHERE state='terminal' AND json_extract(receipt, '$.outcome') NOT IN ('cancelled','no_match') AND r.check_run_id NOT IN
+                WHERE state='terminal' AND json_extract(receipt, '$.outcome') NOT IN ('cancelled','no_match')
+                AND NOT (json_extract(receipt, '$.outcome')='complete' AND COALESCE(json_extract(receipt, '$.coverage.triage_no_match'),0)=1)
+                AND r.check_run_id NOT IN
                 (SELECT check_run_id FROM v2_source_publications) ORDER BY COALESCE(a.attempted_at,''),r.rowid LIMIT 100""").fetchall()
         for row in rows:
             run = self.dispatcher.get(row[0])

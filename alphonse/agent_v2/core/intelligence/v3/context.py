@@ -169,6 +169,14 @@ def selected_skill_guidance(task: "TaskState", context: "CoreLoopContext", *, ma
         # paths. Load only catalog-backed, authorized sections for this task.
         base_instructions = re.split(r"(?m)^## Artifact: ", skill.instructions)[0].rstrip()
         migration_guidance = ""
+        account_guidance = ""
+        if context.skill_bindings is not None:
+            from alphonse.agent_v2.accounts import AccountSession
+            capabilities = context.skill_bindings.account_capabilities(
+                AccountSession(str(task.user or "")), skill_id=skill.skill_id,
+                project_id=task.project_id or None)
+            if capabilities:
+                account_guidance = "Managed account capabilities (advisory; rechecked at execution): " + json.dumps(capabilities) + "\n"
         if resources is not None and context.skill_bindings is not None:
             from alphonse.agent_v2.legacy_migration import LegacyMigration
             migration_guidance = LegacyMigration(resources, context.skill_bindings).guidance(skill.skill_id, str(task.user or ""))
@@ -189,7 +197,7 @@ def selected_skill_guidance(task: "TaskState", context: "CoreLoopContext", *, ma
             "Keep live data and runtime output outside the reusable package; changing its instructions/code/resources invalidates the active revision pin. "
             "Authorized native.skill_maintain publication advances this task's pin with an audit receipt and reloads complete instructions; other tasks require fresh selection. "
             "Skill selection and resource bindings do not grant permission for effects.\n\n"
-            + base_instructions + "\n\n" + migration_guidance
+            + base_instructions + "\n\n" + migration_guidance + account_guidance
         )
         blocks.append(block)
         loaded_ids.append(skill.skill_id)

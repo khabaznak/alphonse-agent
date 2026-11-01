@@ -348,6 +348,37 @@ class SkillBindings:
                              account.connection['revision'], grant['revision'], account.provider_key,
                              operation, tuple(resources), tuple(recipient_user_ids))
 
+    def account_capabilities(self, session: AccountSession, *, skill_id: str,
+                             project_id: str | None = None) -> list[dict[str, Any]]:
+        """Secret-free authorized choices, never a per-account tool registry.
+
+        A manifest is advisory. Every execution still calls resolve_account;
+        neither a cached manifest nor Jev selection is a bearer capability.
+        """
+        self._actor(session.actor_user_id)
+        if not self.skills.can_use(skill_id, session.actor_user_id):
+            raise PermissionError('skill_binding_skill_denied')
+        with self.integrations._connect() as conn:
+            rows = conn.execute('''SELECT c.name,b.requirements,g.definition
+                FROM v2_skill_binding_choices c JOIN v2_skill_bindings b ON b.binding_id=c.binding_id
+                JOIN v2_account_grants g ON g.grant_id=json_extract(b.requirements,'$.grant_id')
+                WHERE c.actor_id=? AND c.skill_id=? ORDER BY c.name''',
+                (session.actor_user_id, skill_id)).fetchall()
+        result = []
+        for row in rows:
+            grant = json.loads(row['definition'])
+            requirements = json.loads(row['requirements'])
+            for operation in sorted(set(grant['operations']) & set(requirements.get('capabilities', []))):
+                try:
+                    handle = self.resolve_account(session, skill_id=skill_id, name=row['name'],
+                        operation=operation, resources=grant['resources'], recipient_user_ids=[], project_id=project_id)
+                except (PermissionError, ValueError):
+                    continue
+                result.append(dict(role=row['name'], operation=operation, provider=handle.provider_key,
+                    resources=list(handle.resources), grant_revision=handle.grant_revision,
+                    execution='trusted managed adapter via use_account; raw Bash credential delivery is unavailable'))
+        return result
+
     def use_account(self, session: AccountSession, *, request: dict[str, Any],
                     operation: Callable[[AccountHandle, dict[str, Any]], Any]) -> Any:
         """Trusted provider adapter only; never expose credentials to model arguments.

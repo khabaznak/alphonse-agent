@@ -71,6 +71,12 @@ the authority for irreversible or terminal state transitions.
 
 ## Configuration and failure behavior
 
+Project-check acquisition uses the separate required, versioned
+[bounded triage contract](../project-check-triage.md). Its ambiguity, outage,
+invalid-score and saturation behavior is durable pending/partial, with no
+wholesale System Two scan fallback. Existing interactive review fallback behavior
+below does not apply to that acquisition stage.
+
 Administrators configure the endpoint, model, API key, and probability thresholds in
 Desktop Settings → System One. Enabling requires a successful live validation. The
 API key is stored in the local settings database and is never returned through IPC.
