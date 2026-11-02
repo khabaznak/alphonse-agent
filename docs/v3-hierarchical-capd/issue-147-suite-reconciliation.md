@@ -213,4 +213,54 @@ Affected suites: `python -m pytest -q` with all 16 inventoried test modules plus
 **171 passed**. These include unavailable/ambiguous decisions, final-response
 requirements, evidence review, project access and context isolation.
 
-Final clean-checkout commands, revision and totals are recorded below after validation.
+Tested commit: `6420ef473e47e4cf5c963968e852ce9dfbfa4f2b`.
+Both checkouts were clean (`git status --porcelain` empty); final follow-up edits
+only add this verification record.
+
+- Fresh detached checkout `/private/tmp/alphonse-147-clean`:
+  `python -m pytest -q -rs` → **1340 passed, 37 skipped in 34.21s**.
+- Clean branch checkout `/private/tmp/alphonse-issue-147`, same commit:
+  affected suites → **171 passed in 5.86s**, with this exact command:
+
+```sh
+python -m pytest -q \
+  tests/test_agent_v2_acceptance_contract.py \
+  tests/test_agent_v2_do_node.py \
+  tests/test_agent_v2_ipc.py \
+  tests/test_agent_v2_memory_sessions.py \
+  tests/test_agent_v2_native_respond_tool.py \
+  tests/test_agent_v2_openai_codex_capd.py \
+  tests/test_agent_v2_pdca_graph.py \
+  tests/test_agent_v2_pdca_processor.py \
+  tests/test_agent_v2_projects.py \
+  tests/test_agent_v2_system_one.py \
+  tests/test_agent_v2_users.py \
+  tests/test_agent_v3_admission.py \
+  tests/test_agent_v3_engine_rollout.py \
+  tests/test_agent_v3_plan_intake.py \
+  tests/test_project_provenance_waiting.py \
+  tests/test_skill_distribution.py \
+  tests/test_agent_v2_act_node.py \
+  tests/test_agent_v2_check_node.py
+```
+
+Use the interpreter path recorded above for both commands. Distribution tests
+pass both first in isolation and after other suites, and include separate clean
+and deliberately bytecode-polluted build-input cases. The extra parameterized
+case explains the one-test increase beyond the 37 repaired tests.
+
+The 37 skips are unchanged from baseline and explicitly optional:
+
+- 34 parameter cases at `tests/test_agent_v2_skills.py:49` require the optional
+  official `skills_ref.validator` conformance checkout.
+- One case at `tests/test_agent_v2_skills.py:166` requires the same optional
+  validator for the authoring template.
+- Two cases at `tests/test_oauth_lifecycle.py:280` require optional
+  `requests_oauthlib` for its real OAuth library contract. Synthetic adapter,
+  grant and lifecycle tests still run without real accounts or provider writes.
+
+No new skips/xfails were added. All 37 original failures are resolved through
+supported-behavior replacement tests, explicit providers, or the three narrow
+product fixes. No authorization, containment, cancellation, evidence or terminal
+safeguard was relaxed. `git diff --check` also passes.
+
