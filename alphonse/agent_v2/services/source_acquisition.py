@@ -81,7 +81,9 @@ class SourceAcquisition:
         b, r = policy['budgets'], ctx.run
         return ReadContext(AccountSession(r['executing_user_id']), handle, ctx.deadline,
             ReadLimits(b['max_pages'] - r['pages'], b['max_items'] - r['items'], b['max_bytes'] - r['bytes_read']),
-            project_id=policy['project_id'], guard=ctx.guard)
+            project_id=policy['project_id'], guard=ctx.guard,
+            calendar_window=tuple(policy['query']['calendar_window'][k] for k in ('time_min', 'time_max'))
+                if source['operation'] == 'calendar_read' else None)
 
     def __call__(self, ctx):
         policy = ctx.guard()
@@ -107,15 +109,16 @@ class SourceAcquisition:
                 row = conn.execute('SELECT definition FROM v2_source_streams WHERE scope_key=?', (key,)).fetchone()
             progress = json.loads(row[0]) if row else dict(mode='baseline', cursor=None,
                 since=(instant(ctx.run['scheduled_for']) - timedelta(days=policy['initial_lookback_days'])).isoformat())
+        query = self._query(policy, source)
         def fetch():
             nonlocal progress
             # This single transport operation receives its pre-reservation
             # allowance; perform durably charges the attempt before I/O.
             try:
                 if progress['mode'] == 'changes':
-                    page = adapter.changes(context, query=policy['query'], cursor=progress['cursor'])
+                    page = adapter.changes(context, query=query, cursor=progress['cursor'])
                 else:
-                    page = adapter.search(context, query=policy['query'], since=instant(progress['since']), cursor=progress['cursor'])
+                    page = adapter.search(context, query=query, since=instant(progress['since']), cursor=progress['cursor'])
             except CursorExpired:
                 if progress.get('resynced'):
                     raise CheckStopped('partial', 'cursor_expired_again')
@@ -126,6 +129,13 @@ class SourceAcquisition:
                 return CheckStep(acquisition_checkpoint=checkpoint)
             return self._accept(ctx, policy, source, key, progress, page, checkpoint, index, context)
         return ctx.perform('page', fetch)
+
+    @staticmethod
+    def _query(policy, source):
+        query = {'text': policy['query']['text']}
+        if source['operation'] == 'calendar_read':
+            query.update(policy['query']['calendar_window'])
+        return query
 
     def read_operation(self, ctx, *, source_index, operation, resource='', source_id='', attachment_id='', max_bytes=0, content_type=''):
         """Native provider tools use this gate for expansion/health/attachments.

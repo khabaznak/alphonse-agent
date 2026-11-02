@@ -482,6 +482,17 @@ def test_project_policy_survives_rotation_and_stops_on_lifecycle_change(f, tmp_p
         checks.guard(policy['policy_id'], expected_revision=policy['revision'])
 
 
+@pytest.mark.parametrize('capability', ['calendar_discover', 'calendar_read'])
+def test_calendar_consent_does_not_request_mail_or_writes(f, capability):
+    from urllib.parse import urlencode
+    f.service.begin(f.owner, connection_id='calendar', provider='google', capabilities=[capability], expected_revision=0)
+    client = f.service.clients['google']
+    assert set(client.scopes) == {'openid', SCOPES['google'][capability]}
+    url = client.config.redirect_uri + '?' + urlencode({'state': client.state, 'code': 'disposable-code'})
+    result = f.service.complete(f.owner, url)
+    assert result['capabilities'] == [capability]
+
+
 @pytest.mark.parametrize('capability', ['classroom_read', 'classroom_announcements_read'])
 def test_classroom_consent_is_minimal_and_role_discovery_is_required(f, capability):
     from alphonse.agent_v2.integrations.oauth import capability_scopes
