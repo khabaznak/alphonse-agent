@@ -557,8 +557,8 @@ def test_v3_phase_planner_receives_project_context_and_durable_memory(tmp_path: 
         name="Calisthenics", description="Workout coaching and tracking",
         root_path=str(root), owner_user_id="alex",
     )
-    projects.write_project_context(
-        project.project_id, "Keep a dated workout journal.", requester_user_id="alex",
+    projects.write_project_config(
+        project.project_id, {"scope": "Keep a dated workout journal."}, requester_user_id="alex",
     )
     task = TaskState(
         goal="Update today's workout",
@@ -573,6 +573,7 @@ def test_v3_phase_planner_receives_project_context_and_durable_memory(tmp_path: 
         ),
         recent_conversation_md='- alex: "I completed 5 sets of push-ups"',
     )
+    task.metadata["v3_context_selection"] = {"selected_context_ids": [f"project:{project.project_id}"]}
     task.set_acceptance_contract_from_markdown("1.- [ ] Today's workout is recorded")
 
     class ContextAwareJev(_TestJev):
@@ -599,7 +600,7 @@ def test_v3_phase_planner_receives_project_context_and_durable_memory(tmp_path: 
     )
 
     request = next(item for item in provider.requests if item.purpose == InferencePurpose.PHASE_PLANNING)
-    assert f"Project Directory: {root}" in request.prompt
+    assert str(root) in request.prompt
     assert "Keep a dated workout journal." in request.prompt
     assert str(root / "calisthenics_journal.md") in request.prompt
     assert "Latest workout correction remains active." in request.prompt

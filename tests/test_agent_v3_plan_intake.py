@@ -36,11 +36,11 @@ def test_plan_intake_batches_eligible_messages_and_consumes_only_jev_selected_id
 
     _ingest_relevant_messages(task, context)
 
-    assert [item["message_id"] for item in jev.candidates] == [relevant.message_id]
+    assert [item["message_id"] for item in jev.candidates] == [relevant.message_id, unrelated.message_id]
     assert "Consult B before X" in task.recent_conversation_md
     assert queue.size() == 1
     assert queue.peek().message_id == unrelated.message_id
-    assert task.metadata["v3_intake_ignored_message_ids"] == []
+    assert task.metadata["v3_intake_ignored_message_ids"] == [unrelated.message_id]
 
 
 def test_plan_intake_keeps_jev_rejected_steering_queued_without_reinterrupting_task() -> None:

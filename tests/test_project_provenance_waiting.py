@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import pytest
-
 from alphonse.agent_v2.core.io import SQLiteOutboundStore
 from alphonse.agent_v2.core.messages import CommunicationChannel, SQLiteMessageQueue
 from alphonse.agent_v2.core.projects import ProjectStore
@@ -24,16 +22,16 @@ def _router(tmp_path):
     return router, queue, projects, outbox, active
 
 
-def test_new_conversation_creates_protected_home_project(tmp_path) -> None:
+def test_new_conversation_stays_projectless(tmp_path) -> None:
     router, _, projects, _, _ = _router(tmp_path)
 
     routed = router.ingest(prompt="Hello", user="alex", integration_id="desktop", provider_key="tui", channel_target="alex")
 
     home = projects.home_project("alex")
-    assert home is not None and home.is_system_home
-    assert routed.project_id == home.project_id
-    with pytest.raises(ValueError, match="system_home_project_protected"):
-        projects.archive_project(home.project_id, requester_user_id="alex")
+    assert home is None
+    assert routed.project_id == ""
+    assert routed.queued.message.project_id == ""
+    assert projects.list_visible_projects("alex") == []
 
 
 def test_independent_message_receives_exact_turns_ahead_notice(tmp_path) -> None:
@@ -47,7 +45,8 @@ def test_independent_message_receives_exact_turns_ahead_notice(tmp_path) -> None
 
     assert routed.disposition == "pdca_task"
     assert routed.turns_ahead == 1
-    assert projects.home_project("gaby") is not None
+    assert projects.home_project("gaby") is None
+    assert routed.queued.message.project_id == ""
     assert "after 1 task ahead" in outbox.list()[-1].message
 
 
