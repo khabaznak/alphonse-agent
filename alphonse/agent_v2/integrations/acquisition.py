@@ -49,6 +49,7 @@ class SourcePage:
     complete: bool = False
     coverage_complete: bool = True
     bytes_read: int = 0  # All transport bytes, including unused response fields.
+    resource_coverage: dict[str, str] | None = None  # Safe statuses, never links.
 
 
 class CursorExpired(Exception):
@@ -65,3 +66,13 @@ class ReadAdapter(Protocol):
     def read(self, context: ReadContext, *, resource: str, source_id: str) -> SourceRecord: ...
     def attachment(self, context: ReadContext, *, resource: str, source_id: str,
                    attachment_id: str, max_bytes: int) -> bytes: ...
+
+
+class ReadRetryAfter(Exception):
+    """Safe provider backoff, persisted by the existing worker; no inline sleep."""
+
+    def __init__(self, seconds: int):
+        if type(seconds) is not int or seconds < 1:
+            raise ValueError("source_retry_delay_invalid")
+        self.seconds = seconds
+        super().__init__("source_retry_after")

@@ -178,6 +178,14 @@ class SourceAcquisition:
                 or (page.cursor is not None and (not isinstance(page.cursor, str) or len(page.cursor) > 65536))
                 or not page.complete and not page.cursor):
             raise ValueError('source_page_invalid')
+        if page.resource_coverage is not None and (
+                not isinstance(page.resource_coverage, dict)
+                or set(page.resource_coverage) != set(source['resources'])
+                or any(v not in {'pending', 'in_progress', 'complete', 'unavailable', 'incomplete'}
+                       for v in page.resource_coverage.values())
+                or page.complete and page.coverage_complete and
+                   any(v != 'complete' for v in page.resource_coverage.values())):
+            raise ValueError('source_resource_coverage_invalid')
         raw_bytes = sum(len(r.mime) for r in page.records)
         size = max(raw_bytes, page.bytes_read)
         if len(page.records) > context.limits.items or size > context.limits.bytes:
@@ -227,7 +235,8 @@ class SourceAcquisition:
         coverage['sources'] = dict(coverage.get('sources', {}))
         coverage['sources'][key] = dict(resources=source['resources'], query_digest=policy['query_digest'],
             baseline_since=progress.get('since'), complete=page.complete,
-            coverage_complete=page.coverage_complete, observed_at=observed)
+            coverage_complete=page.coverage_complete, observed_at=observed,
+            resource_coverage=page.resource_coverage)
         receipt = {k: v for k, v in ctx.run.items() if k not in {
             'state', 'lease_owner', 'generation', 'lease_until', 'next_attempt_at'}}
         receipt.update(acquisition_checkpoint=checkpoint, coverage=coverage,
@@ -243,7 +252,8 @@ class SourceAcquisition:
                 raise CheckStopped('blocked', 'lease_lost')
             conn.execute('INSERT INTO v2_source_pages VALUES(?,?,?,?)',
                 (ctx.run['check_run_id'], key, request, json.dumps(dict(evidence_ids=[r['evidence_id'] for r in records],
-                complete=page.complete, coverage_complete=page.coverage_complete, observed_at=observed))))
+                complete=page.complete, coverage_complete=page.coverage_complete, observed_at=observed,
+            resource_coverage=page.resource_coverage))))
             for record in records:
                 if record['deleted']:
                     old_rows = conn.execute('SELECT evidence_id,definition FROM v2_source_evidence').fetchall()
