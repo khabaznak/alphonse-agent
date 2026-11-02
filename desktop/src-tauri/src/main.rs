@@ -68,6 +68,22 @@ async fn daemon_request(method: String, params: Value) -> Result<Value, String> 
 }
 
 #[tauri::command]
+fn open_account_consent(url: String) -> Result<(), String> {
+    let parsed = tauri::Url::parse(&url).map_err(|_| "Invalid consent URL")?;
+    if parsed.scheme() != "https" || !parsed.username().is_empty() || parsed.password().is_some()
+        || !matches!(parsed.host_str(), Some("accounts.google.com") | Some("login.microsoftonline.com")) {
+        return Err("Unsupported consent URL".into());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open").arg(url).spawn().map_err(|_| "Could not open consent browser")?;
+        Ok(())
+    }
+    #[cfg(not(target_os = "macos"))]
+    { Err("Account consent browser is currently supported on macOS".into()) }
+}
+
+#[tauri::command]
 async fn stop_daemon() -> Result<(), String> {
     ipc_request("stop", json!({})).await.map(|_| ())
 }
@@ -183,6 +199,7 @@ fn main() {
             desktop_diagnostic_project_id,
             ensure_daemon,
             daemon_request,
+            open_account_consent,
             stop_daemon,
             show_in_finder,
             play_alert_sound

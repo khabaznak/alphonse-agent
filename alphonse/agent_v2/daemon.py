@@ -183,6 +183,9 @@ class V2Daemon:
                         self.runtime.identity_resolver) if self.source_acquisition is not None else None)
         if self.source_acquisition is not None:
             self.source_acquisition.findings = self.findings
+        self.runtime.integration_management.oauth_factory = self.optional_accounts
+        self.runtime.integration_management.dispatcher = self.project_check_dispatcher
+        self.runtime.integration_management.findings = self.findings
         self.project_check_worker = (
             ProjectCheckWorker(self.project_check_dispatcher, adapter=self.source_acquisition,
                                on_results=self.source_acquisition.publish_ready)
@@ -1915,9 +1918,9 @@ class V2Daemon:
     def optional_accounts(self, session):
         """Trusted setup/adapter API; session must come from authenticated context.
 
-        Intentionally absent from legacy IPC, whose payload `user` is not an
-        authenticated actor. #121 can project health and invoke setup with a
-        trusted AccountSession. Never serialize this service or its token API.
+        Legacy payload `user` is not an authenticated actor. Management uses
+        a verified local OS peer or trusted conversation context. Never serialize
+        this service or its token API.
         """
         from alphonse.agent_v2.accounts import AccountService, AccountSession
         from alphonse.agent_v2.integrations.oauth import ClientConfig, OAuthService

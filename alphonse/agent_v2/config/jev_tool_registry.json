@@ -112,6 +112,14 @@
         "true": "An activated skill may need references, script documentation/source or assets read on demand to answer, plan or execute accurately. Include when uncertain whether a supporting resource is needed.",
         "false": "Complete activated instructions suffice and no supporting skill resource inspection is needed."
       }
+    },
+    "native.integration_manage": {
+      "type": "noul",
+      "instructions": "Does this phase need to inspect or manage optional account connections, explicit grants, project check policies, run health or findings?",
+      "criteria": {
+        "true": "The requester needs optional account/grant lifecycle, bounded recurring project checks, authorization review, run status or audience-authorized findings through native management.",
+        "false": "The phase needs an ordinary answer, unrelated local work, provider content execution or a plain reminder without optional account/check management."
+      }
     }
   }
 }

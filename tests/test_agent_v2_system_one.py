@@ -340,6 +340,7 @@ def test_jev_native_registry_template_covers_every_out_of_box_tool() -> None:
     registry = _load_jev_native_tool_registry()
     assert set(registry) == {
         "native.respond",
+        "native.integration_manage",
         "native.bash",
         "native.deliver_message",
         "native.send_attachment",
