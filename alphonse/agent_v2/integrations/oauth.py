@@ -28,10 +28,23 @@ SCOPES = {
     'google': {
         'mail_read': 'https://www.googleapis.com/auth/gmail.readonly',
         'calendar_read': 'https://www.googleapis.com/auth/calendar.events.readonly',
+        'classroom_read': 'https://www.googleapis.com/auth/classroom.coursework.me.readonly',
+        'classroom_announcements_read': 'https://www.googleapis.com/auth/classroom.announcements.readonly',
     },
     'microsoft': {'mail_read': 'https://graph.microsoft.com/Mail.Read',
                   'calendar_read': 'https://graph.microsoft.com/Calendars.Read'},
 }
+
+
+def capability_scopes(provider, capability):
+    scopes = [SCOPES[provider][capability]]
+    if provider == 'google' and capability in {'classroom_read', 'classroom_announcements_read'}:
+        # Course metadata and proof of the connected student's own enrollment.
+        scopes += ['https://www.googleapis.com/auth/classroom.courses.readonly',
+                   'https://www.googleapis.com/auth/classroom.rosters.readonly']
+    return scopes
+
+
 ENDPOINTS = {
     'google': ('https://accounts.google.com/o/oauth2/v2/auth',
                'https://oauth2.googleapis.com/token', 'https://openidconnect.googleapis.com/v1/userinfo'),
@@ -181,7 +194,7 @@ class OAuthService:
             raise OAuthError('oauth_revision_conflict')
         if record.credential_deletion_pending:
             raise OAuthError('oauth_credential_cleanup_required')
-        scopes = sorted({'openid', *(SCOPES[provider][c] for c in capabilities)})
+        scopes = sorted({'openid', *(s for c in capabilities for s in capability_scopes(provider, c))})
         if provider == 'microsoft':
             scopes.append('offline_access')
         # Fence in-flight managed reads/refresh and any earlier consent attempt.

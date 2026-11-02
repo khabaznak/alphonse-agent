@@ -320,7 +320,7 @@ class ProjectCheckService:
                     raise ValueError()
                 if any(not isinstance(source[k], str) or not source[k].strip() for k in source if k != 'resources'):
                     raise ValueError()
-                if source['operation'] not in {'read', 'search', 'list', 'changes', 'attachments.read', 'mail_read', 'calendar_read', 'classroom_read'}:
+                if source['operation'] not in {'read', 'search', 'list', 'changes', 'attachments.read', 'mail_read', 'calendar_read', 'classroom_read', 'classroom_announcements_read'}:
                     raise ValueError()
                 source['resources'] = _strings(source['resources'])
                 if not source['resources']:
