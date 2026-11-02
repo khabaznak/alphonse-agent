@@ -11,6 +11,18 @@ also returns an advisory route for Act.
 This is an optional provider path; it does not replace deterministic authorization,
 effect, cancellation, or completion invariants.
 
+## Clarification interpretation belongs to System Two
+
+On a resumed task, interpreting whether a user answer resolves the actual question
+requires System Two reasoning over the linked question, answer, task and corrections.
+The model identifies resolved context, a remaining historical dependency, or specific
+missing/conflicting information. A new source supplied directly by the user can
+replace an earlier request to remember one; historical retrieval uncertainty cannot
+override that supported assessment. Runtime code validates same-task/requester receipts,
+source references, input freshness and cancellation, while existing scope, effect and
+completion rules remain authoritative. Jev does not evaluate answer cogency here;
+its bounded retrieval and tool-relevance judgments retain their existing thresholds.
+
 ## Do boundary
 
 Alphonse produces a static Jev-oriented registry once per runtime. It contains one

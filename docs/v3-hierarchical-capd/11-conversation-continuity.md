@@ -96,6 +96,34 @@ Previews are for selection only: the selected sources are reloaded whole before
 use. Disconnected qualifying episodes remain ambiguous rather than being merged by
 topical similarity.
 
+Authenticated clarification answers are interpreted by System Two before historical
+retrieval. The model receives the task, chronological steering, and complete linked
+question/answer receipts. It reasons about whether current input resolves the gap,
+still refers to unsupplied history, or leaves a specific ambiguity/conflict. This
+is interpretation of an evolving task, not a Jev source-relevance classification.
+A complete replacement source can release an earlier historical-source requirement;
+partial or conflicting answers retain the blocker and name what is missing.
+
+A resolved assessment must cite valid same-task/requester answer receipts, including
+the latest answer, with no remaining missing information. The runtime validates the
+structured response, preserves source receipts, and invalidates it when steering or
+answers change. Whole inputs are bounded (32 receipts/24,000 characters); oversize,
+malformed, cancelled or failed assessments cannot clear the blocker. Cached results
+survive restart but cannot be reused after a requester/task/input change. No answer
+assessment grants authority, changes acceptance criteria, executes a tool, or proves
+a database effect. Jev still handles historical retrieval relevance and tool curation
+when those are needed. No Jev confidence threshold changes.
+
+A configured-System-Two read-only evaluation on 2026-11-02 used only invented
+invoice/calendar inputs. A complete replacement source resolved the gap; partial
+and conflicting answers each retained a specific clarification requirement. No
+task was submitted or database record changed. A separately approved read-only replay
+of the failed household checkpoint passed twice through the configured System Two
+provider: the complete latest authenticated answer was retained, the historical
+question-only blocker was released, and no Jev recall/source-selection call was
+made. No task was submitted or record changed. Actual database update/read-back
+and owner acceptance remain pending; these checks validate context resolution only.
+
 The binding stores a current-request/steering fingerprint and canonical source IDs,
 never cached prescription contents or imported mutation authority. Every prompt
 rechecks source access and existence. Missing antecedents withhold the whole bundle

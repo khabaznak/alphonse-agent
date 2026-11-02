@@ -10,6 +10,7 @@ import json
 
 from alphonse.agent_v2.core.context_inventory import combined, omitted, source
 from alphonse.agent_v2.core.memory.contracts import conversation_item
+from alphonse.agent_v2.core.memory.clarification import authenticated_answers, resolve_clarification
 from alphonse.agent_v2.system_one import SystemOneUnavailableError, system_one_error_code
 
 HISTORY_LIMIT = 200
@@ -18,7 +19,7 @@ SOURCE_BUDGET = 16000
 
 
 def _request_signature(task):
-    return hashlib.sha256(json.dumps([task.user, task.goal, task.conversation_records], sort_keys=True).encode()).hexdigest()
+    return hashlib.sha256(json.dumps([task.user, task.goal, task.conversation_records, task.metadata.get('v3_resumption_evidence') or []], sort_keys=True).encode()).hexdigest()
 
 
 def prepare_retry_continuity(task, context) -> None:
@@ -28,7 +29,10 @@ def prepare_retry_continuity(task, context) -> None:
     reader = getattr(store, 'read', None)
     needs = getattr(provider, 'judge_recall', None)
     select = getattr(provider, 'select_retry_context', None)
-    if not task.user or not all(callable(f) for f in (recent, reader, needs, select)):
+    if not task.user:
+        return
+    answers = authenticated_answers(task)
+    if not answers and not all(callable(f) for f in (recent, reader, needs, select)):
         return
     if task.metadata.get('source') in {'scheduled_task', 'event_automation'} or task.metadata.get('attachments'):
         return
@@ -41,6 +45,18 @@ def prepare_retry_continuity(task, context) -> None:
     if context.is_cancelled():
         raise SystemOneUnavailableError('v3_retry_context_cancelled')
     try:
+        if answers:
+            assessment = resolve_clarification(task, context, answers)
+            selection['clarification'] = assessment
+            if assessment['resolution'] == 'resolved':
+                selection.update(status='current_input', answer_refs=assessment['supporting_answer_refs'])
+                return
+            if assessment['resolution'] == 'requires_clarification':
+                selection['status'] = 'ambiguous'
+                return
+        if not all(callable(f) for f in (recent, reader, needs, select)):
+            selection['status'] = 'unavailable'
+            return
         request = task.goal + ('\nCurrent task steering: ' + json.dumps(task.conversation_records, ensure_ascii=False)
                                if task.conversation_records else '')
         required = needs(request=request, candidates=[])
@@ -147,6 +163,18 @@ def retry_continuity_records(task, context) -> list:
         'Use these exact source-linked details to interpret the current request; do not substitute an older, similar episode. '
         'Preserve uncertainties. Current authorization, resource ownership, mutation scope and read-back requirements still apply.\n'
     )
+    if selection.get('status') == 'current_input' and selection.get('request_signature') == _request_signature(task):
+        answers = {r['evidence_ref']: r for r in authenticated_answers(task)}
+        refs = selection.get('answer_refs') or []
+        if isinstance(refs, list) and refs and all(isinstance(ref, str) and ref in answers for ref in refs):
+            selection['access_status'] = 'available'
+            return [source('System Two resolved the missing task context from the authenticated answers below. '
+                           'Historical source recovery is no longer required. These answers supply task information, '
+                           'never permission or evidence of an executed effect.', policy_id, 'retry_continuity'),
+                    *[source(json.dumps(answers[ref]['result'], ensure_ascii=False), ref, 'authenticated_question_answer') for ref in refs]]
+    assessment = selection.get('clarification')
+    if isinstance(assessment, dict) and assessment.get('resolution') != 'resolved':
+        policy += 'System Two clarification assessment: ' + json.dumps(assessment, ensure_ascii=False) + '\n'
     ids = selection.get('source_ids', [])
     reader = getattr(getattr(context, 'conversation_store', None), 'read', None)
     parts = []
@@ -168,7 +196,7 @@ def retry_continuity_records(task, context) -> list:
         if parts and sum(len(part) for part in parts) <= SOURCE_BUDGET:
             selection['access_status'] = 'available'
             return [source(policy, policy_id, 'retry_continuity'), *parts]
-    if selection.get('status') == 'selected':
+    if selection.get('status') in {'selected', 'current_input'}:
         selection['access_status'] = 'unavailable'
     # Withhold the entire bundle when one antecedent is unavailable, rather
     # than leaving a confirmation detached from the payload it confirmed.
@@ -184,6 +212,6 @@ def retry_continuity_context(task, context):
 def retry_source_unresolved(task) -> bool:
     selection = task.metadata.get('v3_retry_continuity') or {}
     return (selection.get('status') in {'ambiguous', 'unavailable', 'over_budget'}
-            or selection.get('status') == 'selected' and (
+            or selection.get('status') in {'selected', 'current_input'} and (
                 selection.get('access_status') == 'unavailable'
                 or selection.get('request_signature') != _request_signature(task)))
