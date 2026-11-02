@@ -983,3 +983,15 @@ html[data-alphonse-style="modern"] .modal-backdrop { background: #10282788; }
 }
 
 .task-progress-log > summary { padding: 12px 16px; cursor: pointer; font-size: 13px; font-weight: 600; }
+
+.optional-management { min-width: 0; margin-block: 1.5rem; }
+.optional-management fieldset { min-width: 0; display: grid; gap: .65rem; margin-block: 1rem; border: 1px solid var(--border, #b8b8b8); border-radius: .5rem; padding: 1rem; }
+.optional-management fieldset label { display: flex; align-items: center; gap: .5rem; }
+.optional-management input:not([type=checkbox]), .optional-management select, .optional-management textarea { max-width: 100%; min-width: 0; }
+.optional-management pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: .85em; }
+.optional-management :focus-visible { outline: 3px solid var(--accent, #316f88); outline-offset: 3px; }
+.optional-management button { margin: .25rem; }
+.optional-management .project-detail { grid-template-columns: minmax(0, 1fr); min-width: 0; }
+.optional-management .dialog-actions { flex-wrap: wrap; min-width: 0; }
+.optional-management p, .optional-management li, .optional-management label { overflow-wrap: anywhere; }
+.optional-management button { white-space: normal; }

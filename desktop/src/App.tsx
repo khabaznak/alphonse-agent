@@ -1,3 +1,4 @@
+import { OptionalAccounts, ProjectCheckPanel, CheckAgenda } from "./OptionalIntegrations";
 import { FormEvent, KeyboardEvent, memo, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CalendarClock, ChevronLeft, ChevronRight, FolderKanban, FolderOpen, Settings, UsersRound, Sparkles } from "lucide-react";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
@@ -742,7 +743,7 @@ function SettingsModal({ user, initialTab, workspaceRequired, enterToSend, deskt
       </section>
       <div className="setting-group"><MediaToolsSettingsSection /></div>
     </div>}
-    {tab === "integrations" && <IntegrationsSettingsSection user={user} />}
+    {tab === "integrations" && <><OptionalAccounts key={user} identity={user} /><IntegrationsSettingsSection user={user} /></>}
     {tab === "automations" && <AutomationsSettingsSection user={user} />}
     {tab === "model" && <ModelSettingsSection />}
     {tab === "system-one" && <SystemOneSettingsSection user={user} />}
@@ -895,7 +896,7 @@ type ManagedAddress = { address_id: string; integration_id: string; provider_key
 type ManagedUser = { user_id: string; display_name: string; role: string; is_active: boolean; addresses?: ManagedAddress[] };
 type ProjectConfig = { scope: string; goals: string[]; duration: { ongoing: boolean; start_date: string | null; end_date: string | null }; directory_structure: string[] };
 type ScheduledTask = {
-  scheduled_task_id: string; owner_user_id: string; name: string; description: string; prompt: string;
+  scheduled_task_id: string; job_kind?: string; owner_user_id: string; name: string; description: string; prompt: string;
   schedule: Record<string, unknown>; timezone: string; status: string; next_run_at: string | null; last_run_at: string | null;
   latest_execution?: { status: string; started_at: string; finished_at: string | null; error: string; last_error?: string } | null;
 };
@@ -1006,7 +1007,7 @@ function ScheduledTasksModal({ actorUserId, initialTaskId = "", onClose }: { act
         daemonRequest<{ tasks: ScheduledTask[] }>("scheduled_tasks", { actor_user_id: actorUserId, owner_user_id: ownerId, status }),
         daemonRequest<{ users: ManagedUser[] }>("users"),
       ]);
-      setTasks(taskResult.tasks); setUsers(userResult.users); setNotice("");
+      setTasks(taskResult.tasks.filter(task => task.job_kind !== "project_check")); setUsers(userResult.users); setNotice("");
       setSelected((current) => current ? taskResult.tasks.find((task) => task.scheduled_task_id === current.scheduled_task_id) || null : null);
     } catch (cause) { setNotice(cause instanceof Error ? cause.message : "Scheduled tasks could not be loaded."); }
   }, [actorUserId, ownerId, status]);
@@ -1030,6 +1031,7 @@ function ScheduledTasksModal({ actorUserId, initialTaskId = "", onClose }: { act
   };
   const editable = selected?.status === "active" || selected?.status === "paused";
   return <ModalFrame title="Scheduled tasks" onClose={onClose}>
+    <CheckAgenda identity={actorUserId} />
     {isAdmin && <div className="form-field"><label htmlFor="scheduled-owner">User</label><select id="scheduled-owner" value={ownerId} onChange={(event) => { setOwnerId(event.target.value); setSelected(null); setExecutions([]); }}>{users.map((item) => <option key={item.user_id} value={item.user_id}>{item.display_name}</option>)}</select></div>}
     <div className="form-field"><label htmlFor="scheduled-status">Status</label><select id="scheduled-status" value={status} onChange={(event) => { setStatus(event.target.value); setSelected(null); setExecutions([]); }}><option value="">All statuses</option>{["active", "paused", "completed", "cancelled", "failed"].map((value) => <option key={value} value={value}>{value}</option>)}</select></div>
     <div className="stack scheduled-task-list">{tasks.length ? tasks.map((task) => {
@@ -1160,6 +1162,7 @@ function ProjectEditorPanel({ user, project, onBack, onUpdated, onClose }: { use
     <header className="project-editor-header"><div><p className="eyebrow">Project</p><h1>{project.name}</h1></div><button className="secondary" onClick={onClose}>Back to conversation</button></header>
     <section className="project-detail"><div className="form-field"><label htmlFor="project-name">Name</label><input id="project-name" disabled={archived} value={name} onChange={(event) => setName(event.target.value)} /></div><div className="form-field"><label htmlFor="project-description">Description</label><input id="project-description" disabled={archived} value={description} onChange={(event) => setDescription(event.target.value)} /></div><div className="form-field"><label htmlFor="project-visibility">Visibility</label><select id="project-visibility" disabled={archived} value={visibility} onChange={(event) => setVisibility(event.target.value as "private" | "shared")}><option value="private">Private</option><option value="shared">Selected family members</option></select></div>{visibility === "shared" && <fieldset className="form-field"><legend>Shared with</legend>{members.map((member) => member.is_active && member.user_id !== project.owner_user_id && <label key={member.user_id}><input type="checkbox" checked={memberIds.includes(member.user_id)} onChange={(event) => setMemberIds((current) => event.target.checked ? [...current, member.user_id] : current.filter((id) => id !== member.user_id))} /> {member.display_name}</label>)}</fieldset>}<div className="form-field task-readonly"><label>Owner user</label><output>👤 {project.owner?.display_name || project.owner_user_id}</output><small>{project.owner_user_id}</small></div><div className="form-field task-readonly"><label>Project directory</label><output>{project.root_path}</output><button type="button" className="secondary" onClick={() => void showInFinder(project.root_path).catch((cause: unknown) => setNotice(cause instanceof Error ? cause.message : "Project folder could not be opened."))}>Open folder in Finder</button><small>Legacy project_context.md is preserved and excluded from prompts.</small></div><div className="form-field"><label htmlFor="project-scope">Scope</label><textarea id="project-scope" disabled={archived} rows={4} value={config.scope} onChange={(event) => setConfig((current) => ({ ...current, scope: event.target.value }))} /></div><div className="form-field"><label htmlFor="project-goals">Goals (one per line)</label><textarea id="project-goals" disabled={archived} rows={5} value={config.goals.join("\n")} onChange={(event) => setConfig((current) => ({ ...current, goals: event.target.value.split("\n").map((item) => item.trim()).filter(Boolean) }))} /></div><fieldset className="form-field"><legend>Duration</legend><label><input type="checkbox" checked={config.duration.ongoing} disabled={archived} onChange={(event) => setConfig((current) => ({ ...current, duration: { ...current.duration, ongoing: event.target.checked } }))} /> Ongoing</label><label htmlFor="project-start-date">Start date</label><input id="project-start-date" type="date" disabled={archived} value={config.duration.start_date || ""} onChange={(event) => setConfig((current) => ({ ...current, duration: { ...current.duration, start_date: event.target.value || null } }))} /><label htmlFor="project-end-date">End date</label><input id="project-end-date" type="date" disabled={archived} value={config.duration.end_date || ""} onChange={(event) => setConfig((current) => ({ ...current, duration: { ...current.duration, end_date: event.target.value || null } }))} /></fieldset><div className="form-field"><label htmlFor="project-structure">Directory structure (one relative path per line)</label><textarea id="project-structure" disabled={archived} rows={5} value={config.directory_structure.join("\n")} onChange={(event) => setConfig((current) => ({ ...current, directory_structure: event.target.value.split("\n").map((item) => item.trim()).filter(Boolean) }))} /></div><div className="form-field"><label htmlFor="project-status">Lifecycle</label><select id="project-status" value={status} onChange={(event) => void lifecycle(event.target.value as "active" | "paused" | "completed" | "archived")}><option value="active">Active</option><option value="paused">Paused</option><option value="completed">Completed</option><option value="archived">Archived</option></select></div><div className="dialog-actions"><button onClick={() => void save()}>Save changes</button></div><div className="form-field destructive-action"><label htmlFor="project-delete-confirmation">Type the project ID to remove it</label><input id="project-delete-confirmation" value={confirmation} placeholder={project.project_id} onChange={(event) => setConfirmation(event.target.value)} /><button disabled={confirmation !== project.project_id} onClick={() => void remove()}>Remove from Alphonse</button></div></section>
     <section className="project-detail"><h3>Project files</h3><button type="button" disabled={archived} onClick={() => void addFiles()}>Add files</button>{files.length ? <ul>{files.map((file) => <li key={file.name}>{file.name} <button type="button" className="secondary" disabled={archived} onClick={() => void removeFile(file.name)}>Remove</button></li>)}</ul> : <p>No project files yet.</p>}</section>
+    <ProjectCheckPanel projectId={project.project_id} identity={user} readOnly={archived} />
     <p>{notice}</p>
   </div>;
 }

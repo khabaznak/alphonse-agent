@@ -132,6 +132,7 @@ class V2RuntimeHost:
     communication_router: CommunicationRouter
     conversation_store: SQLiteConversationStore
     project_checks: ProjectCheckService | None = None
+    integration_management: Any | None = None
     integration_runtimes: list[Any] = field(default_factory=list)
     active_project_id: str = ""
     ui_events: list[CoreUiEvent] = field(default_factory=list)
@@ -356,6 +357,8 @@ def build_runtime_host(
         activity_events=activity_events,
         telemetry_events=telemetry_events,
     )
+    from alphonse.agent_v2.integration_management import IntegrationManagement
+    runtime.integration_management = IntegrationManagement(runtime)
     if not provided_tools:
         refresh_runtime_artifacts(runtime)
     return runtime
@@ -373,7 +376,7 @@ def refresh_runtime_media_tools(runtime: V2RuntimeHost) -> None:
 
 def refresh_runtime_artifacts(runtime: V2RuntimeHost) -> None:
     """Refresh native management tools after artifact catalog or skill changes."""
-    registry = build_native_tool_registry(runtime.web_tools_settings_store.get(), runtime.asset_store, runtime.media_tools_settings_store.get(), runtime.artifact_store, lambda: refresh_runtime_artifacts(runtime), runtime.user_store, runtime.skill_store)
+    registry = build_native_tool_registry(runtime.web_tools_settings_store.get(), runtime.asset_store, runtime.media_tools_settings_store.get(), runtime.artifact_store, lambda: refresh_runtime_artifacts(runtime), runtime.user_store, runtime.skill_store, management_runtime=runtime)
     # Artifact programs are not members of the executable tool registry.
     runtime.core.tools = registry
 

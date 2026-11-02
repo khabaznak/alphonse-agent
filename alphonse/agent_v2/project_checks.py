@@ -148,7 +148,8 @@ class ProjectCheckService:
                 raise PermissionError('project_check_skill_unavailable')
 
     def save(self, session: AccountSession, *, definition: dict, expected_revision: int = 0,
-             policy_id: str | None = None, authorization_reference: str = '', activate: bool = False) -> dict:
+             policy_id: str | None = None, authorization_reference: str = '', activate: bool = False,
+             reviewed_authority: dict | None = None) -> dict:
         """Create/re-authorize a concrete policy from a trusted explicit instruction.
 
         An instruction can authorize recurring execution; no approval per run.
@@ -176,6 +177,11 @@ class ProjectCheckService:
         value['source_bindings'] = self._sources(session, value, pinned=False)
         self._skills(session, value)
         self._duration(value, datetime.now(timezone.utc), require_started=False)
+        if reviewed_authority is not None and (
+                value['goal_digest'] != reviewed_authority['snapshot_digest']
+                or _digest(value['source_bindings']) != reviewed_authority['sources_digest']
+                or value['project_revision'] != reviewed_authority['project_revision']):
+            raise ValueError('management_review_stale')
         return self._put(value, expected_revision)
 
     def get(self, session: AccountSession, policy_id: str) -> dict:

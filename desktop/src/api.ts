@@ -41,3 +41,12 @@ export async function showInFinder(path: string): Promise<void> {
 export async function playAlertSound(path = ""): Promise<void> {
   await invoke("play_alert_sound", { path });
 }
+
+// Identity is derived by the daemon from the OS peer, never from UI user fields.
+export async function optionalManagement<T>(action: string, values: Record<string, unknown> = {}): Promise<T> {
+  return daemonRequest<T>("optional_management", { action, values });
+}
+
+export async function openAccountConsent(url: string): Promise<void> {
+  await invoke("open_account_consent", { url });
+}

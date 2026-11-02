@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import socket
+import sys
 import threading
 import traceback
 from datetime import datetime, timezone
@@ -321,6 +322,8 @@ class V2DaemonServer:
         self._thread.start()
 
     def stop(self) -> None:
+        if hasattr(self, '_oauth_loopback'):
+            self._oauth_loopback.stop()
         self._stop.set()
         if self._server is not None:
             self._server.close()
@@ -347,7 +350,10 @@ class V2DaemonServer:
             request: Any = {}
             try:
                 request = json.loads(_read_line(connection))
-                result = self._dispatch(request)
+                if isinstance(request, dict) and request.get('method') == 'optional_management':
+                    result = self._optional_management(connection, request)
+                else:
+                    result = self._dispatch(request)
                 response = {"version": PROTOCOL_VERSION, "request_id": _request_id(request), "ok": True, "result": result}
             except Exception as exc:
                 traceback.print_exc()
@@ -358,6 +364,50 @@ class V2DaemonServer:
                     "error": f"{type(exc).__name__}: {exc}",
                 }
             connection.sendall((json.dumps(response, sort_keys=True) + "\n").encode("utf-8"))
+
+    def _optional_management(self, connection, request):
+        # The owner-only Unix socket and kernel peer identity authenticate the
+        # local OS principal. Payload user/actor fields are never credentials.
+        import struct
+        from alphonse.agent_v2.accounts import AccountSession
+        if hasattr(connection, 'getpeereid'):
+            uid, _ = connection.getpeereid()
+        elif sys.platform == 'darwin':
+            # CPython on macOS exposes LOCAL_PEERCRED but not getpeereid.
+            # Use the OS getpeereid function rather than trusting a payload UID.
+            import ctypes
+            libc = ctypes.CDLL(None, use_errno=True)
+            getpeereid = libc.getpeereid
+            getpeereid.argtypes = [ctypes.c_int, ctypes.POINTER(ctypes.c_uint), ctypes.POINTER(ctypes.c_uint)]
+            getpeereid.restype = ctypes.c_int
+            peer_uid, peer_gid = ctypes.c_uint(), ctypes.c_uint()
+            if getpeereid(connection.fileno(), ctypes.byref(peer_uid), ctypes.byref(peer_gid)) != 0:
+                raise PermissionError('management_peer_auth_failed')
+            uid = peer_uid.value
+        elif hasattr(socket, 'SO_PEERCRED'):
+            _, uid, _ = struct.unpack('3i', connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+        else:
+            raise PermissionError('management_peer_auth_unavailable')
+        if uid != os.getuid():
+            raise PermissionError('management_peer_denied')
+        session = AccountSession(self.daemon.runtime.user)
+        params = request.get('params', {})
+        if set(params) - {'action', 'values'}:
+            raise ValueError('management_identity_payload_denied')
+        if request.get('version') != PROTOCOL_VERSION:
+            raise ValueError('daemon_protocol_version_unsupported')
+        oauth = self.daemon.optional_accounts(session)
+        management = self.daemon.runtime.integration_management
+        management.oauth = oauth
+        if params.get('action') == 'begin':
+            from alphonse.agent_v2.integrations.oauth_loopback import OAuthLoopback
+            if not hasattr(self, '_oauth_loopback'):
+                self._oauth_loopback = OAuthLoopback(oauth)
+            self._oauth_loopback.start(params['values']['provider'])
+        # Callback exchange is accepted only by the loopback listener, never raw IPC.
+        if params.get('action') == 'complete':
+            raise PermissionError('oauth_callback_transport_required')
+        return management.request(session, params.get('action'), params.get('values', {}))
 
     def _dispatch(self, request: Any) -> dict[str, Any]:
         if not isinstance(request, dict):

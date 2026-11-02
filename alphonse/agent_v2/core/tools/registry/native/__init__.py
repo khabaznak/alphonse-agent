@@ -38,9 +38,11 @@ from alphonse.agent_v2.core.tools.registry.native.skill_read import build_skill_
 from alphonse.agent_v2.core.tools.registry.native.skill_maintain import build_skill_maintain_tool_definition
 
 
-def build_native_tool_registry(web_tools_settings: WebToolsSettings | None = None, asset_store: object | None = None, media_tools_settings: MediaToolsSettings | None = None, artifact_store: object | None = None, on_artifact_changed: object | None = None, user_store: object | None = None, skill_store: SkillStore | None = None) -> InMemoryToolRegistry:
+def build_native_tool_registry(web_tools_settings: WebToolsSettings | None = None, asset_store: object | None = None, media_tools_settings: MediaToolsSettings | None = None, artifact_store: object | None = None, on_artifact_changed: object | None = None, user_store: object | None = None, skill_store: SkillStore | None = None, management_runtime: object | None = None) -> InMemoryToolRegistry:
     """Build the default v2-native tool registry."""
+    from alphonse.agent_v2.core.tools.registry.native.integration_manage import build_integration_manage_tool_definition
     registry = InMemoryToolRegistry()
+    registry.register(build_integration_manage_tool_definition(management_runtime))
     registry.register(build_respond_tool_definition())
     registry.register(build_bash_tool_definition())
     registry.register(build_deliver_message_tool_definition())
