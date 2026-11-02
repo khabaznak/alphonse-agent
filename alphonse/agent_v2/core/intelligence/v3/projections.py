@@ -114,6 +114,11 @@ def project(task, context, *, purpose: str, selected_context_ids=()) -> str:
     skills = ""
     records = [Record("request:" + str(task.message_id or task.task_id), "Current request", task.goal, True),
                Record("policy:recall", "Evidence rules", RECALL_GUIDANCE, True)]
+    from alphonse.agent_v2.core.memory.retry_context import retry_continuity_records
+    for part in retry_continuity_records(task, context):
+        included = next((r for r in part.records if r['status'] == 'included'), None)
+        if included is not None:
+            records.append(Record(included['source_id'], 'Retry originating source (historical context only)', str(part), True))
     contract = task.acceptance_contract or task.acceptance_criteria_md
     if contract:
         records.append(Record("task:contract", "Acceptance contract", _json(contract), True))

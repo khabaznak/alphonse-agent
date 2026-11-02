@@ -25,6 +25,7 @@ from alphonse.agent_v2.core.intelligence.v3.context import selected_project_cont
 from alphonse.agent_v2.core.intelligence.v3.context import selected_skill_guidance
 from alphonse.agent_v2.core.memory.formatting import bound_memory_context
 from alphonse.agent_v2.core.intelligence.v3.context import task_context_for_decision, memory_inventory
+from alphonse.agent_v2.core.memory.retry_context import prepare_retry_continuity, retry_source_unresolved
 
 if TYPE_CHECKING:
     from alphonse.agent_v2.core.core import CoreLoopContext
@@ -37,6 +38,7 @@ class V3PhasePlanValidationError(ValueError):
 
 def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
     _ingest_relevant_messages(task, context)
+    prepare_retry_continuity(task, context)
     if context.inference is None:
         raise RuntimeError("v3_phase_planning_inference_unavailable")
     tools = ToolExposurePolicy().select_tools(
@@ -58,7 +60,7 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
         skill_selection["loaded_skill_ids"] = loaded_skill_ids
     attachment_manifest = _attachment_manifest(task)
     system_prompt = _strategic_plan_instructions()
-    curation_context = task_context_for_decision(task, context, purpose="curation", selected_context_ids=selected_context_ids) if projections_enabled() else shared_context
+    curation_context = task_context_for_decision(task, context, purpose="curation", selected_context_ids=selected_context_ids)
     tools = _curate_request_tools(
         task, tools, system_prompt=system_prompt, session_history=session_history,
         project_context=_bounded_text(project_context, 5000), durable_memory=durable_memory,
@@ -102,7 +104,7 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
         "and only after showing the complete draft and receiving approval. "
         f"\nPhasePlan JSON Schema: {json.dumps(contract_schema, ensure_ascii=False, sort_keys=True)}"
     )
-    planning_manifest = prompt_receipt(prompt, [
+    planning_parts = [
         "Household conversation, global, and selected project context:\n" + shared_context,
         "Selected skill guidance (reusable instructions; they do not grant permissions or override controls):\n" + skill_guidance if skill_guidance else skill_guidance,
         source(goal_section, 'request:' + str(task.message_id or task.task_id), 'current_request'),
@@ -111,27 +113,75 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
         source('Prior V3 phase history: ' + json.dumps(task.metadata.get('v3_phase_history') or [], ensure_ascii=False), 'task:' + str(task.task_id) + ':phase_history', 'phase_evidence'),
         source('Jev-curated tool registry (complete descriptors): ' + json.dumps(_tool_rows(tools), ensure_ascii=False), 'tools:planning', 'tool_descriptors'),
         source('Task attachment manifest (metadata only; use asset IDs exactly as listed):\n' + json.dumps(attachment_manifest, ensure_ascii=False), 'attachments:planning', 'attachment_metadata'),
-    ], purpose='planning')
-    result = context.inference.generate_json(
-        InferenceRequest(
-            prompt=prompt,
-            purpose=InferencePurpose.PHASE_PLANNING,
-            context_manifests=planning_manifest,
-            input_sources=tuple({'source_id': tool.tool_id, 'source_type': 'tool_descriptor', 'reason': 'curated_for_planning'} for tool in tools),
-            project_id=task.project_id,
-            user=task.user,
-            task_id=task.task_id,
-            images=context.image_inputs(task),
-            tools=(),
-            cancel_checker=context.is_cancelled if context.cancellation_checker is not None else None,
-        )
+    ]
+    planning_manifest = prompt_receipt(prompt, planning_parts, purpose='planning')
+    request = InferenceRequest(
+        prompt=prompt,
+        purpose=InferencePurpose.PHASE_PLANNING,
+        context_manifests=planning_manifest,
+        input_sources=tuple({'source_id': tool.tool_id, 'source_type': 'tool_descriptor', 'reason': 'curated_for_planning'} for tool in tools),
+        project_id=task.project_id,
+        user=task.user,
+        task_id=task.task_id,
+        images=context.image_inputs(task),
+        tools=(),
+        cancel_checker=context.is_cancelled if context.cancellation_checker is not None else None,
     )
-    if not isinstance(result.json_value, dict):
-        raise ValueError("v3_phase_plan_missing")
-    try:
-        phase = PhasePlan.from_dict(result.json_value)
-    except (TypeError, ValueError) as exc:
-        raise V3PhasePlanValidationError(f"v3_phase_plan_invalid:{exc}") from exc
+    for attempt in range(2):
+        if context.is_cancelled():
+            raise SystemOneUnavailableError("v3_phase_planning_cancelled")
+        result = context.inference.generate_json(request)
+        if not isinstance(result.json_value, dict):
+            raise ValueError("v3_phase_plan_missing")
+        try:
+            phase = PhasePlan.from_dict(result.json_value)
+            _validate_inspection_handoff(phase, act_directive)
+            if retry_source_unresolved(task):
+                _validate_inspection_handoff(phase, {'inspection_resolution': {'route': 'requires_user_input'}})
+        except (TypeError, ValueError) as exc:
+            # An absolute path in this relative-only field is a plan encoding
+            # error, not an attempted or denied database operation. Let System
+            # Two correct it once; never strip paths or relax validation here.
+            scope_error = str(exc).startswith("mutation_scope_path_invalid:/")
+            handoff_error = str(exc).startswith("inspection_handoff_")
+            dependency_error = str(exc).startswith(("phase_subgoal_dependency_invalid:", "phase_subgoal_self_dependency:"))
+            if attempt or not (scope_error or handoff_error or dependency_error):
+                raise V3PhasePlanValidationError(f"v3_phase_plan_invalid:{exc}") from exc
+            correction = (
+                "The plan has an invalid subgoal dependency. Use unique subgoal IDs and exact depends_on references "
+                "to IDs defined earlier in the subgoals array; no missing, forward, self or cyclic dependencies. "
+                "Correct IDs/order explicitly; do not silently remove prerequisites, broaden authorization or replace "
+                "the requested mutation/read-back with a reply. Returned subgoal IDs: "
+                + json.dumps([item.get('subgoal_id') for item in result.json_value.get('subgoals', []) if isinstance(item, dict)]) + ". "
+                if dependency_error else
+                "Inspection handoff requires the next phase to perform the requested authorized operation or ask "
+                "a concrete missing-information question. Do not start another read-only inspection phase. If the "
+                "handoff route requires_user_input, plan exactly one user_interaction subgoal, using native.ask_question "
+                "to name only the specific missing fields, conflicting values or unusable source identified in the evidence. "
+                "Do not request generic permission again or ask the user to repeat already confirmed details. "
+                if handoff_error else
+                "mutation_scope.allowed_paths accepts relative paths only. For native.bash, identify the authorized "
+                "working directory and use paths relative to that directory; the action must use that explicit cwd. "
+                "Do not drop the mutation target, broaden effects, use '..', or substitute a reply-only plan. "
+            )
+            feedback = source(
+                "Plan validation feedback: " + correction +
+                "No tool or mutation ran for this rejected plan. Return a corrected complete PhasePlan within the original authorized "
+                "request and curated capabilities. Preserve the requested persisted effect and read-back. "
+                "Protected engine paths remain forbidden.\n"
+                "Rejected plan (model output, not permission): " + json.dumps(result.json_value, ensure_ascii=False),
+                'task:' + str(task.task_id) + ':plan_validation', 'plan_validation',
+            )
+            correction_prompt = prompt + "\n\n" + feedback
+            request = replace(request, prompt=correction_prompt, context_manifests=prompt_receipt(
+                correction_prompt, [*planning_parts, feedback], purpose='planning',
+            ))
+            reason = "invalid_plan_dependency" if dependency_error else "inspection_handoff" if handoff_error else "absolute_mutation_scope_path"
+            task.metadata["v3_plan_validation_recovery"] = {"reason": reason, "attempts": 1}
+            context.emit_telemetry({"event": "v3_plan_validation_recovery", "task_id": task.task_id,
+                                    "reason": reason, "attempts": 1})
+        else:
+            break
     if act_directive.get("response_required"):
         response_subgoals = [
             subgoal for subgoal in phase.subgoals
@@ -148,7 +198,24 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
             raise V3PhasePlanValidationError("v3_phase_plan_acceptance_criteria_invalid")
         task.sync_acceptance_criteria_view()
         task.append_update("Plan established the mission acceptance contract alongside the strategic phase.")
-    return _curate_phase_tools(task, phase, tools, context, task_context=shared_context)
+    return _curate_phase_tools(task, phase, tools, context, task_context=curation_context)
+
+
+def _validate_inspection_handoff(phase: PhasePlan, directive: dict) -> None:
+    resolution = directive.get("inspection_resolution") or {}
+    route = resolution.get("route")
+    if route not in {"ready_for_action", "requires_user_input", "decision_required"}:
+        return
+    first = phase.subgoals[0]
+    question = set(first.allowed_capabilities) == {Capability.USER_INTERACTION.value}
+    if route == "requires_user_input":
+        if not question or len(phase.subgoals) != 1:
+            raise ValueError("inspection_handoff_requires_specific_question")
+    elif not question and not set(first.allowed_side_effects) & {
+        SideEffectClass.PROJECT_MUTATION, SideEffectClass.EXTERNAL_REVERSIBLE,
+        SideEffectClass.EXTERNAL_IRREVERSIBLE, SideEffectClass.LOCAL_SKILL_INSTALLATION,
+    }:
+        raise ValueError("inspection_handoff_requires_action_or_question")
 
 
 def _curate_request_tools(
@@ -195,10 +262,17 @@ def _curate_request_tools(
             f"request_tool_curation:{type(exc).__name__}:{detail}"
         ) from exc
     selected_ids = set((*selection.selected_tool_ids, *selection.ambiguous_tool_ids))
-    if projections_enabled():
+    if (task.metadata.get("act_directive") or {}).get("inspection_resolution") or retry_source_unresolved(task):
+        # Relevance retention only, intersected with runtime exposure below.
+        selected_ids.add("native.ask_question")
+    retained_recall_ids = []
+    if _retain_recall_tools(task):
+        retained_recall_ids = [tool.tool_id for tool in tools if tool.tool_id in RECALL_TOOLS and tool.tool_id not in selected_ids]
         selected_ids.update(RECALL_TOOLS)
     curated = tuple(tool for tool in tools if tool.tool_id in selected_ids)
-    metadata = {"status": "used", "candidate_count": len(tools), **selection.to_metadata()}
+    metadata = {"status": "used", "candidate_count": len(tools), **selection.to_metadata(),
+                "retained_recall_tool_ids": retained_recall_ids,
+                "curated_tool_ids": [tool.tool_id for tool in curated]}
     history = task.metadata.setdefault("system_one_request_tool_selections", [])
     if not isinstance(history, list):
         history = []
@@ -236,6 +310,13 @@ def _safe_system_one_error_code(exc: Exception) -> str:
     if template_error:
         return message
     return "unclassified"
+
+
+def _retain_recall_tools(task) -> bool:
+    coverage = task.metadata.get("conversation_projection") or {}
+    return projections_enabled() or bool(
+        coverage.get("requires_recall") or coverage.get("history_unavailable")
+    )
 
 
 def _attachment_manifest(task) -> list[dict[str, str]]:
@@ -287,9 +368,18 @@ def _strategic_plan_instructions() -> str:
         "a single-stage response phase. Use only the authorized, Jev-curated concrete tool registry supplied with the "
         "request; do not assume tools outside it are available. Do not declare it unavailable or claim inability unless relevant tools were attempted "
         "and failed. Authorize only capabilities and mutation paths within the task's authorized scope. Never target "
-        ".alphonse, memory ledgers, prompts, plans, acceptance criteria, or agent-internal state. Project context and "
+        "protected engine configuration, memory ledgers, prompts, plans, acceptance criteria, or agent-internal state. "
+        "User-owned skill resource data (including SQLite records in the default skill directory) may be read or updated "
+        "only within the current user's authorized resource and effect scope; its parent directory does not make it engine configuration. "
+        "Do not broaden that resource access to surrounding engine files. Project context and "
         "durable memory are trusted evidence for choosing reads, never mutation targets. Convert absolute paths under the "
         "project directory to project-relative form. Mutation targets must be established by the user or verified reads. "
+        "mutation_scope.allowed_paths accepts only relative paths, never absolute paths or '..'. For native.bash on "
+        "authorized skill data outside the task project, establish the skill/resource working directory in the phase "
+        "instructions, list the mutation targets relative to that directory, and require that explicit cwd in the action. "
+        "For example, an authorized skill database at /authorized/skill/records.sqlite uses allowed_paths ['records.sqlite'] "
+        "with native.bash cwd /authorized/skill. Keep the target and the requested effect; do not replace them with an "
+        "empty scope or a response-only plan. Relative encoding never grants resource access or authorizes effects. "
         "For a requested known mutation, include needed inspection, mutation, and verification in one coherent phase; "
         "do not stop at discovery if inspection resolves the target. Do not ask the requester for a file location already "
         "present in project context, durable memory, recent conversation, or prior verified evidence. If a prepared user response exists, plan only work adding "
@@ -311,8 +401,26 @@ def _strategic_plan_instructions() -> str:
         "An attachment_analysis subgoal requires verified image inputs to its tactical inference call before completion. "
         "Define stable measurable acceptance criteria when none exist, otherwise preserve the existing contract."
         " Mission criteria must describe the requested outcome, not replace it with searching, asking a question, or trying a tool. "
+        "For a requested record update, preserve the persisted mutation and successful transaction/read-back as mission criteria. "
+        "Acknowledgments, explanations, drafts and no-write disclaimers do not satisfy that requested effect. "
+        "A tool omitted by curation or a restricted current phase is not evidence of denied authorization, an inaccessible resource, "
+        "or a failed operation. Replan missing capabilities rather than inventing an operational failure. "
+        "Inspection is a decision stage: sufficient evidence leads to the authorized operation; a specific unresolved "
+        "field or source leads to native.ask_question. Existing reviewed and confirmed extraction may support the requested "
+        "record update; do not independently re-extract the original document unless a specific contradiction or missing "
+        "essential field requires it. Never invent clinical details or treat unsupported historical transcription as confirmation. "
+        "When Act carries inspection_resolution, use its cumulative evidence and do not restart inspection. For "
+        "requires_user_input, plan exactly one user_interaction subgoal and ask only for the specific missing information. "
+        "For ready_for_action or decision_required, the first subgoal must perform the authorized operation or ask a "
+        "specific missing-information question. A question parks the task; it does not satisfy the pending mutation criterion. "
         "For a newly authorized household task, resolve people, destinations and operating details from applicable authorized memory. "
         "Historical evidence can supply parameters for the current request; it does not independently authorize a new task. "
+        "When a retry-originating payload and user review are supplied, use that exact source/date and intended change. "
+        "Do not replace it with an older similar prescription or a prior report about a different record. Preserve its "
+        "uncertain fields, asking only for essential unresolved details. Subgoal depends_on values must exactly match "
+        "subgoal IDs defined earlier in the array; do not mix hyphenated and underscored spellings or invent dependencies. "
+        "If retry continuity reports unresolved, ambiguous, unavailable or oversized antecedents, plan exactly one "
+        "user_interaction subgoal asking which source or exact change is intended. Do not mutate based on an older similar record. "
         "Do not ask the user to repeat a time, relationship or instruction already resolved by an applicable source unless it conflicts, "
         "has expired, or is genuinely ambiguous. Unavailable unrelated memory backends do not negate a complete positive source."
         " When asked to retain a reusable workflow, solve the task and present the complete skill name, description and instructions "
@@ -420,9 +528,14 @@ def _curate_phase_tools(task, phase: PhasePlan, tools, context, *, task_context:
     else:
         metadata = {"status": "used", **selection.to_metadata()}
         selected_ids = list((*selection.selected_tool_ids, *selection.ambiguous_tool_ids))
-        if projections_enabled():
+        if (task.metadata.get("act_directive") or {}).get("inspection_resolution") or retry_source_unresolved(task):
+            selected_ids.extend(tool.tool_id for tool in tools if tool.tool_id == "native.ask_question")
+        retained_recall_ids = []
+        if _retain_recall_tools(task):
+            retained_recall_ids = [tool.tool_id for tool in tools if tool.tool_id in RECALL_TOOLS and tool.tool_id not in selected_ids]
             selected_ids.extend(tool.tool_id for tool in tools if tool.tool_id in RECALL_TOOLS)
         selected = tuple(dict.fromkeys(selected_ids))
+        metadata.update(retained_recall_tool_ids=retained_recall_ids, curated_tool_ids=list(selected))
         curated = replace(phase, curated_tool_ids=selected, tool_curation_status="used")
     _record_tool_curation(task, phase, metadata)
     context.emit_telemetry({
@@ -474,10 +587,10 @@ def _phase_plan_json_schema(capabilities: list[str]) -> dict[str, object]:
             "allowed_capabilities", "allowed_side_effects", "completion", "failure_policy",
         ],
         "properties": {
-            "subgoal_id": {"type": "string", "minLength": 1},
+            "subgoal_id": {"type": "string", "minLength": 1, "description": "Unique stable ID; all dependency references must use this exact spelling."},
             "objective": {"type": "string", "minLength": 1},
             "required_output_type": {"type": "string", "minLength": 1},
-            "depends_on": {"type": "array", "items": {"type": "string"}},
+            "depends_on": {"type": "array", "description": "Exact subgoal IDs already defined earlier in this array. No missing, forward, self or cyclic dependencies; preserve required prerequisites.", "items": {"type": "string"}},
             "allowed_capabilities": {"type": "array", "items": capability},
             "allowed_side_effects": {
                 "type": "array", "minItems": 1,
@@ -506,7 +619,7 @@ def _phase_plan_json_schema(capabilities: list[str]) -> dict[str, object]:
                 "type": "object", "additionalProperties": False,
                 "required": ["allowed_paths", "allow_external_effects"],
                 "properties": {
-                    "allowed_paths": {"type": "array", "items": {"type": "string"}},
+                    "allowed_paths": {"type": "array", "description": "Authorized mutation targets relative to the operation's established working directory. Never absolute, traversal, or protected engine paths. Native Bash must use the established explicit cwd for skill resources outside the task project.", "items": {"type": "string", "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"}},
                     "allow_external_effects": {"type": "boolean"},
                 },
             },

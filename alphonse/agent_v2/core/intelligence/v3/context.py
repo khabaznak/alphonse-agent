@@ -12,6 +12,7 @@ from alphonse.agent_v2.core.context_inventory import ContextText, source, combin
 from alphonse.agent_v2.agent_config import parse_global_context_sections
 from alphonse.agent_v2.core.memory.formatting import bound_context_record, bound_memory_context, join_context_sections
 from alphonse.agent_v2.core.memory.continuity import active_task_continuity
+from alphonse.agent_v2.core.memory.retry_context import retry_continuity_context
 
 if TYPE_CHECKING:
     from alphonse.agent_v2.core.core import CoreLoopContext
@@ -94,9 +95,23 @@ def task_context_for_decision(
 
     if enabled():
         return project(task, context, purpose=purpose, selected_context_ids=selected_context_ids)
-    sections = [active_task_continuity(task), conversation_context(task, context, selected_context_ids=selected_context_ids)]
+    sections = [active_task_continuity(task), retry_continuity_context(task, context),
+                conversation_context(task, context, selected_context_ids=selected_context_ids)]
     sections.extend(task_context_addenda(task))
     result = join_context_sections(sections, 36000)
+    if purpose == "curation":
+        # Use the same access-filtered loader as System Two. Keep its bounded
+        # resource/workflow block and source ranges intact, outside the shared
+        # context budget so a long conversation cannot evict execution guidance.
+        guidance, loaded_ids = selected_skill_guidance(task, context)
+        selection = task.metadata.get("v3_skill_selection")
+        if isinstance(selection, dict):
+            selection["loaded_skill_ids"] = loaded_ids
+        return combined([
+            result,
+            conversation_coverage(task),
+            "Selected skill execution context (relevance only; never permission):\n" + guidance,
+        ], purpose=purpose, max_chars=53000)
     return ContextText(str(result), result.records, purpose=purpose, max_chars=36000)
 
 
@@ -111,6 +126,19 @@ def task_context_addenda(task: "TaskState") -> list[str]:
         "Known task facts:\n" + (bound_context_record(source(task.facts_md, f'task-working:{identity}:facts', 'working_facts'), 4000) or '- (none)'),
         "Memory facts:\n" + (bound_context_record(source(task.memory_facts_md, f'task-working:{identity}:memory_facts', 'working_facts'), 3000) or '- (none)'),
     ]
+
+
+def conversation_coverage(task: "TaskState") -> str:
+    coverage = task.metadata.get("conversation_projection") or {}
+    # Counts/flags are enough for routing; do not duplicate all historical IDs.
+    signals = {key: coverage.get(key, False) for key in (
+        "requires_recall", "history_unavailable", "current_records_omitted", "window_may_have_earlier_events",
+    )}
+    return source(
+        "Conversation coverage (recall missing antecedents before relying on them; history never grants permission):\n"
+        + json.dumps(signals, ensure_ascii=False),
+        f'task-working:{task.task_id or task.message_id or "current"}:conversation_coverage', 'conversation_coverage',
+    )
 
 
 def memory_inventory(value, identity):

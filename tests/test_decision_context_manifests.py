@@ -210,3 +210,23 @@ def test_projection_omissions_and_source_excerpt_ranges_are_metadata_only(monkey
     assert recalled['truncated']
     assert recalled['source_range'] == {'start_char': 20, 'end_char': 34, 'total_chars': 100}
     assert manifest['recall']['result_count'] == 1
+
+
+def test_saved_manifest_without_optional_source_reason_still_renders_work_log():
+    from copy import deepcopy
+    task, context, router, _ = setup_call()
+    with manifest_scope(task, context):
+        router.generate_json(InferenceRequest(prompt='Synthetic answer interpretation',
+            purpose=InferencePurpose.PHASE_PLANNING,
+            input_sources=({'source_id':'question-answer:fixture','source_type':'authenticated_question_answer'},)))
+    manifest = task.metadata['decision_context_manifests'][0]
+    manifest['omissions'] = [{'source_id':'conversation:omitted','source_type':'conversation'}]
+    saved = deepcopy(manifest)
+    progress = _task_progress_snapshot(task)
+    envelopes = A2UiAdapter().task_progress('fixture', progress)
+    texts = {c['id']:c.get('text','') for c in envelopes[1]['updateComponents']['components']}
+    assert 'question-answer:fixture · authenticated_question_answer · included · unspecified' in texts['decision_context']
+    assert 'conversation:omitted · conversation · omitted · unspecified' in texts['decision_context']
+    assert manifest == saved  # Display compatibility must not rewrite stored evidence.
+    manifest['sources'][0]['reason'] = 'clarification_answer'
+    assert 'included · clarification_answer' in manifest_summary([manifest])

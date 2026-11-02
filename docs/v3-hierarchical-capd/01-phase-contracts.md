@@ -143,6 +143,15 @@ Terminal states must be explicit. Invalid transitions must fail closed.
 
 ## Implementation log
 
+- 2026-10-31 — Issue #128: invalid missing/forward/self/cyclic subgoal
+  dependencies now receive one bounded System Two correction with the rejected
+  plan and exact returned IDs. The schema and instructions require exact earlier
+  IDs, including consistent spelling. No dependency is silently deleted, reordered
+  or normalized by code; the corrected plan must pass the same graph, scope and
+  capability validation before any execution. Repeated invalid plans fail visibly;
+  cancellation and existing acceptance contracts remain intact. Disposable
+  regressions cover the live hyphen/underscore reference error and all invalid
+  dependency shapes without changing household records.
 - 2026-09-20 — Added `intelligence/v3` contracts, V3 fields in `TaskState`, legacy
   one-call adaptation, typed bindings, bounded prompt projections, and
   contract/checkpoint tests. Full suite: 428 passed.

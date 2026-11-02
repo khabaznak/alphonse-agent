@@ -6,6 +6,7 @@ from alphonse.agent_v2.core.context_inventory import source, prompt_receipt
 
 import json
 import inspect
+import math
 from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any
@@ -16,7 +17,7 @@ from alphonse.agent_v2.core.tools.registry import ToolExposurePolicy
 from alphonse.agent_v2.core.inference import InferencePurpose, InferenceRequest
 from alphonse.agent_v2.core.intelligence.acceptance_contract import apply_status_patch
 from alphonse.agent_v2.core.intelligence.v3.contracts import PhaseOutcome, PhaseStatus, SideEffectClass, TacticalState
-from alphonse.agent_v2.system_one import SystemOneUnavailableError
+from alphonse.agent_v2.system_one import SystemOneUnavailableError, system_one_error_code
 from alphonse.agent_v2.core.intelligence.v3.context import task_context_for_decision
 from alphonse.agent_v2.core.intelligence.v3.projections import enabled as projections_enabled
 
@@ -78,7 +79,8 @@ class V3OuterController:
         act_directive = task.metadata.get("act_directive")
         act_directive = act_directive if isinstance(act_directive, dict) else {}
         desired = str(act_directive.get("terminal_outcome") or "failed")
-        closure_allowed = desired == "failed" or review.status == PhaseReviewStatus.PHASE_VERIFIED_TASK_COMPLETE
+        # Successful closure must still pass the mission-outcome review below.
+        closure_allowed = desired == "failed"
         if review.status != PhaseReviewStatus.CANCELLED and closure_allowed and act_directive.get("closure_only") and task.has_prepared_user_response():
             decision = StrategicDecision(
                 StrategicAction.FAIL if desired == "failed" else StrategicAction.COMPLETE,
@@ -114,11 +116,24 @@ class V3OuterController:
                 decision, recommendation = _recommend_act(task, state, outcome, review, context)
             except SystemOneUnavailableError:
                 if (getattr(context.system_one, "requires_mission_outcome_review", False)
-                        and task.metadata.get("v3_resumption_evidence")):
+                        and review.status == PhaseReviewStatus.PHASE_VERIFIED_TASK_COMPLETE):
                     raise
                 decision = decide_next_action(review)
         else:
             decision = decide_next_action(review)
+        inspection = task.metadata.get("v3_inspection_resolution") or {}
+        inspection_handoff = (
+            review.status == PhaseReviewStatus.PHASE_BLOCKED
+            and inspection.get("phase_id") == state.phase.phase_id
+            and any(blocker.startswith("inspection_") for blocker in outcome.blockers)
+        )
+        if inspection_handoff:
+            missing = inspection.get("route") == "requires_user_input"
+            decision = StrategicDecision(
+                StrategicAction.ASK_USER if missing else StrategicAction.REPLAN,
+                "Ask only for the specific unresolved information identified by inspection." if missing else
+                "Resolve the existing inspection evidence into the authorized operation or a specific missing-information question; do not repeat inspection.",
+            )
         if context.is_cancelled():
             review = PhaseReview(state.phase.phase_id, PhaseReviewStatus.CANCELLED, "Task cancelled.")
             decision = decide_next_action(review)
@@ -179,6 +194,16 @@ class V3OuterController:
                 task.metadata["v3_route"] = "plan_next_phase"
         elif decision.action == StrategicAction.REPLAN:
             task.metadata["act_directive"] = {"action": "replan", "rationale": decision.reason}
+            if (review.status == PhaseReviewStatus.PHASE_VERIFIED_TASK_COMPLETE and task.has_prepared_user_response()
+                    and recommendation is not None
+                    and type(recommendation.answers.get("mission_outcome_is_fulfilled")) in {int, float}
+                    and recommendation.answers["mission_outcome_is_fulfilled"] < float(getattr(recommendation, "yes_threshold", 0.8))):
+                # Repeating a prepared report cannot resolve disagreement about
+                # the requested outcome. Require an operation or a precise question.
+                task.metadata["act_directive"]["inspection_resolution"] = {
+                    "route": "decision_required", "phase_id": state.phase.phase_id,
+                    "evidence_refs": list(review.evidence_refs),
+                }
             task.metadata["v3_route"] = "strategic_replan"
         elif decision.action == StrategicAction.ASK_USER:
             task.metadata["act_directive"] = {"action": "ask_user", "rationale": decision.reason}
@@ -197,6 +222,8 @@ class V3OuterController:
             task.status = "failed"
             task.outcome = {"status": "failure", "reason": decision.reason, "phase_id": state.phase.phase_id}
             task.metadata["v3_route"] = "end"
+        if inspection_handoff and task.metadata.get("v3_route") == "strategic_replan":
+            task.metadata["act_directive"]["inspection_resolution"] = dict(inspection)
         return review, decision
 
 
@@ -308,14 +335,32 @@ def _recommend_act(task, state, outcome, review: PhaseReview, context):
     try:
         recommendation = context.system_one.recommend_act(state=input_state)
     except Exception as exc:
-        raise SystemOneUnavailableError(f"act_recommendation:{type(exc).__name__}") from exc
+        raise SystemOneUnavailableError(f"act_recommendation:{type(exc).__name__}:{system_one_error_code(exc)}") from exc
     action = str(recommendation.action)
     recommended_action = action
     answers = recommendation.answers
     yes_threshold = float(getattr(recommendation, "yes_threshold", 0.8))
     mission_fulfilled = answers.get("mission_outcome_is_fulfilled")
-    if (action == "complete" and task.metadata.get("v3_resumption_evidence")
-            and isinstance(mission_fulfilled, (int, float)) and mission_fulfilled < yes_threshold):
+    valid_mission_judgment = (type(mission_fulfilled) in {int, float}
+                             and math.isfinite(mission_fulfilled) and 0 <= mission_fulfilled <= 1)
+    requires_effect = answers.get("mission_requires_persisted_effect", 0.0)
+    # A semantic positive cannot manufacture execution evidence out of a reply.
+    # Successful operational evidence is necessary, never sufficient: the
+    # mission judgment and existing scope/verification checks still apply.
+    missing_effect_evidence = (
+        type(requires_effect) in {int, float} and math.isfinite(requires_effect)
+        and requires_effect >= yes_threshold
+        and not any(
+            item.get("status") == "success" and item.get("tool_id")
+            and item["tool_id"] not in {"native.respond", "native.ask_question"}
+            for item in state.evidence.entries
+        )
+    )
+    mission_unfulfilled = valid_mission_judgment and mission_fulfilled < yes_threshold
+    required_judgment_missing = (
+        getattr(context.system_one, "requires_mission_outcome_review", False) and not valid_mission_judgment
+    )
+    if action == "complete" and (mission_unfulfilled or missing_effect_evidence or required_judgment_missing):
         action = "replan"
     elif action == "fail_explain" and review.status == PhaseReviewStatus.PHASE_VERIFIED_TASK_INCOMPLETE:
         # A completed phase is not the same as a completed mission. If the
