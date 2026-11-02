@@ -766,3 +766,11 @@ label/mailbox resource grants, query semantics, history-driven bounded refresh,
 attachment expansion and the synthetic validation command. Connections alone
 start no monitoring; a real-account pilot remains behind milestone readiness
 and explicit consent gates.
+
+### Classroom student reads — #120
+
+Optional Google `classroom_read` and separately consented
+`classroom_announcements_read` capabilities use the shared acquisition contract.
+See [Classroom setup, enrollment and coverage](classroom-readonly.md) for exact
+scopes, school restrictions, guardian-only fallback to summary mail, unknown
+assignment fields and bounded refresh limitations. Connections start no monitoring.

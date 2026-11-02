@@ -480,3 +480,17 @@ def test_project_policy_survives_rotation_and_stops_on_lifecycle_change(f, tmp_p
     getattr(f.service, action)(f.owner, 'one', revision(f))
     with pytest.raises(PermissionError):
         checks.guard(policy['policy_id'], expected_revision=policy['revision'])
+
+
+@pytest.mark.parametrize('capability', ['classroom_read', 'classroom_announcements_read'])
+def test_classroom_consent_is_minimal_and_role_discovery_is_required(f, capability):
+    from alphonse.agent_v2.integrations.oauth import capability_scopes
+    f.service.begin(f.owner, connection_id='school', provider='google', capabilities=[capability], expected_revision=0)
+    provider = f.service.clients['google']
+    assert set(provider.scopes) == {'openid', *capability_scopes('google', capability)}
+    callback = provider.config.redirect_uri + '?' + urlencode({'state': provider.state, 'code': 'disposable-code'})
+    assert f.service.complete(f.owner, callback)['capabilities'] == [capability]
+    assert not any('guardian' in s or s.endswith('.students.readonly') for s in provider.scopes)
+    with pytest.raises(OAuthError, match='scopes_missing'):
+        f.service._validated(dict(access_token='fake', refresh_token='fake-refresh', expires_at=time.time() + 3600,
+            token_type='Bearer', scope=[SCOPES['google'][capability]]), provider.scopes)
