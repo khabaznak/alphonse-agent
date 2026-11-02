@@ -171,9 +171,11 @@ class V2Daemon:
         from alphonse.agent_v2.integrations.graph_mail import GraphMailAdapter
         from alphonse.agent_v2.services.source_acquisition import SourceAcquisition
         from alphonse.agent_v2.system_one import build_system_one_provider
+        from alphonse.agent_v2.integrations.google_calendar import CalendarAdapter
         from alphonse.agent_v2.integrations.gmail import GmailAdapter
         self.source_acquisition = (SourceAcquisition(self.project_check_dispatcher, self.event_store,
-            adapters={'google': GmailAdapter(self.optional_accounts),
+            adapters={('google', 'calendar_read'): CalendarAdapter(self.optional_accounts),
+                      'google': GmailAdapter(self.optional_accounts),
                       'microsoft': GraphMailAdapter(self.optional_accounts)},
             clock=lambda: datetime.now(timezone.utc),
             triage_provider=lambda: build_system_one_provider(self.runtime.system_one_settings_store.get()))
