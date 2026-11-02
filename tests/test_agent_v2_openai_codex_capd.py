@@ -10,58 +10,43 @@ from alphonse.agent_v2.core.inference import InferenceRouter
 from alphonse.agent_v2.core.inference import ModelProfile
 from alphonse.agent_v2.core.inference import OpenAICodexProvider
 from alphonse.agent_v2.core.inference import OpenAICodexProviderConfig
-from alphonse.agent_v2.core.intelligence.pdca.nodes.act_node import act_node
 from alphonse.agent_v2.core.intelligence.pdca.nodes.check_node import check_node
 from alphonse.agent_v2.core.intelligence.pdca.nodes.plan_node import plan_node
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
 
 
-def test_act_node_uses_codex_provider_for_acceptance_criteria(monkeypatch) -> None:
-    captured: dict[str, str] = {}
+def test_plan_node_uses_codex_provider_for_acceptance_criteria(monkeypatch) -> None:
+    captured = []
     router = _router()
 
     def fake_run(command, **kwargs):
-        captured["input"] = kwargs["input"]
-        return SimpleNamespace(returncode=0, stdout="1.- [ ] File exists", stderr="")
+        envelope = json.loads(kwargs["input"])
+        captured.append(envelope)
+        output = "1.- [ ] File exists" if envelope["purpose"] == "acceptance_criteria" else json.dumps({"tool_id": "tool-1", "arguments": {}})
+        return SimpleNamespace(returncode=0, stdout=output, stderr="")
 
     monkeypatch.setattr("alphonse.agent_v2.core.inference.openai_codex.shutil.which", lambda _bin: "/bin/codex")
     monkeypatch.setattr("alphonse.agent_v2.core.inference.openai_codex.subprocess.run", fake_run)
 
     task = TaskState(goal="Write the file", user="alex", check_verdict="new")
-    act_node(task, context=CoreLoopContext(messages=InMemoryMessageQueue(), inference=router))
+    plan_node(task, context=CoreLoopContext(messages=InMemoryMessageQueue(), inference=router, tools=_ToolRegistry()))
 
     assert task.acceptance_criteria_md == "1.- [ ] File exists"
-    assert task.metadata["acceptance_criteria_llm_stubbed"] is False
-    envelope = json.loads(captured["input"])
+    assert task.metadata["acceptance_criteria_model_profile"] == "plus"
+    envelope = captured[0]
     assert envelope["purpose"] == "acceptance_criteria"
     assert "tools" not in envelope
 
 
-def test_check_node_uses_codex_provider_for_criteria_review(monkeypatch) -> None:
-    captured: dict[str, str] = {}
+def test_check_node_uses_system_one_without_codex_review(monkeypatch, pdca_decisions) -> None:
     router = _router()
+    pdca_decisions.satisfy = True
 
-    def fake_run(command, **kwargs):
-        captured["input"] = kwargs["input"]
-        return SimpleNamespace(
-            returncode=0,
-            stdout=json.dumps(
-                {
-                    "updates": [
-                        {
-                            "criterion_id": "ac-1",
-                            "status": "satisfied",
-                            "evidence_refs": ["tool-call:plan-call-1"],
-                        }
-                    ]
-                }
-            ),
-            stderr="",
-        )
+    def unexpected_provider_call(*args, **kwargs):
+        raise AssertionError("Bounded evidence review belongs to System One")
 
-    monkeypatch.setattr("alphonse.agent_v2.core.inference.openai_codex.shutil.which", lambda _bin: "/bin/codex")
-    monkeypatch.setattr("alphonse.agent_v2.core.inference.openai_codex.subprocess.run", fake_run)
+    monkeypatch.setattr("alphonse.agent_v2.core.inference.openai_codex.subprocess.run", unexpected_provider_call)
 
     task = TaskState(
         goal="Write the file",
@@ -79,13 +64,11 @@ def test_check_node_uses_codex_provider_for_criteria_review(monkeypatch) -> None
         }
     )
 
-    check_node(task, context=CoreLoopContext(messages=InMemoryMessageQueue(), inference=router))
+    check_node(task, context=CoreLoopContext(messages=InMemoryMessageQueue(), inference=router, system_one=pdca_decisions))
 
     assert task.acceptance_criteria_md == "1.- [x] File exists"
-    assert task.metadata["criteria_review_llm_stubbed"] is False
-    envelope = json.loads(captured["input"])
-    assert envelope["purpose"] == "criteria_review"
-    assert "tools" not in envelope
+    assert task.metadata["system_one_check_review"]["updates"][0]["evidence_refs"] == ["tool-call:plan-call-1"]
+    assert pdca_decisions.calls[0][0] == "check"
 
 
 def test_plan_node_uses_codex_provider_with_exposed_tools(monkeypatch) -> None:
