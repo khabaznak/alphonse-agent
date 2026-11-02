@@ -173,8 +173,12 @@ class V2Daemon:
         from alphonse.agent_v2.system_one import build_system_one_provider
         from alphonse.agent_v2.integrations.google_calendar import CalendarAdapter
         from alphonse.agent_v2.integrations.gmail import GmailAdapter
+        from alphonse.agent_v2.integrations.classroom import ClassroomAdapter
+        classroom = ClassroomAdapter(self.optional_accounts)
         self.source_acquisition = (SourceAcquisition(self.project_check_dispatcher, self.event_store,
             adapters={('google', 'calendar_read'): CalendarAdapter(self.optional_accounts),
+                      ('google', 'classroom_read'): classroom,
+                      ('google', 'classroom_announcements_read'): classroom,
                       'google': GmailAdapter(self.optional_accounts),
                       'microsoft': GraphMailAdapter(self.optional_accounts)},
             clock=lambda: datetime.now(timezone.utc),

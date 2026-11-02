@@ -63,6 +63,11 @@ class SourceAcquisition:
             from alphonse.agent_v2.services.project_triage import ProjectTriage
             self.triage = ProjectTriage(self, triage_provider)
 
+    def _adapter(self, context):
+        grant = context.grant
+        return self.adapters.get((grant.provider_key, grant.operation),
+                                 self.adapters.get(grant.provider_key))
+
     def _policy(self, run):
         return self.dispatcher.policies.guard(run['policy_id'], expected_revision=run['policy_revision'], now=self.clock())
 
@@ -90,9 +95,7 @@ class SourceAcquisition:
             return self.triage(ctx) if self.triage else CheckStep(complete=True, no_match=ctx.run['items'] == 0)
         source = policy['source_bindings'][index]
         context = self._context(ctx, policy, source)
-        adapter = self.adapters.get((context.grant.provider_key, context.grant.operation))
-        if adapter is None:
-            adapter = self.adapters.get(context.grant.provider_key)
+        adapter = self._adapter(context)
         if adapter is None:
             raise CheckStopped('blocked', 'acquisition_adapter_unavailable')
         # A new query, folder, owner, binding, grant scope or revision has a new
@@ -143,9 +146,7 @@ class SourceAcquisition:
         policy = ctx.guard()
         source = policy['source_bindings'][source_index]
         context = self._context(ctx, policy, source)
-        adapter = self.adapters.get((context.grant.provider_key, context.grant.operation))
-        if adapter is None:
-            adapter = self.adapters.get(context.grant.provider_key)
+        adapter = self._adapter(context)
         if adapter is None:
             raise CheckStopped('blocked', 'acquisition_adapter_unavailable')
         if operation not in {'health', 'capabilities', 'read', 'attachment'}:

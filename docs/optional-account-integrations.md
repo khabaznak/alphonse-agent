@@ -777,3 +777,12 @@ event window; the existing worker bounds retrieval/analysis time and budgets.
 See [Calendar context and sync](family-calendar.md) for recurring-instance identity,
 all-day/timezone semantics, selected-calendar delta consent, cursor invalidation,
 partial coverage, legacy compatibility and cross-source finding constraints.
+
+
+### Classroom student reads — #120
+
+Optional Google `classroom_read` and separately consented
+`classroom_announcements_read` capabilities use the shared acquisition contract.
+See [Classroom setup, enrollment and coverage](classroom-readonly.md) for exact
+scopes, school restrictions, guardian-only fallback to summary mail, unknown
+assignment fields and bounded refresh limitations. Connections start no monitoring.
