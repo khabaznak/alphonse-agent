@@ -174,6 +174,11 @@ class V2Daemon:
             clock=lambda: datetime.now(timezone.utc),
             triage_provider=lambda: build_system_one_provider(self.runtime.system_one_settings_store.get()))
             if self.project_check_dispatcher is not None else None)
+        from alphonse.agent_v2.services.findings import FindingService
+        self.findings = (FindingService(self.source_acquisition, self.runtime.outbox,
+                        self.runtime.identity_resolver) if self.source_acquisition is not None else None)
+        if self.source_acquisition is not None:
+            self.source_acquisition.findings = self.findings
         self.project_check_worker = (
             ProjectCheckWorker(self.project_check_dispatcher, adapter=self.source_acquisition,
                                on_results=self.source_acquisition.publish_ready)

@@ -99,6 +99,7 @@ class SQLiteOutboundStore:
 
     def __init__(self, db_path: str | Path = ":memory:") -> None:
         self.db_path = str(db_path)
+        self.finding_delivery_guard: Callable[[OutboundMessage], bool] | None = None
         self._memory_connection: sqlite3.Connection | None = None
         if self.db_path == ":memory:":
             self._memory_connection = sqlite3.connect(":memory:", check_same_thread=False)
@@ -250,6 +251,39 @@ class SQLiteOutboundStore:
         lease_owner: str = "outbox",
         lease_seconds: int = 60,
     ) -> OutboundMessage | None:
+        # Every consumer uses this gate, including restarted stores. A store
+        # without the authoritative finding service fails closed.
+        for _ in range(100):
+            message = self._claim_next_unchecked(selector, lease_owner=lease_owner, lease_seconds=lease_seconds)
+            if message is None or message.kind != 'finding':
+                return message
+            try:
+                allowed = self.finding_delivery_guard is not None and self.finding_delivery_guard(message)
+            except Exception:
+                allowed = False
+            if allowed:
+                return message
+            with self._connect() as conn:
+                conn.execute("""UPDATE v2_outbox SET status='failed', message='[Finding unavailable]',
+                    metadata_json=json_set(metadata_json, '$.finding_delivery_state', 'unavailable'),
+                    lease_owner='', lease_expires_at='' WHERE outbox_message_id=?""", (message.outbox_message_id,))
+        return None
+
+    def redact_finding(self, finding_id: str) -> None:
+        with self._connect() as conn:
+            conn.execute("""UPDATE v2_outbox SET message='[Finding unavailable]',
+                status=CASE WHEN status='delivered' THEN status ELSE 'failed' END,
+                metadata_json=json_set(metadata_json, '$.finding_delivery_state', 'revoked'),
+                last_error='', lease_owner='', lease_expires_at=''
+                WHERE kind='finding' AND json_extract(metadata_json, '$.finding_id')=?""", (finding_id,))
+
+    def _claim_next_unchecked(
+        self,
+        selector: OutboundSelector | None = None,
+        *,
+        lease_owner: str = "outbox",
+        lease_seconds: int = 60,
+    ) -> OutboundMessage | None:
         selector = selector or OutboundSelector()
         pending_selector = OutboundSelector(
             integration_id=selector.integration_id,
@@ -264,6 +298,8 @@ class SQLiteOutboundStore:
         owner = str(lease_owner or "outbox").strip() or "outbox"
         lease_expires_at = (now + timedelta(seconds=max(1, int(lease_seconds)))).isoformat()
         eligibility = "status = 'pending' OR (status = 'retry_wait' AND next_attempt_at <= ?)"
+        if self.finding_delivery_guard is None:
+            eligibility = f"({eligibility}) AND kind != 'finding'"
         values = [now.isoformat(), *values]
         if where:
             where = where.replace("WHERE ", f"WHERE ({eligibility}) AND ", 1)
@@ -310,6 +346,8 @@ class SQLiteOutboundStore:
                 """
                 UPDATE v2_outbox
                 SET status = 'delivered',
+                    metadata_json = CASE WHEN kind='finding'
+                        THEN json_set(metadata_json, '$.finding_delivery_state', 'delivered') ELSE metadata_json END,
                     provider_message_id = ?,
                     delivered_at = ?,
                     updated_at = ?,
@@ -350,7 +388,14 @@ class SQLiteOutboundStore:
             if retry_after_seconds is not None:
                 retry_delay = max(0.0, float(retry_after_seconds))
             next_attempt_at = (_now() + timedelta(seconds=retry_delay)).isoformat()
-            terminal = attempts >= max_attempts
+            # A failed send may have reached the provider. Findings must never
+            # automatically resend after ambiguity, even after process restart.
+            is_finding = bool(metadata.get("finding_id"))
+            if is_finding:
+                metadata["finding_delivery_state"] = "ambiguous"
+                metadata["last_error"] = "finding_send_outcome_unknown"
+                normalized_error = "finding_send_outcome_unknown"
+            terminal = is_finding or attempts >= max_attempts
             cursor = conn.execute(
                 """
                 UPDATE v2_outbox
@@ -386,7 +431,9 @@ class SQLiteOutboundStore:
             cursor = connection.execute(
                 """
                 UPDATE v2_outbox
-                SET status = 'pending',
+                SET status = CASE WHEN kind='finding' THEN 'failed' ELSE 'pending' END,
+                    metadata_json = CASE WHEN kind='finding'
+                      THEN json_set(metadata_json, '$.finding_delivery_state', 'ambiguous') ELSE metadata_json END,
                     lease_owner = '',
                     lease_expires_at = '',
                     claimed_at = '',

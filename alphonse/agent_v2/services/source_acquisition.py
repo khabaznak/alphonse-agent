@@ -338,6 +338,10 @@ class SourceAcquisition:
                     conn.execute('UPDATE v2_source_evidence SET definition=? WHERE evidence_id=?',
                                  (json.dumps(value), row['evidence_id']))
 
+        findings = getattr(self, 'findings', None)
+        if findings is not None:
+            findings.purge()
+
     def publish_ready(self):
         """Crash-safe retry via existing durable event receipts; no second queue."""
         self.purge_content()

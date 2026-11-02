@@ -686,3 +686,74 @@ receipt therefore produces one event. No-match/cancellation stays quiet. A resul
 whose authority was revoked remains visible only through authorized operational
 status; revocation never grants permission to publish private evidence. Existing
 event dispatch, subscriptions, queue and outbox remain the downstream path.
+
+### Source-backed findings — #116
+
+`services/findings.py` provides the trusted `FindingService` on `V2Daemon.findings`.
+It shares the acquisition run database and existing outbound queue. This service
+performs no provider read, model call or background monitoring. System Two/workflow
+code supplies a bounded structured interpretation to `record(AccountSession,
+run_id, evidence_ids=..., interpretation=..., audience_user_ids=...)`. Recording
+requires currently expandable, window-authorized evidence and policy authority.
+The independent CAPD checkpoint stores evidence IDs only. Failed checkpoint writes
+can replay the same observation without creating another finding/version.
+
+Interpretations require a kind, bounded summary, explicit canonical subject and
+commitment IDs when known, facts and uncertainty, with optional due date/timezone.
+An unknown date/timezone stays null. Fact predicates distinguish notices, payment
+or submission reports, presence, requirements, deadlines and grades. Every fact
+records its basis (`sender_reported` or `source_observed`) and explicit unit;
+points and percentages are distinct. Current read-only source adapters provide no
+trusted payment/submission outcome verifier, so this API rejects verified-outcome
+predicates and resolved states. A sender statement can never mark a commitment
+completed or a balance unpaid. Extraction remains System Two's responsibility;
+Jev supplies bounded judgments and never canonical IDs, prose or permission.
+
+The implemented finding uses `version` for material revision, `correction_of`
+(finding ID + prior version) for correction relationships, `source_refs` for
+provenance, and `goal_digest` for project-goal association. States are `open`,
+`unresolved`, `withdrawn` and a content-free `redacted` tombstone. Immutable versions
+preserve earlier interpretations. Identity includes policy/project, audience,
+kind, canonical subject and commitment; matching titles never merge records.
+Uncertain identities and quoted-only notices remain separate unresolved findings
+and do not emit automatic commitment alerts. Cross-source duplicates add provenance
+without a material revision. Only strictly newer unquoted source timestamps can
+replace material facts. Summary wording and coverage changes alone do not alert;
+older notices and equal-time conflicting assertions cannot overwrite current facts.
+
+`notify` requires the executing principal and rechecks active policy/revision,
+project lifecycle, every contributing grant and each recipient. It uses the
+existing preferred-channel resolver and outbox. Idempotency is finding/version/
+recipient, deliberately independent of a subsequent preferred-channel change:
+changing a channel does not resend an already queued alert. Queue acceptance is
+pending, never delivery success. `delivery_status` reads each recipient's actual
+outbox outcome; recipients can inspect only their own delivery, and the executing
+principal can inspect all authorized recipients. `view` supports current or exact
+historical versions after current audience/source checks.
+
+Every outbox claim of a finding rechecks authority and current material version.
+Consumers without the authoritative service installed fail closed. Superseded
+pending versions cannot displace newer alerts. A provider send error or expired
+claimed lease is recorded as `ambiguous`, excluded from automatic retries and
+preserved across restart. A later confirmed delivery receipt may mark it delivered;
+no exactly-once provider effect is inferred from an absent acknowledgement. These
+rules apply only to findings; existing reminder/sensor retry behavior is preserved.
+A send already in flight or a recipient's delivered copy cannot be recalled.
+
+Findings retain minimal interpreted facts separately from the seven-day source
+cache: finite policy lifetime plus 90 days, or a one-year review deadline for
+ongoing policies. Raw-cache expiration and policy pause do not delete authorized
+history. New notifications still require an active policy. Current source grants,
+recipient scope, source tombstones and finding retention are checked at every view
+and delivery; project membership is insufficient. Deletion, revocation, grant
+narrowing or finding expiry deny reads immediately, and acquisition cleanup ticks
+remove every dependent version and redact local pending/delivered outbox text.
+Content-free observation hashes and identity tombstones remain for replay safety.
+
+Other memory/cache/checkpoint/UI consumers must retain only the returned
+`{finding_id, version}` reference and resolve through the service each time;
+they must not copy interpreted facts into general memory or task results. The
+implementation creates no whole-mailbox ledger or private-content checkpoint.
+Supported client management is owned by #121 and provider-independent workflow
+composition by #122; this service does not itself perform free-form extraction.
+Deployment backup/export/recovery qualification remains #123's release gate.
