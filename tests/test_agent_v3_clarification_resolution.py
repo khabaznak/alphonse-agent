@@ -54,6 +54,7 @@ def test_system_two_can_resolve_current_answers_across_domains_and_restart(answe
     assert task.metadata['v3_retry_continuity']['status'] == 'current_input'
     assert not retry_source_unresolved(task) and answer in retry_continuity_context(task, context)
     assert 'question-answer:q1' in str(calls[0].input_sources)
+    assert all(s['reason'] == 'clarification_answer' for s in calls[0].input_sources)
     assert '"answer_ref": "question-answer:q1"' in calls[0].prompt
     assert task.acceptance_contract == {} and not task.hierarchical_state
     restored = TaskState.from_dict(task.to_checkpoint_dict())

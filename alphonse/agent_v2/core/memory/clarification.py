@@ -75,7 +75,7 @@ def resolve_clarification(task, context, answers):
         task_id=task.task_id, project_id=task.project_id, tools=(), output_schema=schema,
         metadata={'reasoning_stage': 'clarification_resolution'},
         context_manifests=prompt_receipt(prompt, parts, purpose='clarification_resolution'),
-        input_sources=tuple({'source_id': r['evidence_ref'], 'source_type': 'authenticated_question_answer'} for r in answers),
+        input_sources=tuple({'source_id': r['evidence_ref'], 'source_type': 'authenticated_question_answer', 'reason': 'clarification_answer'} for r in answers),
         cancel_checker=context.is_cancelled,
     ))
     if context.is_cancelled():

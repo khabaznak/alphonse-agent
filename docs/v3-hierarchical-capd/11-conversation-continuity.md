@@ -124,6 +124,14 @@ question-only blocker was released, and no Jev recall/source-selection call was
 made. No task was submitted or record changed. Actual database update/read-back
 and owner acceptance remain pending; these checks validate context resolution only.
 
+Clarification answer references include a `clarification_answer` provenance reason.
+Work-log rendering also accepts already-saved source/omission references without
+that optional reason and labels it `unspecified`, without rewriting evidence.
+A missing display reason must not break the Desktop polling response or appear as
+a daemon disconnect. The regression exercises the A2UI task-progress path; a
+read-only replay of the affected saved checkpoint confirms it renders successfully.
+
+
 The binding stores a current-request/steering fingerprint and canonical source IDs,
 never cached prescription contents or imported mutation authority. Every prompt
 rechecks source access and existence. Missing antecedents withhold the whole bundle
