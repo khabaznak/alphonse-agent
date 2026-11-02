@@ -757,3 +757,12 @@ implementation creates no whole-mailbox ledger or private-content checkpoint.
 Supported client management is owned by #121 and provider-independent workflow
 composition by #122; this service does not itself perform free-form extraction.
 Deployment backup/export/recovery qualification remains #123's release gate.
+
+### Gmail read-only adapter — #117
+
+The optional Google `mail_read` adapter is implemented on the shared acquisition
+contract. See [Gmail setup, coverage and readiness](gmail-readonly.md) for exact
+label/mailbox resource grants, query semantics, history-driven bounded refresh,
+attachment expansion and the synthetic validation command. Connections alone
+start no monitoring; a real-account pilot remains behind milestone readiness
+and explicit consent gates.

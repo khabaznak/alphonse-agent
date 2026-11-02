@@ -75,7 +75,8 @@ class SourceAcquisition:
             expected_grant_id=source['grant_id'], expected_grant_revision=source['grant_revision'])
         b, r = policy['budgets'], ctx.run
         return ReadContext(AccountSession(r['executing_user_id']), handle, ctx.deadline,
-            ReadLimits(b['max_pages'] - r['pages'], b['max_items'] - r['items'], b['max_bytes'] - r['bytes_read']))
+            ReadLimits(b['max_pages'] - r['pages'], b['max_items'] - r['items'], b['max_bytes'] - r['bytes_read']),
+            project_id=policy['project_id'], guard=ctx.guard)
 
     def __call__(self, ctx):
         policy = ctx.guard()
@@ -138,6 +139,10 @@ class SourceAcquisition:
         if operation in {'read', 'attachment'} and resource not in context.grant.resources:
             raise PermissionError('source_resource_denied')
         result = None
+        transported = [0]
+        def account_bytes(size):
+            transported[0] += size
+        context = replace(context, on_bytes=account_bytes)
         def call():
             nonlocal result
             if operation in {'health', 'capabilities'}:
@@ -145,7 +150,7 @@ class SourceAcquisition:
                 size = len(json.dumps(result).encode())
                 if size > context.limits.bytes:
                     raise CheckStopped('partial', 'source_content_budget')
-                return CheckStep(bytes_read=size)
+                return CheckStep(bytes_read=max(size, transported[0]))
             if operation == 'attachment':
                 if (content_type not in {'text/plain', 'text/csv', 'application/pdf'}
                         or type(max_bytes) is not int or not 0 < max_bytes <= min(context.limits.bytes, 5 * 1024 * 1024)):
@@ -154,7 +159,7 @@ class SourceAcquisition:
                                             attachment_id=attachment_id, max_bytes=max_bytes)
                 if not isinstance(result, bytes) or len(result) > max_bytes:
                     raise CheckStopped('partial', 'source_attachment_budget')
-                return CheckStep(items=1, bytes_read=len(result))
+                return CheckStep(items=1, bytes_read=max(len(result), transported[0]))
             result = adapter.read(context, resource=resource, source_id=source_id)
             if result.resource != resource or result.source_id != source_id:
                 raise PermissionError('source_identity_mismatch')
@@ -163,7 +168,7 @@ class SourceAcquisition:
             # Expansion returns inert normalized evidence, never MIME execution.
             size = len(result.mime)
             result = normalize_mime(result.mime, max_bytes=context.limits.bytes)
-            return CheckStep(items=1, bytes_read=size)
+            return CheckStep(items=1, bytes_read=max(size, transported[0]))
         ctx.perform('attachment' if operation == 'attachment' else 'fetch', call)
         return result
 
