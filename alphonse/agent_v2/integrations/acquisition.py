@@ -29,6 +29,7 @@ class ReadContext:
     project_id: str | None = None
     guard: Callable[[], object] = lambda: None
     on_bytes: Callable[[int], object] = lambda size: None
+    calendar_window: tuple[str, str] | None = None
 
 
 @dataclass(frozen=True)

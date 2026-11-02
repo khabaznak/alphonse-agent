@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from pathlib import Path
+
+from alphonse.agent_v2.core.projects import ProjectStore
+
 import pytest
 
 from alphonse.agent_v2.conversations import SQLiteConversationStore
@@ -86,16 +90,14 @@ def test_direct_reply_receives_cross_project_history_global_and_selected_project
     )
     config = AgentConfigStore(tmp_path / "agent-config")
     config.save(GLOBAL_CONTEXT_FILE, "Household language preference: Spanish.")
-    project = type("Project", (), {"context_path": str(tmp_path / "project_context.md"), "name": "Recovery"})()
-    (tmp_path / "project_context.md").write_text("Goal: return to activity gradually.", encoding="utf-8")
-    projects = type("Projects", (), {
-        "get_project": lambda self, project_id, **kwargs: project if project_id == "home" else None,
-        "list_visible_projects": lambda self, user_id: [type("VisibleProject", (), {"project_id": "another-project"})()],
-    })()
+    projects = ProjectStore(":memory:")
+    project = projects.create_project(name="Recovery", root_path=str(tmp_path / "recovery"), owner_user_id="alex")
+    projects.write_project_config(project.project_id, {"scope": "Goal: return to activity gradually."}, requester_user_id="alex")
+    Path(project.context_path).write_text("LEGACY_PRIVATE_SENTINEL", encoding="utf-8")
     inference = _DirectInference("Descansa y sigue las indicaciones recibidas.")
     context = CoreLoopContext(
         messages=InMemoryMessageQueue(), inference=inference,
-        system_one=_AdmissionJev(SystemOneAdmissionDecision(False, 0.04, True, model="test-jev")),
+        system_one=_AdmissionJev(SystemOneAdmissionDecision(False, 0.04, True, model="test-jev", selected_context_ids=(f"project:{project.project_id}",))),
         prompts=AgentConfigPromptLoader.from_store(config), project_store=projects,
         conversation_store=conversations,
     )
@@ -106,6 +108,7 @@ def test_direct_reply_receives_cross_project_history_global_and_selected_project
     assert "A clinician recommended a week of rest." in prompt
     assert "Household language preference: Spanish." in prompt
     assert "Goal: return to activity gradually." in prompt
+    assert "LEGACY_PRIVATE_SENTINEL" not in prompt
 
 
 def test_context_curation_separates_invariants_from_optional_candidates(tmp_path) -> None:
@@ -122,24 +125,10 @@ def test_context_curation_separates_invariants_from_optional_candidates(tmp_path
 ## Please remove
 - REMOVAL_SENTINEL
 """)
-    selected_root = tmp_path / "selected"
-    optional_root = tmp_path / "optional"
-    selected_root.mkdir()
-    optional_root.mkdir()
-    (selected_root / "project_context.md").write_text("Selected goal context", encoding="utf-8")
-    (optional_root / "project_context.md").write_text("Optional project context", encoding="utf-8")
-    selected_project = type("Project", (), {
-        "project_id": "selected", "name": "Selected", "description": "Current effort",
-        "context_path": str(selected_root / "project_context.md"),
-    })()
-    optional_project = type("Project", (), {
-        "project_id": "optional", "name": "Optional", "description": "Another active effort",
-        "context_path": str(optional_root / "project_context.md"),
-    })()
-    project_store = type("Projects", (), {
-        "get_project": lambda self, project_id, **kwargs: selected_project if project_id == "selected" else None,
-        "list_visible_projects": lambda self, user_id: [selected_project, optional_project],
-    })()
+    project_store = ProjectStore(":memory:")
+    for name, text in [("selected", "Selected goal context"), ("optional", "Optional project context")]:
+        project = project_store.create_project(name=name, project_id=name, root_path=str(tmp_path / name), owner_user_id="alex")
+        project_store.write_project_config(project.project_id, {"scope": text}, requester_user_id="alex")
     task = _new_task("A request")
     task.project_id = "selected"
 
@@ -152,11 +141,12 @@ def test_context_curation_separates_invariants_from_optional_candidates(tmp_path
     )
 
     assert "Member A is a parent" in invariant
-    assert "Selected goal context" in invariant
+    assert "Selected goal context" not in invariant
+    assert "Selected goal context" in next(c["content"] for c in candidates if c["id"] == "project:selected")
     assert "The household prefers shared meals" not in invariant
     assert "Optional project context" not in invariant
     assert "REMOVAL_SENTINEL" not in invariant
-    assert {item["id"] for item in candidates} == {"global:household-norms", "project:optional"}
+    assert {item["id"] for item in candidates} == {"global:household-norms", "project:selected", "project:optional"}
 
 
 def test_direct_reply_uses_only_the_context_candidates_selected_at_admission(tmp_path) -> None:

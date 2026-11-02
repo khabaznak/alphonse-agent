@@ -99,8 +99,7 @@ def task_context_for_decision(
 def task_context_addenda(task: "TaskState") -> list[str]:
     """Render task memory and fact sections shared across decision systems."""
     durable_memory = str(task.memory_context_md or "").strip() or "- (none)"
-    if len(durable_memory) > 9000:
-        durable_memory = durable_memory[-8982:].lstrip() + "\n... truncated"
+    durable_memory = _bounded_context_value(durable_memory, 9000)
     return [
         f"Current goal:\n{str(task.goal or '').strip() or '- (none)'}",
         f"Durable project/session memory:\n{durable_memory}",

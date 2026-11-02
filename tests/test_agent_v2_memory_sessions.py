@@ -72,14 +72,14 @@ def test_router_stamps_selected_session_before_queueing_and_supports_commands(tm
     selected = sessions.get_binding(project_binding)
     assert selected is not None and selected.name == "Research"
 
-    routed = router.ingest(prompt="Investigate", user="alex", integration_id="tui", provider_key="tui", channel_target="alex")
+    routed = router.ingest(prompt="Investigate", user="alex", integration_id="tui", provider_key="tui", channel_target="alex", project_id=project.project_id)
     router.ingest(prompt="/session new Other", user="alex", integration_id="tui", provider_key="tui", channel_target="alex")
     shared_session = sessions.get_binding(project_binding)
     telegram_key = ProjectSessionKey("alex", "telegram-home", "chat-1")
     router.select_project(telegram_key, project.project_id)
     telegram_routed = router.ingest(
         prompt="Continue from Telegram", user="alex", integration_id="telegram-home",
-        provider_key="telegram", channel_target="chat-1",
+        provider_key="telegram", channel_target="chat-1", project_id=project.project_id,
     )
 
     assert routed.queued is not None

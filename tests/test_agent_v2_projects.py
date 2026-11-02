@@ -21,11 +21,10 @@ from alphonse.agent_v2.interfaces.tui import build_tui_runtime
 from alphonse.agent_v2.interfaces.tui import create_tui_project
 from alphonse.agent_v2.interfaces.tui import detect_tui_slash_command
 from alphonse.agent_v2.interfaces.tui import queue_tui_input
-from alphonse.agent_v2.interfaces.tui import save_tui_project_context
 from alphonse.agent_v2.interfaces.tui import select_tui_project
 
 
-def test_project_store_creates_directory_and_context_file(tmp_path: Path) -> None:
+def test_project_store_creates_directory_and_config_file(tmp_path: Path) -> None:
     store = ProjectStore(":memory:")
     root = tmp_path / "alpha"
 
@@ -36,11 +35,14 @@ def test_project_store_creates_directory_and_context_file(tmp_path: Path) -> Non
         visibility="private",
         owner_user_id="alex",
     )
-    updated = store.write_project_context(project.project_id, "# Context\nBuild carefully.", requester_user_id="alex")
+    updated = store.write_project_config(project.project_id, {"scope": "# Context\nBuild carefully."}, requester_user_id="alex")
 
     assert root.is_dir()
-    assert project.context_path == str(root / "project_context.md")
-    assert store.read_project_context(project.project_id, requester_user_id="alex") == "# Context\nBuild carefully."
+    assert project.config_path == str(root / "project_config.json")
+    assert not Path(project.context_path).exists()
+    with pytest.raises(ValueError, match="legacy_project_context_read_only"):
+        store.write_project_context(project.project_id, "retired", requester_user_id="alex")
+    assert store.read_project_config(project.project_id, requester_user_id="alex")["scope"] == "# Context\nBuild carefully."
     assert updated.updated_at >= project.updated_at
 
 
@@ -59,6 +61,8 @@ def test_project_store_filters_private_and_shared_projects(tmp_path: Path) -> No
         owner_user_id="alex",
     )
 
+    assert store.list_visible_projects("gaby") == []
+    store.add_member(shared.project_id, "gaby")
     alex_projects = {project.project_id for project in store.list_visible_projects("alex")}
     gaby_projects = {project.project_id for project in store.list_visible_projects("gaby")}
 
@@ -83,12 +87,13 @@ def test_project_store_archives_restores_and_updates_metadata(tmp_path: Path) ->
     assert updated.name == "Renamed"
     assert updated.description == "Details"
     assert updated.visibility == "shared"
-    with pytest.raises(PermissionError, match="project_owner_required"):
+    with pytest.raises(KeyError, match="project_not_found"):
         store.update_project(project.project_id, name="No", description="", visibility="private", requester_user_id="gaby")
 
 
 def test_tui_project_commands_are_intercepted_and_not_queued(tmp_path: Path) -> None:
     runtime = build_tui_runtime(user="alex", project_store=ProjectStore(":memory:"))
+    runtime.conversation_store.set_daily_ledger_projector(None)
 
     result = queue_tui_input(runtime, "/project")
     indented = queue_tui_input(runtime, " /project")
@@ -100,8 +105,9 @@ def test_tui_project_commands_are_intercepted_and_not_queued(tmp_path: Path) -> 
     assert indented.command == ""
 
 
-def test_tui_project_selection_routes_future_messages(tmp_path: Path) -> None:
+def test_tui_project_selection_does_not_implicitly_scope_conversations(tmp_path: Path) -> None:
     runtime = build_tui_runtime(user="alex", project_store=ProjectStore(":memory:"))
+    runtime.conversation_store.set_daily_ledger_projector(None)
     project = create_tui_project(
         runtime,
         name="Alpha",
@@ -109,7 +115,7 @@ def test_tui_project_selection_routes_future_messages(tmp_path: Path) -> None:
         root_path=str(tmp_path / "alpha"),
         visibility="private",
     )
-    save_tui_project_context(runtime, "Use the alpha rules.")
+    runtime.project_store.write_project_config(project.project_id, {"scope": "Use the alpha rules."}, requester_user_id="alex")
 
     result = queue_tui_input(runtime, "List files")
 
@@ -117,12 +123,13 @@ def test_tui_project_selection_routes_future_messages(tmp_path: Path) -> None:
     assert result.queued is True
     queued = runtime.queue.peek()
     assert queued is not None
-    assert queued.message.project_id == project.project_id
-    assert runtime.project_store.read_project_context(project.project_id, requester_user_id="alex") == "Use the alpha rules."
+    assert queued.message.project_id == ""
+    assert runtime.project_store.read_project_config(project.project_id, requester_user_id="alex")["scope"] == "Use the alpha rules."
 
 
 def test_select_tui_project_sets_active_project(tmp_path: Path) -> None:
     runtime = build_tui_runtime(user="alex", project_store=ProjectStore(":memory:"))
+    runtime.conversation_store.set_daily_ledger_projector(None)
     project = runtime.project_store.create_project(
         name="Alpha",
         root_path=str(tmp_path / "alpha"),
@@ -145,7 +152,7 @@ def test_detect_tui_slash_command_requires_first_character() -> None:
 def test_prompt_render_paths_include_project_context(tmp_path: Path) -> None:
     store = ProjectStore(":memory:")
     project = store.create_project(name="Alpha", description="Build docs", root_path=str(tmp_path / "alpha"), owner_user_id="alex")
-    store.write_project_context(project.project_id, "Prefer concise markdown.", requester_user_id="alex")
+    store.write_project_config(project.project_id, {"scope": "Prefer concise markdown."}, requester_user_id="alex")
     task = TaskState(
         goal="Write docs",
         user="alex",
@@ -154,6 +161,7 @@ def test_prompt_render_paths_include_project_context(tmp_path: Path) -> None:
     )
     context = CoreLoopContext(messages=InMemoryMessageQueue(), tools=build_native_tool_registry(), project_store=store)
 
+    task.metadata["v3_context_selection"] = {"selected_context_ids": [f"project:{project.project_id}"]}
     plan_node(task, context=context)
 
     assert "Prefer concise markdown." in task.metadata["tool_call_plan_prompt"]
@@ -173,8 +181,8 @@ def test_capd_prompts_keep_user_and_project_contexts_isolated(tmp_path: Path) ->
     store = ProjectStore(":memory:")
     alex_project = store.create_project(name="Alex project", root_path=str(tmp_path / "alex"), owner_user_id="alex")
     gaby_project = store.create_project(name="Gaby project", root_path=str(tmp_path / "gaby"), owner_user_id="gaby")
-    store.write_project_context(alex_project.project_id, "ALEX_PROJECT_SENTINEL", requester_user_id="alex")
-    store.write_project_context(gaby_project.project_id, "GABY_PROJECT_SENTINEL", requester_user_id="gaby")
+    store.write_project_config(alex_project.project_id, {"scope": "ALEX_PROJECT_SENTINEL"}, requester_user_id="alex")
+    store.write_project_config(gaby_project.project_id, {"scope": "GABY_PROJECT_SENTINEL"}, requester_user_id="gaby")
     context = CoreLoopContext(
         messages=InMemoryMessageQueue(),
         tools=build_native_tool_registry(),
@@ -184,7 +192,9 @@ def test_capd_prompts_keep_user_and_project_contexts_isolated(tmp_path: Path) ->
 
     alex_task = TaskState(goal="Respond", user="alex", project_id=alex_project.project_id, acceptance_criteria_md="1.- [ ] Reply")
     gaby_task = TaskState(goal="Respond", user="gaby", project_id=gaby_project.project_id, acceptance_criteria_md="1.- [ ] Reply")
+    alex_task.metadata["v3_context_selection"] = {"selected_context_ids": [f"project:{alex_project.project_id}"]}
     plan_node(alex_task, context=context)
+    gaby_task.metadata["v3_context_selection"] = {"selected_context_ids": [f"project:{gaby_project.project_id}"]}
     plan_node(gaby_task, context=context)
 
     alex_prompt = alex_task.metadata["tool_call_plan_prompt"]
@@ -193,6 +203,7 @@ def test_capd_prompts_keep_user_and_project_contexts_isolated(tmp_path: Path) ->
     assert "ALEX_PROJECT_SENTINEL" in alex_prompt
     assert "GABY_USER_SENTINEL" not in alex_prompt
     assert "GABY_PROJECT_SENTINEL" not in alex_prompt
+    assert store.render_project_context(gaby_project.project_id, requester_user_id="alex") == ""
     assert "GABY_USER_SENTINEL" in gaby_prompt
     assert "GABY_PROJECT_SENTINEL" in gaby_prompt
     assert "ALEX_USER_SENTINEL" not in gaby_prompt
@@ -203,13 +214,15 @@ def test_capd_prompt_uses_the_project_attached_to_each_new_task(tmp_path: Path) 
     store = ProjectStore(":memory:")
     first = store.create_project(name="First", root_path=str(tmp_path / "first"), owner_user_id="alex")
     second = store.create_project(name="Second", root_path=str(tmp_path / "second"), owner_user_id="alex")
-    store.write_project_context(first.project_id, "FIRST_PROJECT_SENTINEL", requester_user_id="alex")
-    store.write_project_context(second.project_id, "SECOND_PROJECT_SENTINEL", requester_user_id="alex")
+    store.write_project_config(first.project_id, {"scope": "FIRST_PROJECT_SENTINEL"}, requester_user_id="alex")
+    store.write_project_config(second.project_id, {"scope": "SECOND_PROJECT_SENTINEL"}, requester_user_id="alex")
     context = CoreLoopContext(messages=InMemoryMessageQueue(), tools=build_native_tool_registry(), project_store=store)
 
     first_task = TaskState(goal="Respond", user="alex", project_id=first.project_id, acceptance_criteria_md="1.- [ ] Reply")
     second_task = TaskState(goal="Respond", user="alex", project_id=second.project_id, acceptance_criteria_md="1.- [ ] Reply")
+    first_task.metadata["v3_context_selection"] = {"selected_context_ids": [f"project:{first.project_id}"]}
     plan_node(first_task, context=context)
+    second_task.metadata["v3_context_selection"] = {"selected_context_ids": [f"project:{second.project_id}"]}
     plan_node(second_task, context=context)
 
     assert "FIRST_PROJECT_SENTINEL" in first_task.metadata["tool_call_plan_prompt"]
