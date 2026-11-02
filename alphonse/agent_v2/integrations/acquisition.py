@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Protocol
+from typing import Callable, Protocol
 
 from alphonse.agent_v2.accounts import AccountSession, AccountHandle
 
@@ -27,6 +27,8 @@ class ReadContext:
     deadline: datetime
     limits: ReadLimits
     project_id: str | None = None
+    guard: Callable[[], object] = lambda: None
+    on_bytes: Callable[[int], object] = lambda size: None
 
 
 @dataclass(frozen=True)
@@ -38,13 +40,6 @@ class SourceRecord:
     mime: bytes
     safe_url: str = ''
     deleted: bool = False
-    bytes_read: int = 0
-
-
-@dataclass(frozen=True)
-class SourceAttachment:
-    data: bytes
-    bytes_read: int
 
 
 @dataclass(frozen=True)
@@ -70,7 +65,7 @@ class ReadAdapter(Protocol):
     def changes(self, context: ReadContext, *, query: dict, cursor: str) -> SourcePage: ...
     def read(self, context: ReadContext, *, resource: str, source_id: str) -> SourceRecord: ...
     def attachment(self, context: ReadContext, *, resource: str, source_id: str,
-                   attachment_id: str, max_bytes: int) -> bytes | SourceAttachment: ...
+                   attachment_id: str, max_bytes: int) -> bytes: ...
 
 
 class ReadRetryAfter(Exception):

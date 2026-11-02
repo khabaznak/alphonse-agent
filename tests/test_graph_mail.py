@@ -144,10 +144,12 @@ def test_read_attachment_and_transport_bytes(graph):
     f = graph
     f.transport.pages = [response(message()), response({'@odata.type': '#microsoft.graph.fileAttachment',
         'id': 'a', 'contentType': 'text/plain', 'contentBytes': base64.b64encode(b'notice').decode()})]
+    sizes = []
+    f.context = replace(f.context, on_bytes=sizes.append)
     record = f.adapter.read(f.context, resource='folder-a', source_id='immutable-1')
-    assert record.source_id == 'immutable-1' and record.bytes_read
+    assert record.source_id == 'immutable-1' and sizes[0] > 0
     result = f.adapter.attachment(f.context, resource='folder-a', source_id='immutable-1', attachment_id='a', max_bytes=100)
-    assert result.data == b'notice' and result.bytes_read > len(result.data)
+    assert result == b'notice' and sizes[-1] > len(result)
 
 
 @pytest.mark.parametrize('data', [
@@ -278,3 +280,13 @@ def test_http_date_retry_after(graph):
     f.transport.pages = [response({}, 429, {'Retry-After': format_datetime(now + timedelta(seconds=90), usegmt=True)})]
     with pytest.raises(ReadRetryAfter) as exc: f.fetch()
     assert 90 <= exc.value.seconds <= 91
+
+
+def test_cancellation_guard_fences_each_transport_use(graph):
+    f = graph
+    f.transport.pages = [page()]
+    def stopped():
+        raise CheckStopped('cancelled', 'cancelled')
+    f.context = replace(f.context, guard=stopped)
+    with pytest.raises(CheckStopped, match='cancelled'): f.fetch()
+    assert not f.transport.calls

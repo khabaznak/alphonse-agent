@@ -15,7 +15,7 @@ import json
 import logging
 from urllib.parse import quote, unquote, urlencode, urlsplit
 
-from alphonse.agent_v2.integrations.acquisition import CursorExpired, ReadRetryAfter, SourcePage, SourceRecord, SourceAttachment
+from alphonse.agent_v2.integrations.acquisition import CursorExpired, ReadRetryAfter, SourcePage, SourceRecord
 from alphonse.agent_v2.integrations.oauth import SCOPES
 from alphonse.agent_v2.services.project_check_worker import CheckStopped
 
@@ -101,6 +101,7 @@ class GraphMailAdapter:
         self.oauth, self.transport, self.clock = oauth, transport or GraphHTTP(), clock
 
     def _authorization(self, context):
+        context.guard()
         g = context.grant
         if g.provider_key != 'microsoft' or g.operation != 'mail_read' or not g.resources:
             raise PermissionError('graph_mail_scope_denied')
@@ -129,6 +130,7 @@ class GraphMailAdapter:
             raise CheckStopped('partial', 'source_deadline')
         if not isinstance(raw, bytes) or len(raw) > context.limits.bytes:
             raise CheckStopped('partial', 'source_content_budget')
+        context.on_bytes(len(raw))
         if status == 429 or status == 503:
             retry = next((v for k, v in headers.items() if k.lower() == 'retry-after'), '5')
             try:
@@ -290,8 +292,7 @@ class GraphMailAdapter:
         record = self._record(resource, data)
         if record.source_id != source_id:
             raise PermissionError('graph_message_identity_mismatch')
-        from dataclasses import replace
-        return replace(record, bytes_read=size)
+        return record
 
     def attachment(self, context, *, resource, source_id, attachment_id, max_bytes):
         if resource not in context.grant.resources or not source_id or not attachment_id:
@@ -312,4 +313,4 @@ class GraphMailAdapter:
             raise GraphReadError('graph_attachment_invalid') from None
         if len(result) > max_bytes:
             raise CheckStopped('partial', 'source_attachment_budget')
-        return SourceAttachment(result, size)
+        return result
