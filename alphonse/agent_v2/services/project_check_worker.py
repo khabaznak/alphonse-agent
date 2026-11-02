@@ -18,6 +18,7 @@ from zoneinfo import ZoneInfo
 
 from alphonse.agent_v2.core.scheduled_tasks import ScheduledTaskStore, ScheduledOccurrence
 from alphonse.agent_v2.accounts import AccountSession
+from alphonse.agent_v2.integrations.acquisition import ReadRetryAfter
 from alphonse.agent_v2.project_checks import ProjectCheckService
 
 
@@ -364,6 +365,21 @@ class ProjectCheckWorker:
             if exc.code == 'lease_lost':
                 return self.dispatcher.get(run['check_run_id'])
             run.update(outcome=exc.outcome, error_code=exc.code)
+        except ReadRetryAfter as exc:
+            # Honor the provider delay durably without sleeping a worker thread.
+            remaining = (instant(run['window_end']) - self.clock()).total_seconds()
+            if exc.seconds >= remaining:
+                run.update(outcome='partial', error_code='retry_outside_window')
+            elif run['attempts'] >= self.max_attempts:
+                run.update(outcome='failed', error_code='attempts_exhausted')
+            else:
+                delay = max(exc.seconds, min(3600, 5 * 2 ** (run['attempts'] - 1)))
+                retry = self.clock() + timedelta(seconds=delay)
+                if retry >= instant(run['window_end']):
+                    run.update(outcome='partial', error_code='retry_outside_window')
+                else:
+                    run.update(next_attempt_at=retry.isoformat(), error_code='source_retry_after')
+                    state = 'retry_wait'
         except Exception:
             # Do not persist provider exception strings (may contain private data).
             if run['attempts'] >= self.max_attempts:

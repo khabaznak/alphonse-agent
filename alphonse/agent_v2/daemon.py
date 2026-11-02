@@ -168,10 +168,12 @@ class V2Daemon:
             ProjectCheckDispatcher(self.runtime.schedule_store, self.runtime.project_checks)
             if self.runtime.project_checks is not None else None
         )
+        from alphonse.agent_v2.integrations.graph_mail import GraphMailAdapter
         from alphonse.agent_v2.services.source_acquisition import SourceAcquisition
         from alphonse.agent_v2.system_one import build_system_one_provider
         self.source_acquisition = (SourceAcquisition(self.project_check_dispatcher, self.event_store,
             clock=lambda: datetime.now(timezone.utc),
+            adapters={'microsoft': GraphMailAdapter(self.optional_accounts)},
             triage_provider=lambda: build_system_one_provider(self.runtime.system_one_settings_store.get()))
             if self.project_check_dispatcher is not None else None)
         from alphonse.agent_v2.services.findings import FindingService

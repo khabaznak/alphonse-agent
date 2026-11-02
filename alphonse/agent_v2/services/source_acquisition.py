@@ -12,7 +12,7 @@ import json
 from alphonse.agent_v2.accounts import AccountSession
 from alphonse.agent_v2.automations import EventEnvelope
 from alphonse.agent_v2.integrations.acquisition import (
-    CursorExpired, ReadContext, ReadLimits, SourcePage,
+    CursorExpired, ReadContext, ReadLimits, SourcePage, SourceAttachment,
 )
 from alphonse.agent_v2.integrations.content import normalize_mime, safe_link
 from alphonse.agent_v2.services.project_check_worker import CheckStep, CheckStopped, instant
@@ -75,7 +75,7 @@ class SourceAcquisition:
             expected_grant_id=source['grant_id'], expected_grant_revision=source['grant_revision'])
         b, r = policy['budgets'], ctx.run
         return ReadContext(AccountSession(r['executing_user_id']), handle, ctx.deadline,
-            ReadLimits(b['max_pages'] - r['pages'], b['max_items'] - r['items'], b['max_bytes'] - r['bytes_read']))
+            ReadLimits(b['max_pages'] - r['pages'], b['max_items'] - r['items'], b['max_bytes'] - r['bytes_read']), policy['project_id'])
 
     def __call__(self, ctx):
         policy = ctx.guard()
@@ -152,16 +152,25 @@ class SourceAcquisition:
                     raise ValueError('source_attachment_budget')
                 result = adapter.attachment(context, resource=resource, source_id=source_id,
                                             attachment_id=attachment_id, max_bytes=max_bytes)
-                if not isinstance(result, bytes) or len(result) > max_bytes:
+                size = len(result) if isinstance(result, bytes) else 0
+                if isinstance(result, SourceAttachment):
+                    size = result.bytes_read
+                    result = result.data
+                if (not isinstance(result, bytes) or type(size) is not int or size < len(result)
+                        or size > context.limits.bytes or len(result) > max_bytes):
                     raise CheckStopped('partial', 'source_attachment_budget')
-                return CheckStep(items=1, bytes_read=len(result))
+                return CheckStep(items=1, bytes_read=size)
             result = adapter.read(context, resource=resource, source_id=source_id)
             if result.resource != resource or result.source_id != source_id:
                 raise PermissionError('source_identity_mismatch')
             if len(result.mime) > context.limits.bytes:
                 raise CheckStopped('partial', 'source_content_budget')
             # Expansion returns inert normalized evidence, never MIME execution.
-            size = len(result.mime)
+            if type(result.bytes_read) is not int or result.bytes_read < 0:
+                raise ValueError('source_transport_size_invalid')
+            size = max(len(result.mime), result.bytes_read)
+            if size > context.limits.bytes:
+                raise CheckStopped('partial', 'source_content_budget')
             result = normalize_mime(result.mime, max_bytes=context.limits.bytes)
             return CheckStep(items=1, bytes_read=size)
         ctx.perform('attachment' if operation == 'attachment' else 'fetch', call)
@@ -173,6 +182,14 @@ class SourceAcquisition:
                 or (page.cursor is not None and (not isinstance(page.cursor, str) or len(page.cursor) > 65536))
                 or not page.complete and not page.cursor):
             raise ValueError('source_page_invalid')
+        if page.resource_coverage is not None and (
+                not isinstance(page.resource_coverage, dict)
+                or set(page.resource_coverage) != set(source['resources'])
+                or any(v not in {'pending', 'in_progress', 'complete', 'unavailable', 'incomplete'}
+                       for v in page.resource_coverage.values())
+                or page.complete and page.coverage_complete and
+                   any(v != 'complete' for v in page.resource_coverage.values())):
+            raise ValueError('source_resource_coverage_invalid')
         raw_bytes = sum(len(r.mime) for r in page.records)
         size = max(raw_bytes, page.bytes_read)
         if len(page.records) > context.limits.items or size > context.limits.bytes:
@@ -222,7 +239,8 @@ class SourceAcquisition:
         coverage['sources'] = dict(coverage.get('sources', {}))
         coverage['sources'][key] = dict(resources=source['resources'], query_digest=policy['query_digest'],
             baseline_since=progress.get('since'), complete=page.complete,
-            coverage_complete=page.coverage_complete, observed_at=observed)
+            coverage_complete=page.coverage_complete, observed_at=observed,
+            resource_coverage=page.resource_coverage)
         receipt = {k: v for k, v in ctx.run.items() if k not in {
             'state', 'lease_owner', 'generation', 'lease_until', 'next_attempt_at'}}
         receipt.update(acquisition_checkpoint=checkpoint, coverage=coverage,
@@ -238,7 +256,8 @@ class SourceAcquisition:
                 raise CheckStopped('blocked', 'lease_lost')
             conn.execute('INSERT INTO v2_source_pages VALUES(?,?,?,?)',
                 (ctx.run['check_run_id'], key, request, json.dumps(dict(evidence_ids=[r['evidence_id'] for r in records],
-                complete=page.complete, coverage_complete=page.coverage_complete, observed_at=observed))))
+                complete=page.complete, coverage_complete=page.coverage_complete, observed_at=observed,
+                resource_coverage=page.resource_coverage))))
             for record in records:
                 if record['deleted']:
                     old_rows = conn.execute('SELECT evidence_id,definition FROM v2_source_evidence').fetchall()
