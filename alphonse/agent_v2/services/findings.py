@@ -60,7 +60,10 @@ class FindingService:
                 row = conn.execute('SELECT definition FROM v2_source_evidence WHERE evidence_id=?',
                                    (ref['evidence_id'],)).fetchone()
                 evidence = json.loads(row[0]) if row else {}
-                if not evidence or evidence.get('state') == 'deleted' or evidence.get('deleted'):
+                # Cache expiry preserves separately retained findings. Revocation,
+                # deletion and unknown states cannot preserve derived disclosure.
+                if (not evidence or evidence.get('state') not in {'available', 'expired'}
+                        or evidence.get('deleted')):
                     raise PermissionError('finding_source_unavailable')
                 run = self.acquisition.dispatcher.get(evidence['check_run_id'])
                 if run['outcome'] == 'cancelled':
@@ -194,7 +197,9 @@ class FindingService:
                                    (finding_id, version)).fetchone()
             if row is None:
                 raise ValueError('finding_version_missing')
-            return json.loads(row[0])
+            historical = json.loads(row[0])
+            self._authorize(historical, session.actor_user_id)
+            return historical
         return finding
 
     def notify(self, session, finding_id):

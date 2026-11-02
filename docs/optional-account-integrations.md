@@ -10,6 +10,11 @@ grants/binding resolution, #111 managed Google/Microsoft OAuth lifecycle APIs, a
 and [binding implementation](skill-bindings.md#member-owned-connections-and-bounded-grants-110).
 The per-issue dependencies in #104 govern delivery.
 
+The dated [integration readiness review](integrations-readiness.md) records exact
+deployment evidence still required, processor disclosures, retention implementation
+gaps, and separate pilot/public-release checklists. Both release gates are blocked;
+merged provider implementations do not authorize real household account access.
+
 ## Outcome and non-negotiable boundaries
 
 A member can connect an optional account without starting any proactive work.
@@ -404,9 +409,8 @@ Services enforce deadlines on reads and cleanup; event history count limits rema
 additional bounds. All backup/checkpoint/export paths must respect the same scope.
 
 - Raw/normalized source cache, attachments and excerpts: seven days from acquisition.
-  Pending active runs may pin necessary evidence up to 30 days total; at that hard
-  limit expire bytes and terminate blocked/partial with truthful coverage. A pin
-  never defeats revocation/deletion. Reacquisition requires current authority/window.
+  No active-run pin or extension is qualified. Reacquisition requires current
+  authority/window. Provider cache limits may require a shorter lifetime.
 - Optional-account event payloads, terminal run diagnostics and content-free input
   manifests: 30 days. Active references pin only the minimum metadata required for
   recovery; purge terminal diagnostics after 30 days. Never put message bodies,
@@ -435,6 +439,10 @@ must apply deletion/revocation tombstones before enabling any reads. #123 rehear
 this across recovery/export paths before any private-data pilot. Provider rules may
 require shorter retention; #123 records deployment-specific restrictions and blockers.
 Longer content retention requires explicit user authorization and provider allowance.
+These are the adopted limits, not a claim that every metadata/backup path already
+enforces them. See the #123 [runtime gaps and blockers](integrations-readiness.md#adopted-retention-replay-and-recovery-boundary)
+before any real-account pilot; event history is currently count-bounded and replay
+acceptance receipts are retained to preserve deduplication.
 
 ## Provider extensions and rollout ownership
 

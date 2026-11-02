@@ -355,6 +355,7 @@ class SourceAcquisition:
             value = json.loads(row['definition'])
             state = 'expired' if instant(value['retention_deadline']) <= self.clock() else ''
             if not state:
+                run = None
                 try:
                     run = self.dispatcher.get(row['check_run_id'])
                     if run['outcome'] == 'cancelled':
@@ -362,6 +363,22 @@ class SourceAcquisition:
                     self._policy(run)
                 except (PermissionError, ValueError, KeyError, OSError):
                     state = 'revoked'
+                    # An inactive policy expires its raw cache, but is not
+                    # itself a source revocation. Retained findings still need
+                    # independently valid, pinned account/resource authority.
+                    if run is not None and run['outcome'] != 'cancelled':
+                        try:
+                            policies = self.dispatcher.policies
+                            session = AccountSession(run['executing_user_id'])
+                            policy = policies._managed(session, run['policy_id'])
+                            sources = policies._sources(session, policy, pinned=True)
+                            if any(s['connection_id'] == value['connection_id']
+                                   and s['grant_id'] == value['grant_id']
+                                   and s['grant_revision'] == value['grant_revision']
+                                   and value['resource'] in s['resources'] for s in sources):
+                                state = 'expired'
+                        except (PermissionError, ValueError, KeyError, OSError):
+                            pass
             if state:
                 value.update(content={}, state=state)
                 with self.dispatcher.store._connect() as conn:
