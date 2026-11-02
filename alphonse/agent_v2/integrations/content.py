@@ -49,7 +49,11 @@ def normalize_mime(raw: bytes, *, max_bytes: int) -> dict:
             continue
         kind = part.get_content_type()
         if part.get_content_disposition() == 'attachment' or kind not in {'text/plain', 'text/html'}:
-            attachments.append({'content_type': kind, 'requires_authorized_read': True})
+            attachment = {'content_type': kind, 'requires_authorized_read': True}
+            attachment_id = part.get('X-Alphonse-Attachment-Id')
+            if attachment_id:
+                attachment['attachment_id'] = str(attachment_id)
+            attachments.append(attachment)
             continue
         data = part.get_payload(decode=True) or b''
         try:

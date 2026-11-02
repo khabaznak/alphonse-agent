@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Protocol
+from typing import Callable, Protocol
 
 from alphonse.agent_v2.accounts import AccountSession, AccountHandle
 
@@ -26,6 +26,9 @@ class ReadContext:
     grant: AccountHandle
     deadline: datetime
     limits: ReadLimits
+    project_id: str | None = None
+    guard: Callable[[], object] = lambda: None
+    on_bytes: Callable[[int], object] = lambda size: None
 
 
 @dataclass(frozen=True)
