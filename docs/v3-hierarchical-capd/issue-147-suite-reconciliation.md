@@ -263,3 +263,17 @@ No new skips/xfails were added. All 37 original failures are resolved through
 supported-behavior replacement tests, explicit providers, or the three narrow
 product fixes. No authorization, containment, cancellation, evidence or terminal
 safeguard was relaxed. `git diff --check` also passes.
+
+
+### Current-main integration verification
+
+PR #148 landed while this work was being validated. Integrated current main
+`41cfd25e05d42e6eaf035a2a590080160d1a57bb` without conflicts. Combined tested
+revision: `6166f489998d3cdff1a232d65ac69f34ce603138`.
+
+From the clean detached checkout `/private/tmp/alphonse-147-clean`, with the same
+interpreter/environment and `python -m pytest -q -rs`:
+**1378 passed, 37 skipped in 35.51s**. The additional 38 passing tests come from
+the Calendar integration. Skip reasons and node locations are unchanged.
+`git status --porcelain` remained empty. The subsequent commit only records this
+result; product and test source are identical to the combined tested revision.
