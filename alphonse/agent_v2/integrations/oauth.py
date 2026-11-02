@@ -27,6 +27,7 @@ class OAuthError(ValueError):
 SCOPES = {
     'google': {
         'mail_read': 'https://www.googleapis.com/auth/gmail.readonly',
+        'calendar_discover': 'https://www.googleapis.com/auth/calendar.calendarlist.readonly',
         'calendar_read': 'https://www.googleapis.com/auth/calendar.events.readonly',
         'classroom_read': 'https://www.googleapis.com/auth/classroom.coursework.me.readonly',
         'classroom_announcements_read': 'https://www.googleapis.com/auth/classroom.announcements.readonly',

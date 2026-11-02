@@ -284,8 +284,13 @@ class ProjectCheckService:
             if not isinstance(value['project_id'], str) or not value['project_id'].strip():
                 raise ValueError()
             query = value['query']
-            if not isinstance(query, dict) or set(query) != {'text'} or not isinstance(query['text'], str) or len(query['text']) > 4096:
+            if not isinstance(query, dict) or set(query) not in ({'text'}, {'text', 'calendar_window'}) or not isinstance(query['text'], str) or len(query['text']) > 4096:
                 raise ValueError()
+            if 'calendar_window' in query:
+                calendar_window = query['calendar_window']
+                if (not isinstance(calendar_window, dict) or set(calendar_window) != {'time_min', 'time_max'}
+                        or not 0 < (_deadline(calendar_window['time_max']) - _deadline(calendar_window['time_min'])).total_seconds() <= 366 * 86400):
+                    raise ValueError()
             trigger, window, duration, budgets, missed = (value[k] for k in ['trigger', 'retrieval_window', 'duration', 'budgets', 'missed_run'])
             if (set(trigger) != {'kind', 'weekdays', 'local_time'} or trigger['kind'] != 'schedule'
                     or not _weekdays(trigger['weekdays']) or not _clock(trigger['local_time'])
@@ -321,6 +326,8 @@ class ProjectCheckService:
                 if any(not isinstance(source[k], str) or not source[k].strip() for k in source if k != 'resources'):
                     raise ValueError()
                 if source['operation'] not in {'read', 'search', 'list', 'changes', 'attachments.read', 'mail_read', 'calendar_read', 'classroom_read', 'classroom_announcements_read'}:
+                    raise ValueError()
+                if source['operation'] == 'calendar_read' and 'calendar_window' not in query:
                     raise ValueError()
                 source['resources'] = _strings(source['resources'])
                 if not source['resources']:

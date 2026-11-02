@@ -318,3 +318,15 @@ def test_project_deletion_and_id_reuse_never_revive_queued_work(checks):
     f.projects.create_project(name='School', root_path=f.project.root_path, owner_user_id='child',
                              project_id=f.project.project_id, visibility='shared')
     with pytest.raises(PermissionError): guard(f, policy)
+
+
+@pytest.mark.parametrize('window', [None, {'time_min': '2026-11-01', 'time_max': '2026-11-10'},
+    {'time_min': '2026-11-10T00:00:00Z', 'time_max': '2026-11-01T00:00:00Z'},
+    {'time_min': '2026-11-01T00:00:00Z', 'time_max': '2028-11-01T00:00:00Z'}])
+def test_calendar_policy_requires_explicit_finite_offset_window(checks, window):
+    f = checks
+    f.definition['source_bindings'][0]['operation'] = 'calendar_read'
+    if window is not None:
+        f.definition['query']['calendar_window'] = window
+    with pytest.raises(ValueError, match='definition_invalid'):
+        active(f)

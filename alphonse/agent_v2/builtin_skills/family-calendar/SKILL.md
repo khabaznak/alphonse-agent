@@ -50,3 +50,31 @@ Recurring updates must explicitly target one instance or the entire series; obta
 specific authorization for that scope. More complex recurrence needs a separately
 reviewed route, never an approximated event. Generic Bash is trusted host execution,
 not an OS sandbox; the managed checks do not constrain arbitrary replacement code.
+
+
+## Project context and selected-calendar sync
+
+For an explicitly authorized project check, use the managed shared acquisition
+service (`CalendarAdapter`), the same installed skill and explicit actor/account
+bindings. Trusted setup connects managed Google `calendar_read` separately from
+mail and from optional `calendar_discover`. Discovery proposes calendars; it never
+selects or grants them. Legacy script bindings are retained and require explicit
+owner setup to add a managed connection; never guess a replacement.
+
+A project policy must specify exact calendar resources, recipients, retrieval
+hours/budgets and `query.calendar_window` with offset-bearing `time_min`/`time_max`
+(at most 366 days). Enabling incremental sync authorizes bounded change reads of
+those selected calendars: Google omits time filters on deltas, and the shared
+service filters out-of-window content before storage. No connection alone starts
+monitoring. Do not run the interactive script as a substitute background worker
+or add Calendar tool definitions. See `docs/family-calendar.md` in product source
+for the managed service contract and synthetic validation.
+
+Keep source event IDs, series IDs, original occurrence times, exceptions, all-day
+exclusive dates and timezones intact. Reconcile mail/calendar references only with
+source-backed canonical person/commitment identities; titles and series UIDs alone
+are insufficient. Presence is not completion, and missing/revoked access means
+unknown coverage. Failed sync, expired tokens and partial coverage cannot support
+claims of absence. System One judges relevance; System Two interprets evidence;
+deterministic grants and policy checks retain authority. Write operations still
+require the separate exact-effect authorization and readback procedure above.

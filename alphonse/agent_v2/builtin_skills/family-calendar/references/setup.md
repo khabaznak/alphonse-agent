@@ -107,3 +107,18 @@ Native dispatch retains phase effects, cancellation and checkpoint checks. The
 package's checks are deterministic for the supplied managed execution path, not an
 OS boundary against trusted Bash reading the integration database or replacing code.
 No Jev answer supplies access, authorizes an effect or substitutes for readback.
+
+
+## Managed project reads
+
+The optional project acquisition route uses `OAuthService` and secure managed
+`google` account grants, separately from the legacy script's `google-calendar`
+binding above. Consent `calendar_read` for events and, only when needed,
+`calendar_discover` for candidate calendar discovery. Neither requests mail or
+writes. Install/select the owning family-calendar skill and bind an exact managed
+connection, project grant, calendar IDs and recipients. Preserve existing IDs and
+legacy account configuration; do not migrate or substitute implicitly. Policies
+require an explicit event-time window and retrieval window. The shared service
+owns incremental sync and coverage; invoking the interactive script does not
+create a proactive check. Product operators should consult `docs/family-calendar.md`
+for the full setup and sync contract.

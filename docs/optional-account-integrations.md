@@ -767,6 +767,18 @@ attachment expansion and the synthetic validation command. Connections alone
 start no monitoring; a real-account pilot remains behind milestone readiness
 and explicit consent gates.
 
+
+### Calendar project read/sync extension — #119
+
+The shipped family-calendar skill now has managed Google `calendar_read` support
+through the existing acquisition service, with independent discovery consent and
+operation-specific routing alongside mail. Policies explicitly bound the calendar
+event window; the existing worker bounds retrieval/analysis time and budgets.
+See [Calendar context and sync](family-calendar.md) for recurring-instance identity,
+all-day/timezone semantics, selected-calendar delta consent, cursor invalidation,
+partial coverage, legacy compatibility and cross-source finding constraints.
+
+
 ### Classroom student reads — #120
 
 Optional Google `classroom_read` and separately consented
