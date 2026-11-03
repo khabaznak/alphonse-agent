@@ -295,3 +295,22 @@ def test_interruptible_runner_delivers_large_prompt_after_initial_poll_timeout(t
 
     assert completed.returncode == 0
     assert completed.stdout.strip() == str(len(prompt))
+
+
+@pytest.mark.parametrize('output', [
+    '{"phase_id":"fixture","subgoals":[{"subgoal_id":"reply","completion":{"kind":"output_present"}}],"}',
+    '```json\n{"phase_id":"fixture","subgoals":[{"subgoal_id":"reply"}],"}\n```',
+    '{"tool_id":"native.bash","arguments":{"command":"fixture --version"},',
+    '[{"subgoal_id":"nested"}]',
+    '```json\n[{"subgoal_id":"nested"}]\n```',
+])
+def test_malformed_outer_response_never_becomes_valid_nested_object(output):
+    from alphonse.agent_v2.core.inference.openai_codex import _try_parse_json_object
+    assert _try_parse_json_object(output) is None
+
+
+def test_json_extraction_preserves_complete_outer_object_with_prose_wrapper():
+    from alphonse.agent_v2.core.inference.openai_codex import _try_parse_json_object
+    assert _try_parse_json_object('Result:\n{"phase_id":"fixture","subgoals":[{"subgoal_id":"reply"}]}\nEnd.') == {
+        'phase_id': 'fixture', 'subgoals': [{'subgoal_id': 'reply'}],
+    }

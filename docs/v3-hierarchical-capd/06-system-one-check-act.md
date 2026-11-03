@@ -52,6 +52,23 @@ strategy, including differently worded empty searches. A read-only stage declari
 still require outer recovery. These judgments neither execute tools nor alter the
 requested mission outcomes. See the [household pilot](16-household-delegation.md).
 
+When a read-only phase stalls with successful retrieval observations, outer strategy
+records a bounded `retrieval_resolution` handoff. If a planned source has not been
+attempted, System Two gets one remaining-source pass: at most one read-only subgoal
+followed by one answer/question subgoal. A subsequent stall, or a phase that already
+attempted its sources, goes directly to a single answer-or-clarify phase. Its plan
+cannot retrieve again or mutate data. The handoff asks System Two to distinguish
+dated facts, provenance, contradictions and missing/current information, and either
+prepare a supported answer with explicit limitations or ask for the precise missing
+fact/source. Unattempted sources are disclosed, never described as checked.
+
+These handoffs receive their bounded resolution phase before the global stall fuse
+can stop the task. The receipt/budget survives checkpoints; after the final synthesis
+handoff, ordinary no-progress limits still apply. Mutation phases, denied operations,
+cancellation and verification violations retain their existing routes. Retrieval
+subgoals are not retroactively marked complete, acceptance criteria remain pending,
+and the answer must pass normal Check and Act review before successful completion.
+
 Inspection before a requested mutation also asks bounded Noul
 questions: whether cumulative evidence is sufficient to plan the authorized
 operation, whether a specific unresolved field or source needs a user answer, and
@@ -87,6 +104,28 @@ plan must resolve the unmet operation or ask a specific question, not repeat tha
 report.
 
 ## Check boundary
+
+An Act fulfillment Noul between the configured no and yes thresholds is unresolved,
+not evidence that requested work remains undone. When Check has verified completion
+and Act confidently recommends completion, resolve that middle-band disagreement
+through one focused System Two review of the same bounded mission state. The
+review must cite successful evidence, assess the prepared answer before delivery,
+and identify concrete remaining work if it withholds completion. Keep Jev's raw
+probabilities unchanged. Missing effect evidence, invalid responses, cancellation
+and deterministic verification failures cannot be overridden. Clear negative
+judgments retain the existing recovery route. Read-only answer tasks must not be
+forced into mutation-or-question handoffs merely because fulfillment was uncertain.
+
+The 2026-11-03 version-lookup incident exposed this distinction: the shell check
+and prepared answer succeeded, Check verified the criteria, and Act selected
+complete at 0.99. A fulfillment Noul of 0.79 was nevertheless treated as unfinished
+work against a 0.80 cutoff. The unnecessary replan then hit malformed JSON whose
+nested subgoal was incorrectly accepted as the outer plan. Regression fixtures
+cover the completion cascade, fail-closed reasoning, cancellation, and bounded
+plan correction. Live synthetic checks with the configured reasoning model
+accepted a supported fictional version answer and rejected a contradictory one.
+The original household checkpoint was inspected locally; it was not submitted as
+a live evaluation payload.
 
 For each still-pending acceptance criterion and each bounded successful evidence
 entry, Alphonse sends one Noul question asking whether that exact evidence directly

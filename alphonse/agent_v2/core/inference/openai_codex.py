@@ -306,20 +306,25 @@ def _try_parse_json_object(text: str) -> dict[str, Any] | None:
         parsed = decode(trimmed)
         if parsed is not None:
             return parsed
+        value = trimmed
 
     parsed = decode(value)
     if parsed is not None:
         return parsed
 
+    # A malformed outer object must never become a valid nested fragment.
+    # Otherwise a subgoal can masquerade as a PhasePlan (or arguments as a
+    # tool call), hiding the actual provider encoding failure.
     decoder = json.JSONDecoder()
     idx = value.find("{")
-    while idx >= 0:
+    array_idx = value.find("[")
+    if array_idx >= 0 and (idx < 0 or array_idx < idx):
+        return None
+    if idx >= 0:
         try:
             parsed_obj, _end = decoder.raw_decode(value[idx:])
         except ValueError:
-            idx = value.find("{", idx + 1)
-            continue
+            return None
         if isinstance(parsed_obj, dict):
             return parsed_obj
-        idx = value.find("{", idx + 1)
     return None

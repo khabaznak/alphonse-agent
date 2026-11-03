@@ -70,6 +70,7 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
     goal_section = "" if projections_enabled() else f"Goal: {task.goal}\n"
     contract_context = "See the structured acceptance contract above." if projections_enabled() else json.dumps(task.ensure_acceptance_contract(), ensure_ascii=False)
     directive_context = "See the structured Act directive above, when present." if projections_enabled() else json.dumps(act_directive, ensure_ascii=False)
+    from .retrieval_handoff import INSTRUCTIONS as retrieval_instructions, validate_handoff
     prompt = (
         f"{system_prompt}\n\n"
         f"{goal_section}"
@@ -80,6 +81,7 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
         f"Task attachment manifest (metadata only; use asset IDs exactly as listed):\n{json.dumps(attachment_manifest, ensure_ascii=False)}\n"
         f"Prepared user response already exists: {'yes' if isinstance(prepared_response, dict) else 'no'}\n"
         f"Act directive (authoritative resilience instruction): {directive_context}\n"
+        + (retrieval_instructions + "\n" if act_directive.get("retrieval_resolution") else "") +
         "If Act requires a final response/closure, plan exactly one user_response subgoal that uses the user-response capability, "
         "and do no further mission work in that phase. If Act requests user input, plan an ask-question subgoal. "
         f"Existing acceptance contract (preserve its definitions unless new user steering requires a justified revision): {contract_context}\n"
@@ -125,12 +127,22 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
     for attempt in range(2):
         if context.is_cancelled():
             raise SystemOneUnavailableError("v3_phase_planning_cancelled")
-        result = context.inference.generate_json(request)
-        if not isinstance(result.json_value, dict):
-            raise ValueError("v3_phase_plan_missing")
+        rejected_plan = None
+        invalid_json = False
         try:
-            phase = PhasePlan.from_dict(result.json_value)
+            result = context.inference.generate_json(request)
+        except ValueError as exc:
+            if str(exc) != "openai_codex_invalid_json":
+                raise
+            invalid_json = True
+        else:
+            rejected_plan = result.json_value
+        try:
+            if invalid_json:
+                raise ValueError("phase_plan_json_invalid")
+            phase = PhasePlan.from_dict(rejected_plan)
             _validate_inspection_handoff(phase, act_directive)
+            validate_handoff(phase, act_directive)
             if retry_source_unresolved(task):
                 if any(not retry_allows_subgoal(subgoal) for subgoal in phase.subgoals):
                     raise ValueError('inspection_handoff_requires_source_resolution_before_mutation')
@@ -140,16 +152,29 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
             # Two correct it once; never strip paths or relax validation here.
             scope_error = str(exc).startswith("mutation_scope_path_invalid:/")
             handoff_error = str(exc).startswith("inspection_handoff_")
+            retrieval_error = str(exc).startswith("retrieval_handoff_")
             unresolved_source = str(exc) == "inspection_handoff_requires_source_resolution_before_mutation"
             dependency_error = str(exc).startswith(("phase_subgoal_dependency_invalid:", "phase_subgoal_self_dependency:"))
-            if attempt or not (scope_error or handoff_error or dependency_error):
+            encoding_error = str(exc) in {
+                "phase_plan_json_invalid", "phase_plan_invalid", "phase_id_required", "phase_objective_required",
+                "phase_subgoals_required", "phase_subgoal_invalid", "phase_subgoal_id_required",
+                "phase_subgoal_objective_required", "phase_subgoal_output_type_required",
+                "phase_subgoal_ids_duplicate", "completion_condition_invalid", "completion_condition_kind_required",
+                "completion_condition_field_required", "phase_acceptance_criteria_invalid",
+            }
+            if attempt or not (scope_error or handoff_error or dependency_error or encoding_error or retrieval_error):
                 raise V3PhasePlanValidationError(f"v3_phase_plan_invalid:{exc}") from exc
             correction = (
+                retrieval_instructions + " " if retrieval_error else
+                "The response is malformed JSON or is not a complete PhasePlan. Return one valid top-level "
+                "object matching the supplied schema, including a nonempty phase_id and all required fields. "
+                "Do not return a nested subgoal, tool call or prose instead of a complete plan. "
+                if encoding_error else
                 "The plan has an invalid subgoal dependency. Use unique subgoal IDs and exact depends_on references "
                 "to IDs defined earlier in the subgoals array; no missing, forward, self or cyclic dependencies. "
                 "Correct IDs/order explicitly; do not silently remove prerequisites, broaden authorization or replace "
                 "the requested mutation/read-back with a reply. Returned subgoal IDs: "
-                + json.dumps([item.get('subgoal_id') for item in result.json_value.get('subgoals', []) if isinstance(item, dict)]) + ". "
+                + json.dumps([item.get('subgoal_id') for item in rejected_plan.get('subgoals', []) if isinstance(item, dict)]) + ". "
                 if dependency_error else
                 "The intended source is unresolved. Plan read_only evidence retrieval or a specific source question "
                 "before any mutation. Do not substitute an older source. A supported read-only response may proceed. "
@@ -169,14 +194,14 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
                 "No tool or mutation ran for this rejected plan. Return a corrected complete PhasePlan within the original authorized "
                 "request and curated capabilities. Preserve the requested persisted effect and read-back. "
                 "Protected engine paths remain forbidden.\n"
-                "Rejected plan (model output, not permission): " + json.dumps(result.json_value, ensure_ascii=False),
+                "Validation error: " + str(exc) + "\nRejected plan (model output, not permission): " + json.dumps(rejected_plan, ensure_ascii=False),
                 'task:' + str(task.task_id) + ':plan_validation', 'plan_validation',
             )
             correction_prompt = prompt + "\n\n" + feedback
             request = replace(request, prompt=correction_prompt, context_manifests=prompt_receipt(
                 correction_prompt, [*planning_parts, feedback], purpose='planning',
             ))
-            reason = "invalid_plan_dependency" if dependency_error else "inspection_handoff" if handoff_error else "absolute_mutation_scope_path"
+            reason = "retrieval_handoff" if retrieval_error else "invalid_plan_encoding" if encoding_error else "invalid_plan_dependency" if dependency_error else "inspection_handoff" if handoff_error else "absolute_mutation_scope_path"
             task.metadata["v3_plan_validation_recovery"] = {"reason": reason, "attempts": 1}
             context.emit_telemetry({"event": "v3_plan_validation_recovery", "task_id": task.task_id,
                                     "reason": reason, "attempts": 1})
