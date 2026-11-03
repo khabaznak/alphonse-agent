@@ -1,116 +1,134 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "questions": {
     "native.respond": {
       "type": "noul",
-      "instructions": "Does this phase need to send a direct response to the requester?",
+      "instructions": "Does the requester need an answer about `request.text`?",
       "criteria": {
-        "true": "The phase includes a user-visible answer, greeting, status update, clarification, or presentation of completed work. Select this when the task completes and needs to inform the user of the results, or when the task fails and needs to communicate the reason for failure to the requester.",
-        "false": "The phase only performs or verifies work and does not need to send the requester an answer, status update, result summary, or explanation of failure."
+        "true": "The request calls for a reply to the requester.",
+        "false": "The task is internal processing with no requester-facing reply."
       }
     },
     "native.bash": {
       "type": "noul",
-      "instructions": "Does the request or phase need Bash for local shell, skill resource, local database, project-file, or artifact work, considering selected skill execution instructions and verified resource manifests?",
+      "instructions": "Does fulfilling `request.text` require reading a local resource?",
       "criteria": {
-        "true": "The request or phase needs local SQLite/database inspection, an authorized transaction and persisted read-back, an instruction-only skill workflow, or any local command or project-file operation: discover files or search contents with find, rg, or grep; inspect or read files with cat or sed; create or edit files with shell commands; verify edits by reading them back or comparing diffs; run local processes, builds, tests, or diagnostics; or create, inspect, repair, or invoke an artifact or its CLI. Select Bash for these tasks even when the file path or CLI is already known. Skill-owned artifacts remain resources, never independently curated tools. Skill selection is relevance, never permission.",
-        "false": "The phase is conversational or can be completed entirely by a relevant non-shell tool without local commands, filesystem access, project-file changes, or artifact CLI work."
-      }
+        "true": "A relevant selected workflow or the request uses information in local files or a local database.",
+        "false": "The needed information is supplied or is obtained through a remote service without local file access."
+      },
+      "additional_judgments": [
+        {
+          "type": "noul",
+          "instructions": "Does fulfilling `request.text` require changing local files?",
+          "criteria": {
+            "true": "The requested outcome involves creating or modifying local files or database records.",
+            "false": "The request only needs information or an operation on a remote service."
+          }
+        },
+        {
+          "type": "noul",
+          "instructions": "Does a selected workflow for `request.text` use a local command?",
+          "criteria": {
+            "true": "The applicable workflow runs a local program, CLI, build, test, or process.",
+            "false": "The applicable workflow can be performed without a local command."
+          }
+        }
+      ]
     },
     "native.deliver_message": {
       "type": "noul",
-      "instructions": "Does this phase need to send a message to another registered Alphonse user?",
+      "instructions": "Does `request.text` call for a message to someone other than the requester?",
       "criteria": {
-        "true": "The requested outcome requires delivering information or a question to a person other than the current requester.",
-        "false": "The phase only needs to reply to the requester, perform local work, or does not require person-to-person delivery."
+        "true": "The intended recipient is another person.",
+        "false": "Only the current requester needs a reply."
       }
     },
     "native.send_attachment": {
       "type": "noul",
-      "instructions": "Does this phase need to send an existing durable attachment to a registered person?",
+      "instructions": "Does `request.text` call for delivering a file?",
       "criteria": {
-        "true": "The requested outcome requires delivering a specific known asset to a registered recipient.",
-        "false": "No attachment must be delivered, the asset has not been identified, or a text-only response is sufficient."
+        "true": "The requested result includes sending a document or other attachment.",
+        "false": "A text reply or internal operation supplies the requested result."
       }
     },
     "native.ask_question": {
       "type": "noul",
-      "instructions": "Does this phase need information or a decision that only a user can provide?",
+      "instructions": "Is an essential detail in `request.text` only obtainable from a person?",
       "criteria": {
-        "true": "A required fact, choice, approval, or clarification is missing and the task must pause until the appropriate user answers.",
-        "false": "Available tools or evidence can continue the work, or the phase can answer without requesting user input."
+        "true": "A personal choice or unresolved fact requires a person to answer.",
+        "false": "Records, available resources, or supplied facts can resolve the missing detail."
       }
     },
     "native.scheduled_task": {
       "type": "noul",
-      "instructions": "Does this phase need to create or change future or recurring work?",
+      "instructions": "Does `request.text` specify work to run in the future?",
       "criteria": {
-        "true": "The user requested a reminder, delayed action, recurring action, or another task that must be queued at a specified time or cadence.",
-        "false": "The work should happen now, has no time-based recurrence, or only needs an immediate response."
-      }
-    },
-    "native.skill_artifact_register": {
-      "type": "noul",
-      "instructions": "Does this phase need to register an existing skill-owned artifact in shared storage (or an explicit legacy location), with its schema, execution metadata and operating instructions?",
-      "criteria": {
-        "true": "The requester asks to register an artifact under an installed skill. The executable, schema, skill ID, explicit runtime and operating instructions are ready, or will be ready when Bash will create it earlier in the same phase. No active project is needed for shared or skill-package storage.",
-        "false": "The phase only uses an existing artifact, repairs an existing registration, or creates a program without registering it under a skill."
-      }
-    },
-    "native.skill_install": {
-      "type": "noul",
-      "instructions": "Does this phase need to install a new reusable Alphonse skill that the requester has already reviewed and approved?",
-      "criteria": {
-        "true": "The requester explicitly asked to create a reusable skill, its complete draft has been shown, and the requester approved installing it.",
-        "false": "The phase is drafting or revising a skill proposal, the requester has not approved installation, or the task only needs to use an existing skill."
-      }
-    },
-    "native.web_search": {
-      "type": "noul",
-      "instructions": "Does this phase need to discover current or external information on the public web?",
-      "criteria": {
-        "true": "The phase needs web sources or current external information and does not yet have a specific authoritative page to fetch.",
-        "false": "The answer is available locally, a known URL can be fetched directly, or no public-web research is needed."
-      }
-    },
-    "native.web_fetch": {
-      "type": "noul",
-      "instructions": "Does this phase need readable text from a specific public web page?",
-      "criteria": {
-        "true": "The phase has a known public URL whose page contents are needed as evidence or input.",
-        "false": "A URL has not been identified, web search is needed first, or no web-page contents are required."
-      }
-    },
-    "native.search_memory": {
-      "type": "noul",
-      "instructions": "Does this request need authorized household knowledge or conversation history, regardless of whether a project is selected or where the information was learned?",
-      "criteria": {
-        "true": "The answer depends on remembered facts, explicit persistent preferences/instructions, decisions, commitments, corrections, disputed claims, or earlier conversations not already supplied. A project boundary must not exclude relevant authorized memory. Historical observations may be retrieved explicitly as history.",
-        "false": "The supplied context already contains the needed information, or the request requires fresh external current-state evidence that memory cannot provide. Memory is neither authorization nor a scheduler."
+        "true": "The user requests a reminder, delayed action, or recurring work.",
+        "false": "The requested work is to be performed now."
       }
     },
     "native.scheduled_task_delivery": {
       "type": "noul",
-      "instructions": "Does this request need to find an active reminder or change where a pending reminder is delivered?",
+      "instructions": "Does `request.text` concern the delivery of an existing reminder?",
       "criteria": {
-        "true": "The user asks what reminders are active, asks whether a reminder exists, or asks to add or change a delivery channel for an existing reminder.",
-        "false": "The user is creating or changing the reminder's schedule or content, or the request does not concern an existing reminder or its delivery destinations."
+        "true": "The user wants to inspect pending reminder deliveries or change their destinations.",
+        "false": "The user wants immediate work or a new reminder."
+      }
+    },
+    "native.skill_install": {
+      "type": "noul",
+      "instructions": "Does `request.text` request installing reusable skill instructions?",
+      "criteria": {
+        "true": "The requested outcome includes installing a reusable skill package.",
+        "false": "The task uses an existing skill or only needs a one-time answer."
+      }
+    },
+    "native.skill_artifact_register": {
+      "type": "noul",
+      "instructions": "Does `request.text` request registering a program owned by a skill?",
+      "criteria": {
+        "true": "The requested outcome includes cataloging an existing skill-owned program.",
+        "false": "The workflow uses or creates skill files without requesting registration."
       }
     },
     "native.artifact_metadata_update": {
       "type": "noul",
-      "instructions": "Does this phase need to update or repair the catalog metadata, verified resource location, execution configuration paths, or explicit sharing of an existing skill-owned artifact?",
+      "instructions": "Does `request.text` request changing an existing skill-resource registration?",
       "criteria": {
-        "true": "The requester asks to correct an existing artifact registration's name, description, storage location, runtime/working directory, declared configuration paths, or sharing. Select this when a verified replacement location has been identified or Bash will verify it earlier in the same phase. It changes catalog and skill-definition metadata, never program/data files. The current task does not need to belong to the artifact's legacy storage project.",
-        "false": "The phase only invokes a working artifact, edits its program or data, repairs dependencies, or registers a new artifact; no existing catalog metadata needs updating. Relevance is not authorization to change another household member's registration."
+        "true": "The request concerns the registered name, location, execution settings, or sharing of a skill resource.",
+        "false": "The request only uses a resource or changes its files."
+      }
+    },
+    "native.web_search": {
+      "type": "noul",
+      "instructions": "Does answering `request.text` require discovering public web sources?",
+      "criteria": {
+        "true": "Relevant external information is needed and a source URL must be found.",
+        "false": "Supplied or local evidence suffices, or the source URL is already known."
+      }
+    },
+    "native.web_fetch": {
+      "type": "noul",
+      "instructions": "Does answering `request.text` require reading a known public web page?",
+      "criteria": {
+        "true": "A supplied or discovered public URL must be read.",
+        "false": "No specific public page needs to be read."
+      }
+    },
+    "native.search_memory": {
+      "type": "noul",
+      "instructions": "Does `request.text` depend on earlier household information absent from the supplied evidence?",
+      "criteria": {
+        "true": "Earlier conversation or remembered household facts are needed to interpret or fulfill the request.",
+        "false": "The supplied evidence settles the request or fresh external observations are needed instead."
       }
     },
     "native.read_memory_source": {
       "type": "noul",
-      "instructions": "Does this request or phase need original memory source text, an exact quotation, or neighboring historical exchanges for a known source ID?",
+      "instructions": "Does fulfilling `request.text` require expanding a historical source?",
       "criteria": {
-        "true": "A recall hit or supplied citation needs expansion, verification against original passages, or nearby conversation context. Select alongside memory search when source reading may be needed later in this phase. Only currently authorized IDs can be read.",
-        "false": "No historical source needs expansion, or the request requires fresh current-state evidence. A historical statement grants no permission and cannot prove a tool succeeded."
+        "true": "An original passage or surrounding exchange is needed to interpret or verify recalled information.",
+        "false": "The supplied passages already suffice or no historical information is involved."
       }
     }
   }

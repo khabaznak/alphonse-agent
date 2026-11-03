@@ -9,23 +9,71 @@ Expose only the capabilities and concrete tool schemas relevant to the current
 subgoal and evidence. Reduce prompt cost and tool confusion without making necessary
 capabilities undiscoverable.
 
-## Request-level curation and phase-level reveal
+## Request relevance and deterministic tool exposure
 
-Before strategic System Two planning, Jev receives the runtime tool registry after
-the runtime exposure policy has selected tools available to this task, plus the
-Plan instructions, current request, conversation history, bounded authorized
-project-config candidates, and bounded person/audience knowledge across projects. This lets
-request curation recognize when a short or implicit request refers to a
-project-specific record, workflow, or artifact. Jev may select multiple relevant
-projects; equal qualifying relevance probabilities are all retained. Project
-context candidates come from `project_config.json`; legacy `project_context.md`
-files are retained as user data and are not loaded into prompts. These context fields are evidence
-for relevance only; Jev still returns relevant tool IDs and does not devise the
-method or authorize tools. Ambiguous candidates remain available. Strategic Plan
-then receives the complete LLM-oriented descriptors for those candidates, so it
-can form a feasible plan without paying to show System Two the entire registry.
+Jev selects relevant skills and supplies one request-level native-tool relevance
+pass before System Two planning. There is no second, phase-level Jev tool pass.
+System Two receives complete descriptors for positive and uncertain tools, plus a
+compact catalog of the remaining runtime capabilities. It can plan a capability
+that relevance omitted; deterministic Do reveals its current schemas. Relevance
+cannot deny access, establish absent records, or make a capability undiscoverable.
 
-When a task has image attachments, Jev receives a metadata-only manifest. System
+The versioned state is built by `tool_curation.request_tool_state`, independently
+of the projection feature flag. It contains named data fields, not a strategic
+system prompt or a generated phase:
+
+```json
+{
+  "schema_version": 1,
+  "request": {"text": "Check the latest recorded schedule."},
+  "conversation": [{"speaker": "Requester", "text": "Use the latest update.", "source_id": "conversation:fixture"}],
+  "selected_skills": [{"name": "fixture-records", "description": "Read recorded schedules", "package_directory": "/fixture/skills/records", "workflow": "Read records.sqlite read-only.", "resources": []}],
+  "known_context": [],
+  "evidence": [],
+  "coverage": {"resource_paths_are_not_resource_contents": true, "recall_status": "not_performed"},
+  "omissions": []
+}
+```
+
+Conversation records are complete, access-filtered messages, including revalidated
+originating exchanges beyond the recent tail and current steering. Selected skills
+supply workflow text and resource locations; private resource sections require the
+same catalog ownership checks as execution guidance. Paths/manifests are never
+represented as database/file contents. Optional context and evidence are bounded
+as whole records within a 48,000-byte state budget. Omitted or unavailable records
+cause LLM fallback rather than judgments over clipped context. The request itself
+is never silently clipped. Source inventories record the actual structured fields.
+
+Reviewed native questions live in `config/jev_tool_registry.json` (schema v2).
+Each Noul asks one observable requirement. Bash uses separate local-read,
+local-write, and command-execution judgments; code retains it if any need qualifies.
+The recorded maximum is an any-need relevance score, not an estimated probability
+of the union; individual judgment probabilities remain visible in metadata.
+
+Decision policy:
+
+- At/above `tool_selection_threshold`: positive.
+- At/below `no_threshold`: negative.
+- Between thresholds: unresolved; keep the tool for System Two.
+- Empty selections, malformed responses, provider errors, unavailable curation, or
+  incomplete state: give System Two the full runtime-exposed native registry.
+  Errors remain errors in metadata; they do not become negative probabilities.
+- Response/question capabilities are retained for interaction, and missing-history
+  signals retain authorized recall tools. Deterministic exposure remains the ceiling.
+
+Identical input snapshots reuse their request selection. New messages, changed
+selected workflows/resources, new evidence, candidate tools, or thresholds/model
+invalidate the cached result. Replanning alone does not add a phase-specific Jev
+filter. Curation never generates tool calls, permission, or clinical schedules.
+
+For explicit local replay, set `ALPHONSE_JEV_CAPTURE_DIR` to a private diagnostic
+directory. Requests are saved under `jev-tool-requests/` with directory mode 0700
+and file mode 0600. Each file contains the exact model/state/questions payload,
+without the API credential. Capture is off by default; captured state can contain
+private household information. Use synthetic cases for evaluation and remove
+captures when finished. Normal manifests retain inventories, not raw context.
+
+When a task has image attachments, admission receives a metadata-only manifest. System
 Two receives authorized image bytes directly through the selected inference model
 for planning, tactical actions, and responses. The asset catalog enforces requester
 ownership; attachment metadata cannot supply filesystem paths. Codex transport
@@ -41,13 +89,12 @@ not create an image-only tool subgoal. This is a model input capability, not a t
 to curate or reveal. Jev continues to judge bounded progress from recorded evidence;
 it neither interprets images nor composes extraction instructions.
 
-After the phase is planned, Jev still curates the request-level candidate set for
-that phase. Deterministic authorization and subgoal prerequisites are applied
-before concrete tools are revealed to tactical System Two. This preserves focused
-per-phase tactical contexts. Artifacts in shared, skill-package, or legacy storage are owned by skills and are
-not independently listed, curated, or revealed as tools. Their operating
-instructions are maintained in the owning skill and programs are invoked through
-authorized native capabilities when appropriate.
+After planning, deterministic reveal matches tools to the current subgoal's
+capabilities and enforces prerequisites. It recomputes against current runtime
+exposure before each action, including resumed checkpoints. Persisted legacy Jev
+palettes do not restrict exposure. Artifacts remain skill-owned programs, not
+independent tools; invoke them through authorized native capabilities and verified
+resource manifests.
 
 ### Capability catalog
 
@@ -66,14 +113,16 @@ device_control
 
 ### Concrete tool reveal
 
-Jev's tool questions come from the reviewed native registry template. Artifact
-programs do not enter this registry; their definitions and operating expertise are
-maintained inside their owning skill. Jev sees this compact decision-oriented
-registry, not LLM schemas or argument lists. Its
-request-level positive and ambiguous results form the candidate set supplied to Plan.
-The per-phase Jev result then narrows that set, and deterministic policy applies
-authorization and current-subgoal prerequisites before schemas reach tactical
-System Two. Jev can never grant execution permission.
+The runtime exposure policy supplies the candidate registry. Deterministic reveal
+filters it by the phase/subgoal capabilities and operational prerequisites before
+schemas reach tactical System Two. A relevance hint can shorten the descriptor list but cannot remove a
+capability from the discoverable runtime catalog. Revealing a schema does not grant execution permission.
+
+Uncertain conversation recall permits read-only retrieval from authorized memory
+and selected skill resources, as well as evidence-grounded responses. It still
+blocks source-dependent mutations, including mixed read/write stages. Ask the user
+only when retrieval leaves an essential unresolved source, conflict, or detail.
+Normal evidence and acceptance review must support any final answer.
 
 ## Deterministic prerequisites
 
@@ -142,26 +191,22 @@ that phase unless new evidence and the phase contract make them relevant.
 - [x] Define stable capability identifiers and semantic input/output types.
 - [x] Add V3 capability metadata support for current native tools; skill-owned
       artifacts are not represented as tool capabilities.
-- [x] Curate request-relevant tools with Jev before strategic planning.
-- [x] Pass Plan instructions, current request, session history, bounded project
-      context, and bounded durable project memory to request-level curation.
-- [x] Give strategic Plan complete descriptors only for Jev-curated candidates.
-- [x] Keep per-phase Jev curation and deterministic authorization before tactical reveal.
+- [x] Use Jev for skills and one structured request-level tool relevance pass.
+- [x] Give Plan selected workflows, resource manifests, history and household memory.
+- [x] Apply deterministic subgoal capability and prerequisite checks before tactical reveal.
+- [x] Ignore legacy probabilistic tool palettes during resumed execution.
 - [x] Implement deterministic prerequisite filtering.
 - [x] Implement concrete-tool reveal for the current subgoal.
 - [x] Persist revealed capability and tool IDs in tactical state.
 - [x] Reject calls to tools not revealed for the action.
-- [x] Recompute reveal only after a meaningful state/evidence transition.
-- [x] Cache stable reveal results within a subgoal.
+- [x] Recompute deterministic reveal before each action using current runtime exposure.
 - [x] Log why each tool was revealed or excluded without exposing chain-of-thought.
 - [x] Emit structured reveal decisions through the existing UI/debug event stream.
 - [x] Fail visibly and return to outer review when policy reveals no usable tool.
-- [x] Reuse reviewed native-tool Noul questions across request- and phase-level
-      curation; skill-owned artifacts are excluded from tool curation.
+- [x] Keep atomic native-tool judgments in one reviewed template; exclude skill programs.
 - [x] Use the authorized `native.bash` local_shell capability for project-file
       search, reading, creation, editing, and verification.
-- [x] Select a phase-wide relevant tool palette with System One while preserving
-      System Two ownership of invocation composition.
+- [x] Preserve uncertain tools and fall back to LLM selection on empty or failed curation.
 
 ## Tests
 
@@ -175,8 +220,7 @@ that phase unless new evidence and the phase contract make them relevant.
 - [x] Unauthorized integrations and cross-project tools remain hidden.
 - [x] A hidden tool call is rejected at execution even if the model invents it.
 - [x] Tool reveal changes after typed subgoal output is bound.
-- [x] Jev receives calibrated static questions for registered native tools;
-      artifacts are excluded from tool questions.
+- [x] Jev receives atomic request-need questions for native tools; skill programs are excluded.
 - [x] Project-file discovery excludes `.alphonse`, source-control metadata,
       dependencies, and generated build directories unless specifically requested.
 - [ ] Necessary-tool recall is measured on the V3 evaluation set (Stage 5 rollout
@@ -191,8 +235,8 @@ that phase unless new evidence and the phase contract make them relevant.
 
 ## Exit criteria
 
-- Tactical prompts receive the Jev-selected, deterministically authorized tool set
-  rather than the entire registry.
+- Tactical prompts receive the current subgoal-compatible tools after deterministic checks,
+  without another Jev relevance filter.
 - Irrelevant high-risk tools are deterministically excluded.
 - Necessary tools remain discoverable on the representative evaluation set.
 - Reveal decisions are auditable and enforceable at execution time.
@@ -200,14 +244,13 @@ that phase unless new evidence and the phase contract make them relevant.
 
 ## Decisions made
 
-- Jev performs cheap relevance filtering before strategic planning, then phase-level
-  relevance filtering. Runtime exposure and deterministic phase authorization stay
-  outside Jev; System Two remains responsible for strategy and concrete call selection.
+- Jev supplies one advisory request-level relevance pass with explicit uncertainty/fallback
+  rules. System Two owns strategy and calls; runtime policy owns access and prerequisites.
 - Artifacts are attached to skills and excluded from runtime tool materialization,
   request curation, and phase-level reveal. Native shell stays subject to deterministic
   authorization and mutation scope.
-- The registry is frozen on first use for a runtime. A registry change requires a
-  restart so its static Jev question contract cannot silently drift mid-task.
+- Reviewed question templates are cached per process. Restart after editing templates;
+  new native tools without a template trigger visible LLM fallback.
 
 ## Implementation log
 
@@ -262,3 +305,25 @@ Generic Bash continues to be trusted host access, not an OS filesystem sandbox.
 location and synchronizes the skill definition without changing program/data files.
 
 See [artifact resource storage and migration](../skill-artifact-resources.md).
+
+- 2026-11-02 — Removed V3 request/phase Jev tool curation. System Two receives
+  runtime descriptors and deterministic reveal applies current subgoal prerequisites,
+  including for legacy checkpoints. Uncertain recall allows read-only discovery and
+  evidenced responses while retaining the unresolved-source mutation guard. Disposable
+  SQLite regressions cover discovery, legacy palettes, and blocked mixed effects.
+
+- 2026-11-02 — Replaced the broad first-pass planning prompt with named request,
+  conversation, selected skill/resource, known-context and evidence fields. Added
+  atomic Bash judgments, three-way probability handling, explicit LLM fallbacks,
+  discoverable omitted capabilities, request-snapshot caching and opt-in private
+  replay captures. The phase-level Jev pass remains removed. Synthetic transport
+  and disposable SQLite tests verify policy. After explicit approval of a US$1
+  budget, 16 synthetic-only live cases (including four untuned holdouts and Spanish
+  follow-ups) retained all required tools with no API errors. The request selection
+  retained 4.3125 of 14 native candidates on average; 22,081 input tokens cost an
+  estimated US$0.000927402 at the documented US$0.042/Mtok input rate. Exact
+  payloads/results are in `output/jev-tool-curation-2026-11-02/`; no household
+  data was submitted. This is a tool-palette check, not an end-to-end LLM task
+  completion benchmark. Full suite: 1,448 passed with three previously observed
+  failures (one non-isolated memory fixture; two home-project assertions).
+  Focused affected tests: 342 passed.

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from alphonse.agent_v2.core.inference import InferencePurpose
 from alphonse.agent_v2.core.inference import InferenceRouter
 from alphonse.agent_v2.core.inference import ModelProfile
@@ -347,3 +349,26 @@ def test_non_plan_v3_failure_message_does_not_claim_plan_rejection() -> None:
 
     assert "couldn't complete this task" in message
     assert "execution plan was rejected" not in message
+
+
+@pytest.mark.parametrize('reason,expected', [
+    ('system_one_http_error:400', 'request was rejected'),
+    ('system_one_request_rejected:400', 'request was rejected'),
+    ('system_one_context_limit_exceeded', 'size limit'),
+    ('system_one_context_budget_exceeded', 'size limit'),
+    ('act_context_required_input_exceeds_budget', 'size limit'),
+    ('system_one_api_key_invalid', 'credentials'),
+])
+def test_review_request_errors_do_not_claim_temporary_outage(reason, expected):
+    from alphonse.agent_v2.daemon import _scheduled_failure_message
+    error = 'system_one_unavailable:act_recommendation:' + reason
+    inbound = _inbound_failure_message(error, 'fixture-model')
+    scheduled = _scheduled_failure_message('Fixture schedule', error)
+    assert expected in inbound and expected in scheduled
+    assert 'temporarily unavailable' not in inbound and 'temporarily unavailable' not in scheduled
+    assert 'Please try again later' not in inbound
+
+
+def test_actual_transient_review_failure_keeps_retry_guidance():
+    message = _inbound_failure_message('system_one_unavailable:act_recommendation:system_one_http_error:503', '')
+    assert 'temporarily unavailable' in message and 'try again later' in message

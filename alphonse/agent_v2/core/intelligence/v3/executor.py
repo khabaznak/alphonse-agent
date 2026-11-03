@@ -28,7 +28,8 @@ from alphonse.agent_v2.core.tools.registry.native.bash import BASH_TOOL_ID
 from alphonse.agent_v2.core.tools.registry.native.respond import RESPOND_TOOL_ID
 from alphonse.agent_v2.system_one import SystemOneUnavailableError, system_one_error_code
 from alphonse.agent_v2.core.intelligence.v3.response_state import work_evidence_refs
-from alphonse.agent_v2.core.memory.retry_context import retry_continuity_context, retry_source_unresolved
+from alphonse.agent_v2.core.tools.registry import ToolExposurePolicy
+from alphonse.agent_v2.core.memory.retry_context import retry_continuity_context, retry_source_unresolved, retry_allows_subgoal
 
 if TYPE_CHECKING:
     from alphonse.agent_v2.core.core import CoreLoopContext, ToolDescriptor
@@ -63,10 +64,10 @@ class PhaseExecutor:
                 return interruption
             subgoal = self._active_subgoal(state)
             retry_continuity_context(task, context)  # Recheck the bound source before each action, including resumed phases.
-            if retry_source_unresolved(task) and set(subgoal.allowed_capabilities) != {Capability.USER_INTERACTION.value}:
+            if retry_source_unresolved(task) and not retry_allows_subgoal(subgoal):
                 state.transition(PhaseStatus.BLOCKED)
                 self._checkpoint(task, state, context)
-                return self._outcome(state, "The retry's exact source/change is unresolved; ask a specific source question before further operations.",
+                return self._outcome(state, "The retry's exact source/change is unresolved; retrieve evidence or ask before a mutation.",
                                      blockers=("retry_source_requires_user_input",))
             tools = self._revealed_tools(task, state, subgoal, context)
             selected = self._select_action(task, state, subgoal, tools, context)
@@ -148,6 +149,8 @@ class PhaseExecutor:
                     "confident": bool(progress_review.get("confident")),
                     "confidence": progress_review.get("confidence"),
                     "retry_approved": retry_approved,
+                    "context_complete": progress_review.get("context_complete", True),
+                    "context_coverage": progress_review.get("context_coverage", {}),
                     "answers": dict(progress_review.get("answers") or {}),
                 }
                 if not completion_met and _is_update_inspection(state, subgoal, progress_review.get("answers") or {},
@@ -159,7 +162,7 @@ class PhaseExecutor:
                     ready = answers.get("runtime_inspection_ready_for_action", 0.0)
                     missing = answers.get("runtime_inspection_requires_user_input", 0.0)
                     route = None
-                    if completed.status == "success":
+                    if completed.status == "success" and progress_review.get("context_complete", True):
                         if _confident_probability(ready, threshold) and _confident_negative(missing, threshold):
                             route = "ready_for_action"
                         elif _confident_probability(missing, threshold) and _confident_negative(ready, threshold):
@@ -353,12 +356,12 @@ class PhaseExecutor:
     ) -> tuple["ToolDescriptor", ...]:
         if context.tools is None:
             return ()
-        available = tuple(context.tools.list())
-        candidates = available
-        if state.phase.tool_curation_status == "used":
-            relevant = set(state.phase.curated_tool_ids)
-            candidates = tuple(item for item in available if item.tool_id in relevant)
-        if self._reveal_policy is not None and not state.revealed_tool_ids:
+        # Re-evaluate current runtime exposure even for legacy Jev-curated
+        # checkpoints. Historical relevance omissions must not hide capabilities.
+        candidates = ToolExposurePolicy().select_tools(
+            registry=context.tools, project_id=task.project_id, user=task.user, task=task,
+        )
+        if self._reveal_policy is not None:
             reveal = self._reveal_policy.reveal(task, state, subgoal, candidates)
             state.revealed_capabilities = [item["capability"] for item in reveal.catalog]
             state.revealed_tool_ids = [item.tool_id for item in reveal.tools]
@@ -394,7 +397,7 @@ class PhaseExecutor:
             raise SystemOneUnavailableError("tactical_acceptance_unavailable")
         try:
             review = context.system_one.evaluate_tactical_progress(
-                goal="" if projections_enabled() else task.goal,
+                goal=task.goal,
                 phase=state.phase.to_dict(),
                 subgoal={
                     "subgoal_id": subgoal.subgoal_id,
@@ -409,13 +412,6 @@ class PhaseExecutor:
                 action=action.to_dict(),
                 questions=list(action.acceptance_questions),
                 execution_log=[dict(item) for item in state.evidence.entries],
-                task_context=task_context_for_decision(
-                    task, context, purpose="review",
-                    selected_context_ids=(
-                        task.metadata.get("v3_context_selection", {}).get("selected_context_ids", [])
-                        if isinstance(task.metadata.get("v3_context_selection"), dict) else []
-                    ),
-                ),
             )
         except Exception as exc:
             raise SystemOneUnavailableError(f"tactical_acceptance:{type(exc).__name__}:{system_one_error_code(exc)}") from exc
@@ -432,7 +428,10 @@ class PhaseExecutor:
                 # response retains ambiguous fallback; outer acceptance review
                 # still verifies whether its content fulfills the request.
                 result = result and stage_answer >= threshold
-            retry_approved = bool(getattr(review, "retry_approved", False))
+            if not getattr(review, 'context_complete', True):
+                result = False
+                metadata['completion_blocker'] = 'targeted_observation_required'
+            retry_approved = bool(getattr(review, "retry_approved", False)) and getattr(review, 'context_complete', True)
             metadata["retry_approved"] = retry_approved
         if (
             Capability.ATTACHMENT_ANALYSIS.value in subgoal.allowed_capabilities
@@ -641,6 +640,9 @@ def _tactical_prompt(
         "for the next action even when they did not complete the subgoal. Do not repeat a successful discovery/list action when "
         "its result already supplies the identifier needed by another operation in the same tool schema; compose that follow-up "
         "operation with the discovered identifier.\n\n"
+        "If progress_review.context_complete is false, the current result exceeded the bounded judgment view. "
+        "The original result remains below. Obtain a targeted source expansion or narrower observation to verify the "
+        "stage; do not repeat the broad search or re-execute a mutation whose effects may already exist. "
         "Every completed execution-log entry includes progress_review.complete from Jev. When it is false, the call "
         "executed but did not make semantic progress. Do not select the same tool with the same arguments again; "
         "choose different arguments or another revealed tool. For a CLI-backed artifact that returns an unexpected "
@@ -800,18 +802,6 @@ def _wait_for_retry(delay: float, task: "TaskState", state: TacticalState, conte
             return False
         time.sleep(min(0.1, max(0.0, deadline - time.monotonic())))
     return True
-
-
-def _record_system_one_registry_selection(
-    task: "TaskState", state: TacticalState, metadata: dict[str, Any]
-) -> None:
-    history = task.metadata.setdefault("system_one_tool_registry_selections", [])
-    if not isinstance(history, list):
-        history = []
-        task.metadata["system_one_tool_registry_selections"] = history
-    history.append({"phase_id": state.phase.phase_id, **metadata})
-    if len(history) > 20:
-        del history[:-20]
 
 
 def _record_system_one_tactical_review(

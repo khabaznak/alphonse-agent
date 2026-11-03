@@ -640,8 +640,8 @@ def test_v3_phase_planner_receives_project_context_and_durable_memory(tmp_path: 
     assert "never mutation targets" in request.prompt
     assert "Do not ask the requester for a file location already present" in request.prompt
     assert state.phase.mutation_scope.allowed_paths == ()
-    assert "Keep a dated workout journal." in jev.project_context
-    assert "calisthenics_journal.md" in jev.durable_memory
+    assert jev.project_context == "" and jev.durable_memory == ""
+    assert state.phase.tool_curation_status == "deterministic"
     assert '"tool_id": "native.bash"' in request.prompt
 
 

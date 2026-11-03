@@ -692,6 +692,8 @@ def test_phase_executor_rejects_identical_action_after_jev_reports_no_progress()
         "confidence": 0.95,
         "retry_approved": False,
         "answers": {"temperature_returned": 0.05},
+        "context_complete": True,
+        "context_coverage": {},
     }
     assert state.evidence.entries[1]["semantic_duplicate_of"] == state.actions[0].action_id
 

@@ -32,6 +32,9 @@ One-time admission for a new human task
   Task or ambiguity -> acknowledge immediately and continue
           |
           v
+One structured request-level tool relevance pass (uncertain/failed -> LLM fallback)
+          |
+          v
 Outer CAPD
   Check task/steering
   Act defines or amends immutable outcomes
@@ -40,7 +43,7 @@ Outer CAPD
           v
 Tactical Phase Executor inside Do
   Resolve current subgoal
-  Ask Jev about native tools, then reveal relevant authorized tools
+  Reveal native tools through deterministic capability/prerequisite checks
   Choose and execute the next action
   Inspect local result and recover within policy
   Return structured phase evidence

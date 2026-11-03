@@ -210,7 +210,8 @@ def test_enabled_planning_and_execution_receive_one_request(setup):
     PhaseExecutor()._select_action(task, state, phase.subgoals[0], context.tools.list(), context)
     assert all(prompt.count(task.goal) == 1 for prompt in prompts)
     assert all('UNRELATED_LEDGER' not in prompt for prompt in prompts)
-    assert {'planning', 'curation', 'execution'} <= task.metadata['v3_context_projections'].keys()
+    assert {'planning', 'execution'} <= task.metadata['v3_context_projections'].keys()
+    assert 'curation' not in task.metadata['v3_context_projections']
 
 
 def test_admission_rebuilds_projection_after_context_selection():
