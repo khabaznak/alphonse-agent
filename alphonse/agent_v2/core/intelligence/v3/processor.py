@@ -113,11 +113,17 @@ class HierarchicalCAPDProcessor:
             )
             if "tactical_stage_no_new_progress" in set(outcome.blockers):
                 evidence_progress = False
+            retrieval_handoff = (
+                (task.metadata.get("act_directive", {}).get("retrieval_resolution") or {}).get("phase_id")
+                == state.phase.phase_id
+                and review_status == "phase_blocked"
+                and "tactical_stage_no_new_progress" in set(outcome.blockers)
+            )
             mission_answer = (task.metadata.get("system_one_act_recommendation") or {}).get("answers", {}).get("mission_outcome_is_fulfilled")
             threshold = float(getattr(getattr(context.system_one, "settings", None), "yes_threshold", 0.8))
             mission_unfulfilled = (bool(task.metadata.get("v3_resumption_evidence"))
                                   and isinstance(mission_answer, (int, float)) and mission_answer < threshold)
-            if not inspection_handoff and (review_status in {
+            if not inspection_handoff and not retrieval_handoff and (review_status in {
                 "phase_blocked", "verification_failed", "phase_verified_task_incomplete",
             } or mission_unfulfilled or task.metadata.get("v3_route") == "strategic_replan") and not evidence_progress:
                 no_progress_phases += 1

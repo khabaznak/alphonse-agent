@@ -11,6 +11,13 @@ resume a phase without reconstructing it from model prose.
 
 This stage must not change the default execution path.
 
+Planning consumes one complete top-level JSON object. The Codex provider must
+reject malformed outer JSON rather than extracting a valid nested subgoal or
+arguments object. Malformed JSON and missing structural plan fields receive one
+explicit System Two correction with the original request and schema. No action
+runs for the rejected plan. A second invalid response fails with a planning
+diagnostic; authorization, protected-path and traversal checks remain enforced.
+
 ## Deliverables
 
 Introduce typed models equivalent to:
