@@ -49,20 +49,15 @@ def test_confirmed_record_update_reaches_shell_and_verifies_transaction(tmp_path
             subgoal_id='write', objective='Transaction and persisted read-back', required_output_type='verified_record',
             depends_on=[], allowed_capabilities=['local_shell'], allowed_side_effects=['external_reversible'],
             completion={'kind': 'output_present', 'output_type': 'verified_record'}, failure_policy='stop')])
-    seen = []
-
     class Jev:
-        def curate_request_tools(self, *, task_context, **kwargs):
-            # This content-sensitive stub reproduces the original context-loss
-            # failure: without skill guidance the only candidate is respond.
-            seen.append(task_context)
-            selected = ('native.bash',) if 'Authoritative SQLite resource' in task_context else ('native.respond',)
-            return SystemOneToolRegistrySelection(selected_tool_ids=selected)
-
-        def select_plan_tools(self, *, task_context, **kwargs):
-            seen.append(task_context)
-            assert 'COMMIT and read back' in task_context
+        def curate_request_tools(self, *, state, **kwargs):
+            assert state['selected_skills'][0]['package_directory'] == str(skill.directory)
+            assert 'Authoritative SQLite resource' in state['selected_skills'][0]['workflow']
+            assert 'plan_system_prompt' not in state
             return SystemOneToolRegistrySelection(selected_tool_ids=('native.bash',))
+
+        def select_plan_tools(self, **kwargs):
+            pytest.fail('System One must not curate phase tools')
 
         def evaluate_tactical_progress(self, **kwargs):
             return SystemOneTacticalReview(True, .99, True)
@@ -91,16 +86,16 @@ def test_confirmed_record_update_reaches_shell_and_verifies_transaction(tmp_path
     context = CoreLoopContext(messages=InMemoryMessageQueue(), skill_store=skills, tools=registry, system_one=Jev(),
         inference=SimpleNamespace(generate_json=generate_json))
     planned = plan_phase(task, context)
-    assert planned.curated_tool_ids == ('native.bash',)
+    assert set(planned.curated_tool_ids) == {'native.bash', 'native.respond'}
+    assert planned.tool_curation_status == 'deterministic'
     assert planned.mutation_scope.allowed_paths == ('records.sqlite',)
     assert len(planning_requests) == (2 if invalid_plan_first else 1)
     assert 'persisted' in task.acceptance_criteria_md
-    for text in seen:
-        included = [r for r in text.records if r['status'] == 'included' and r['source_id'] == ('skills:selected' if projected else skill.skill_id)]
-        assert included
-        for receipt in included:
-            span = receipt['input_range']
-            assert 'Authoritative SQLite' in text[span['start_char']:span['end_char']]
+    assert 'Authoritative SQLite resource' in planning_requests[0].prompt
+    assert str(skill.directory) in planning_requests[0].prompt
+    assert any(r['source_id'] == ('skills:selected' if projected else skill.skill_id)
+               and r['status'] == 'included'
+               for manifest in planning_requests[0].context_manifests for r in manifest['records'])
     uri = str(database) + '?mode=ro' if operation == 'denied' else str(database)
     if operation == 'unavailable':
         uri = str(database.parent / 'missing.sqlite') + '?mode=rw'
@@ -157,7 +152,8 @@ def test_default_curation_retains_authorized_recall_after_structured_omission(mo
     ), authorized_capabilities=('memory_recall',))
     phase = _curate_phase_tools(task, phase, curated, context)
     assert set(phase.curated_tool_ids) == {'native.search_memory', 'native.read_memory_source'}
-    assert set(task.metadata['system_one_request_tool_selections'][-1]['retained_recall_tool_ids']) == set(phase.curated_tool_ids)
+    assert task.metadata['v3_request_tool_curation']['status'] == 'empty_selection_llm_fallback'
+    assert phase.tool_curation_status == 'deterministic'
     # Retention operates only over the exposure-policy candidates it receives.
     assert not _curate_request_tools(task, (), system_prompt='', session_history='', project_context='',
         durable_memory='', attachment_manifest=[], context=context)

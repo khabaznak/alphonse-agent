@@ -207,3 +207,37 @@ def test_unavailable_failure_review_preserves_failure_and_provides_next_action()
     assert result.status == ProcessingStatus.FAILED
     assert "not been fully verified" in task.metadata["v3_failure_response"]["message"]
     assert "ask me to retry" in task.metadata["v3_failure_response"]["message"]
+
+
+def test_rejected_final_review_reports_preserved_draft_without_delivering_it():
+    runtime = build_runtime_host()
+    queued = runtime.channel.queue_message(prompt='Read the fixture schedule', user='alex',
+        integration_id='desktop', provider_key='desktop', channel_target='alex')
+    task = _task(); task.message_id = queued.message_id
+    task.outcome = {'status': 'failure', 'reason': 'system_one_unavailable:act_recommendation:system_one_context_limit_exceeded'}
+    task.set_acceptance_contract_from_markdown('1.- [ ] The recorded schedule is retrieved')
+    task.acceptance_contract['criteria'][0]['status'] = 'satisfied'
+    task.metadata['prepared_user_response'] = {'message': 'PRIVATE_UNDELIVERED_DRAFT'}
+    task.metadata['v3_phase_review'] = {'status': 'phase_verified_task_complete'}
+    V2Daemon(runtime)._notify_inbound_failure(queued, error=task.outcome['reason'], task_state=task.to_dict())
+    notification = runtime.outbox.list()[0]
+    assert 'size limit' in notification.message and 'draft answer was prepared' in notification.message
+    assert 'draft was not delivered' in notification.message
+    assert 'PRIVATE_UNDELIVERED_DRAFT' not in notification.message
+    assert 'temporarily unavailable' not in notification.message
+    assert notification.kind == 'task_failed' and task.status == 'failed'
+    assert task.metadata['prepared_user_response']['message'] == 'PRIVATE_UNDELIVERED_DRAFT'
+
+
+def test_final_review_progress_does_not_cross_task_or_owner_boundary():
+    runtime = build_runtime_host()
+    queued = runtime.channel.queue_message(prompt='Read the fixture schedule', user='alex',
+        integration_id='desktop', provider_key='desktop', channel_target='alex')
+    task = _task(); task.message_id = 'different-message'
+    task.set_acceptance_contract_from_markdown('1.- [ ] The recorded schedule is retrieved')
+    task.acceptance_contract['criteria'][0]['status'] = 'satisfied'
+    task.metadata['prepared_user_response'] = {'message': 'PRIVATE_UNDELIVERED_DRAFT'}
+    task.metadata['v3_phase_review'] = {'status': 'phase_verified_task_complete'}
+    V2Daemon(runtime)._notify_inbound_failure(queued,
+        error='system_one_unavailable:act_recommendation:system_one_request_rejected:400', task_state=task.to_dict())
+    assert 'draft answer was prepared' not in runtime.outbox.list()[0].message

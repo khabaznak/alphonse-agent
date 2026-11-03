@@ -2405,7 +2405,11 @@ class V2Daemon:
         if origin is None:
             logger.error("inbound failure could not be delivered message_id=%s error=%s", getattr(queued, "message_id", ""), error)
             return
-        message = _inbound_failure_message(error, self.runtime.inference_settings_store.get().model_id)
+        matched_task = (isinstance(task_state, dict) and task_state.get('status') == 'failed'
+                        and str(task_state.get('user') or '') == user_id
+                        and str(task_state.get('message_id') or '') == str(getattr(queued, 'message_id', '')))
+        message = _inbound_failure_message(error, self.runtime.inference_settings_store.get().model_id,
+                                           task_state=task_state if matched_task else None)
         if (
             _scheduled_failure_code(error) == "v3_task_failed"
             and isinstance(task_state, dict)
@@ -2718,7 +2722,7 @@ def _model_access_rejection(error: str) -> bool:
 def _scheduled_failure_message(task_name: str, error: str) -> str:
     code = _scheduled_failure_code(error)
     if code == "system_one_unavailable":
-        detail = "A required service is temporarily unavailable. Please try again later."
+        detail = _system_one_failure_detail(error)
     elif code == "openai_codex_auth_required":
         detail = "Codex needs to be signed in again before I can run it."
     elif code == "openai_codex_cli_missing":
@@ -2732,11 +2736,38 @@ def _scheduled_failure_message(task_name: str, error: str) -> str:
     return f"Scheduled task failed: {task_name}. {detail}"
 
 
-def _inbound_failure_message(error: str, model_id: str) -> str:
+def _system_one_failure_detail(error: str) -> str:
+    """Distinguish rejected requests from outages without exposing provider prose."""
+    error = str(error or '')
+    if any(code in error for code in ('system_one_context_limit_exceeded', 'system_one_context_budget_exceeded',
+                                      'act_context_required_input_exceeds_budget',
+                                      'system_one_request_rejected:413', 'system_one_http_error:413')):
+        return "An internal review request exceeded its size limit. The task remains unverified."
+    if any(code in error for code in ('system_one_request_rejected', 'system_one_request_invalid',
+                                      'system_one_http_error:400', 'system_one_http_error:413',
+                                      'system_one_http_error:415', 'system_one_http_error:422')):
+        return "An internal review request was rejected. The task remains unverified."
+    if any(code in error for code in ('system_one_api_key_required', 'system_one_api_key_invalid', 'system_one_http_error:401')):
+        return "The review service credentials need to be corrected before verification can finish."
+    if any(code in error for code in ('system_one_connection_failed', 'system_one_temporarily_unavailable',
+                                      'system_one_http_error:5')):
+        return "A required service is temporarily unavailable. Please try again later."
+    return "A required review could not be completed. The task remains unverified."
+
+
+def _inbound_failure_message(error: str, model_id: str, *, task_state=None) -> str:
     code = _scheduled_failure_code(error)
     model = str(model_id or "").strip()
     if code == "system_one_unavailable":
-        return "I couldn't complete this task because a required service is temporarily unavailable. Please try again later."
+        detail = _system_one_failure_detail(error)
+        metadata = (task_state.get('metadata') or {}) if isinstance(task_state, dict) else {}
+        criteria = (task_state.get('acceptance_contract') or {}).get('criteria', []) if isinstance(task_state, dict) else []
+        if (any(stage in error for stage in ('act_recommendation', 'act_context'))
+                and (metadata.get('prepared_user_response') or {}).get('message')
+                and (metadata.get('v3_phase_review') or {}).get('status') == 'phase_verified_task_complete'
+                and criteria and all(row.get('status') == 'satisfied' for row in criteria if row.get('required', True))):
+            detail += " A draft answer was prepared, but final verification did not finish; the draft was not delivered."
+        return "I couldn't complete this task. " + detail
     if code == "v3_task_failed":
         reason = str(error or "").partition(":")[2].strip() or "V3 reported a terminal task failure."
         if reason.startswith("v3_phase_plan_invalid:"):

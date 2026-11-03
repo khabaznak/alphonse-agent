@@ -215,3 +215,20 @@ def retry_source_unresolved(task) -> bool:
             or selection.get('status') in {'selected', 'current_input'} and (
                 selection.get('access_status') == 'unavailable'
                 or selection.get('request_signature') != _request_signature(task)))
+
+
+def retry_allows_subgoal(subgoal) -> bool:
+    """Uncertain recall blocks source-dependent effects, not evidence gathering.
+
+    The phase's declared read-only scope is still enforced by normal action and
+    tool policy. It never grants access or makes an arbitrary Bash command safe.
+    """
+    from alphonse.agent_v2.core.intelligence.v3.contracts import SideEffectClass
+    from alphonse.agent_v2.core.intelligence.v3.revealing import Capability
+
+    effects = set(subgoal.allowed_side_effects)
+    if effects - {SideEffectClass.READ_ONLY, SideEffectClass.USER_RESPONSE}:
+        return False
+    return (set(subgoal.allowed_capabilities) <= {
+        Capability.USER_INTERACTION.value, Capability.USER_RESPONSE.value,
+    } or effects == {SideEffectClass.READ_ONLY})

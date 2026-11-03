@@ -5,8 +5,6 @@ from __future__ import annotations
 from alphonse.agent_v2.core.context_inventory import source, prompt_receipt
 
 import json
-import inspect
-import re
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
@@ -18,14 +16,11 @@ from alphonse.agent_v2.core.intelligence.v3.contracts import SUPPORTED_COMPLETIO
 from alphonse.agent_v2.core.intelligence.v3.revealing import Capability, tool_capabilities
 from alphonse.agent_v2.core.intelligence.v3.revealing import ToolRevealPolicy
 from alphonse.agent_v2.core.tools.registry import ToolExposurePolicy
-from alphonse.agent_v2.core.intelligence.v3.projections import enabled as projections_enabled, RECALL_TOOLS
+from alphonse.agent_v2.core.intelligence.v3.projections import enabled as projections_enabled
 from alphonse.agent_v2.system_one import SystemOneUnavailableError
-from alphonse.agent_v2.core.intelligence.v3.context import recent_conversation_for_curation
-from alphonse.agent_v2.core.intelligence.v3.context import selected_project_context
 from alphonse.agent_v2.core.intelligence.v3.context import selected_skill_guidance
-from alphonse.agent_v2.core.memory.formatting import bound_memory_context
-from alphonse.agent_v2.core.intelligence.v3.context import task_context_for_decision, memory_inventory
-from alphonse.agent_v2.core.memory.retry_context import prepare_retry_continuity, retry_source_unresolved
+from alphonse.agent_v2.core.intelligence.v3.context import task_context_for_decision
+from alphonse.agent_v2.core.memory.retry_context import prepare_retry_continuity, retry_source_unresolved, retry_allows_subgoal
 
 if TYPE_CHECKING:
     from alphonse.agent_v2.core.core import CoreLoopContext
@@ -44,29 +39,25 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
     tools = ToolExposurePolicy().select_tools(
         registry=context.tools, project_id=task.project_id, user=task.user, task=task,
     ) if context.tools is not None else ()
-    session_history = recent_conversation_for_curation(task, context)
-    project_context = _project_context(task, context)
-    durable_memory = bound_memory_context(memory_inventory(task.memory_context_md, "task-working:" + str(task.task_id) + ":memory_context"), 9000)
     context_selection = task.metadata.get("v3_context_selection")
     selected_context_ids = context_selection.get("selected_context_ids", []) if isinstance(context_selection, dict) else []
     shared_context = task_context_for_decision(
         task, context, selected_context_ids=selected_context_ids,
     )
-    if projections_enabled():
-        session_history = project_context = durable_memory = ""
     skill_guidance, loaded_skill_ids = ("", []) if projections_enabled() else selected_skill_guidance(task, context)
     skill_selection = task.metadata.get("v3_skill_selection")
     if isinstance(skill_selection, dict) and not projections_enabled():
         skill_selection["loaded_skill_ids"] = loaded_skill_ids
     attachment_manifest = _attachment_manifest(task)
     system_prompt = _strategic_plan_instructions()
-    curation_context = task_context_for_decision(task, context, purpose="curation", selected_context_ids=selected_context_ids)
-    tools = _curate_request_tools(
-        task, tools, system_prompt=system_prompt, session_history=session_history,
-        project_context=_bounded_text(project_context, 5000), durable_memory=durable_memory,
-        attachment_manifest=attachment_manifest, context=context, task_context=curation_context,
-    )
-    catalog = sorted({capability for tool in tools for capability in tool_capabilities(tool)})
+    available_tools = tuple(tool for tool in tools if str(getattr(tool.kind, 'value', tool.kind)) != 'artifact')
+    tools = _curate_request_tools(task, available_tools, context=context)
+    # A negative relevance hint cannot make a capability undiscoverable. Plan
+    # may request any runtime capability; Do reveals its schemas deterministically.
+    catalog = sorted({capability for tool in available_tools for capability in (tool_capabilities(tool) or (tool.tool_id,))})
+    additional_tools = [{"tool_id": tool.tool_id, "capabilities": tool_capabilities(tool) or (tool.tool_id,),
+                         "description": tool.description}
+                        for tool in available_tools if tool not in tools]
     capability_descriptions = ToolRevealPolicy().capability_descriptions
     capability_catalog = [
         {"capability": capability, "description": capability_descriptions.get(capability, capability)}
@@ -97,7 +88,10 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
         "If a contract already exists, return acceptance_criteria as an empty array and preserve it. "
         f"Prior V3 phase history: {json.dumps(task.metadata.get('v3_phase_history') or [], ensure_ascii=False)}\n"
         f"Available capability catalog: {json.dumps(capability_catalog, ensure_ascii=False)}\n"
-        f"Jev-curated tool registry (complete descriptors): {json.dumps(_tool_rows(tools), ensure_ascii=False)}\n"
+        f"Request-relevant tool descriptors: {json.dumps(_tool_rows(tools), ensure_ascii=False)}\n"
+        f"Additional runtime capabilities: {json.dumps(additional_tools, ensure_ascii=False)}\n"
+        "Request relevance is advisory. If additional work needs a listed capability, include it in the phase; "
+        "execution will reveal its current schemas subject to deterministic prerequisites and authorization. "
         "Return an object conforming exactly to this JSON Schema. Do not omit required nested fields "
         "or invent enum values. Use the user_response side effect for a subgoal whose effect is replying "
         "to the requester. Use local_skill_installation only for a new reusable skill explicitly requested by the requester, "
@@ -111,7 +105,8 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
         source("Existing acceptance contract (preserve its definitions unless new user steering requires a justified revision): " + contract_context, 'task:' + str(task.task_id) + ':contract', 'acceptance_contract'),
         source("Act directive (authoritative resilience instruction): " + directive_context, 'task:' + str(task.task_id) + ':act', 'act_directive'),
         source('Prior V3 phase history: ' + json.dumps(task.metadata.get('v3_phase_history') or [], ensure_ascii=False), 'task:' + str(task.task_id) + ':phase_history', 'phase_evidence'),
-        source('Jev-curated tool registry (complete descriptors): ' + json.dumps(_tool_rows(tools), ensure_ascii=False), 'tools:planning', 'tool_descriptors'),
+        source('Request-relevant tool descriptors: ' + json.dumps(_tool_rows(tools), ensure_ascii=False), 'tools:planning', 'tool_descriptors'),
+        source('Additional runtime capabilities: ' + json.dumps(additional_tools, ensure_ascii=False), 'tools:additional', 'capability_catalog'),
         source('Task attachment manifest (metadata only; use asset IDs exactly as listed):\n' + json.dumps(attachment_manifest, ensure_ascii=False), 'attachments:planning', 'attachment_metadata'),
     ]
     planning_manifest = prompt_receipt(prompt, planning_parts, purpose='planning')
@@ -137,13 +132,15 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
             phase = PhasePlan.from_dict(result.json_value)
             _validate_inspection_handoff(phase, act_directive)
             if retry_source_unresolved(task):
-                _validate_inspection_handoff(phase, {'inspection_resolution': {'route': 'requires_user_input'}})
+                if any(not retry_allows_subgoal(subgoal) for subgoal in phase.subgoals):
+                    raise ValueError('inspection_handoff_requires_source_resolution_before_mutation')
         except (TypeError, ValueError) as exc:
             # An absolute path in this relative-only field is a plan encoding
             # error, not an attempted or denied database operation. Let System
             # Two correct it once; never strip paths or relax validation here.
             scope_error = str(exc).startswith("mutation_scope_path_invalid:/")
             handoff_error = str(exc).startswith("inspection_handoff_")
+            unresolved_source = str(exc) == "inspection_handoff_requires_source_resolution_before_mutation"
             dependency_error = str(exc).startswith(("phase_subgoal_dependency_invalid:", "phase_subgoal_self_dependency:"))
             if attempt or not (scope_error or handoff_error or dependency_error):
                 raise V3PhasePlanValidationError(f"v3_phase_plan_invalid:{exc}") from exc
@@ -154,6 +151,9 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
                 "the requested mutation/read-back with a reply. Returned subgoal IDs: "
                 + json.dumps([item.get('subgoal_id') for item in result.json_value.get('subgoals', []) if isinstance(item, dict)]) + ". "
                 if dependency_error else
+                "The intended source is unresolved. Plan read_only evidence retrieval or a specific source question "
+                "before any mutation. Do not substitute an older source. A supported read-only response may proceed. "
+                if unresolved_source else
                 "Inspection handoff requires the next phase to perform the requested authorized operation or ask "
                 "a concrete missing-information question. Do not start another read-only inspection phase. If the "
                 "handoff route requires_user_input, plan exactly one user_interaction subgoal, using native.ask_question "
@@ -198,7 +198,7 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
             raise V3PhasePlanValidationError("v3_phase_plan_acceptance_criteria_invalid")
         task.sync_acceptance_criteria_view()
         task.append_update("Plan established the mission acceptance contract alongside the strategic phase.")
-    return _curate_phase_tools(task, phase, tools, context, task_context=curation_context)
+    return _curate_phase_tools(task, phase, available_tools, context)
 
 
 def _validate_inspection_handoff(phase: PhasePlan, directive: dict) -> None:
@@ -218,98 +218,9 @@ def _validate_inspection_handoff(phase: PhasePlan, directive: dict) -> None:
         raise ValueError("inspection_handoff_requires_action_or_question")
 
 
-def _curate_request_tools(
-    task, tools, *, system_prompt: str, session_history: str, project_context: str,
-    durable_memory: str, attachment_manifest, context, task_context: str = "",
-):
-    """Narrow the task-authorized runtime registry before System 2 planning."""
-    if not tools:
-        context.emit_telemetry({
-            "event": "system_one_request_tool_selection",
-            "task_id": task.task_id,
-            "status": "empty_authorized_registry",
-            "candidate_count": 0,
-        })
-        return ()
-    jev = context.system_one
-    curate = getattr(jev, "curate_request_tools", None) if jev is not None else None
-    try:
-        if not callable(curate):
-            raise SystemOneUnavailableError("request_tool_curation_unavailable")
-        selection = curate(
-            goal="" if projections_enabled() else task.goal,
-            system_prompt=system_prompt,
-            session_history=(
-                session_history + "\nTask attachment manifest (metadata only): "
-                f"{json.dumps(attachment_manifest, ensure_ascii=False)}"
-            ),
-            project_context=project_context,
-            durable_memory=durable_memory,
-            task_context=task_context,
-            tools=tools,
-        )
-    except Exception as exc:
-        detail = _safe_system_one_error_code(exc)
-        context.emit_telemetry({
-            "event": "system_one_request_tool_selection",
-            "task_id": task.task_id,
-            "status": "failed",
-            "candidate_count": len(tools),
-            "exception_type": type(exc).__name__,
-            "error_code": detail,
-        })
-        raise SystemOneUnavailableError(
-            f"request_tool_curation:{type(exc).__name__}:{detail}"
-        ) from exc
-    selected_ids = set((*selection.selected_tool_ids, *selection.ambiguous_tool_ids))
-    if (task.metadata.get("act_directive") or {}).get("inspection_resolution") or retry_source_unresolved(task):
-        # Relevance retention only, intersected with runtime exposure below.
-        selected_ids.add("native.ask_question")
-    retained_recall_ids = []
-    if _retain_recall_tools(task):
-        retained_recall_ids = [tool.tool_id for tool in tools if tool.tool_id in RECALL_TOOLS and tool.tool_id not in selected_ids]
-        selected_ids.update(RECALL_TOOLS)
-    curated = tuple(tool for tool in tools if tool.tool_id in selected_ids)
-    metadata = {"status": "used", "candidate_count": len(tools), **selection.to_metadata(),
-                "retained_recall_tool_ids": retained_recall_ids,
-                "curated_tool_ids": [tool.tool_id for tool in curated]}
-    history = task.metadata.setdefault("system_one_request_tool_selections", [])
-    if not isinstance(history, list):
-        history = []
-        task.metadata["system_one_request_tool_selections"] = history
-    history.append(metadata)
-    if len(history) > 20:
-        del history[:-20]
-    context.emit_telemetry({"event": "system_one_request_tool_selection", "task_id": task.task_id, **metadata})
-    return curated
-
-
-def _safe_system_one_error_code(exc: Exception) -> str:
-    """Keep known diagnostic codes while excluding arbitrary provider text."""
-    message = str(exc).strip()
-    exact_codes = {
-        "system_one_api_key_required",
-        "system_one_api_key_invalid",
-        "system_one_request_invalid",
-        "system_one_response_invalid",
-        "system_one_connection_failed",
-        "system_one_native_tool_template_invalid",
-    }
-    if message in exact_codes:
-        return message
-    if re.fullmatch(r"system_one_(?:temporarily_unavailable|http_error):[0-9]{3}", message):
-        return message
-    relevance_error = re.fullmatch(
-        r"system_one_tool_relevance_answer_invalid:([a-zA-Z0-9_.-]{1,100})", message
-    )
-    if relevance_error:
-        return f"system_one_tool_relevance_answer_invalid:{relevance_error.group(1)}"
-    template_error = re.fullmatch(
-        r"system_one_native_tool_template_(?:missing|invalid):(native\.[a-zA-Z0-9_.-]{1,100})", message
-    )
-    if template_error:
-        return message
-    return "unclassified"
+def _curate_request_tools(task, tools, *, context, **legacy_context):
+    from .tool_curation import curate_request_tools
+    return curate_request_tools(task, tools, context)
 
 
 def _retain_recall_tools(task) -> bool:
@@ -419,8 +330,11 @@ def _strategic_plan_instructions() -> str:
         "Do not replace it with an older similar prescription or a prior report about a different record. Preserve its "
         "uncertain fields, asking only for essential unresolved details. Subgoal depends_on values must exactly match "
         "subgoal IDs defined earlier in the array; do not mix hyphenated and underscored spellings or invent dependencies. "
-        "If retry continuity reports unresolved, ambiguous, unavailable or oversized antecedents, plan exactly one "
-        "user_interaction subgoal asking which source or exact change is intended. Do not mutate based on an older similar record. "
+        "If retry continuity reports unresolved, ambiguous, unavailable or oversized antecedents, retrieve relevant "
+        "authorized evidence with read_only subgoals before asking the user. Selected skills identify applicable sources "
+        "independently of conversation recall. Ask only when retrieval leaves a specific ambiguity. Do not mutate based "
+        "on an unresolved source or substitute an older similar record. A verified read-only answer can proceed through "
+        "normal evidence review; uncertain recall does not prove that the records are unavailable. "
         "Do not ask the user to repeat a time, relationship or instruction already resolved by an applicable source unless it conflicts, "
         "has expired, or is genuinely ambiguous. Unavailable unrelated memory backends do not negate a complete positive source."
         " When asked to retain a reusable workflow, solve the task and present the complete skill name, description and instructions "
@@ -510,60 +424,18 @@ def _ingest_relevant_messages(task: "TaskState", context: "CoreLoopContext") -> 
 
 
 def _curate_phase_tools(task, phase: PhasePlan, tools, context, *, task_context: str = "") -> PhasePlan:
-    if context.system_one is None or not hasattr(context.system_one, "select_plan_tools"):
-        raise SystemOneUnavailableError("tool_curation_unavailable")
-    try:
-        selector = context.system_one.select_plan_tools
-        parameters = inspect.signature(selector).parameters.values()
-        accepts_context = any(
-            item.name == "task_context" or item.kind == inspect.Parameter.VAR_KEYWORD
-            for item in parameters
-        )
-        kwargs = {"goal": "" if projections_enabled() and accepts_context and task_context else task.goal, "phase": phase.to_dict(), "tools": tools}
-        if accepts_context:
-            kwargs["task_context"] = task_context
-        selection = selector(**kwargs)
-    except Exception as exc:
-        raise SystemOneUnavailableError(f"tool_curation:{type(exc).__name__}") from exc
-    else:
-        metadata = {"status": "used", **selection.to_metadata()}
-        selected_ids = list((*selection.selected_tool_ids, *selection.ambiguous_tool_ids))
-        if (task.metadata.get("act_directive") or {}).get("inspection_resolution") or retry_source_unresolved(task):
-            selected_ids.extend(tool.tool_id for tool in tools if tool.tool_id == "native.ask_question")
-        retained_recall_ids = []
-        if _retain_recall_tools(task):
-            retained_recall_ids = [tool.tool_id for tool in tools if tool.tool_id in RECALL_TOOLS and tool.tool_id not in selected_ids]
-            selected_ids.extend(tool.tool_id for tool in tools if tool.tool_id in RECALL_TOOLS)
-        selected = tuple(dict.fromkeys(selected_ids))
-        metadata.update(retained_recall_tool_ids=retained_recall_ids, curated_tool_ids=list(selected))
-        curated = replace(phase, curated_tool_ids=selected, tool_curation_status="used")
-    _record_tool_curation(task, phase, metadata)
+    """Record deterministic exposure; subgoal reveal still enforces prerequisites.
+
+    Keep the persisted palette fields readable for older checkpoints, but never
+    consult Jev or treat a historical relevance palette as authorization.
+    """
+    selected = tuple(tool.tool_id for tool in tools)
+    metadata = {"status": "deterministic", "candidate_count": len(selected), "tool_ids": list(selected)}
     context.emit_telemetry({
-        "event": "system_one_tool_registry_selection", "task_id": task.task_id,
+        "event": "v3_tool_exposure", "task_id": task.task_id,
         "phase_id": phase.phase_id, **metadata,
     })
-    return curated
-
-
-def _record_tool_curation(task, phase: PhasePlan, metadata: dict) -> None:
-    history = task.metadata.setdefault("system_one_tool_registry_selections", [])
-    if not isinstance(history, list):
-        history = []
-        task.metadata["system_one_tool_registry_selections"] = history
-    history.append({"phase_id": phase.phase_id, **metadata})
-    if len(history) > 20:
-        del history[:-20]
-
-
-def _project_context(task: "TaskState", context: "CoreLoopContext") -> str:
-    return selected_project_context(task, context) or "- (none)"
-
-
-def _bounded_text(value: object, max_chars: int) -> str:
-    rendered = (value.strip() if isinstance(value, str) else str(value or "").strip()) or "- (none)"
-    if len(rendered) <= max_chars:
-        return rendered
-    return rendered[-max(1, max_chars - 18):].lstrip() + "\n... truncated"
+    return replace(phase, curated_tool_ids=selected, tool_curation_status="deterministic")
 
 
 def _phase_plan_json_schema(capabilities: list[str]) -> dict[str, object]:

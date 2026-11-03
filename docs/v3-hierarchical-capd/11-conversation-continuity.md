@@ -192,3 +192,13 @@ rollout gates. Replay preserves necessary-source recall, reduces aggregate
 irrelevant included sources from 83 to 29, and increases the aggregate prompt
 estimate from 3,287 to 3,776 tokens because explicit task-state/provenance labels
 add overhead. Token reduction and live answer quality are not claimed.
+
+### 2026-11-02: unresolved recall must permit evidence gathering
+
+An ambiguous historical-source selection no longer forces a user question before
+read-only discovery. Plan and Do allow read-only subgoals and evidence-grounded
+responses against selected skill resources or authorized memory. Source-dependent
+mutations and mixed read/write stages remain blocked until the intended source is
+resolved; unknown recall is neither denial of access nor proof of absent records.
+The ordinary authorization, effect, source visibility, and acceptance checks still
+apply. No household records are copied into product fixtures.

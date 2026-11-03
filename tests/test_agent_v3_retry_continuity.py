@@ -68,8 +68,8 @@ class ContinuityJev:
         assert len(candidates) <= 64 and sum(len(c['content']) for c in candidates) <= 48000
         return tuple(c['id'] for c in candidates if 'NEW_OCTOBER_PAYLOAD' in c['content'] and 'NEW_APPROVAL' in c['content'])
 
-    def curate_request_tools(self, *, task_context, **kwargs):
-        assert 'NEW_OCTOBER_PAYLOAD' in task_context and 'NEW_APPROVAL' in task_context
+    def curate_request_tools(self, *, state, **kwargs):
+        assert state['request']['text']
         return SystemOneToolRegistrySelection(selected_tool_ids=('native.bash', 'native.respond'))
 
     def select_plan_tools(self, **kwargs):
@@ -491,3 +491,75 @@ def test_parallel_source_screening_keeps_manifests_and_checkpoint_in_disposable_
     assert {m['sources'][0]['source_id'] for m in manifests if m['purpose'] == 'retry_context_screening'} == {
         f'fixture-{i}' for i in range(8)
     }
+
+
+@pytest.mark.parametrize('projected', [False, True])
+@pytest.mark.parametrize('bash_omitted', [False, True])
+def test_uncertain_history_allows_skill_database_lookup_and_evidenced_response(history, tmp_path, monkeypatch, projected, bash_omitted):
+    """A missing conversation antecedent must not prevent querying the records."""
+    from alphonse.agent_v2.skills import SkillStore
+    monkeypatch.setenv('ALPHONSE_V3_CONTEXT_PROJECTIONS', str(int(projected)))
+    store, *_ = history
+    skills = SkillStore(tmp_path / 'skills')
+    skill = skills.create_skill('fixture-schedules', 'Read recorded schedules',
+        'Authoritative records.sqlite is in this skill package. Use read-only SQLite; retrieve the latest dated record.')
+    database = Path(skill.directory) / 'records.sqlite'
+    with sqlite3.connect(database) as db:
+        db.execute('CREATE TABLE schedules(date TEXT, instructions TEXT)')
+        db.execute("INSERT INTO schedules VALUES('2026-10-30','FixtureBeta: Monday through Thursday')")
+    task = TaskState(task_id='schedule-lookup', message_id='schedule-lookup', user='fixture-owner',
+        goal='Check the latest recorded schedule and tell me whether Tuesday is included.',
+        metadata={'v3_skill_selection': {'selected_skill_ids': [skill.skill_id]}})
+    jev = ContinuityJev()
+    jev.select_retry_context = lambda **kwargs: ()
+    jev.curate_request_tools = lambda **kwargs: SystemOneToolRegistrySelection(selected_tool_ids=('native.respond',), ambiguous_tool_ids=() if bash_omitted else ('native.bash',))
+    jev.select_plan_tools = lambda **kwargs: pytest.fail('Phase tool curation must not run')
+    phase = dict(schema_version=3, phase_id='read-schedule', objective='Read the latest schedule and report its contents',
+        acceptance_criteria=['The answer cites the latest retrieved schedule and its date.'], criterion_ids=['ac-1'],
+        authorized_capabilities=['local_shell', 'user_response'], mutation_scope={'allowed_paths': []}, subgoals=[
+            dict(subgoal_id='read', objective='Read the latest recorded schedule', required_output_type='record',
+                 allowed_capabilities=['local_shell'], allowed_side_effects=['read_only'], completion={'kind': 'output_present'}),
+            dict(subgoal_id='answer', objective='Answer from the retrieved record', required_output_type='response', depends_on=['read'],
+                 allowed_capabilities=['user_response'], allowed_side_effects=['user_response'], completion={'kind': 'output_present'})])
+    tools = InMemoryToolRegistry()
+    tools.register(build_bash_tool_definition()); tools.register(build_respond_tool_definition())
+    def plan(request):
+        assert str(skill.directory) in request.prompt
+        assert 'Authoritative records.sqlite' in request.prompt
+        assert 'native.bash' in request.prompt
+        if bash_omitted:
+            assert 'Additional runtime capabilities:' in request.prompt
+        return SimpleNamespace(json_value=phase)
+    context = CoreLoopContext(messages=InMemoryMessageQueue(), conversation_store=store, skill_store=skills,
+        system_one=jev, tools=tools, inference=SimpleNamespace(generate_json=plan))
+    planned = plan_phase(task, context)
+    assert task.metadata['v3_retry_continuity']['status'] == 'ambiguous'
+    # Legacy checkpoints may have hidden Bash. Execution must recompute exposure.
+    from dataclasses import replace
+    planned = replace(planned, curated_tool_ids=('native.respond',), tool_curation_status='used')
+    state = new_tactical_state(planned)
+    def action(current, subgoal, available):
+        if subgoal.subgoal_id == 'read':
+            assert [tool.tool_id for tool in available] == ['native.bash']
+            script = "import sqlite3; c=sqlite3.connect('file:records.sqlite?mode=ro',uri=True); print(c.execute('SELECT date,instructions FROM schedules ORDER BY date DESC LIMIT 1').fetchone())"
+            return {'tool_id': 'native.bash', 'arguments': {'cwd': str(skill.directory),
+                'command': shlex.quote(sys.executable) + ' -c ' + shlex.quote(script)}}
+        assert [tool.tool_id for tool in available] == ['native.respond']
+        observed = current.bindings['record']['value']['stdout']
+        assert '2026-10-30' in observed and 'Monday through Thursday' in observed
+        return {'tool_id': 'native.respond', 'arguments': {
+            'message': 'The recorded October 30 schedule includes Tuesday: FixtureBeta, Monday through Thursday.'}}
+    outcome = PhaseExecutor(action_selector=action, reveal_policy=ToolRevealPolicy()).run(task, state, context)
+    assert outcome.status == PhaseStatus.PHASE_COMPLETE
+    assert [entry.tool_id for entry in state.actions] == ['native.bash', 'native.respond']
+    assert 'October 30' in task.metadata['prepared_user_response']['message']
+    with sqlite3.connect(database) as db:
+        assert db.execute('SELECT count(*) FROM schedules').fetchone()[0] == 1
+
+
+def test_uncertain_recall_does_not_allow_mixed_read_and_mutation_scope():
+    from alphonse.agent_v2.core.intelligence.v3.contracts import PhaseSubgoal, SideEffectClass
+    from alphonse.agent_v2.core.memory.retry_context import retry_allows_subgoal
+    subgoal = PhaseSubgoal('mixed', 'Inspect then write', 'record', allowed_capabilities=('local_shell',),
+        allowed_side_effects=(SideEffectClass.READ_ONLY, SideEffectClass.PROJECT_MUTATION))
+    assert not retry_allows_subgoal(subgoal)

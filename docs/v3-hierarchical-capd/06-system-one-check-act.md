@@ -6,7 +6,7 @@ Depends on: Stages 2 through 4
 ## Purpose
 
 Alphonse V3 can use TypeSafe.ai Jev as a fast System One decision engine for parallel
-tool relevance and semantic completion inside Do and for the semantic part of outer Check. The Check request
+skill relevance and semantic completion inside Do and for the semantic part of outer Check. The Check request
 also returns an advisory route for Act.
 This is an optional provider path; it does not replace deterministic authorization,
 effect, cancellation, or completion invariants.
@@ -21,21 +21,18 @@ replace an earlier request to remember one; historical retrieval uncertainty can
 override that supported assessment. Runtime code validates same-task/requester receipts,
 source references, input freshness and cancellation, while existing scope, effect and
 completion rules remain authoritative. Jev does not evaluate answer cogency here;
-its bounded retrieval and tool-relevance judgments retain their existing thresholds.
+its bounded retrieval judgments retain their existing thresholds.
 
 ## Do boundary
 
-Alphonse produces a static Jev-oriented registry once per runtime. It contains one
-stable Noul question for every registered tool, with explicit capability, inputs,
-read/write effects, and positive/negative selection boundaries. Every phase submits
-the complete question set in parallel against the goal and full phase plan. The
-questions do not change between tasks, even though the plan state does.
-
-Positive answers form the phase-wide relevant-tool palette. Deterministic policy then
-removes unavailable, unauthorized, or current-subgoal-incompatible tools. System Two
-receives the resulting descriptors and schemas and remains solely responsible for
-choosing the concrete call and filling its arguments. Jev never writes arguments,
-executes a tool, broadens mutation scope, or grants authorization.
+Jev selects reusable skills and supplies one advisory request-level tool relevance
+pass using structured facts and atomic Noul questions. Positive and uncertain tools
+reach strategic System Two; remaining capabilities stay discoverable. Failed or
+empty curation falls back to LLM selection. There is no phase-level Jev tool pass.
+Strategic System Two plans from these descriptors, runtime capabilities and skill
+workflows. Deterministic capability/prerequisite checks narrow concrete tools for
+each tactical subgoal. Legacy tool-palette fields remain readable but do not hide
+tools during resumed execution. See [progressive tool revealing](03-progressive-tool-revealing.md).
 
 After an operationally successful call, a separate Jev Noul decision determines
 whether the observed result semantically satisfies the current subgoal. Hard status,
@@ -104,7 +101,7 @@ files, memory ledgers, or chain-of-thought.
 ## Act boundary
 
 The same Jev request asks a Choice question among `complete`, `continue`, `replan`,
-`ask_user`, and `fail`. The result is deliberately asymmetric:
+`ask_user`, `fail_explain`, and `fail`. The result is deliberately asymmetric:
 
 - It may conservatively withhold an otherwise verified completion and route to
   strategic replanning.
@@ -133,19 +130,86 @@ review cannot fall back to acceptance-only success.
 Prepared acknowledgments are excluded from substantive outer progress, so changing
 their wording cannot keep an unfulfilled task running indefinitely.
 
+## Shared Jev request boundary and tactical review
+
+Every Jev call uses `jev_context.question_batches`: state plus any single question
+must fit 28,000 UTF-8 bytes; an entire independent-question batch must fit 56,000
+bytes. Questions are partitioned when their combined set is too large. State,
+Choice options, and individual questions are never silently pruned to fit. The
+HTTP client enforces the same preflight for callers outside the decision provider.
+Inputs that cannot be judged within that boundary produce a local size error
+before network access. Normal context limits remain enabled.
+
+Tactical progress now receives the goal, compact phase/subgoal facts, the current
+action/result once, and bounded prior observations. It does not receive the broad
+planning context or an unbounded execution log. `native.search_memory` results
+have one canonical hit representation: repeated Markdown, legacy recall envelopes,
+and top-level duplicate knowledge lists are excluded. Knowledge metadata and
+nonduplicated content are retained. Whole ranked hits are included within a
+20,000-byte tactical state budget; omitted hits are counted explicitly. An opaque
+result that cannot fit is withheld, not silently sliced. Full tool results remain
+unchanged in the checkpoint and available to tactical System Two.
+
+`SystemOneTacticalReview.context_complete` describes the completeness of this
+judgment view, not the underlying history or resource. When the current result is
+partial, code blocks subgoal completion, retry approval and inspection-readiness
+handoffs even if individual model judgments are positive. Raw probabilities remain
+visible. System Two must obtain a targeted source expansion/narrower observation;
+it must not repeat a broad search or re-execute a possibly completed mutation.
+A subsequent complete current observation can satisfy the subgoal without resending
+the earlier large search. Prior-result omissions are explicit optional context,
+never evidence of absence, denial, failure or success.
+
+Acceptance review renders each evidence summary once, keeps an ordered reference
+index, omits broad planning prompts and partitions whole evidence palettes when
+needed. It retains direct criterion-to-evidence support mappings. All other Jev
+builders share the same transport preflight, so oversized requests cannot evade
+limits by occurring at an earlier or later decision stage.
+
+## Bounded final mission review
+
+`act_context.mission_review_state` supplies a dedicated structured review, not the
+full tactical checkpoint. Its required fields are the goal, current-task messages,
+authenticated follow-ups, revalidated originating sources when needed, user
+constraints, acceptance definitions/status, compact subgoal/completion facts,
+phase outcome, and prepared response. All successful observations referenced by
+satisfied required semantic criteria are included in full, once per evidence ID.
+The current prepared response is referenced rather than duplicated as a tool result.
+Action argument logs, bound-output copies, and broad household/skill prompt blocks
+are not sent again. Optional observations can be omitted whole, with explicit
+coverage; omissions never establish absence, denial, successful mutation, or failure.
+
+State is limited to 24,000 UTF-8 bytes; the provider additionally checks the state
+plus its actual questions against a 28,000-byte request budget. These conservative
+bounds leave framing headroom under normal Jev context limits. Required content
+that cannot fit or is unavailable stops with an explicit local error; it is never
+silently clipped and does not trigger a long-context override. `v3_act_context`
+records size, support refs and coverage, without storing a second raw payload.
+The required mission check and deterministic effect/cancellation guards remain.
+A service or request failure cannot promote a prepared draft to completed work.
+
+Check's latest verdict is persisted before Act. If Act fails, the work log retains
+that verdict, the actual failed routing decision, and an end route, rather than an
+older blocked phase. Prepared answers remain in their checkpoint, undelivered.
+
 ## Configuration and failure behavior
 
 Administrators configure the endpoint, model, API key, and probability thresholds in
 Desktop Settings → System One. Enabling requires a successful live validation. The
 API key is stored in the local settings database and is never returned through IPC.
 
-System One is disabled by default. Connection errors, malformed responses, missing
-answers, or ambiguous evidence cause a per-task fallback to System Two. The last
+System One is disabled by default. Advisory tool-relevance failures fall back to
+System Two tool selection; ambiguous semantic evidence can use System Two review.
+A failed required mission-outcome review cannot fall back to acceptance-only success. The last
 validated settings remain unchanged after a failed validation. Structured telemetry
 records provider status, latency, model, usage, and routing metadata without logging
 the key or request contents.
-Failed Jev decision manifests also retain only a reviewed error code and exception
-type; arbitrary provider bodies and credentials are excluded. Retries apply to
+Failed Jev decision manifests retain reviewed error codes and exception types.
+Request rejections also retain HTTP status and an allowlisted machine code such as
+`max_tokens_exceeded`; arbitrary provider prose and credentials are excluded. HTTP
+400/413/415/422 are reported as request errors, with context-size errors distinguished
+from transient outages. Matching task/owner notifications may state that a draft
+was prepared while explicitly preserving its unverified, undelivered status. Retries apply to
 connection failures, temporary-service responses and server errors, not unchanged
 persistent HTTP requests.
 
@@ -193,3 +257,26 @@ persistent HTTP requests.
 - 2026-09-20 — Extended Jev into Do with a static full-registry parallel Noul contract,
   phase-wide relevance selection, deterministic per-subgoal enforcement, System Two
   invocation composition, and a semantic inner-Do completion review.
+
+- 2026-11-02 — Bounded final Act state independently of tactical checkpoints and
+  preserved every criterion-linked supporting observation. The failed household
+  run was inspected locally only: 109,907 bytes of duplicated checkpoint state
+  became approximately 23 KB of review state with all acceptance support intact.
+  Added safe provider rejection codes, context-limit classification, accurate
+  inbound/scheduled messages, preserved prepared responses and current work-log
+  verdicts. Synthetic live checks accepted a supported answer, withheld completion
+  for an unperformed write and wrong source, and confirmed HTTP 400 with machine
+  code `max_tokens_exceeded` for deliberately oversized synthetic input. No medical
+  or household data was sent. Evidence is in `output/jev-act-review-2026-11-02/`.
+
+- 2026-11-03 — The subsequent household run failed earlier, in tactical progress:
+  an 82,823-byte memory-search result was repeated in a 144,224-byte decision
+  inventory and rejected with `max_tokens_exceeded`. Added canonical tactical
+  evidence views, explicit partial-view completion/readiness/retry guards,
+  targeted-read recovery, acceptance-review deduplication/evidence batches,
+  and shared per-question/per-request preflight for every Jev call. The failed
+  checkpoint was inspected locally only; its tactical state projects to about
+  18 KB with partial coverage explicit. Live synthetic probes reviewed a large
+  search without completing the subgoal, then completed after an exact source
+  read. 5,771 input tokens cost approximately US$0.000242382 within the previously
+  approved US$1 budget. Payloads/results: `output/jev-tactical-review/`.

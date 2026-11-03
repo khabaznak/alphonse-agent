@@ -100,6 +100,7 @@ class HierarchicalCAPDProcessor:
             except SystemOneUnavailableError as exc:
                 task.status = "failed"
                 task.outcome = {"status": "failure", "reason": str(exc)}
+                task.metadata["v3_route"] = "end"
                 self._persist(task, context)
                 break
             self._persist(task, context)

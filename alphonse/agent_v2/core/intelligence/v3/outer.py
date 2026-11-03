@@ -91,6 +91,7 @@ class V3OuterController:
             task.metadata["v3_route"] = "end"
             task.metadata["v3_strategic_decision"] = {"action": decision.action.value, "reason": decision.reason}
             return review, decision
+        task.metadata["v3_phase_review"] = _review_dict(review)
         recommendation = None
         if review.status in {
             PhaseReviewStatus.WAITING_USER,
@@ -114,9 +115,10 @@ class V3OuterController:
         elif context.system_one is not None and callable(getattr(context.system_one, "recommend_act", None)):
             try:
                 decision, recommendation = _recommend_act(task, state, outcome, review, context)
-            except SystemOneUnavailableError:
+            except SystemOneUnavailableError as exc:
                 if (getattr(context.system_one, "requires_mission_outcome_review", False)
                         and review.status == PhaseReviewStatus.PHASE_VERIFIED_TASK_COMPLETE):
+                    task.metadata['v3_strategic_decision'] = {'action': 'fail', 'reason': str(exc)}
                     raise
                 decision = decide_next_action(review)
         else:
@@ -311,27 +313,17 @@ def _recommend_act(task, state, outcome, review: PhaseReview, context):
         return StrategicDecision(StrategicAction.FAIL, review.reason), SystemOneActRecommendation(
             "fail", 1.0, True, review.reason,
         )
-    check_verdict = (
-        "success" if review.status == PhaseReviewStatus.PHASE_VERIFIED_TASK_COMPLETE else
-        "wip" if review.status == PhaseReviewStatus.PHASE_VERIFIED_TASK_INCOMPLETE else "failure"
-    )
-    input_state = {
-        "goal": "" if projections_enabled() else task.goal,
-        "task_id": task.task_id,
-        "check_verdict": check_verdict,
-        "check_reason": review.reason,
-        "acceptance_contract": task.ensure_acceptance_contract(),
-        "strategic_plan": state.phase.to_dict(),
-        "phase_outcome": outcome.to_dict(),
-        "complete_tool_execution_log": state.to_dict(),
-        "task_context": _task_context(task, context),
-        "user_constraints": task.metadata.get("user_constraints", {}),
-        "failure_reason": task.metadata.get("failure_reason", ""),
-        "plan_call_exception_count": task.count_plan_call_exceptions(),
-        "authenticated_followups": list(task.metadata.get("v3_resumption_evidence") or []),
-        "available_tool_ids": [tool.tool_id for tool in ToolExposurePolicy().select_tools(
-            registry=context.tools, project_id=task.project_id, user=task.user, task=task)] if context.tools is not None else [],
-    }
+    from .act_context import mission_review_state
+    available = [tool.tool_id for tool in ToolExposurePolicy().select_tools(
+        registry=context.tools, project_id=task.project_id, user=task.user, task=task)] if context.tools is not None else []
+    request_sources = []
+    if (task.metadata.get('v3_retry_continuity') or {}).get('status') == 'selected':
+        from alphonse.agent_v2.core.memory.retry_context import retry_continuity_records
+        records = retry_continuity_records(task, context)
+        if (task.metadata.get('v3_retry_continuity') or {}).get('access_status') != 'available':
+            raise SystemOneUnavailableError('act_context_required_evidence_unavailable')
+        request_sources = [str(record) for record in records[1:]]
+    input_state = mission_review_state(task, state, outcome, review, available, request_sources=request_sources)
     try:
         recommendation = context.system_one.recommend_act(state=input_state)
     except Exception as exc:
