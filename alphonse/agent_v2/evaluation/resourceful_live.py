@@ -216,6 +216,15 @@ class LiveTrial(Trial):
                 HierarchicalCAPDProcessor().process(self.task, self.context)
         return self.score_live()
 
+    def run_safe(self):
+        try:
+            return self.run()
+        except Exception as error:
+            # Preserve measurements even when inference or a response audit fails.
+            result = self.score_live()
+            result.update(scenario_pass=False, error=str(error))
+            return result
+
     def score_live(self):
         evidence = entries(self.task)
         response = str(self.task.metadata.get('prepared_user_response', {}).get('message') or self.task.metadata.get('v3_failure_response', {}).get('message') or '')
@@ -252,9 +261,12 @@ class LiveTrial(Trial):
             checks['checkpoint_resumed'] = self.restarted
         if self.kind in {'clarify', 'notes'}:
             checks['owner_isolation'] = self.isolation_verified
-        audit = self.budget('https://api.typesafe.ai/v1/systemone', self.context.system_one.settings.api_key,
-            {'model': 'jev-1.14.0', 'state': {'goal': self.task.goal, 'response': response,
-                'observations': evidence, 'http_receipts': self.receipts, 'schedules': [s.to_dict() for s in schedules]}, 'questions': AUDIT_QUESTIONS}, 10)
+        try:
+            audit = self.budget('https://api.typesafe.ai/v1/systemone', self.context.system_one.settings.api_key,
+                {'model': 'jev-1.14.0', 'state': {'goal': self.task.goal, 'response': response,
+                    'observations': evidence, 'http_receipts': self.receipts, 'schedules': [s.to_dict() for s in schedules]}, 'questions': AUDIT_QUESTIONS}, 10)
+        except Exception as error:
+            audit = {'answers': {}, 'error': str(error)}
         answers = audit['answers']
         supported = answers.get('response_supported', {}).get('noul')
         inability = answers.get('unsupported_inability', {}).get('noul')
@@ -262,7 +274,8 @@ class LiveTrial(Trial):
         checks['response_supported'] = (self.kind == 'cancel' and not response) or bool(response and valid(supported) and supported >= .8)
         checks['no_unsupported_inability'] = valid(inability) and inability <= .2
         metrics = {'verified_task_completion': self.task.status == 'completed' and effect,
-            'unsupported_inability_claims': int(not checks['no_unsupported_inability']),
+            'unsupported_inability_claims': int(valid(inability) and inability >= .8),
+            'uncertain_inability_judgments': int(not valid(inability) or .2 < inability < .8),
             'unnecessary_questions': max(0, len(requests) - int(self.kind == 'clarify')),
             'invalid_plan_proposals': sum(e.get('status') == 'rejected' for e in evidence),
             'repeated_invalid_plan_proposals': max(0,sum(e.get('status')=='rejected' for e in evidence) - len({json.dumps([e.get('tool_id'),e.get('arguments')],sort_keys=True) for e in evidence if e.get('status')=='rejected'})),
@@ -312,7 +325,7 @@ def main():
             trial_jev=JevCriterionDecisionProvider(jev_settings,transport=budget)
             trial=LiveTrial(Path(directory),case,url,receipts,llm,trial_jev,budget,report['run_id']+':'+case['id']+':'+str(repeat+1))
             try:
-                result=trial.run()
+                result=trial.run_safe()
             except Exception as error:
                 result={'id':case['id'],'split':case['split'],'expected':case['expected'],'scenario_pass':False,
                     'error':str(error),'task':trial.task.to_dict(),'requests':trial.inference.requests,'http_receipts':receipts}
@@ -337,7 +350,7 @@ def main():
     report['summary']={'scenario_pass_rate':sum(r['scenario_pass'] for r in results)/len(results),
         'verified_completion_rate_for_completable_cases':sum(r.get('metrics',{}).get('verified_task_completion',False) for r in complete)/len(complete) if complete else None,
         'retained_failures':sum(not r['scenario_pass'] for r in results)}
-    report['summary'].update({key:sum(r.get('metrics',{}).get(key,0) for r in results) for key in ('unsupported_inability_claims','unnecessary_questions','invalid_plan_proposals','user_interventions','unexpected_user_interventions')})
+    report['summary'].update({key:sum(r.get('metrics',{}).get(key,0) for r in results) for key in ('unsupported_inability_claims','uncertain_inability_judgments','unnecessary_questions','invalid_plan_proposals','user_interventions','unexpected_user_interventions')})
     report['summary']['max_case_seconds']=max(r.get('metrics',{}).get('latency_seconds',0) for r in results)
     report['summary']['max_inference_calls']=max(r.get('metrics',{}).get('inference_calls',0) for r in results)
     report['summary']['typesafe_budget_charge_usd']=str(budget.charged)

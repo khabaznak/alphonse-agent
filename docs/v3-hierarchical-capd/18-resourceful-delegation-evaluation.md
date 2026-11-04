@@ -136,3 +136,20 @@ The qualifying run uses four concurrent independent fixture tasks. TypeSafe HTTP
 attempts and ledger reservations are serialized under a lock; per-case costs use
 a unique run/case/repeat tag. This changes throughput only, with no shared task
 state or cross-owner context. Repeats each use new stores and fixture servers.
+
+The frozen live-v1 run at `91f1406` failed its qualification gate. All 28
+trials were retained. Its exception path omitted final metric blocks; original
+request durations, task snapshots and per-case TypeSafe ledger rows remain
+available. The runner now preserves measurements even when inference/audit fails.
+Its original inability count conservatively included uncertain judgments; the
+corrected implementation records positive and uncertain judgments separately.
+Neither correction rewrites or changes the frozen run's result.
+
+`resourceful_live_review.py` performs a separately identified **post-hoc diagnostic**
+audit over retained traces, with the same cumulative $1 ledger. It recovers exact
+provider call counts/durations, rejected-proposal and authenticated-intervention
+counts for interrupted trials. Original missing end-to-end wall times remain null;
+provider duration sums are not presented as wall time. Three atomic Nouls audit
+response support, unsupported inability and unnecessary input requests. The audit
+retains all probabilities and separates yes/no/uncertain/unavailable. It cannot
+turn the original failed qualification into success.
