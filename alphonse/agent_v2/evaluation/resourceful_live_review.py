@@ -72,10 +72,10 @@ def main():
                 'typesafe_calls':len(calls),'typesafe_seconds':sum(c.get('seconds',0) for c in calls),
                 'typesafe_charge_usd':str(sum((Decimal(c['budget_charge_usd']) for c in calls),Decimal(0))),
                 'case_wall_seconds':result.get('metrics',{}).get('latency_seconds'),
-                'delivered_question_interrupts':sum(bool(e.get('result',{}).get('question_interrupt')) for e in rows),
+                'delivered_question_interrupts':sum(bool((e.get('result') or {}).get('question_interrupt')) for e in rows),
                 'authenticated_user_interventions':sum(e.get('kind')=='authenticated_question_answer' for e in rows),
                 'rejected_tool_proposals':len(rejected),'repeated_equivalent_rejected_proposals':duplicates,
-                'repeated_prepared_response_messages':max(0,len([e for e in rows if e.get('tool_id')=='native.respond'])-len({e.get('result',{}).get('message') for e in rows if e.get('tool_id')=='native.respond'}))}})
+                'repeated_prepared_response_messages':max(0,len([e for e in rows if e.get('tool_id')=='native.respond'])-len({(e.get('result') or {}).get('message') for e in rows if e.get('tool_id')=='native.respond'}))}})
         report['total_typesafe_budget_charge_usd']=str(budget.charged)
         args.output.write_text(json.dumps(report,indent=2)+'\n')
     print(json.dumps({'reviewed':len(report['results']),'total_typesafe_budget_charge_usd':str(budget.charged)}))

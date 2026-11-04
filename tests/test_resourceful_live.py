@@ -101,3 +101,26 @@ def test_audit_outage_still_retains_failed_workflow_measurements(tmp_path, monke
 def test_post_run_review_keeps_uncertainty_separate(value,expected):
     from alphonse.agent_v2.evaluation.resourceful_live_review import classify
     assert classify(value)==expected
+
+
+def test_post_run_review_handles_rejected_call_without_result(tmp_path, monkeypatch):
+    import json
+    import sys
+    from types import SimpleNamespace
+    from alphonse.agent_v2.evaluation import resourceful_live_review as review
+    source=tmp_path/'source.json';output=tmp_path/'review.json';ledger=tmp_path/'budget.json'
+    source.write_text(json.dumps({'revision':'synthetic','run_id':'synthetic','live_model_qualified':False,
+        'results':[{'id':'rejected','repeat':1,'split':'heldout','scenario_pass':False,
+            'task':{'status':'failed','metadata':{'v3_phase_history':[{'evidence':{'entries':[
+                {'evidence_ref':'rejected:1','tool_id':'native.respond','status':'rejected','result':None,'arguments':{}}
+            ]}}]}}}]}))
+    def send(*args):
+        return {'usage':{'input_tokens':10},'answers':{k:{'noul':.5} for k in review.QUESTIONS}}
+    monkeypatch.setattr(review,'BudgetTransport',lambda p:BudgetTransport(p,transport=send))
+    monkeypatch.setattr(review,'read_settings',lambda p:(None,SimpleNamespace(api_key='synthetic')))
+    monkeypatch.setattr(sys,'argv',['review','--input',str(source),'--output',str(output),'--ledger',str(ledger)])
+    review.main()
+    result=json.loads(output.read_text())
+    assert result['results'][0]['metrics']['rejected_tool_proposals']==1
+    assert result['results'][0]['metrics']['delivered_question_interrupts']==0
+    assert result['qualification_unchanged']

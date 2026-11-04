@@ -228,7 +228,7 @@ class LiveTrial(Trial):
     def score_live(self):
         evidence = entries(self.task)
         response = str(self.task.metadata.get('prepared_user_response', {}).get('message') or self.task.metadata.get('v3_failure_response', {}).get('message') or '')
-        requests = [e for e in evidence if e.get('result', {}).get('question_interrupt')]
+        requests = [e for e in evidence if (e.get('result') or {}).get('question_interrupt')]
         posts = [r for r in self.receipts if r['method'] == 'POST']
         schedules = self.schedules.list_tasks()
         # Live prose and filenames vary. Independent result oracles do not use generated criteria.
