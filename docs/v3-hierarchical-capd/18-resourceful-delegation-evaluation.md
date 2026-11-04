@@ -91,7 +91,7 @@ mode, never instantiating the production stores. Every task gets disposable
 users, workspace, questions, schedules and loopback forms. No household history,
 skills, artifacts or account session is loaded into task context.
 
-`live_v1.json` fixes 14 synthetic cases, six held-out fixture variations and two
+`live_v1.json` fixes 14 synthetic cases, five held-out fixture variations and two
 repeats. All 28 must pass; all completable cases require external effect readback,
 zero unnecessary questions/unsupported inability reports/unexpected interventions,
 at most 16 System Two calls and 180 seconds per case. Model behavior is autonomous;

@@ -1,0 +1,50 @@
+{
+  "qualification": "FAILED / NO-GO",
+  "runtime_baseline": "585541f3441b3ea64071a1e969520b2f9024e166",
+  "evaluated_harness": "91f1406cfc24042b0707122c10283c6aa0f06c88",
+  "review_revision": "0b68ee3528b6bf4dd8bd43d12d5a613ab40e2293",
+  "trials": 28,
+  "passed": 12,
+  "retained_failures": 16,
+  "original_summary": {
+    "scenario_pass_rate": 0.42857142857142855,
+    "verified_completion_rate_for_completable_cases": 0.5,
+    "retained_failures": 16,
+    "unsupported_inability_claims": 2,
+    "unnecessary_questions": 0,
+    "invalid_plan_proposals": 3,
+    "user_interventions": 0,
+    "unexpected_user_interventions": 0,
+    "max_case_seconds": 165.47153716697358,
+    "max_inference_calls": 13,
+    "typesafe_budget_charge_usd": "0.063212058"
+  },
+  "total_typesafe_budget_charge_usd": "0.066962280",
+  "audit_counts": {
+    "response_supported": {
+      "yes": 23,
+      "uncertain": 5
+    },
+    "unsupported_inability": {
+      "no": 27,
+      "uncertain": 1
+    },
+    "unnecessary_input_request": {
+      "no": 26,
+      "uncertain": 2
+    }
+  },
+  "trace_counts": {
+    "system_two_calls": 257,
+    "typesafe_calls": 475,
+    "delivered_question_interrupts": 0,
+    "authenticated_user_interventions": 0,
+    "rejected_tool_proposals": 4,
+    "repeated_equivalent_rejected_proposals": 1,
+    "repeated_prepared_response_messages": 15
+  },
+  "interrupted_trials_without_original_wall_time": 12,
+  "repair_issue": "https://github.com/khabaznak/alphonse-agent/issues/164",
+  "live_model_qualified": false,
+  "live_site_qualified": false
+}
