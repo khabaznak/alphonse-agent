@@ -312,3 +312,11 @@ Verification uses disposable registries and SQLite stores in
 `tests/test_agent_v3_plan_validation.py`, alongside the executor, rollout and reveal
 regressions. No household files, live provider calls, or external services are used
 by these cases.
+
+## Feasibility without a dedicated tool
+
+The Bash relevance question includes bounded runtime checks and temporary
+programs for requests that name no technical library. System Two plans the
+approach under the [feasibility assessment guidance](17-feasibility-assessment.md);
+Jev judges relevance only. A capability-only question does not authorize
+activation or scheduling.

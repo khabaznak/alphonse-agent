@@ -73,6 +73,9 @@ def build_bash_tool_definition() -> ToolDefinition:
             "Downloads, or a path the user supplied; report the scope actually searched and ask when the intended "
             "location is unclear. Bash replaces dedicated project search, project file read, and exact text edit tools. "
             "Use it for direct filesystem, process, build, test, diagnostic, and skill script creation or repair work. "
+            "When a dedicated tool is absent, use bounded runtime/dependency checks and small temporary programs "
+            "within authorized scope to assess feasible execution paths. Users need not name a library. "
+            "Capability assessment alone does not authorize installs, external submissions or schedules. "
 
             "For configured accounts/data, supply skill_id and binding_names. The process receives ALPHONSE_SKILL_BINDINGS JSON; "
             "credentials stay out of command arguments and known literal credentials are redacted from output. "

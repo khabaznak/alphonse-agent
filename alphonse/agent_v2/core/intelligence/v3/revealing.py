@@ -55,7 +55,7 @@ class ToolRevealPolicy:
     max_tools: int | None = None
     max_schema_chars: int | None = None
     capability_descriptions: dict[str, str] = field(default_factory=lambda: {
-        Capability.LOCAL_SHELL.value: "Run local Bash commands for filesystem, process, build, test, diagnostic, and artifact work.",
+        Capability.LOCAL_SHELL.value: "Run local Bash commands for filesystem, process, build, test, diagnostic, dependency checks, bounded feasibility experiments, and skill program work.",
         Capability.PROJECT_RECORD_SEARCH.value: "Legacy project search capability; use local_shell for new plans.",
         Capability.PROJECT_FILE_INSPECTION.value: "Legacy project file inspection capability; use local_shell for new plans.",
         Capability.PROJECT_ARTIFACT_QUERY.value: "Legacy artifact capability; use the selected skill and authorized local_shell for new plans.",

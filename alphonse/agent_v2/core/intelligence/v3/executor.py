@@ -25,6 +25,7 @@ from alphonse.agent_v2.core.tools.invocation import ToolInvocationService
 from alphonse.agent_v2.core.tools.registry.native.bash import BASH_TOOL_ID
 from alphonse.agent_v2.core.tools.registry.native.respond import RESPOND_TOOL_ID
 from alphonse.agent_v2.system_one import SystemOneUnavailableError
+from .feasibility import FEASIBILITY_GUIDANCE
 
 if TYPE_CHECKING:
     from alphonse.agent_v2.core.core import CoreLoopContext, ToolDescriptor
@@ -577,6 +578,7 @@ def _tactical_prompt(
         for item in tools
     ]
     return (
+        FEASIBILITY_GUIDANCE +
         "Select exactly one concrete tactical action for the current subgoal and define acceptance questions for its result. "
         "Do not change the objective, acceptance criteria, or mutation scope. "
         "Return JSON with tool_id, arguments, and a non-empty acceptance_questions array. Each item must be a Noul question "
