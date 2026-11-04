@@ -1,0 +1,70 @@
+{
+  "development-1.json.gz": {
+    "sha256_uncompressed": "afbbbf41736a3fa9c0b415f249db938c4eff522fc87a86d45423da70b63ccbc4",
+    "qualified_synthetic_runtime": false,
+    "summary": {
+      "scenario_pass_rate": 0.5,
+      "verified_completion_rate_for_completable_cases": 0.3,
+      "unsupported_inability_claims": 0,
+      "unnecessary_questions": 2,
+      "repeated_invalid_dispatches": 0,
+      "unexpected_user_interventions": 0,
+      "max_case_seconds": 0.28427595901302993,
+      "max_inference_calls": 8,
+      "max_provider_cost_usd": 0
+    },
+    "revision": "202cba0628b2036c9b95735a0807e5cb49675f08",
+    "tracked_tree_dirty": false
+  },
+  "development-2.json.gz": {
+    "sha256_uncompressed": "3f6102d1d944a0ccb46e2b8cfe5880cd2eb84c4d7d8cad4036976518bdd47b4f",
+    "qualified_synthetic_runtime": false,
+    "summary": {
+      "scenario_pass_rate": 0.9285714285714286,
+      "verified_completion_rate_for_completable_cases": 1.0,
+      "unsupported_inability_claims": 0,
+      "unnecessary_questions": 2,
+      "repeated_invalid_dispatches": 0,
+      "unexpected_user_interventions": 0,
+      "max_case_seconds": 0.25316958397161216,
+      "max_inference_calls": 8,
+      "max_provider_cost_usd": 0
+    },
+    "revision": "202cba0628b2036c9b95735a0807e5cb49675f08",
+    "tracked_tree_dirty": false
+  },
+  "development-3.json.gz": {
+    "sha256_uncompressed": "95a5741bbae858ceeea9cb0d8d632f92501563cc3d2468613640e4c7a20142b8",
+    "qualified_synthetic_runtime": false,
+    "summary": {
+      "scenario_pass_rate": 0.9285714285714286,
+      "verified_completion_rate_for_completable_cases": 1.0,
+      "unsupported_inability_claims": 0,
+      "unnecessary_questions": 2,
+      "repeated_invalid_dispatches": 0,
+      "unexpected_user_interventions": 0,
+      "max_case_seconds": 0.20538349996786565,
+      "max_inference_calls": 7,
+      "max_provider_cost_usd": 0
+    },
+    "revision": "202cba0628b2036c9b95735a0807e5cb49675f08",
+    "tracked_tree_dirty": false
+  },
+  "qualification.json.gz": {
+    "sha256_uncompressed": "5c683ee13c8dd0ae9270f2e2d21a3c7e02c6a48bd45a3cb5dd442760bf72fea0",
+    "qualified_synthetic_runtime": true,
+    "summary": {
+      "scenario_pass_rate": 1.0,
+      "verified_completion_rate_for_completable_cases": 1.0,
+      "unsupported_inability_claims": 0,
+      "unnecessary_questions": 0,
+      "repeated_invalid_dispatches": 0,
+      "unexpected_user_interventions": 0,
+      "max_case_seconds": 0.19870054203784093,
+      "max_inference_calls": 7,
+      "max_provider_cost_usd": 0
+    },
+    "revision": "38dc4f5f3a2b06d405f97d2e555d2d354a456bd0",
+    "tracked_tree_dirty": false
+  }
+}
