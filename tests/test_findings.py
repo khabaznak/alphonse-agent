@@ -2,6 +2,7 @@
 from dataclasses import replace
 from datetime import timedelta
 import json
+import sqlite3
 from types import SimpleNamespace
 
 import pytest
@@ -206,7 +207,7 @@ def test_ambiguous_send_is_durable_and_never_automatically_retried(findings, out
     assert 'private text' not in restored.outbox.get(message.outbox_message_id).last_error
 
 
-@pytest.mark.parametrize('change', ['revoke', 'delete', 'finding_expire'])
+@pytest.mark.parametrize('change', ['revoke', 'delete', 'source_revoke', 'unknown_state', 'finding_expire'])
 def test_revocation_deletion_propagates_all_versions_and_local_delivery(findings, change):
     f = findings
     ref = f.save()
@@ -223,11 +224,21 @@ def test_revocation_deletion_propagates_all_versions_and_local_delivery(findings
         with f.schedules._connect() as conn:
             row = conn.execute('SELECT definition FROM v2_source_evidence WHERE evidence_id=?', (f.eid,)).fetchone()
             value = json.loads(row[0])
-            if change == 'delete': value.update(state='deleted', content={})
-            else: value['retention_deadline'] = (f.now - timedelta(seconds=1)).isoformat()
+            value.update(state={'delete': 'deleted', 'source_revoke': 'revoked',
+                                'unknown_state': 'future_state'}[change], content={})
             conn.execute('UPDATE v2_source_evidence SET definition=? WHERE evidence_id=?', (json.dumps(value), f.eid))
     with pytest.raises(PermissionError):
         f.findings.view(RECIPIENT, ref['finding_id'])
+    # References in UI/memory/checkpoints must resolve through the same gate.
+    with pytest.raises(PermissionError):
+        f.findings.view(RECIPIENT, ref['finding_id'], version=ref['version'])
+    with pytest.raises(PermissionError):
+        f.findings.delivery_status(RECIPIENT, ref['finding_id'])
+    with pytest.raises(PermissionError):
+        f.findings.notify(ACTOR, ref['finding_id'])
+    if change == 'revoke':
+        with pytest.raises(PermissionError):
+            f.acquisition.processing(ACTOR, f.run_id)
     assert f.outbox.claim_next() is None  # delivery gate works before cleanup tick
     f.acquisition.purge_content()
     with f.schedules._connect() as conn:
@@ -236,6 +247,56 @@ def test_revocation_deletion_propagates_all_versions_and_local_delivery(findings
     assert 'Prepare the school assignment' not in persisted and '2026-11-10' not in persisted
     assert f.outbox.get(delivery).message == '[Finding unavailable]'
     assert f.outbox.get(delivery).metadata['finding_delivery_state'] == 'revoked'
+
+
+def test_historical_version_revalidates_its_own_retention(findings):
+    f = findings
+    ref = f.save()
+    # Simulate an older version with a shorter retention deadline than current.
+    with f.schedules._connect() as conn:
+        historical = json.loads(conn.execute(
+            'SELECT definition FROM v2_finding_versions WHERE finding_id=? AND version=1',
+            (ref['finding_id'],)).fetchone()[0])
+        historical['retention_deadline'] = (f.now - timedelta(seconds=1)).isoformat()
+        conn.execute('UPDATE v2_finding_versions SET definition=? WHERE finding_id=? AND version=1',
+                     (json.dumps(historical), ref['finding_id']))
+    assert f.findings.view(RECIPIENT, ref['finding_id'])['state'] == 'open'
+    with pytest.raises(PermissionError, match='finding_retention_expired'):
+        f.findings.view(RECIPIENT, ref['finding_id'], version=1)
+
+
+def test_restored_evidence_cannot_override_current_revocation(findings):
+    f = findings
+    ref = f.save()
+    delivery = f.findings.notify(ACTOR, ref['finding_id'])['parent']['outbox_message_id']
+    # Checkpoints/UI/exportable references carry no copied interpretation.
+    locator = json.loads(json.dumps(ref))
+    assert set(locator) == {'finding_id', 'version'}
+    snapshot = f.tmp / 'synthetic-offline-backup.sqlite'
+    with f.schedules._connect() as live, sqlite3.connect(snapshot) as backup:
+        live.backup(backup)
+    f.service.revoke_grant(AccountSession('parent'), grant_id='school-grant', expected_revision=1)
+    f.acquisition.purge_content()
+    # Deliberately restore stale evidence only. Current account authority is
+    # independent and must fence reads even before the cleanup tick runs again.
+    with sqlite3.connect(snapshot) as backup, f.schedules._connect() as live:
+        backup.backup(live)
+    restored = FindingService(f.acquisition, f.outbox, f.resolver)
+    f.acquisition.findings = restored
+    for view in (lambda: restored.view(RECIPIENT, locator['finding_id']),
+                 lambda: restored.view(RECIPIENT, **locator),
+                 lambda: restored.delivery_status(RECIPIENT, locator['finding_id']),
+                 lambda: f.acquisition.evidence(ACTOR, f.run_id),
+                 lambda: f.acquisition.processing(ACTOR, f.run_id)):
+        with pytest.raises(PermissionError):
+            view()
+    assert f.outbox.claim_next() is None
+    f.acquisition.purge_content()
+    assert f.outbox.get(delivery).message == '[Finding unavailable]'
+    with f.schedules._connect() as conn:
+        definitions = [row[0] for row in conn.execute('SELECT definition FROM v2_source_evidence')]
+        assert all(json.loads(value)['content'] == {} for value in definitions)
+        assert conn.execute('SELECT COUNT(*) FROM v2_finding_versions').fetchone()[0] == 0
 
 
 def test_unwired_outbox_consumer_fails_closed(findings):
