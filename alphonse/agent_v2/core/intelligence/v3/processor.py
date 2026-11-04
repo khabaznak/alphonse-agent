@@ -16,6 +16,7 @@ from alphonse.agent_v2.core.intelligence.v3.planner import V3PhasePlanValidation
 from alphonse.agent_v2.system_one import SystemOneUnavailableError
 from alphonse.agent_v2.skill_resources import SkillActivationError
 from .event_evidence import EventEvidenceDenied
+from .feasibility import CAPABILITY_REPORTING_GUIDANCE
 from alphonse.agent_v2.core.intelligence.v3.revealing import ToolRevealPolicy
 from alphonse.agent_v2.core.intelligence.v3.context import prepare_context_curation
 from alphonse.agent_v2.core.intelligence.v3.context import recent_conversation_for_curation
@@ -430,6 +431,7 @@ class HierarchicalCAPDProcessor:
         try:
             response = context.inference.generate_markdown(InferenceRequest(
                 prompt=(
+                    CAPABILITY_REPORTING_GUIDANCE +
                     "Write the final explanation for a task that has already failed. Use the user's language. "
                     "Be brief and concrete: explain the observed blocker, what could not be verified, and the next "
                     "step supported by the evidence. Do not ask the user to rephrase a clear request. "

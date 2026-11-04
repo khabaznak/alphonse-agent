@@ -398,7 +398,7 @@ def test_hierarchical_processor_plans_one_stage_and_jev_selects_respond_for_gree
     planning_request = next(item for item in provider.requests if item.purpose == InferencePurpose.PHASE_PLANNING)
     assert '"required": ["kind"]' in planning_request.prompt
     assert '"enum": ["read_only", "user_response", "project_mutation"' in planning_request.prompt
-    assert "Do not declare it unavailable" in planning_request.prompt
+    assert "Before declaring inability, perform a proportionate evidence-producing feasibility" in planning_request.prompt
     assert "native.artifact_metadata_update" not in planning_request.prompt
     assert "Standard package scripts use native.bash with skill_id" in planning_request.prompt
     assert "For a requested known mutation, include needed inspection, mutation, and verification in one coherent phase" in planning_request.prompt

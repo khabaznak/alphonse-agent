@@ -13,8 +13,8 @@
       "type": "noul",
       "instructions": "Does this phase need Bash for local shell, project files, or ordinary skill scripts and CLIs?",
       "criteria": {
-        "true": "The phase needs any local command or project-file operation: discover files or search contents with find, rg, or grep; inspect or read files with cat or sed; create or edit files with shell commands; verify edits by reading them back or comparing diffs; run local processes, builds, tests, or diagnostics; or create, inspect, repair, or invoke an ordinary skill script or CLI. Select Bash for these tasks even when the file path or CLI is already known. Use authorized native Bash for documented skill commands and runtime checks; scripts require no registration.",
-        "false": "The phase is conversational or can be completed entirely by a relevant non-shell tool without local commands, filesystem access, project-file changes, or skill script or CLI work."
+        "true": "The phase needs any local command or project-file operation: discover files or search contents with find, rg, or grep; inspect or read files with cat or sed; create or edit files with shell commands; verify edits by reading them back or comparing diffs; run local processes, builds, tests, or diagnostics; or create, inspect, repair, or invoke an ordinary skill script or CLI. Select Bash for these tasks even when the file path or CLI is already known. Use authorized native Bash for documented skill commands and runtime checks; scripts require no registration. Bash is also relevant to bounded feasibility inspection, dependency checks and temporary programs for requests lacking a dedicated tool, even when the user names no technical library. Relevance does not authorize execution or installation.",
+        "false": "The request can be answered without local feasibility inspection, local commands, filesystem access, project-file changes, or skill script or CLI work."
       }
     },
     "native.deliver_message": {
@@ -46,7 +46,7 @@
       "instructions": "Does this phase need to create or change future or recurring work?",
       "criteria": {
         "true": "The user requested a reminder, delayed action, recurring action, or another task that must be queued at a specified time or cadence.",
-        "false": "The work should happen now, has no time-based recurrence, or only needs an immediate response."
+        "false": "The request only asks whether future or recurring work is possible, without requesting activation; or the work should happen now, has no time-based recurrence, or only needs an immediate response."
       }
     },
     "native.skill_install": {

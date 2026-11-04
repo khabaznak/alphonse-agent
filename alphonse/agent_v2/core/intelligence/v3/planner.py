@@ -17,6 +17,7 @@ from alphonse.agent_v2.core.intelligence.v3.revealing import Capability, tool_ca
 from alphonse.agent_v2.core.intelligence.v3.revealing import ToolRevealPolicy
 from alphonse.agent_v2.core.tools.registry import ToolExposurePolicy
 from alphonse.agent_v2.system_one import SystemOneUnavailableError
+from .feasibility import FEASIBILITY_GUIDANCE
 from alphonse.agent_v2.core.intelligence.v3.context import recent_conversation_for_curation
 from alphonse.agent_v2.core.intelligence.v3.context import selected_project_context
 from alphonse.agent_v2.core.intelligence.v3.context import selected_skill_guidance
@@ -310,12 +311,13 @@ def _tool_rows(tools):
 
 def _strategic_plan_instructions() -> str:
     return (
+        FEASIBILITY_GUIDANCE +
         "Plan one coherent strategic execution phase and define mission acceptance criteria in the same response. "
         "Return one JSON object matching the PhasePlan contract. Use meaningful subgoals, not one outer CAPD cycle per tool. "
         "When replying is part or all of the goal, include a user_response subgoal; a purely conversational request can be "
         "a single-stage response phase. Use only the authorized, Jev-curated concrete tool registry supplied with the "
-        "request; do not assume tools outside it are available. Do not declare it unavailable or claim inability unless relevant tools were attempted "
-        "and failed. Authorize only capabilities and mutation paths within the task's authorized scope. Never target "
+        "request; do not assume tools outside it are available. "
+        "Authorize only capabilities and mutation paths within the task's authorized scope. Never target "
         ".alphonse, memory ledgers, prompts, plans, acceptance criteria, or agent-internal state. Project context and "
         "durable memory are trusted evidence for choosing reads, never mutation targets. Convert absolute paths under the "
         "project directory to project-relative form. Mutation targets must be established by the user or verified reads. "
