@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from alphonse.agent_v2.core.io.channels import ChannelAddress
@@ -42,6 +43,12 @@ class V2IdentityResolver:
             if provider and provider not in self._by_provider:
                 self._by_provider[provider] = item
         self._user_store = user_store
+
+    def ordinary_workspace(self, user_id: str, *, create: bool = True) -> Path:
+        """Resolve storage using the canonical, active task owner."""
+        if self._user_store is None:
+            raise ValueError("ordinary_workspace_store_unavailable")
+        return self._user_store.ordinary_workspace(user_id, create=create)
 
     def resolve_inbound_user(
         self,

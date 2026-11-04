@@ -37,7 +37,7 @@ BASH_ARGUMENT_SCHEMA: dict[str, Any] = {
                           "description": "Explicit logical binding roles configured for this actor. Trusted scripts read ALPHONSE_SKILL_BINDINGS JSON from their process environment; never put credential values in commands."},
         "cwd": {
             "type": "string",
-            "description": "Optional working directory. With skill_id, omit for package root or supply a contained package-relative directory; absolute cwd must also be within that package. Otherwise uses ordinary host/project resolution.",
+            "description": "Optional working directory. With skill_id, omit for package root or supply a contained package-relative directory; absolute cwd must also be within that package. Otherwise defaults to the authorized project or the active owner’s ordinary workspace.",
         },
         "timeout_seconds": {
             "type": "number",
@@ -68,7 +68,7 @@ def build_bash_tool_definition() -> ToolDefinition:
             'never an automatic install or repeated failing route. A zero exit alone does not verify a write: read back '
             'effects, and on resume reconcile prior or uncertain writes before repeating them. Bash is trusted host '
             'execution, not a filesystem sandbox; cwd does not restrict host files, network or environment. Without skill_id, a '
-            'project-associated task defaults to that project directory. '
+            'project-associated task defaults to that project directory; a task without a project defaults to its active owner’s private ordinary workspace. Never ask for a project just to create ordinary notes. '
             "For an ordinary user file lookup, search likely user-accessible locations such as the user's home folder, "
             "Downloads, or a path the user supplied; report the scope actually searched and ask when the intended "
             "location is unclear. Bash replaces dedicated project search, project file read, and exact text edit tools. "
@@ -380,7 +380,14 @@ def _resolve_cwd(raw_cwd: Any, *, context: ToolExecutionContext | None = None) -
         project_root = _project_root_from_context(context)
         if project_root:
             return project_root
-        return str(Path.cwd())
+        if context is None:
+            return str(Path.cwd())  # Standalone host API compatibility only.
+        if str(context.task.project_id or "").strip():
+            raise ValueError("bash_project_directory_unavailable")
+        resolver = getattr(context.identity_resolver, "ordinary_workspace", None)
+        if not callable(resolver):
+            raise ValueError("ordinary_workspace_store_unavailable")
+        return str(resolver(str(context.task.user or "")))
     path = Path(str(raw_cwd)).expanduser().resolve()
     if not path.exists():
         raise ValueError(f"bash_cwd_not_found: {path}")
