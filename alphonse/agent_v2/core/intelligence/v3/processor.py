@@ -72,14 +72,20 @@ class HierarchicalCAPDProcessor:
                     state = self._new_state(task, context)
                     self._persist(task, context)
             except (V3PhasePlanValidationError, SystemOneUnavailableError, EventEvidenceDenied) as exc:
-                task.status = "failed"
-                task.outcome = {"status": "failure", "reason": str(exc)}
+                task.status = "cancelled" if context.is_cancelled() else "failed"
+                task.outcome = {"status": "cancelled" if task.status == "cancelled" else "failure", "reason": str(exc)}
                 self._persist(task, context)
                 break
             try:
                 outcome = self.executor.run(task, state, context)
                 evidence_before = _successful_evidence_refs(task.metadata.get("v3_phase_history"))
                 self._append_history(task, state, outcome.to_dict())
+                if outcome.reason.startswith(("tactical_planning_error_repeated:", "tactical_correction_exhausted:")):
+                    task.status = "failed"
+                    task.outcome = {"status": "failure", "reason": outcome.reason}
+                    task.metadata["v3_route"] = "end"
+                    self._persist(task, context)
+                    break
                 review, decision = self.outer.review_and_route(task, state, outcome, context)
             except (SystemOneUnavailableError, EventEvidenceDenied) as exc:
                 task.status = "failed"

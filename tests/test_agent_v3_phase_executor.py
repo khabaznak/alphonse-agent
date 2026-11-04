@@ -110,7 +110,7 @@ def _selector(actions: list[dict[str, Any]]):
 
     def select(state, subgoal, tools):
         _ = state, subgoal, tools
-        return remaining.popleft()
+        return remaining.popleft() if len(remaining) > 1 else remaining[0]
 
     return select
 
@@ -323,8 +323,8 @@ def test_phase_executor_rejects_saved_artifact_before_dispatch() -> None:
 
     assert outcome.status == PhaseStatus.BLOCKED
     assert calls == []
-    assert state.actions[0].status == "failed"
-    assert "legacy_artifact_execution_retired" in state.actions[0].error
+    assert state.actions == []
+    assert "legacy_artifact_execution_retired" in outcome.reason
 
 
 def test_phase_executor_still_rejects_non_read_only_native_tool_in_read_only_subgoal() -> None:
@@ -356,7 +356,7 @@ def test_phase_executor_still_rejects_non_read_only_native_tool_in_read_only_sub
     )
 
     assert outcome.status == PhaseStatus.BLOCKED
-    assert outcome.blockers == ("tactical_side_effect_not_authorized:native.external_action",)
+    assert "tactical_side_effect_not_authorized:native.external_action" in outcome.reason
     assert calls == []
 
 

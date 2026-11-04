@@ -102,31 +102,54 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
         f"\nPhasePlan JSON Schema: {json.dumps(contract_schema, ensure_ascii=False, sort_keys=True)}"
     )
     from .context_manifests import event_input_metadata
-    result = context.inference.generate_json(
-        InferenceRequest(
-            prompt=prompt,
-            purpose=InferencePurpose.PHASE_PLANNING,
-            metadata=event_input_metadata(task, "planning"),
-            project_id=task.project_id,
-            user=task.user,
-            task_id=task.task_id,
-            tools=(),
-            cancel_checker=context.is_cancelled if context.cancellation_checker is not None else None,
-        )
+    request = InferenceRequest(
+        prompt=prompt, purpose=InferencePurpose.PHASE_PLANNING,
+        metadata=event_input_metadata(task, "planning"), project_id=task.project_id,
+        user=task.user, task_id=task.task_id, tools=(),
+        cancel_checker=context.is_cancelled if context.cancellation_checker is not None else None,
     )
-    if not isinstance(result.json_value, dict):
-        raise ValueError("v3_phase_plan_missing")
-    try:
-        phase = PhasePlan.from_dict(result.json_value)
-    except (TypeError, ValueError) as exc:
-        raise V3PhasePlanValidationError(f"v3_phase_plan_invalid:{exc}") from exc
-    if act_directive.get("response_required"):
-        response_subgoals = [
-            subgoal for subgoal in phase.subgoals
-            if SideEffectClass.USER_RESPONSE in subgoal.allowed_side_effects
-        ]
-        if len(response_subgoals) != 1 or len(phase.subgoals) != 1:
-            raise V3PhasePlanValidationError("v3_act_response_directive_not_isolated")
+    from .revealing import validate_phase_actions
+    for attempt in range(2):
+        if context.is_cancelled():
+            raise V3PhasePlanValidationError("v3_phase_planning_cancelled")
+        rejected = None
+        invalid_json = False
+        try:
+            result = context.inference.generate_json(request)
+        except ValueError as exc:
+            if str(exc) != "openai_codex_invalid_json":
+                raise
+            invalid_json = True
+        else:
+            rejected = result.json_value
+        if context.is_cancelled():
+            raise V3PhasePlanValidationError("v3_phase_planning_cancelled")
+        try:
+            if invalid_json:
+                raise ValueError("phase_plan_json_invalid")
+            phase = PhasePlan.from_dict(rejected)
+            if context.tools is not None:
+                validate_phase_actions(phase, tools)
+            if not task.acceptance_contract and not phase.acceptance_criteria:
+                raise ValueError("v3_phase_plan_acceptance_criteria_missing")
+            if act_directive.get("response_required"):
+                if len(phase.subgoals) != 1 or SideEffectClass.USER_RESPONSE not in phase.subgoals[0].allowed_side_effects:
+                    raise ValueError("v3_act_response_directive_not_isolated")
+        except (TypeError, ValueError) as exc:
+            error = str(exc)
+            task.metadata["v3_plan_validation_recovery"] = {"attempts": attempt + 1, "error": error}
+            if attempt:
+                raise V3PhasePlanValidationError(f"v3_phase_plan_invalid:{error}") from exc
+            request = replace(request, prompt=prompt +
+                "\nPlan validation feedback: No action ran for this rejected plan. "
+                "Correct the complete PhasePlan once within the original request and available capabilities. "
+                "Preserve completed work, acceptance criteria, prerequisites and the intended effect. "
+                "Do not silently broaden authorization or mutation scope. If essential information is missing, "
+                "plan a specific user_interaction question. Read-only clarification may use read_only; "
+                "a final reply requires user_response.\nValidation error: " + error +
+                "\nRejected plan (model output, not permission): " + json.dumps(rejected, ensure_ascii=False))
+        else:
+            break
     if not task.acceptance_contract:
         if not phase.acceptance_criteria:
             raise V3PhasePlanValidationError("v3_phase_plan_acceptance_criteria_missing")

@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
-from alphonse.agent_v2.core.intelligence.v3.contracts import PhaseSubgoal, SideEffectClass, TacticalState
+from alphonse.agent_v2.core.intelligence.v3.contracts import PhasePlan, PhaseSubgoal, SideEffectClass, TacticalState
 
 if TYPE_CHECKING:
     from alphonse.agent_v2.core.core import ToolDescriptor
@@ -149,6 +149,51 @@ def tool_capabilities(descriptor: "ToolDescriptor") -> tuple[str, ...]:
     if descriptor.kind.value == "artifact":
         derived.add(Capability.PROJECT_ARTIFACT_QUERY.value)
     return tuple(sorted(derived))
+
+
+def action_compatibility_error(subgoal: PhaseSubgoal, descriptor: "ToolDescriptor") -> str:
+    """Validate declarations only; native dispatch still enforces real authority.
+
+    Bash remains trusted host execution, with no command-text safety heuristic.
+    Clarification is dialogue and can accompany read-only mission work.
+    """
+    if descriptor.kind.value == "artifact":
+        return "legacy_artifact_execution_retired"
+    allowed = set(subgoal.allowed_capabilities)
+    if descriptor.tool_id not in allowed and not allowed.intersection(tool_capabilities(descriptor)):
+        return f"tactical_capability_not_allowed:{descriptor.tool_id}"
+    effects = set(subgoal.allowed_side_effects)
+    if descriptor.tool_id == "native.ask_question":
+        compatible = bool(effects & {SideEffectClass.READ_ONLY, SideEffectClass.USER_RESPONSE})
+    elif descriptor.tool_id == "native.bash" or descriptor.read_only:
+        compatible = True
+    elif descriptor.metadata.get("side_effect_class"):
+        compatible = descriptor.metadata["side_effect_class"] in {effect.value for effect in effects}
+    elif descriptor.tool_id == "native.exact_text_edit":
+        compatible = SideEffectClass.PROJECT_MUTATION in effects
+    elif descriptor.tool_id in {"native.skill_install", "native.skill_maintain"}:
+        compatible = SideEffectClass.LOCAL_SKILL_INSTALLATION in effects
+    else:
+        # Descriptors without a more precise effect retain the legacy conservative gate.
+        compatible = bool(effects - {SideEffectClass.READ_ONLY, SideEffectClass.USER_RESPONSE})
+    return "" if compatible else f"tactical_side_effect_not_authorized:{descriptor.tool_id}"
+
+
+def validate_phase_actions(phase: PhasePlan, tools: tuple["ToolDescriptor", ...]) -> None:
+    """Reject capability/effect combinations with no compatible runtime action.
+
+    Dynamic prerequisites (attachments, bindings, integrations) remain reveal-time
+    checks because earlier subgoals can supply them.
+    """
+    for subgoal in phase.subgoals:
+        candidates = [tool for tool in tools if tool.tool_id in subgoal.allowed_capabilities
+                      or set(tool_capabilities(tool)).intersection(subgoal.allowed_capabilities)]
+        if not candidates:
+            raise ValueError(f"phase_subgoal_capability_unavailable:{subgoal.subgoal_id}:"
+                             + ",".join(subgoal.allowed_capabilities))
+        errors = [action_compatibility_error(subgoal, tool) for tool in candidates]
+        if all(errors):
+            raise ValueError(f"phase_subgoal_effect_incompatible:{subgoal.subgoal_id}:" + ",".join(errors))
 
 
 def _prerequisite_failure(

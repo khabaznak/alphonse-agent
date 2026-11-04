@@ -278,3 +278,37 @@ Legacy catalog tools and ID-based execution were retired by #37. See the
 [implemented migration and recovery contract](../skill-artifact-resources.md)
 for explicit preview/reconciliation, preserved files, actor-scoped bindings and rollback.
 Historical Artifact descriptions above describe pre-migration behavior only.
+
+## Plan compatibility and bounded correction (#154)
+
+Strategic Plan now checks that each subgoal has a runtime action compatible with
+its declared capabilities and side effects before execution. Dynamic prerequisites
+remain in reveal: an earlier subgoal may discover an attachment or resource.
+The same compatibility check runs on every selected tactical action, including
+when a saved reveal list contains a tool outside the active subgoal.
+
+Malformed or incompatible strategic plans receive the exact validation error and
+one correction attempt. Rejected tactical actions record their proposed call,
+validation error, and correction instructions in durable phase evidence; the next
+selection can correct the call within the unchanged phase. A second invalid
+selection stops the task with an explicit planning failure. Fingerprints ignore
+model-generated action IDs and acceptance-question wording and survive checkpoints
+and strategic replans. Neither rejection nor a failed correction erases completed
+actions, output bindings, or earlier phase evidence.
+
+A clarification through `native.ask_question` is dialogue compatible with a
+read-only subgoal when that subgoal explicitly declares `user_interaction` (or the
+native tool ID). Its delivery, authenticated answer receipt, parking and resumed
+planning use the existing question store. A final `native.respond` still requires
+the `user_response` effect. Bash remains trusted host execution; these checks do
+not infer command safety or introduce a filesystem sandbox. Native authorization
+and effect verification continue to enforce actual permission and success.
+
+Cancellation is checked after planning/selection and again before native dispatch.
+Planning cancellation retains the cancelled terminal state. Repeated invalid
+planning stops before probabilistic outer review can replan or manufacture success.
+
+Verification uses disposable registries and SQLite stores in
+`tests/test_agent_v3_plan_validation.py`, alongside the executor, rollout and reveal
+regressions. No household files, live provider calls, or external services are used
+by these cases.
