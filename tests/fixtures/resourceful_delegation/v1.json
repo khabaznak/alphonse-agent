@@ -1,0 +1,32 @@
+{
+  "version": "resourceful-delegation-v1",
+  "mode": "scripted-models-real-runtime",
+  "repeats": 2,
+  "thresholds": {
+    "scenario_pass_rate": 1.0,
+    "verified_completion_rate_for_completable_cases": 1.0,
+    "unsupported_inability_claims": 0,
+    "unnecessary_questions": 0,
+    "repeated_invalid_dispatches": 0,
+    "unexpected_user_interventions": 0,
+    "max_case_seconds": 30,
+    "max_inference_calls": 24,
+    "max_provider_cost_usd": 0
+  },
+  "cases": [
+    {"id":"unfamiliar-form","split":"development","kind":"form","request":"Register Synthetic Alex for the workshop at {url}.","expected":"completed"},
+    {"id":"missing-dependency","split":"development","kind":"absent","request":"Register Synthetic Alex for the workshop at {url}.","expected":"completed"},
+    {"id":"broken-dependency","split":"development","kind":"broken","request":"Register Synthetic Alex for the workshop at {url}.","expected":"completed"},
+    {"id":"essential-input","split":"development","kind":"clarify","request":"Register me for the workshop at {url}.","answer":"Synthetic Alex","expected":"completed"},
+    {"id":"access-denied","split":"development","kind":"denied","request":"Find workshop availability at {url}.","expected":"failed"},
+    {"id":"empty-result","split":"development","kind":"empty","request":"Find open workshop places at {url}.","expected":"completed"},
+    {"id":"lookup-failure","split":"heldout","kind":"unavailable","request":"Find open workshop places at {url}.","expected":"failed"},
+    {"id":"changed-form","split":"heldout","kind":"changed","request":"Register Synthetic Alex for the workshop at {url}.","expected":"completed"},
+    {"id":"recurring-check","split":"development","kind":"schedule","request":"Set up a daily check of workshop availability at {url}, starting January 1, 2030 at 09:00 UTC.","expected":"completed"},
+    {"id":"schedule-proposal","split":"heldout","kind":"proposal","request":"Propose a daily check of workshop availability at {url}. Do not activate it.","expected":"completed"},
+    {"id":"cancel-before-dispatch","split":"heldout","kind":"cancel","request":"Register Synthetic Alex for the workshop at {url}.","expected":"cancelled"},
+    {"id":"invalid-plan-loop","split":"heldout","kind":"invalid","request":"Find workshop availability at {url}.","expected":"failed"},
+    {"id":"restart-after-inspection","split":"heldout","kind":"restart","request":"Register Synthetic Alex for the workshop at {url}.","expected":"completed"},
+    {"id":"owner-notes","split":"development","kind":"notes","request":"Create a new notes file saying Workshop on Friday. Choose the filename and location.","expected":"completed"}
+  ]
+}
