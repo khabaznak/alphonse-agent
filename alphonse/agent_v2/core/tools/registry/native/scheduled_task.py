@@ -133,6 +133,11 @@ def execute_scheduled_task(
         delivery_mode=delivery_mode,
         idempotency_key=f"schedule:{str(getattr(task, 'message_id', '') or getattr(task, 'task_id', '')).strip()}",
     )
+    stored = store.get_task(record.scheduled_task_id)
+    fields = ("owner_user_id", "project_id", "schedule", "timezone", "status", "next_run_at", "prompt", "delivery_mode")
+    if stored is None or any(getattr(stored, field) != getattr(record, field) for field in fields):
+        raise RuntimeError("scheduled_task_readback_failed")
+    record = stored
     return {
         "scheduled_task_id": record.scheduled_task_id,
         "project_id": record.project_id,
@@ -141,6 +146,11 @@ def execute_scheduled_task(
         "next_run_at": record.next_run_at,
         "schedule_summary": schedule_summary(record.schedule),
         "delivery_mode": record.delivery_mode,
+        "prompt": record.prompt,
+        "description": record.description,
+        "schedule": dict(record.schedule),
+        "timezone": record.timezone,
+        "verification": {"status": "verified", "source": "schedule_store_readback"},
     }
 
 

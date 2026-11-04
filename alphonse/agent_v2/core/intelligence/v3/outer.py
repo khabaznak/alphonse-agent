@@ -71,7 +71,9 @@ class V3OuterController:
         )
         act_directive = task.metadata.get("act_directive")
         act_directive = act_directive if isinstance(act_directive, dict) else {}
-        if act_directive.get("closure_only") and task.has_prepared_user_response():
+        if (review.status not in {PhaseReviewStatus.CANCELLED, PhaseReviewStatus.VERIFICATION_FAILED}
+                and act_directive.get("terminal_outcome", "failed") == "failed"
+                and act_directive.get("closure_only") and task.has_prepared_user_response()):
             desired = str(act_directive.get("terminal_outcome") or "failed")
             decision = StrategicDecision(
                 StrategicAction.FAIL if desired == "failed" else StrategicAction.COMPLETE,
@@ -106,9 +108,17 @@ class V3OuterController:
             try:
                 decision, recommendation = _recommend_act(task, state, outcome, review, context)
             except SystemOneUnavailableError:
-                decision = decide_next_action(review)
+                if getattr(context.system_one, "requires_mission_outcome_review", False):
+                    task.metadata["v3_outcome_assessment"] = {"status": "unresolved", "fulfilled": False, "reason": "outcome_review_unavailable"}
+                    decision = StrategicDecision(StrategicAction.REPLAN, "Required outcome review unavailable; completion withheld.")
+                else:
+                    decision = decide_next_action(review)
         else:
             decision = decide_next_action(review)
+        if context.is_cancelled():
+            task.status = "cancelled"
+            task.metadata["v3_route"] = "end"
+            return PhaseReview(state.phase.phase_id, PhaseReviewStatus.CANCELLED, "Task cancelled."), StrategicDecision(StrategicAction.FAIL, "Task cancelled.")
         if recommendation is not None:
             task.metadata["system_one_act_recommendation"] = recommendation.to_metadata()
         if (
@@ -268,13 +278,17 @@ def _recommend_act(task, state, outcome, review: PhaseReview, context):
     )
     input_state = {
         "goal": task.goal,
+        "current_task_messages": task.recent_conversation_md,
+        "authenticated_followups": task.metadata.get("v3_resumption_evidence", []),
+        "prepared_response": task.metadata.get("prepared_user_response", {}),
+        "execution_evidence": state.evidence.to_dict(),
         "task_id": task.task_id,
         "check_verdict": check_verdict,
         "check_reason": review.reason,
         "acceptance_contract": task.ensure_acceptance_contract(),
         "strategic_plan": state.phase.to_dict(),
         "phase_outcome": outcome.to_dict(),
-        "complete_tool_execution_log": state.to_dict(),
+        "completed_subgoal_ids": list(state.completed_subgoal_ids),
         "task_context": _task_context(task, context),
         "user_constraints": task.metadata.get("user_constraints", {}),
         "failure_reason": task.metadata.get("failure_reason", ""),
@@ -288,7 +302,17 @@ def _recommend_act(task, state, outcome, review: PhaseReview, context):
     recommended_action = action
     answers = recommendation.answers
     yes_threshold = float(getattr(recommendation, "yes_threshold", 0.8))
-    if action == "fail_explain" and review.status == PhaseReviewStatus.PHASE_VERIFIED_TASK_INCOMPLETE:
+    from .delegated_outcome import outcome_assessment
+    from alphonse.agent_v2.outcome_judgments import OUTCOME_QUESTIONS
+    required = getattr(context.system_one, "requires_mission_outcome_review", False)
+    assessment = None
+    if required or any(key in answers for key in OUTCOME_QUESTIONS):
+        assessment = outcome_assessment(answers, state.evidence.entries, yes=yes_threshold,
+            no=float(getattr(getattr(context.system_one, "settings", None), "no_threshold", .2)))
+        task.metadata["v3_outcome_assessment"] = assessment
+    if action == "complete" and assessment is not None and not assessment['fulfilled']:
+        action = "replan"
+    elif action == "fail_explain" and review.status == PhaseReviewStatus.PHASE_VERIFIED_TASK_INCOMPLETE:
         # A completed phase is not the same as a completed mission. If the
         # phase review confirms that required acceptance criteria remain unmet,
         # do not turn a low continuation score into a user-facing failure while
@@ -313,7 +337,7 @@ def _recommend_act(task, state, outcome, review: PhaseReview, context):
     if action != recommended_action:
         rationale = {
             "continue": "The task is not yet verified complete; Plan must continue with any useful authorized work.",
-            "replan": "Jev's recommendation and resilience checks disagreed; returning to Plan for a fresh strategy.",
+            "replan": ("Requested outcome remains unverified: " + assessment["reason"] if assessment and not assessment["fulfilled"] else "Jev's recommendation and resilience checks disagreed; returning to Plan for a fresh strategy."),
             "ask_user": "A concrete user answer is needed before useful work can continue.",
             "fail_explain": "Further work is not worthwhile, and Jev recommends a final evidence-based explanation.",
             "fail": "Jev determined that the mission must stop without another execution phase.",
