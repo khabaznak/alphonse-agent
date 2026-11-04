@@ -81,3 +81,58 @@ external-service writes and household records are outside this synthetic trial.
 Generic Bash remains a trusted host capability, not a filesystem sandbox. Owner
 checks cover native owner-scoped defaults and authenticated question routing,
 not isolation of arbitrary malicious shell commands.
+
+## Approved live-model protocol (live-v1)
+
+The user approved **$1 USD for TypeSafe tests** on November 3, 2026 (Mexico City).
+`resourceful_live.py` uses the configured Codex ChatGPT subscription and pinned
+`jev-1.14.0`. It reads only the two provider-setting rows through SQLite read-only
+mode, never instantiating the production stores. Every task gets disposable
+users, workspace, questions, schedules and loopback forms. No household history,
+skills, artifacts or account session is loaded into task context.
+
+`live_v1.json` fixes 14 synthetic cases, six held-out fixture variations and two
+repeats. All 28 must pass; all completable cases require external effect readback,
+zero unnecessary questions/unsupported inability reports/unexpected interventions,
+at most 16 System Two calls and 180 seconds per case. Model behavior is autonomous;
+only essential input answers and lifecycle fault injection are controlled. The
+live corpus/runner/thresholds must be committed before the qualifying run. Pilot
+notes trials are diagnostics, recorded separately and never counted toward the
+qualifying result. Do not relax thresholds after seeing results.
+
+The loopback fixture may validate a supplied synthetic identity; it contains no
+real name or real service. The notes oracle allows model-selected `.md`/`.txt`
+filenames but requires exact contents in the authenticated owner's workspace.
+Schedule activation requires the actual persisted owner, UTC recurrence/start,
+PDCA mode, website-bearing prompt, active status and next run. A proposal must
+leave no persisted schedule. Live response scoring uses two independent atomic
+Jev Nouls over the original goal, response and raw observations, including an
+explicit unsupported-inability question; yes >= .8, no <= .2, uncertainty fails.
+These audits supplement deterministic effect checks and cannot grant permission
+or override failed/cancelled effects.
+
+Each TypeSafe physical attempt first reserves $0.003 in a durable ledger. This
+exceeds 65,536 input tokens at the documented $0.042/M price; requests use only
+pinned text Jev, the official endpoint and no long-context or image headers.
+Successful requests replace the reservation with reported input-token cost;
+missing usage, network failure or process loss retain it. Every attempt, request,
+response, duration and usage is retained; no key is logged. A restart reuses the
+ledger, including diagnostic spending. Refuse a call before its reservation
+would exceed $1. OpenAI runs through the existing subscription; its CLI does not
+expose per-call billing, so no invented token cost is reported. TypeSafe pricing:
+[official models reference](https://docs.typesafe.ai/models.md), checked November 3.
+
+```sh
+ALPHONSE_V2_CODEX_CLI_BIN=/opt/homebrew/bin/codex python -m alphonse.agent_v2.evaluation.resourceful_live --output /private/tmp/resourceful-live-qualification.json --ledger /private/tmp/resourceful-live-typesafe-ledger.json
+```
+
+The temporary CLI override uses an already installed working binary and does not
+change the household configuration. The npm CLI first on this session's PATH was
+broken (missing vendored executable); both failed pilot attempts remain recorded.
+Bash remains the native trusted host capability; fixture instructions restrict
+work to the temporary environment, but this is not a malicious-shell sandbox.
+
+The qualifying run uses four concurrent independent fixture tasks. TypeSafe HTTP
+attempts and ledger reservations are serialized under a lock; per-case costs use
+a unique run/case/repeat tag. This changes throughput only, with no shared task
+state or cross-owner context. Repeats each use new stores and fixture servers.

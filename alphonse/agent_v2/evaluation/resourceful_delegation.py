@@ -52,7 +52,7 @@ def entries(task):
 
 
 @contextmanager
-def fixture_server(kind):
+def fixture_server(kind, *, identity='Synthetic Alex'):
     """Loopback-only service; POST independently validates discovered field names."""
     receipts = []
     field = 'attendee_label' if kind == 'changed' else 'full_name'
@@ -70,7 +70,7 @@ def fixture_server(kind):
         def do_POST(self):
             from urllib.parse import parse_qs
             values = parse_qs(self.rfile.read(int(self.headers.get('Content-Length', '0'))).decode())
-            valid = self.path == '/register' and values == {field: ['Synthetic Alex']}
+            valid = self.path == '/register' and values == {field: [identity]}
             receipts.append({'method': 'POST', 'status': 201 if valid else 422, 'values': values})
             self.send_response(201 if valid else 422)
             self.end_headers()
