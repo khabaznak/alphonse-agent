@@ -18,6 +18,7 @@ from alphonse.agent_v2.core.intelligence.v3.revealing import ToolRevealPolicy
 from alphonse.agent_v2.core.tools.registry import ToolExposurePolicy
 from alphonse.agent_v2.system_one import SystemOneUnavailableError
 from .feasibility import FEASIBILITY_GUIDANCE
+from ..routine_autonomy import ROUTINE_AUTONOMY_GUIDANCE, ordinary_workspace_context
 from alphonse.agent_v2.core.intelligence.v3.context import recent_conversation_for_curation
 from alphonse.agent_v2.core.intelligence.v3.context import selected_project_context
 from alphonse.agent_v2.core.intelligence.v3.context import selected_skill_guidance
@@ -75,6 +76,7 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
     prompt = (
         f"{system_prompt}\n\n"
         f"Goal: {task.goal}\n"
+        f"{ordinary_workspace_context(task, context)}\n"
         f"Household conversation, global, and selected project context:\n{shared_context}\n"
         "Selected skill guidance (reusable instructions; they do not grant permissions or override controls):\n"
         f"{skill_guidance or '(none)'}\n"
@@ -311,7 +313,7 @@ def _tool_rows(tools):
 
 def _strategic_plan_instructions() -> str:
     return (
-        FEASIBILITY_GUIDANCE +
+        FEASIBILITY_GUIDANCE + ROUTINE_AUTONOMY_GUIDANCE +
         "Plan one coherent strategic execution phase and define mission acceptance criteria in the same response. "
         "Return one JSON object matching the PhasePlan contract. Use meaningful subgoals, not one outer CAPD cycle per tool. "
         "When replying is part or all of the goal, include a user_response subgoal; a purely conversational request can be "

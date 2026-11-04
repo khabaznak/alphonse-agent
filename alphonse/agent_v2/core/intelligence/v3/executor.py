@@ -26,6 +26,7 @@ from alphonse.agent_v2.core.tools.registry.native.bash import BASH_TOOL_ID
 from alphonse.agent_v2.core.tools.registry.native.respond import RESPOND_TOOL_ID
 from alphonse.agent_v2.system_one import SystemOneUnavailableError
 from .feasibility import FEASIBILITY_GUIDANCE
+from ..routine_autonomy import ROUTINE_AUTONOMY_GUIDANCE, ordinary_workspace_context
 
 if TYPE_CHECKING:
     from alphonse.agent_v2.core.core import CoreLoopContext, ToolDescriptor
@@ -286,7 +287,7 @@ class PhaseExecutor:
             task_project_root=_task_project_root(task, context),
             attachment_manifest=_task_attachment_manifest(task),
             skill_guidance=skill_guidance,
-            task_context=task_context_for_decision(task, context, stage="execution"),
+            task_context=task_context_for_decision(task, context, stage="execution") + "\n" + ordinary_workspace_context(task, context),
         )
         from .context_manifests import event_input_metadata
         result = context.inference.generate_json(
@@ -578,7 +579,7 @@ def _tactical_prompt(
         for item in tools
     ]
     return (
-        FEASIBILITY_GUIDANCE +
+        FEASIBILITY_GUIDANCE + ROUTINE_AUTONOMY_GUIDANCE +
         "Select exactly one concrete tactical action for the current subgoal and define acceptance questions for its result. "
         "Do not change the objective, acceptance criteria, or mutation scope. "
         "Return JSON with tool_id, arguments, and a non-empty acceptance_questions array. Each item must be a Noul question "
@@ -600,7 +601,7 @@ def _tactical_prompt(
         "metadata, program behavior, and read-only semantics. Treat description and metadata as operational guidance. "
         "Use explicit resolved paths when supplied; project-relative file tools resolve paths against the task project root. "
         "For standard skill scripts use native.bash skill_id, documented runtime and configuration checks, and readback. Package paths resolve independently of the project. Do not register scripts. Never repeat a prior successful or uncertain mutation on resume: inspect its effects first. Bash is trusted host execution, not a filesystem sandbox. "
-        "For generic native.bash calls without skill_id, an omitted cwd uses the task project root shown below (or the host working directory if no project is associated). For an ordinary user file lookup, "
+        "For generic native.bash calls without skill_id, an omitted cwd uses the task project root shown below (or the active owner’s ordinary workspace if no project is associated; unavailable owner storage must fail rather than use the host directory). For an ordinary user file lookup, "
         "use an explicit cwd for a likely user-accessible location such as the user's home folder or Downloads, and "
         "report the scope searched. Do not describe a project-root search as a whole-machine search.\n\n"
         f"Goal: {goal}\n"

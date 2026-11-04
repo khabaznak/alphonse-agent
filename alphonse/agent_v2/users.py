@@ -156,9 +156,14 @@ class V2UserStore:
                     target.mkdir(parents=True, exist_ok=True)
                     for child in source.iterdir():
                         destination = target / child.name
+                        if child.name == "workspace":
+                            if source.is_symlink() or target.is_symlink() or child.is_symlink() or destination.is_symlink():
+                                raise ValueError("ordinary_workspace_symlink")
+                            if child.is_dir():
+                                destination.mkdir(mode=0o700, exist_ok=True)
                         if child.is_file() and not destination.exists():
                             shutil.copy2(child, destination)
-                        elif child.is_dir() and child.name in {"assets", "memory"}:
+                        elif child.is_dir() and child.name in {"assets", "memory", "workspace"}:
                             copy_tree_missing(child, destination)
         self._set_setting("workspace_root", str(path))
         for user in self.list_users():
@@ -267,6 +272,32 @@ class V2UserStore:
         temporary.write_text(str(content or ""), encoding="utf-8")
         temporary.replace(path)
         return str(path)
+
+    def ordinary_workspace(self, user_id: str, *, create: bool = True) -> Path:
+        """Resolve an active owner's ordinary files without requiring a project.
+
+        This is a default destination, not a sandbox or a grant of host access.
+        Reject linked owner directories instead of silently sharing another root.
+        """
+        user = self.get_user(str(user_id or ""))
+        if user is None or not user.is_active:
+            raise ValueError("ordinary_workspace_owner_required")
+        owner = user.user_id
+        if owner in {".", ".."} or Path(owner).name != owner or "\\" in owner:
+            raise ValueError("ordinary_workspace_owner_invalid")
+        users = self.users_root().expanduser().resolve()
+        owner_root = users / owner
+        workspace = owner_root / "workspace"
+        if owner_root.is_symlink() or workspace.is_symlink():
+            raise ValueError("ordinary_workspace_symlink")
+        if workspace.resolve() != users / owner / "workspace":
+            raise ValueError("ordinary_workspace_escape")
+        if create:
+            owner_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+            workspace.mkdir(mode=0o700, exist_ok=True)
+        if workspace.exists() and not workspace.is_dir():
+            raise ValueError("ordinary_workspace_not_directory")
+        return workspace
 
     def managed_project_root(self, user_id: str) -> Path:
         workspace = self.workspace_root()

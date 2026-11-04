@@ -159,14 +159,14 @@ def test_bash_tool_honors_optional_cwd(tmp_path) -> None:
     assert result["cwd"] == str(tmp_path)
 
 
-def test_do_node_executes_native_bash_and_records_result() -> None:
+def test_do_node_executes_native_bash_and_records_result(tmp_path) -> None:
     task = TaskState(goal="Print greeting")
     task.append_plan_call(
         {
             "id": "plan-call-1",
             "tool_id": BASH_TOOL_ID,
             "tool_name": BASH_TOOL_NAME,
-            "arguments": {"command": "printf hello"},
+            "arguments": {"command": "printf hello", "cwd": str(tmp_path)},
             "internal_state": "Printing a greeting.",
         }
     )

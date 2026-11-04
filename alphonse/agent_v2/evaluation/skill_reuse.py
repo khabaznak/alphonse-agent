@@ -16,6 +16,7 @@ import tempfile
 from time import monotonic
 
 from alphonse.agent_v2.core.core import CoreLoopContext
+from alphonse.agent_v2.core.io.identity import V2IdentityResolver
 from alphonse.agent_v2.core.inference import InferencePurpose, InferenceResult
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.intelligence.v3 import HierarchicalCAPDProcessor
@@ -203,7 +204,7 @@ class Trial:
                          metadata={'routing_disposition': 'pdca_task'})
         task.append_conversation_message('fixture-admin', task.goal)
         context = CoreLoopContext(messages=InMemoryMessageQueue(), skill_store=self.skills,
-                                  question_store=self.questions,
+                                  question_store=self.questions, identity_resolver=V2IdentityResolver(user_store=self.users),
                                   tools=build_native_tool_registry(skill_store=self.skills, user_store=self.users),
                                   system_one=Decisions(), cancellation_checker=lambda: monotonic() - self.started > BUDGET['wall_seconds'])
         context.inference = ScriptedSystemTwo(self, task, fresh=fresh)
