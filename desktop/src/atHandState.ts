@@ -4,6 +4,8 @@ export type WidgetPlacement = { id: string; kind: string; mode: WidgetMode; expi
 export type DrawerState = { open: boolean; widgets: WidgetPlacement[]; dismissed: string[] };
 export type ContextWidget = { id: string; kind: string; expiresAt: number };
 export const WIDGET_CATALOG = [
+  { kind: "workload", title: "Workload", description: "Waiting and processing work over the last 30 minutes of this session." },
+  { kind: "pdca", title: "PDCA activity", description: "Planning, doing, checking and acting over this session." },
   { kind: "care", title: "Treatments & care", description: "Authorized Doctor records, routines and recorded adherence." },
   { kind: "sensors", title: "Home sensors", description: "Authorized readings with source and freshness." },
   { kind: "emergency_contacts", title: "Emergency contacts", description: "Configured contacts and manual copy actions." },
