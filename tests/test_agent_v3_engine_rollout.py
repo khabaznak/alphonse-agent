@@ -430,7 +430,7 @@ def test_every_v3_plan_pass_emits_a_plan_activity(monkeypatch) -> None:
     assert events[0].progress["route"] == "strategic_replan"
 
 
-def test_hierarchical_processor_fails_invalid_phase_once_with_controlled_error() -> None:
+def test_hierarchical_processor_fails_invalid_phase_after_bounded_correction() -> None:
     provider = StubInferenceProvider(
         markdown_by_purpose={InferencePurpose.ACCEPTANCE_CRITERIA: "1.- [ ] The record is updated"},
         json_by_purpose={
@@ -464,7 +464,7 @@ def test_hierarchical_processor_fails_invalid_phase_once_with_controlled_error()
 
     assert result.status.value == "failed"
     assert result.error is not None and result.error.startswith("v3_task_failed:v3_phase_plan_invalid:")
-    assert len([item for item in provider.requests if item.purpose == InferencePurpose.PHASE_PLANNING]) == 1
+    assert len([item for item in provider.requests if item.purpose == InferencePurpose.PHASE_PLANNING]) == 2
 
 
 def test_v3_phase_planner_receives_latest_user_tool_hint() -> None:
@@ -534,7 +534,7 @@ def test_v3_phase_planner_receives_project_context_and_durable_memory(tmp_path: 
                 "phase_id": "read-known-journal",
                 "objective": "Read the known journal before updating it",
                 "criterion_ids": ["ac-1"],
-                "authorized_capabilities": ["project_file_inspection"],
+                "authorized_capabilities": ["local_shell"],
                 "mutation_scope": {"allowed_paths": [], "allow_external_effects": False},
                 "originating_decision": "The journal path is established in durable project memory.",
                 "subgoals": [{
@@ -542,7 +542,7 @@ def test_v3_phase_planner_receives_project_context_and_durable_memory(tmp_path: 
                     "objective": "Read calisthenics_journal.md",
                     "required_output_type": "journal_contents",
                     "depends_on": [],
-                    "allowed_capabilities": ["project_file_inspection"],
+                    "allowed_capabilities": ["local_shell"],
                     "allowed_side_effects": ["read_only"],
                     "completion": {"kind": "output_present", "output_type": "journal_contents"},
                     "failure_policy": "stop",

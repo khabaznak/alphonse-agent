@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 from typing import TYPE_CHECKING, Any, Callable
@@ -15,7 +16,7 @@ from alphonse.agent_v2.core.intelligence.v3.contracts import PhaseSubgoal
 from alphonse.agent_v2.core.intelligence.v3.contracts import SideEffectClass
 from alphonse.agent_v2.core.intelligence.v3.contracts import TacticalAction
 from alphonse.agent_v2.core.intelligence.v3.contracts import TacticalState
-from alphonse.agent_v2.core.intelligence.v3.revealing import ToolRevealPolicy
+from alphonse.agent_v2.core.intelligence.v3.revealing import ToolRevealPolicy, action_compatibility_error
 from alphonse.agent_v2.core.intelligence.v3.context import selected_skill_guidance
 from alphonse.agent_v2.core.intelligence.v3.context import task_context_for_decision
 from alphonse.agent_v2.core.intelligence.v3.revealing import Capability
@@ -58,6 +59,10 @@ class PhaseExecutor:
             subgoal = self._active_subgoal(state)
             tools = self._revealed_tools(task, state, subgoal, context)
             selected = self._select_action(task, state, subgoal, tools, context)
+            interruption = self._interruption(task, state, context)
+            if interruption is not None:
+                self._checkpoint(task, state, context)
+                return interruption
             if selected is None:
                 state.transition(PhaseStatus.BLOCKED)
                 self._checkpoint(task, state, context)
@@ -65,18 +70,35 @@ class PhaseExecutor:
             try:
                 action = self._validate_action(state, subgoal, selected, tools)
             except (ValueError, PermissionError) as exc:
-                state.evidence.append(
-                    {
-                        "evidence_ref": f"tactical-rejection:{uuid4()}",
-                        "phase_id": state.phase.phase_id,
-                        "subgoal_id": subgoal.subgoal_id,
-                        "status": "rejected",
-                        "error": f"{type(exc).__name__}: {exc}",
-                    }
-                )
+                error = str(exc)
+                # IDs and acceptance-question wording do not change an invalid action.
+                fingerprint = hashlib.sha256(json.dumps({
+                    "tool_id": selected.get("tool_id"), "arguments": selected.get("arguments"),
+                    "error": error, "capabilities": sorted(subgoal.allowed_capabilities),
+                    "effects": sorted(item.value for item in subgoal.allowed_side_effects),
+                    "scope": state.phase.mutation_scope.__dict__,
+                }, sort_keys=True, default=str).encode()).hexdigest()
+                seen = task.metadata.setdefault("v3_rejected_action_fingerprints", [])
+                repeated = fingerprint in seen
+                exhausted = any(item.get("status") == "rejected" and
+                                item.get("subgoal_id") == subgoal.subgoal_id for item in state.evidence.entries)
+                if not repeated:
+                    seen.append(fingerprint)
+                state.evidence.append({
+                    "evidence_ref": f"tactical-rejection:{uuid4()}",
+                    "phase_id": state.phase.phase_id, "subgoal_id": subgoal.subgoal_id,
+                    "status": "rejected", "error": error, "rejected_action": selected,
+                    "validation_feedback": "No tool ran. Correct this action once using the same revealed tools, "
+                        "capabilities, effects and mutation scope; preserve completed work. Do not broaden authorization.",
+                    "fingerprint": fingerprint, "repeated": repeated,
+                })
+                self._checkpoint(task, state, context)
+                if not repeated and not exhausted:
+                    continue
                 state.transition(PhaseStatus.BLOCKED)
                 self._checkpoint(task, state, context)
-                return self._outcome(state, str(exc), blockers=(str(exc),))
+                reason = ("tactical_planning_error_repeated:" if repeated else "tactical_correction_exhausted:") + error
+                return self._outcome(state, reason, blockers=(reason,))
             retry_count = 0
             retry_interrupted = False
             while True:
@@ -105,6 +127,11 @@ class PhaseExecutor:
                 selected_skill_guidance(task, context)
                 from .event_evidence import project_event_evidence
                 project_event_evidence(task, context)
+                interruption = self._interruption(task, state, context)
+                if interruption is not None:
+                    state.actions.pop()  # This action never reached native dispatch.
+                    self._checkpoint(task, state, context)
+                    return interruption
                 outcome = ToolInvocationService(context=context, task=task).invoke(
                     action.tool_id, action.arguments, call_id=action.action_id
                 )
@@ -387,17 +414,9 @@ class PhaseExecutor:
             raise ValueError(f"tactical_tool_not_revealed:{tool_id or '(missing)'}")
         if not isinstance(arguments, dict):
             raise ValueError("tactical_tool_arguments_invalid")
-        # Registered artifacts and the explicitly restored full Bash capability
-        # are trusted execution paths. Do not apply the generic native-tool
-        # read-only classification to either one.
-        if (
-            descriptor.kind != ToolKind.ARTIFACT
-            and descriptor.tool_id != BASH_TOOL_ID
-            and not descriptor.read_only
-            and SideEffectClass.READ_ONLY in subgoal.allowed_side_effects
-            and len(subgoal.allowed_side_effects) == 1
-        ):
-            raise PermissionError(f"tactical_side_effect_not_authorized:{tool_id}")
+        compatibility_error = action_compatibility_error(subgoal, descriptor)
+        if compatibility_error:
+            raise PermissionError(compatibility_error)
         if tool_id == "native.exact_text_edit":
             path = str(arguments.get("path") or "").strip().replace("\\", "/")
             if path not in set(state.phase.mutation_scope.allowed_paths):
@@ -566,6 +585,8 @@ def _tactical_prompt(
         "for the next action even when they did not complete the subgoal. Do not repeat a successful discovery/list action when "
         "its result already supplies the identifier needed by another operation in the same tool schema; compose that follow-up "
         "operation with the discovered identifier.\n\n"
+        "Rejected entries contain precise validation feedback. Correct the action within the unchanged phase; "
+        "never repeat an equivalent rejected action or replay completed work. "
         "Every completed execution-log entry includes progress_review.complete from Jev. When it is false, the call "
         "executed but did not make semantic progress. Do not select the same tool with the same arguments again; "
         "choose different arguments or another revealed tool. For a CLI-backed artifact that returns an unexpected "
