@@ -1,0 +1,27 @@
+{
+  "pilot-broken-cli.json.gz": {
+    "source_sha256": "046dc68e9a03b4333ec477c32ac8ab3f7229a1b14d01d9d3970585a102655b56",
+    "delivered_sha256": "046dc68e9a03b4333ec477c32ac8ab3f7229a1b14d01d9d3970585a102655b56",
+    "bytes_uncompressed": 50966
+  },
+  "pilot-working-cli.json.gz": {
+    "source_sha256": "690ae73ac31810b6192c3fe7765495b8acfd1156d08cd741729e9b991e230c28",
+    "delivered_sha256": "690ae73ac31810b6192c3fe7765495b8acfd1156d08cd741729e9b991e230c28",
+    "bytes_uncompressed": 235118
+  },
+  "qualification.json.gz": {
+    "source_sha256": "be2cfcf0434b7b3837e261c62b97dba685adb19a2bdcbaff1231d0a8541425e9",
+    "delivered_sha256": "1ad54107206ed0adbce9ea1587809945215aeb44831f729001136d596849ee24",
+    "bytes_uncompressed": 8071473
+  },
+  "diagnostic-review.json.gz": {
+    "source_sha256": "49ef26c493444c293fc5f59d3d579f6ec3b54cf8800c0ee378a6a9287ae659a9",
+    "delivered_sha256": "49ef26c493444c293fc5f59d3d579f6ec3b54cf8800c0ee378a6a9287ae659a9",
+    "bytes_uncompressed": 42786
+  },
+  "typesafe-ledger.json.gz": {
+    "source_sha256": "03aee803b6f0e84ea598bae21009e516f915be4ee529bdba1d792a676b12c3c0",
+    "delivered_sha256": "bfc1d5c9788e60a1f7bad603465a46c13ddfea33498014d0f96f2a2143f7c94f",
+    "bytes_uncompressed": 7336995
+  }
+}
