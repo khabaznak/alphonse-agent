@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import pytest
 
+from alphonse.agent_v2.outcome_judgments import OUTCOME_QUESTIONS
+
 from alphonse.agent_v2.core.core import ToolDescriptor, ToolKind
 from alphonse.agent_v2.system_one import JevCriterionDecisionProvider
 from alphonse.agent_v2.system_one import SQLiteSystemOneSettingsStore
@@ -89,6 +91,7 @@ def test_jev_act_recommendation_combines_choice_with_parallel_resilience_fuses()
     assert result.confident is True
     assert set(result.answers) == {
         "continuation_is_worthwhile", "user_input_can_unblock", "closure_explanation_is_warranted",
+        *OUTCOME_QUESTIONS,
     }
 
 

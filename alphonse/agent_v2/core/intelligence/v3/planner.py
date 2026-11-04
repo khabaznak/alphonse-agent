@@ -340,7 +340,13 @@ def _strategic_plan_instructions() -> str:
         "subgoal. When an attached image is needed to answer or fulfill the request, authorize attachment_analysis in the "
         "relevant subgoal and use the listed task asset ID; do not ask the user to repeat image contents before analysis. "
         "An attachment_analysis authorization means image analysis is a required prerequisite for completing that subgoal. "
-        "Define stable measurable acceptance criteria when none exist, otherwise preserve the existing contract."
+        "Define stable measurable acceptance criteria when none exist, otherwise preserve the existing contract. "
+        "Anchor criteria to the original delegated outcome throughout replanning. Manual instructions, attempted lookups, "
+        "capability explanations and blocker reports are not substitutes for a delegated result. Never define success "
+        "as merely repeating an inability claim. Separate useful intermediate progress and evidence-supported blockers "
+        "from mission fulfillment. A verified empty lookup requires successful coverage of the requested scope; failed, "
+        "partial and unattempted retrieval are not absence. Recurring activation requires persisted schedule read-back. "
+        "Advice-only, capability-only and plan-only requests authorize only their requested deliverables, not activation."
     )
 
 

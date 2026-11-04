@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import math
+
 import hashlib
 import re
 import sqlite3
@@ -17,6 +19,7 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from alphonse.agent_v2.database import connect_database, default_database_path
+from alphonse.agent_v2.outcome_judgments import OUTCOME_QUESTIONS
 
 DEFAULT_SYSTEM_ONE_URL = "https://api.typesafe.ai/v1/systemone"
 DEFAULT_SYSTEM_ONE_MODEL = "jev-latest"
@@ -366,6 +369,8 @@ class _StaticJevToolRegistry:
 
 
 class JevCriterionDecisionProvider:
+    requires_mission_outcome_review = True
+
     def triage_project_check(self, *, goal, candidates, timeout_seconds):
         from alphonse.agent_v2.project_triage import evaluate
         client = TypeSafeSystemOneClient(api_url=self.settings.api_url,
@@ -728,6 +733,7 @@ class JevCriterionDecisionProvider:
                 "criteria": {"true": "A concise explanation of the failure is useful and safe to deliver.", "false": "No additional user-facing closure cycle is appropriate."},
             },
         }
+        questions.update(OUTCOME_QUESTIONS)
         started = monotonic()
         response = self.client.evaluate(state=state, questions=questions)
         duration_ms = max(0, round((monotonic() - started) * 1000))
@@ -740,11 +746,13 @@ class JevCriterionDecisionProvider:
         probabilities = answer.get("probabilities") if isinstance(answer.get("probabilities"), dict) else {}
         confidence = max(0.0, min(1.0, float(probabilities.get(action) or 0.0)))
         fuse_answers: dict[str, float] = {}
-        for question_id in ("continuation_is_worthwhile", "user_input_can_unblock", "closure_explanation_is_warranted"):
+        for question_id in ("continuation_is_worthwhile", "user_input_can_unblock", "closure_explanation_is_warranted", *OUTCOME_QUESTIONS):
             fuse = response["answers"].get(question_id)
-            if not isinstance(fuse, dict) or fuse.get("type") != "noul" or not isinstance(fuse.get("noul"), (int, float)):
+            if (not isinstance(fuse, dict) or fuse.get("type") != "noul"
+                    or type(fuse.get("noul")) not in {int, float}
+                    or not math.isfinite(fuse["noul"]) or not 0 <= fuse["noul"] <= 1):
                 raise ValueError(f"system_one_act_fuse_invalid:{question_id}")
-            fuse_answers[question_id] = max(0.0, min(1.0, float(fuse["noul"])))
+            fuse_answers[question_id] = float(fuse["noul"])
         return SystemOneActRecommendation(
             action=action,
             confidence=confidence,
