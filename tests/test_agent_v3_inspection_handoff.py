@@ -283,7 +283,7 @@ def test_fresh_read_can_verify_an_already_satisfied_idempotent_update_without_a_
             })
 
     context = CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry(), system_one=Jev())
-    read = command("import sqlite3; c=sqlite3.connect('file:records.sqlite?mode=ro',uri=True); row=c.execute('SELECT id,value FROM records WHERE id=1').fetchone(); print(str(row[0])+'|'+row[1])")
+    read = "sqlite3 -readonly records.sqlite 'SELECT id,value FROM records WHERE id=1'"
     outcome = PhaseExecutor(action_selector=lambda *_: {'tool_id': 'native.bash', 'arguments': {'command': read, 'cwd': str(tmp_path)}}, reveal_policy=ToolRevealPolicy()).run(task, state, context)
     task.metadata['prepared_user_response'] = {'message': 'Record 1 already has the requested value, verified by fresh read-back.',
         'work_evidence_refs': [state.evidence.entries[-1]['evidence_ref']]}

@@ -211,12 +211,29 @@ limits by occurring at an earlier or later decision stage.
 full tactical checkpoint. Its required fields are the goal, current-task messages,
 authenticated follow-ups, revalidated originating sources when needed, user
 constraints, acceptance definitions/status, compact subgoal/completion facts,
-phase outcome, and prepared response. All successful observations referenced by
-satisfied required semantic criteria are included in full, once per evidence ID.
-The current prepared response is referenced rather than duplicated as a tool result.
-Action argument logs, bound-output copies, and broad household/skill prompt blocks
-are not sent again. Optional observations can be omitted whole, with explicit
-coverage; omissions never establish absence, denial, successful mutation, or failure.
+phase outcome, and prepared response. Observations cited by satisfied required semantic criteria are included once per
+evidence ID. The projection also keeps a cited read-back and its linked write
+together. Each observation carries its invocation and task-understanding
+provenance when available, its operation and target, the operational outcome, and
+the effect or read-back state. Legacy checkpoints keep their original evidence
+IDs and mark their provenance as checkpoint evidence.
+
+Native read-back receipts retain the resource identity and verification source.
+Bash retains a bounded operation description for supported literal file and
+SQLite commands. Complex commands are opaque, with a digest and applicable
+artifact ID. Exit zero describes the shell process. A confirmed effect needs
+resource-specific read-back and semantic support for the current requested
+outcome. For example, use a separate `cat` of the written file or a
+`sqlite3 -readonly` query selecting the intended record's fields. A fresh read
+can support an idempotent request when it establishes the desired state for the
+scoped resource. A fresh read alone cannot establish that a new event occurred.
+Explicit HTTP or access failures remain visible even when a wrapper exits zero.
+
+The current prepared response is referenced instead of repeated in its tool
+result. Plans, listed capabilities and prepared language carry no effect status.
+The projection withholds raw Bash commands, error messages and known credential
+fields. Optional observations or results may be omitted whole. Source clipping,
+unavailable evidence and budget omissions are recorded separately.
 
 State is limited to 24,000 UTF-8 bytes; the provider additionally checks the state
 plus its actual questions against a 28,000-byte request budget. These conservative

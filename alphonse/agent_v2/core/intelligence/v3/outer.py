@@ -325,6 +325,7 @@ def _recommend_act(task, state, outcome, review: PhaseReview, context):
             "fail", 1.0, True, review.reason,
         )
     from .act_context import mission_review_state
+    from .act_evidence import has_persisted_outcome_evidence, has_unusable_criterion_support
     available = [tool.tool_id for tool in ToolExposurePolicy().select_tools(
         registry=context.tools, project_id=task.project_id, user=task.user, task=task)] if context.tools is not None else []
     request_sources = []
@@ -332,8 +333,20 @@ def _recommend_act(task, state, outcome, review: PhaseReview, context):
         from alphonse.agent_v2.core.memory.retry_context import retry_continuity_records
         records = retry_continuity_records(task, context)
         if (task.metadata.get('v3_retry_continuity') or {}).get('access_status') != 'available':
+            task.metadata['v3_act_context'] = {
+                'schema_version': 2, 'status': 'blocked',
+                'reason': 'act_context_required_evidence_unavailable',
+                'unavailable_request_source_ids': [
+                    entry['source_id'] for record in records for entry in record.records
+                    if entry['status'] == 'omitted'
+                ],
+            }
             raise SystemOneUnavailableError('act_context_required_evidence_unavailable')
-        request_sources = [str(record) for record in records[1:]]
+        request_sources = [
+            {"source_id": record.records[0]["source_id"], "source_type": record.records[0]["source_type"],
+             "content": str(record)}
+            for record in records[1:]
+        ]
     input_state = mission_review_state(task, state, outcome, review, available, request_sources=request_sources)
     try:
         recommendation = context.system_one.recommend_act(state=input_state)
@@ -353,12 +366,9 @@ def _recommend_act(task, state, outcome, review: PhaseReview, context):
     missing_effect_evidence = (
         type(requires_effect) in {int, float} and math.isfinite(requires_effect)
         and requires_effect >= yes_threshold
-        and not any(
-            item.get("status") == "success" and item.get("tool_id")
-            and item["tool_id"] not in {"native.respond", "native.ask_question"}
-            for item in state.evidence.entries
-        )
+        and not has_persisted_outcome_evidence(input_state)
     )
+    unusable_support = has_unusable_criterion_support(input_state)
     # The middle Noul band means unresolved, not unfinished work. Resolve the
     # disagreement against the same evidence before creating another phase.
     # Keep the original probabilities in telemetry; do not lower a threshold
@@ -368,7 +378,7 @@ def _recommend_act(task, state, outcome, review: PhaseReview, context):
     if (action == "complete" and recommendation.confident
             and review.status == PhaseReviewStatus.PHASE_VERIFIED_TASK_COMPLETE
             and valid_mission_judgment and no_threshold < mission_fulfilled < yes_threshold
-            and not missing_effect_evidence):
+            and not missing_effect_evidence and not unusable_support):
         mission_resolution = _resolve_mission_ambiguity(task, input_state, context)
     mission_unfulfilled = valid_mission_judgment and mission_fulfilled < yes_threshold
     if mission_resolution is not None:
@@ -376,7 +386,7 @@ def _recommend_act(task, state, outcome, review: PhaseReview, context):
     required_judgment_missing = (
         getattr(context.system_one, "requires_mission_outcome_review", False) and not valid_mission_judgment
     )
-    if action == "complete" and (mission_unfulfilled or missing_effect_evidence or required_judgment_missing):
+    if action == "complete" and (mission_unfulfilled or missing_effect_evidence or unusable_support or required_judgment_missing):
         action = "replan"
     elif action == "fail_explain" and review.status == PhaseReviewStatus.PHASE_VERIFIED_TASK_INCOMPLETE:
         # A completed phase is not the same as a completed mission. If the
@@ -429,7 +439,7 @@ def _resolve_mission_ambiguity(task, input_state, context) -> bool | None:
     if context.inference is None:
         return None
     refs = [row["evidence_ref"] for row in input_state["execution_evidence"]
-            if row.get("status") == "success"
+            if row.get("operational_outcome") in {"returned", "process_exited_zero"}
             and ("result" in row or row.get("result_reference") == "prepared_response.message")]
     schema = {
         "type": "object", "additionalProperties": False,

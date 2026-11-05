@@ -113,8 +113,11 @@ def test_approved_october_payload_survives_many_failed_retries_and_is_persisted(
         authorized_capabilities=['local_shell', 'user_response'], mutation_scope={'allowed_paths': ['records.sqlite'], 'allow_external_effects': False},
         subgoals=[dict(subgoal_id='record_or_ask_for_missing_details', objective='Record the reviewed October 30 FixtureBeta payload with its source references and flagged uncertainty',
             required_output_type='verified_record', allowed_capabilities=['local_shell'], allowed_side_effects=['project_mutation'], completion={'kind': 'output_present'}),
+            dict(subgoal_id='verify_record', objective='Read back the saved date, medication and provenance',
+                 required_output_type='record', depends_on=['record_or_ask_for_missing_details'],
+                 allowed_capabilities=['local_shell'], allowed_side_effects=['read_only'], completion={'kind': 'output_present'}),
             dict(subgoal_id='report_outcome', objective='Report the verified October update', required_output_type='response',
-                 depends_on=['record_or_ask_for_missing_details'], allowed_capabilities=['user_response'], allowed_side_effects=['user_response'], completion={'kind': 'output_present'})])
+                 depends_on=['verify_record'], allowed_capabilities=['user_response'], allowed_side_effects=['user_response'], completion={'kind': 'output_present'})])
     requests = []
     def generate(inference):
         requests.append(inference)
@@ -142,12 +145,21 @@ def test_approved_october_payload_survives_many_failed_retries_and_is_persisted(
     assert jev.selections == 1
     assert 'NEW_OCTOBER_PAYLOAD' not in str(task.metadata['v3_retry_continuity'])  # IDs only, no cached payload.
     source_ids = task.metadata['v3_retry_continuity']['source_ids']
-    script = "import sqlite3; c=sqlite3.connect('records.sqlite'); c.execute('BEGIN'); c.execute('INSERT INTO prescriptions VALUES(?,?,?)',('2026-10-30','FixtureBeta'," + repr(json.dumps(source_ids)) + ")); c.commit(); c.close(); r=sqlite3.connect('file:records.sqlite?mode=ro',uri=True); row=r.execute(\"SELECT date,medication FROM prescriptions WHERE date='2026-10-30'\").fetchone(); print(row[0]+'|'+row[1])"
-    actions = iter([{'tool_id': 'native.bash', 'arguments': {'command': shlex.quote(sys.executable) + ' -c ' + shlex.quote(script), 'cwd': str(tmp_path)}},
-                    {'tool_id': 'native.respond', 'arguments': {'message': 'October prescription saved and read back.'}}])
+    provenance = json.dumps(source_ids)
+    write = "sqlite3 records.sqlite " + shlex.quote(
+        f"INSERT INTO prescriptions VALUES('2026-10-30','FixtureBeta','{provenance}')"
+    )
+    read = "sqlite3 -readonly records.sqlite " + shlex.quote(
+        "SELECT date,medication,provenance FROM prescriptions WHERE date='2026-10-30'"
+    )
+    actions = iter([
+        {'tool_id': 'native.bash', 'arguments': {'command': write, 'cwd': str(tmp_path)}},
+        {'tool_id': 'native.bash', 'arguments': {'command': read, 'cwd': str(tmp_path)}},
+        {'tool_id': 'native.respond', 'arguments': {'message': 'October prescription saved and read back.'}},
+    ])
     state = new_tactical_state(planned)
     outcome = PhaseExecutor(action_selector=lambda *_: next(actions), reveal_policy=ToolRevealPolicy()).run(task, state, context)
-    assert outcome.status == PhaseStatus.PHASE_COMPLETE
+    assert outcome.status == PhaseStatus.PHASE_COMPLETE, outcome.to_dict()
     _, decision = V3OuterController().review_and_route(task, state, outcome, context)
     assert decision.action == StrategicAction.COMPLETE
     with sqlite3.connect(database) as db:
