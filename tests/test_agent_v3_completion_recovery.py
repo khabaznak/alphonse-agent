@@ -228,15 +228,19 @@ def test_effect_judgments_have_explicit_routing(requested, support, conflict, st
     {'status': 'success', 'ok': True},
 ])
 def test_process_status_and_prepared_reply_cannot_substitute_for_an_effect(result):
-    task, state, context, requests, _ = completed_lookup(requires_effect=.99, probability=.99)
+    task, state, context, requests, verdict = completed_lookup(requires_effect=.01, probability=.99)
+    # A valid current request ref cannot rescue a criterion based on unusable execution.
+    verdict["evidence_refs"] = ["request:synthetic-lookup"]
     state.evidence.entries[0]['result'] = result
     _, decision = V3OuterController().review_and_route(
         task, state, PhaseOutcome('lookup', PhaseStatus.PHASE_COMPLETE), context,
     )
-    assert decision.action == StrategicAction.REPLAN
-    assert task.metadata['system_one_act_judgments']['status'] == 'unsupported'
-    assert 'unusable execution evidence' in task.metadata['act_directive']['outcome_review']['reason']
-    assert not requests
+    assert decision.action == StrategicAction.FAIL
+    assessment = task.metadata["system_one_act_judgments"]
+    assert assessment["status"] == "unsupported"
+    assert "unusable execution evidence" in assessment["reason"]
+    assert task.metadata["v3_mission_resolution"]["status"] == "invalid"
+    assert len(requests) == 1
 
 
 def test_negative_grounding_blocks_a_reply_even_when_it_addresses_the_request():

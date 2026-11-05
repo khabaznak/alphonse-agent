@@ -90,6 +90,7 @@ success.
 9. [Durable person/audience knowledge](09-durable-knowledge.md)
 10. [Structured memory recall](10-memory-recall.md)
 11. [Bounded conversation and active-task continuity](11-conversation-continuity.md)
+12. [Synthetic lifecycle qualification](14-lifecycle-qualification.md)
 
 Stages are ordered. A later stage may be prototyped early, but it must not be declared
 complete before its dependencies and exit gates pass.

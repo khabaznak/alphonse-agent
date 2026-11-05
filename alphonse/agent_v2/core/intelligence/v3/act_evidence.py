@@ -230,11 +230,14 @@ def observation(entry, criterion_ids, *, include_result=True):
     native_delivery_failed = tool_id in _OUTBOX_TOOLS and fields.get("status") in {
         "recipient_not_found", "recipient_ambiguous", "recipient_unreachable", "delivery_failed",
     }
+    memory_read_failed = tool_id == "native.read_memory_source" and fields.get("status") in {
+        "not_found", "unavailable", "failed",
+    }
     if denied or failure == "denied":
         outcome = "denied"
     elif status == "rejected":
         outcome = "rejected"
-    elif failure or native_delivery_failed or status == "failed" or fields.get("timed_out") is True or (
+    elif failure or native_delivery_failed or memory_read_failed or status == "failed" or fields.get("timed_out") is True or (
         tool_id == "native.bash" and type(fields.get("exit_code")) is int and fields["exit_code"] != 0
     ):
         outcome = "failed"
