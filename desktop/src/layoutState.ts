@@ -42,3 +42,8 @@ export const SETTINGS_SECTIONS = [
   ["integrations", "Integrations"], ["automations", "Automations"],
   ["model", "Model"], ["system-one", "System One"], ["agent-config", "Agent configuration"], ["skills", "Skills"], ["members", "Members"],
 ] as const;
+
+
+export function canOpenSettingsSection(section: (typeof SETTINGS_SECTIONS)[number][0], isAdmin: boolean): boolean {
+  return isAdmin || section === "general" || section === "appearance" || section === "integrations";
+}

@@ -27,7 +27,7 @@ import { followDesktopStyle, readDesktopStyle, saveDesktopStyle, type DesktopSty
 import { desktopDiagnosticBehavior, type DesktopDiagnosticMode } from "./diagnosticMode";
 import { createDesktopNotifier, DESKTOP_NOTIFICATION_PREFERENCES_KEY, notificationForCompletion, notificationForQuestion, readDesktopNotificationPreferences, type DesktopNotificationPreferences } from "./desktopNotifications";
 import { readDismissedScheduledSurfaces, rememberDismissedScheduledSurface, withoutDismissedSurfaces, withoutSurface } from "./dismissedSurfaces";
-import { avatarState, avatarStateLabel, capdActivityLabel, type Workspace, SETTINGS_SECTIONS } from "./layoutState";
+import { avatarState, avatarStateLabel, capdActivityLabel, canOpenSettingsSection, type Workspace, SETTINGS_SECTIONS } from "./layoutState";
 import { ConversationMessage, MemoizedConversationMessage } from "./ConversationMessage";
 import { reconcileQuestionSurfaces, reuseQuestions, withoutTaskProgressSurfaces } from "./pollState";
 import { appendQueueSample, type QueueSample } from "./queueHistory";
@@ -596,7 +596,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
         <nav className="shell-navigation" aria-label={workspace === "settings" ? "Settings navigation" : "Workspaces"}>
           {workspace === "settings" ? <>
             <button disabled={workspaceRequired} title="Back to workspace" onClick={() => navigate(returnWorkspace)}><ChevronLeft /><span>Back to workspace</span></button>
-            {SETTINGS_SECTIONS.filter(([id]) => (!workspaceRequired || id === "general") && (isAdmin || ["general", "appearance"].includes(id))).map(([id, label]) => { const Icon = SETTINGS_ICONS[id]; return <button key={id} title={label} aria-current={workspace === "settings" && settingsTab === id ? "page" : undefined} onClick={() => { setSettingsTab(id); navigate("settings"); }}><Icon /><span>{label}</span></button>; })}
+            {SETTINGS_SECTIONS.filter(([id]) => (!workspaceRequired || id === "general") && canOpenSettingsSection(id, isAdmin)).map(([id, label]) => { const Icon = SETTINGS_ICONS[id]; return <button key={id} title={label} aria-current={workspace === "settings" && settingsTab === id ? "page" : undefined} onClick={() => { setSettingsTab(id); navigate("settings"); }}><Icon /><span>{label}</span></button>; })}
           </> : <>
             <p className="sidebar-section-label">Your household</p>
             {([["conversation", "Conversation", MessageCircle], ["household", "Household", UsersRound], ["projects", "Projects & Tasks", FolderKanban], ["agenda", "Agenda", CalendarClock], ["attention", "Needs your attention", CircleHelp]] as const).filter(([, label]) => label.toLowerCase().includes(navigationQuery.trim().toLowerCase())).map(([id, label, Icon]) => <button key={id} title={label} aria-current={workspace === id ? "page" : undefined} onClick={() => navigate(id)}><Icon /><span>{label}</span>{id === "attention" && questions.length > 0 && <small>{questions.length}</small>}</button>)}
@@ -696,7 +696,7 @@ function SettingsWorkspace({ isAdmin, user, initialTab, workspaceRequired, enter
   };
   const verify = async (kind: "search" | "fetch") => { try { const current = await daemonRequest<{ user: { user_id: string } | null }>("current_user"); if (!current.user) return; const result = await daemonRequest<{ result: { exception?: { message?: string } } }>("verify_web_tools", { actor_user_id: current.user.user_id, kind }); setWebNotice(result.result.exception?.message || `${kind === "search" ? "SearXNG search" : "Public fetch"} verified.`); } catch (cause) { setWebNotice(cause instanceof Error ? cause.message : "Verification failed"); } };
   const saveMemory = async () => { if (!memory) return; try { const current = await daemonRequest<{ user: { user_id: string } | null }>("current_user"); if (!current.user) return; const result = await daemonRequest<{ settings: MemorySettings }>("save_memory_settings", { actor_user_id: current.user.user_id, values: memory }); setMemory(result.settings); setMemoryNotice("Saved. New tasks use these limits."); } catch (cause) { setMemoryNotice(cause instanceof Error ? cause.message : "Memory settings could not be saved"); } };
-  const allowed = isAdmin || ["general", "appearance"].includes(tab);
+  const allowed = canOpenSettingsSection(tab, isAdmin);
   return <section className="settings-workspace">
     <header className="settings-workspace-header"><div><p className="eyebrow">Settings</p><h1 ref={headingRef} tabIndex={-1}>{workspaceRequired ? "Set up Alphonse Workspace" : SETTINGS_SECTIONS.find(([id]) => id === tab)?.[1]}</h1><p>Edits stay here while you navigate, until you close the app. Use each section’s save button to apply changes. Appearance, messaging and alerts save immediately.</p></div><button disabled={workspaceRequired} onClick={onClose}>← Back to workspace</button></header>
     {!allowed && <p role="alert">This section requires an administrator.</p>}
@@ -752,7 +752,7 @@ function SettingsWorkspace({ isAdmin, user, initialTab, workspaceRequired, enter
       </section>
       <div className="setting-group"><MediaToolsSettingsSection /></div>
     </div>}
-    {visitedSections.has("integrations") && isAdmin && <div hidden={tab !== "integrations"}><OptionalAccounts key={user} identity={user} /><IntegrationsSettingsSection user={user} /></div>}
+    {visitedSections.has("integrations") && <div hidden={tab !== "integrations"}><OptionalAccounts key={user} identity={user} />{isAdmin && <IntegrationsSettingsSection user={user} />}</div>}
     {visitedSections.has("automations") && isAdmin && <div hidden={tab !== "automations"}><AutomationsSettingsSection user={user} /></div>}
     {visitedSections.has("model") && isAdmin && <div hidden={tab !== "model"}><ModelSettingsSection /></div>}
     {visitedSections.has("system-one") && isAdmin && <div hidden={tab !== "system-one"}><SystemOneSettingsSection user={user} /></div>}

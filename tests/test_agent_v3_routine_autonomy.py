@@ -182,6 +182,13 @@ def test_delegated_filename_resumes_through_planner_and_executor_without_another
         requests = []
 
         def generate_json(self, request):
+            properties = (request.output_schema or {}).get('properties', {})
+            if 'supporting_answer_refs' in properties:
+                return SimpleNamespace(json_value={
+                    'resolution': 'resolved', 'reason': 'The requester delegated the choice of filename.',
+                    'supporting_answer_refs': properties['supporting_answer_refs']['items']['enum'],
+                    'remaining_information': [],
+                })
             self.requests.append(request)
             return SimpleNamespace(json_value=next(self.outputs))
 
