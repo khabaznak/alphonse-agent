@@ -39,7 +39,7 @@ export function ActivityWidget({ data, now, timezone, onRequest }: { data: Activ
   function request(item: ProgressRecord | TimerRecord, action: string) {
     onRequest?.(`Use the owning skill workflow to ${action}. Resource: ${JSON.stringify(data.artifactId)}; item: ${JSON.stringify(item.id)}; source revision: ${JSON.stringify(data.updatedAt)}. Re-read the source, check authorization and prerequisites, persist the timestamps and verify the effect before reporting success. Refresh the activity snapshot.`);
   }
-  return <div className="activity-widget"><small>{data.source} · Owner: {data.owner}</small><small>Source updated: {widgetTime(data.updatedAt, timezone)}</small>
+  return <div className="activity-widget">
     {!data.items.length && <p>No recorded activity.</p>}
     {data.items.map((item) => <section key={item.id} aria-label={item.title}><h4>{item.title}</h4><small>{scopeLabel[item.scope]} · {widgetTime(item.recorded_at, timezone)}</small>
       {data.family === "timer" ? (() => {
@@ -50,11 +50,11 @@ export function ActivityWidget({ data, now, timezone, onRequest }: { data: Activ
       })() : (() => {
         const progress = item as ProgressRecord;
         const label = `${progress.value} of ${progress.target} ${progress.unit}`;
-        return <><p>{label}</p><div role="progressbar" aria-label={item.title} aria-valuemin={0} aria-valuemax={progress.target} aria-valuenow={Math.min(progress.value, progress.target)} aria-valuetext={label} className={`recorded-progress ${progress.display}`}>
+        return <><div className="activity-metric"><strong>{Math.round(progress.value / progress.target * 100)}<span>%</span></strong><small>{label}</small></div><div role="progressbar" aria-label={item.title} aria-valuemin={0} aria-valuemax={progress.target} aria-valuenow={Math.min(progress.value, progress.target)} aria-valuetext={label} className={`recorded-progress ${progress.display}`}>
           {progress.display === "dots" ? Array.from({ length: progress.target }, (_, index) => <i key={index} data-filled={index < progress.value} aria-hidden="true" />) : <span style={{ width: `${Math.min(100, progress.value / progress.target * 100)}%` }} />}
         </div><small>Source status: {progress.status}</small></>;
       })()}
     </section>)}
-    <p>Records remain authoritative. Requests open a conversation draft; timer expiry does not confirm task completion.</p>
+    <details className="widget-source-details"><summary>Source &amp; details</summary><small>{data.source} · Owner: {data.owner}</small><small>Source updated: {widgetTime(data.updatedAt, timezone)}</small><p>Records remain authoritative. Requests open a conversation draft; timer expiry does not confirm task completion.</p></details>
   </div>;
 }
