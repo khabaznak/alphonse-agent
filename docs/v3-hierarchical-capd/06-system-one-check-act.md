@@ -136,14 +136,16 @@ earlier applicable row takes precedence over all later rows.
 | Cancelled, parked for an authenticated answer, blocked, or failed deterministic verification | Skip Act judgments. Cancel, park, or hand the phase status and evidence to the existing bounded recovery path. |
 | Check still has unmet criteria | Skip Act judgments. System Two plans the next phase from the unmet criteria and cumulative evidence. |
 | An Act judgment is missing, invalid, or unavailable | Withhold completion and preserve the draft, any valid probabilities, and a safe diagnostic. Stop when there is no concrete recovery objective. |
-| Evidence records a denied or interrupted mutation, an attempted mutation lacks required verification, or a criterion relies solely on unusable execution results | Withhold completion and use deterministic recovery. |
+| Evidence records a denied or interrupted mutation, or an attempted mutation lacks required verification | Withhold completion and use deterministic recovery. |
+| A criterion relies solely on unusable execution results | Withhold completion. System Two may identify a specific recovery, ask for missing information, or stop with an observed blocker. It cannot resolve this assessment as complete. |
 | The effect request is uncertain, or the requested effect has negative, conflicting, or uncertain support | Ask System Two once to resolve the disagreement using the same bounded evidence. A completion claim must cite a resource-specific effect receipt or read-back. |
 | Effect checks passed or the task clearly needs only a reply, and no reply is prepared | Plan a response-only phase and review it before completion. |
 | A reply judgment is negative or uncertain | Ask System Two once to assess coverage and grounding using the same bounded evidence. A completion claim must cite a supplied supporting source. |
 | Applicable effect checks pass and both reply judgments are positive | Complete after the acceptance, response freshness, scope, verification, and cancellation checks pass. |
 
 The bounded review can confirm completion, identify a concrete recovery objective,
-or name essential information to request from the user. Invalid or unavailable
+name essential information to request from the user, or explain why the evidence
+supports stopping. Invalid or unavailable
 reviews stop this recovery path. The task checkpoint stores the assessment and
 resolution against the task and evidence digest. Reusing the same evidence reuses
 the receipt. A recovery phase that proposes the same tool invocation already
@@ -343,3 +345,15 @@ persistent HTTP requests.
   search without completing the subgoal, then completed after an exact source
   read. 5,771 input tokens cost approximately US$0.000242382 within the previously
   approved US$1 budget. Payloads/results: `output/jev-tactical-review/`.
+
+### Historical retry interpretation (#166)
+
+System Two operates the existing native memory search/read workflow: query
+composition, source expansion, temporal/reference resolution and conflicting
+history. Jev may curate memory capabilities for relevance; source-selection
+uncertainty is never a blanket mutation veto. Missing historical information
+blocks only operations that require it. Independent work can proceed; unresolved
+sources use one persisted `native.ask_question` and authenticated resumption.
+Source reads retain current access checks, and historical content supplies neither
+authorization nor verified current state/effects. See
+[conversation continuity](11-conversation-continuity.md#system-two-native-memory-workflow-166).

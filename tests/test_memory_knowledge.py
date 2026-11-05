@@ -409,7 +409,14 @@ def test_runtime_wires_extraction_to_current_router_and_jev_without_project(tmp_
     from alphonse.agent_v2.runtime import build_runtime_host
     from alphonse.agent_v2.users import V2UserStore
     from alphonse.agent_v2.core.inference import InferencePurpose, InferenceRouter, StubInferenceProvider
-    users = V2UserStore(tmp_path / "workspace")
+    users = V2UserStore(tmp_path / "users.sqlite")
+    # A database path does not configure profile/workspace storage. Set the
+    # legacy root first so workspace setup cannot consult household profiles.
+    users.set_users_root(tmp_path / "legacy-users")
+    users.set_workspace_root(tmp_path / "workspace")
+    assert users.users_root().is_relative_to(tmp_path)
+    assert users.skills_root().is_relative_to(tmp_path)
+    assert users.artifacts_root().is_relative_to(tmp_path)
     runtime = build_runtime_host(user="alex", user_store=users)
     # Replace the runtime's router/provider after construction, as settings refresh does.
     provider = StubInferenceProvider(json_by_purpose={InferencePurpose.MEMORY_EXTRACTION: {"candidates": [candidate()]}})
@@ -428,6 +435,11 @@ def test_runtime_wires_extraction_to_current_router_and_jev_without_project(tmp_
     assert provider.requests[0].project_id == ""
     assert provider.requests[0].user == "alex"
     assert runtime.core.memory.knowledge.store.processed("alex", f"conversation:{source.event_id}")
+    profile_memory = tmp_path / "workspace" / "users" / "alex" / "memory"
+    audit = profile_memory / "generic" / "ledger-0001.md"
+    daily = profile_memory / "daily" / f"{source.observed_at[:10]}.md"
+    assert "Which filter?" in audit.read_text()
+    assert source.content in daily.read_text()
 
 
 def test_commitment_reported_completion_preserves_authoritative_task_state(setup):

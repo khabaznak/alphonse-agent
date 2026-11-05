@@ -218,7 +218,8 @@ def test_caught_http_error_in_a_real_exit_zero_shell_cannot_fulfill_lookup(http_
     assert row['operational_outcome'] == ('denied' if http_status == 403 else 'failed')
     assert row['http_status'] == http_status
     assert 'verification' not in row
-    assert decision.action == StrategicAction.REPLAN
+    assert decision.action == StrategicAction.FAIL
+    assert task.metadata["v3_mission_resolution"]["status"] == "unavailable"
 
 
 def test_verified_native_effect_survives_alongside_failed_mutation_and_unfinished_intent():

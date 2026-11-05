@@ -79,7 +79,7 @@ def test_current_answer_can_still_require_history_without_silently_clearing_gap(
     context.system_one.select_retry_context = lambda **kw: ()
     context.conversation_store = SimpleNamespace(list_recent=lambda **kw: [], read=lambda **kw: None)
     prepare_retry_continuity(task, context)
-    assert len(calls) == len(seen) == 1 and retry_source_unresolved(task)
+    assert len(calls) == 1 and not seen and retry_source_unresolved(task)
 
 
 @pytest.mark.parametrize('change', [

@@ -461,7 +461,8 @@ class HierarchicalCAPDProcessor:
         if task.status != "failed" or task.metadata.get("v3_failure_response"):
             return
         reason = str((task.outcome or {}).get("reason") or "")
-        if reason.startswith(("system_one_unavailable", "v3_phase_plan_invalid:")):
+        act_unavailable = (task.metadata.get("system_one_act_judgments") or {}).get("status") == "unavailable"
+        if reason.startswith("v3_phase_plan_invalid:") or (reason.startswith("system_one_unavailable") and not act_unavailable):
             return
         directive = task.metadata.get("act_directive")
         if isinstance(directive, dict) and directive.get("closure_only") and task.has_prepared_user_response():
