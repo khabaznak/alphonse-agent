@@ -1,4 +1,5 @@
 """Offline lifecycle contracts with real System Two request/validation plumbing."""
+from conftest import act_judgments
 from copy import deepcopy
 import json
 from types import SimpleNamespace
@@ -214,7 +215,6 @@ def test_processor_uses_one_interpretation_through_real_plan_action_and_review(p
     from alphonse.agent_v2.core.tools.registry.native.respond import build_respond_tool_definition
     from alphonse.agent_v2.system_one import (
         SystemOneToolRegistrySelection, SystemOneReviewResult, SystemOneTacticalReview,
-        SystemOneActRecommendation,
     )
     monkeypatch.setenv('ALPHONSE_V3_CONTEXT_PROJECTIONS', str(int(projected)))
     observed = []
@@ -280,9 +280,10 @@ def test_processor_uses_one_interpretation_through_real_plan_action_and_review(p
         def evaluate(self, **kwargs):
             # Force the real System Two final review path, whose request is checked above.
             return SystemOneReviewResult((), ('ac-1',))
-        def recommend_act(self, *, state):
+        def judge_act(self, *, state):
             assert state['task_understanding']['version'] == 1
-            return SystemOneActRecommendation('complete', 1., True, 'Observed completion')
+            return act_judgments()
+
         def judge_recall(self, **kwargs):
             return False
 

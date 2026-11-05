@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from alphonse.agent_v2.core.core import ImprovementPhase
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
-from alphonse.agent_v2.core.intelligence.acceptance_planning import _render_acceptance_criteria_prompt, _render_acceptance_criteria_amendment_prompt
-from alphonse.agent_v2.system_one import SystemOneUnavailableError
 
 if TYPE_CHECKING:
     from alphonse.agent_v2.core.core import CoreLoopContext
@@ -29,7 +27,7 @@ def act_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskSta
     _observe_completed_do_cycle(task)
     verdict = str(task.check_verdict or "").strip().lower()
     if verdict == "wip":
-        return _act_on_wip(task, context)
+        return _act_on_wip(task)
 
     if verdict == "new":
         task.metadata["act_route"] = _PLAN_ROUTE
@@ -41,80 +39,47 @@ def act_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskSta
         task.append_update("Act routed steering to Plan for acceptance-contract and strategy revision.")
         return task
 
-    return _recommend_act(task, context)
+    return _route_checked_task(task)
 
 
-def _act_on_wip(task: TaskState, context: CoreLoopContext | None) -> TaskState:
+def _act_on_wip(task: TaskState) -> TaskState:
     if task.metadata.get("pending_silent_bash_confirmation"):
         task.metadata["act_route"] = _PLAN_ROUTE
         task.append_update("Act requires a native.respond confirmation before completing the task.")
         return task
 
-    return _recommend_act(task, context)
+    return _route_checked_task(task)
 
 
-def _recommend_act(task: TaskState, context: CoreLoopContext | None) -> TaskState:
+def _route_checked_task(task: TaskState) -> TaskState:
     if task.metadata.get("cancel_requested") is True or task.metadata.get("kill_switch_cancelled") is True:
         task.status = "cancelled"
         task.metadata["act_route"] = _END_ROUTE
         return task
     directive = task.metadata.get("act_directive")
-    if isinstance(directive, dict) and directive.get("closure_only") and task.has_prepared_user_response():
-        return _mark_mission_failed(task, str(directive.get("reason") or "Mission failed; final explanation delivered."))
-    if context is None or context.system_one is None or not callable(getattr(context.system_one, "recommend_act", None)):
-        raise SystemOneUnavailableError("act_recommendation_unavailable")
-    state = {
-        "goal": task.goal,
-        "check_verdict": task.check_verdict,
-        "check_reason": task.check_reason,
-        "acceptance_contract": task.ensure_acceptance_contract(),
-        "task_state": task.to_dict(),
-        "complete_tool_execution_log": task.plan_json,
-        "user_constraints": task.metadata.get("user_constraints", {}),
-        "completed_cycles": task.pdca_cycle_count,
-        "cycle_limit": _TEMPORARY_MAX_COMPLETED_CYCLES,
-        "plan_call_exceptions": task.count_plan_call_exceptions(),
-        "plan_call_exception_limit": _PLAN_CALL_EXCEPTION_FAILURE_THRESHOLD,
-        "failure_reason": _mission_failure_reason(task),
-    }
-    try:
-        recommendation = context.system_one.recommend_act(state=state)
-    except Exception as exc:
-        raise SystemOneUnavailableError(f"act_recommendation:{type(exc).__name__}") from exc
-    task.metadata["act_recommendation"] = recommendation.to_metadata()
-    action = recommendation.action
-    yes_threshold = float(getattr(recommendation, "yes_threshold", 0.8))
-    if _temporary_cycle_limit_reached(task) and action in {"continue", "replan"}:
-        action = "fail_explain" if recommendation.answers.get("closure_explanation_is_warranted", 0.0) >= yes_threshold else "fail"
-    if action == "complete" and not task.acceptance_criteria_all_complete():
-        action = "continue" if recommendation.answers.get("continuation_is_worthwhile", 0.0) >= yes_threshold else "replan"
-    if action == "complete" and not task.has_prepared_user_response():
-        task.metadata["pending_user_response"] = True
-        task.metadata["act_directive"] = {"action": "complete", "response_required": True}
-        action = "continue"
-    if action == "ask_user" and recommendation.answers.get("user_input_can_unblock", 0.0) < yes_threshold:
-        action = "replan"
-    if action == "fail_explain" and recommendation.answers.get("closure_explanation_is_warranted", 0.0) < yes_threshold:
-        action = "fail"
-    if not recommendation.confident and action not in {"fail", "fail_explain"}:
-        action = "replan"
-    if action == "fail_explain":
+    if isinstance(directive, dict) and directive.get("closure_only"):
+        return _mark_mission_failed(task, str(directive.get("reason") or "The mission could not be verified."))
+    verdict = str(task.check_verdict or "").strip().lower()
+    verified = verdict in {"wip", "success", "mission_success"} and task.acceptance_criteria_all_complete()
+    if verified and task.has_prepared_user_response():
+        return _mark_mission_success(task, task.check_reason or "Check verified the acceptance criteria.")
+    if _temporary_cycle_limit_reached(task):
+        return _mark_mission_failed(task, _mission_failure_reason(task) or "The mission reached the execution cycle limit.")
+    reason = _mission_failure_reason(task)
+    if verdict in {"failure", "mission_failed"} or reason:
+        reason = reason or task.check_reason or "The mission could not be verified."
         task.metadata["act_directive"] = {
             "action": "fail_explain", "closure_only": True, "response_required": True,
-            "terminal_outcome": "failed", "reason": recommendation.rationale,
+            "terminal_outcome": "failed", "reason": reason,
         }
         task.metadata["pending_user_response"] = True
-        action = "continue"
-    if action in {"continue", "replan", "ask_user"}:
-        task.metadata.setdefault("act_directive", {"action": action, "rationale": recommendation.rationale})
-        task.metadata["act_route"] = _PLAN_ROUTE
-        task.append_update(f"Act routed to Plan on Jev recommendation: {action}.")
-        return task
-    if action == "complete":
-        return _mark_mission_success(task, recommendation.rationale)
-    if action == "fail":
-        return _mark_mission_failed(task, recommendation.rationale)
-    raise SystemOneUnavailableError("act_recommendation_action_invalid")
+    elif verified:
+        task.metadata["pending_user_response"] = True
+        task.metadata["act_directive"] = {"action": "complete", "response_required": True}
+    else:
+        task.metadata["act_directive"] = {"action": "replan", "rationale": task.check_reason}
+    task.metadata["act_route"] = _PLAN_ROUTE
+    return task
 
 
 def _mark_mission_success(task: TaskState, reason: str) -> TaskState:
@@ -175,8 +140,3 @@ def _temporary_cycle_limit_reached(task: TaskState) -> bool:
     completed_cycle_limit = max(0, int(task.pdca_cycle_count or 0)) >= _TEMPORARY_MAX_COMPLETED_CYCLES
     stubbed_planning_pass = task.metadata.get("tool_call_planning_llm_stubbed") is True
     return completed_cycle_limit or stubbed_planning_pass
-
-
-def _markdown_has_acceptance_criteria(value: str) -> bool:
-    rendered = str(value or "").strip()
-    return bool(rendered and rendered != "- (none)")

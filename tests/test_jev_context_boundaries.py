@@ -73,7 +73,7 @@ def test_large_opaque_result_requires_a_targeted_observation_instead_of_silent_s
     assert 'LARGE RESULT' not in json.dumps(state)
 
 
-@pytest.mark.parametrize('purpose', ['admission', 'admission_curation', 'completion_review', 'recommend_act',
+@pytest.mark.parametrize('purpose', ['admission', 'admission_curation', 'completion_review', 'act_judgments',
                                    'evaluate_tactical_progress', 'recall_selection', 'review_memory_candidates'])
 def test_shared_boundary_blocks_oversized_states_before_network_for_any_decision(purpose):
     provider = JevCriterionDecisionProvider(SystemOneSettings(api_key='fixture'),

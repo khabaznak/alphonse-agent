@@ -97,19 +97,39 @@ def test_jev_maps_only_direct_evidence_refs_during_check_review() -> None:
     assert result.ambiguous_criterion_ids == ()
 
 
-def test_jev_act_recommendation_combines_choice_with_parallel_resilience_fuses() -> None:
-    provider = JevCriterionDecisionProvider(
-        SystemOneSettings(enabled=True, api_key="secret", validated_at="now"),
-        transport=_transport(route="ask_user", support=0.91),
-    )
+def test_jev_act_requests_only_focused_nouls_and_preserves_probabilities() -> None:
+    expected = {"effect_requested": .09, "effect_supported": .32, "effect_contradicted": .51,
+                "reply_addresses_request": .87, "reply_grounded": .93}
 
-    result = provider.recommend_act(state={"check_verdict": "failure", "goal": "Connect to server"})
+    def transport(url, api_key, payload, timeout):
+        assert set(payload["questions"]) == set(expected)
+        assert {question["type"] for question in payload["questions"].values()} == {"noul"}
+        assert payload["state"]["task_understanding"]["version"] == 1
+        return {"answers": {key: {"type": "noul", "noul": value} for key, value in expected.items()}}
 
-    assert result.action == "ask_user"
-    assert result.confident is True
-    assert set(result.answers) == {
-        "continuation_is_worthwhile", "user_input_can_unblock", "closure_explanation_is_warranted", "mission_outcome_is_fulfilled", "mission_requires_persisted_effect",
-    }
+    provider = JevCriterionDecisionProvider(SystemOneSettings(api_key="fixture"), transport=transport)
+    result = provider.judge_act(state={"task_understanding": {"version": 1}})
+    assert result.answers == expected
+    assert (result.no_threshold, result.yes_threshold) == (.2, .8)
+
+
+@pytest.mark.parametrize("bad_answer", [None, {"type": "choice", "choice": "yes"}, *(
+    {"type": "noul", "noul": value} for value in [True, "0.9", float("nan"), float("inf"), -1, 2]
+)])
+def test_jev_act_rejects_missing_malformed_and_out_of_range_judgments(bad_answer):
+    from alphonse.agent_v2.system_one import ACT_QUESTIONS, SystemOneActAnswerError
+
+    def transport(*args):
+        answers = {key: {"type": "noul", "noul": .99} for key in ACT_QUESTIONS}
+        if bad_answer is None:
+            del answers["effect_supported"]
+        else:
+            answers["effect_supported"] = bad_answer
+        return {"answers": answers}
+
+    provider = JevCriterionDecisionProvider(SystemOneSettings(api_key="fixture"), transport=transport)
+    with pytest.raises(SystemOneActAnswerError, match="effect_supported"):
+        provider.judge_act(state={})
 
 
 def test_jev_marks_midrange_evidence_ambiguous_for_system_two_fallback() -> None:
@@ -588,7 +608,7 @@ def test_provider_failure_diagnostics_are_safe_and_only_transient_errors_retry(m
     context = CoreLoopContext(messages=InMemoryMessageQueue())
     provider = JevCriterionDecisionProvider(SystemOneSettings(api_key='PRIVATE_API_KEY'), transport=transport)
     with manifest_scope(task, context), pytest.raises(RuntimeError):
-        provider.recommend_act(state={'goal': 'Inspect fixture'})
+        provider.judge_act(state={'goal': 'Inspect fixture'})
     assert len(calls) == attempts
     assert len(sleeps) == attempts - 1
     manifest = task.metadata['decision_context_manifests'][-1]
@@ -620,7 +640,7 @@ def test_provider_request_rejection_retains_machine_diagnostics_without_body_or_
     context = CoreLoopContext(messages=InMemoryMessageQueue())
     provider = JevCriterionDecisionProvider(SystemOneSettings(api_key='PRIVATE_API_KEY'))
     with manifest_scope(task, context), pytest.raises(system_one.SystemOneRequestError) as error:
-        provider.recommend_act(state={'goal': 'Read a fixture record'})
+        provider.judge_act(state={'goal': 'Read a fixture record'})
     assert str(error.value) == expected and len(calls) == 1
     manifest = task.metadata['decision_context_manifests'][-1]
     assert manifest['error_code'] == expected
@@ -635,4 +655,4 @@ def test_act_request_budget_includes_questions_and_stops_before_transport():
     provider = JevCriterionDecisionProvider(SystemOneSettings(api_key='fixture'),
         transport=lambda *args: pytest.fail('Oversized request must not reach transport'))
     with pytest.raises(ValueError, match='system_one_context_budget_exceeded'):
-        provider.recommend_act(state={'goal': 'Large fixture ' * 4000})
+        provider.judge_act(state={'goal': 'Large fixture ' * 4000})
