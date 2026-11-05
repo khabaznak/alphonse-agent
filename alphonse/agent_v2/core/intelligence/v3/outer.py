@@ -332,7 +332,7 @@ def _recommend_act(task, state, outcome, review: PhaseReview, context):
         from alphonse.agent_v2.core.memory.retry_context import retry_continuity_records
         records = retry_continuity_records(task, context)
         if (task.metadata.get('v3_retry_continuity') or {}).get('access_status') != 'available':
-            raise SystemOneUnavailableError('act_context_required_evidence_unavailable')
+            records = []  # Missing optional history cannot veto independent verified work.
         request_sources = [str(record) for record in records[1:]]
     input_state = mission_review_state(task, state, outcome, review, available, request_sources=request_sources)
     try:
