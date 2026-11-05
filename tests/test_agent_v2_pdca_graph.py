@@ -33,7 +33,7 @@ def test_pdca_plan_node_returns_task_state() -> None:
     assert "tool_call_plan_prompt" in state.metadata
 
 
-def test_pdca_act_node_returns_task_state() -> None:
+def test_pdca_act_node_returns_task_state(pdca_decisions) -> None:
     state = TaskState(goal="Review this request", check_verdict="new")
 
     assert act_node(state, context=CoreLoopContext(messages=InMemoryMessageQueue(), system_one=pdca_decisions)) is state

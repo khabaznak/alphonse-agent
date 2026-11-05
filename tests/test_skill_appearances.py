@@ -48,7 +48,7 @@ def test_install_update_remove_and_missing_resource_fallback(tmp_path):
     store.set_appearance(record.skill_id, "")
     assert resolve_appearance(store.get(record.skill_id)) is None
     package(tmp_path, {"version": 1, "states": {"idle": "missing.png"}})
-    record = store.replace_directory(record.skill_id, source)
+    record = store.replace_directory(record.skill_id, source, resolution="accept-upstream")
     assert resolve_appearance(record) is None
     assert "Read fixture" in record.instructions  # Optional failure never disables the skill.
     store.uninstall(record.skill_id)
@@ -99,11 +99,14 @@ def test_install_and_update_do_not_launder_external_resource_links(tmp_path):
     outside.write_bytes(png())
     (source / "linked.png").symlink_to(outside)
     store = SkillStore(tmp_path / "installed")
+    with pytest.raises(ValueError, match="skill_operational_symlink_not_allowed"):
+        store.install_directory(source)
+    (source / "linked.png").unlink()
     record = store.install_directory(source)
-    assert resolve_appearance(record) is None
-    assert (Path(record.directory) / "linked.png").is_symlink()
-    updated = store.replace_directory(record.skill_id, source)
-    assert resolve_appearance(updated) is None
+    (source / "linked.png").symlink_to(outside)
+    with pytest.raises(ValueError, match="skill_operational_symlink_not_allowed"):
+        store.replace_directory(record.skill_id, source)
+    assert resolve_appearance(store.get(record.skill_id)) is None
     assert outside.read_bytes() == png()
 
 

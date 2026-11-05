@@ -34,8 +34,7 @@ from alphonse.agent_v2.core.tools.registry.native.ask_question import build_ask_
 from alphonse.agent_v2.core.tools.registry.native.bash import build_bash_tool_definition
 from alphonse.agent_v2.core.tools.registry.native.respond import build_respond_tool_definition
 from alphonse.agent_v2.core.tools.registry.native.scheduled_task import build_scheduled_task_tool_definition
-from alphonse.agent_v2.outcome_judgments import OUTCOME_QUESTIONS
-from alphonse.agent_v2.system_one import (SystemOneAdmissionDecision, SystemOneActRecommendation,
+from alphonse.agent_v2.system_one import (SystemOneAdmissionDecision, SystemOneActJudgments,
     SystemOneReviewResult, SystemOneTacticalReview, SystemOneToolRegistrySelection)
 from alphonse.agent_v2.users import V2UserStore
 
@@ -113,19 +112,17 @@ class ScriptedDecisions:
         return SystemOneReviewResult(tuple({'criterion_id': c['id'], 'status': 'satisfied', 'evidence_refs': refs}
             for c in values['contract']['criteria']) if done else (), ())
 
-    def recommend_act(self, **values):
-        done = self.trial.oracle_effect()
-        answers = {key: .01 for key in OUTCOME_QUESTIONS}
-        answers.update(mission_outcome_is_fulfilled=.99 if done else .01,
-                       mission_requires_execution=.01 if self.trial.kind == 'proposal' else .99,
-                       mission_requires_recurring_setup=.99 if self.trial.kind == 'schedule' else .01,
-                       capability_claims_are_supported=.99, lookup_claims_are_supported=.99,
-                       continuation_is_worthwhile=.99)
-        if self.trial.kind in {'denied', 'unavailable'}:
-            answers.update(blocker_is_supported=.99, closure_explanation_is_warranted=.99)
-            return SystemOneActRecommendation('fail', .99, True, 'Observed service blocker', answers=answers)
-        return SystemOneActRecommendation('complete' if done else 'replan', .99, True,
-                                           'Controlled synthetic judgment', answers=answers)
+    def judge_act(self, *, state):
+        return SystemOneActJudgments({
+            'effect_requested': .99 if self.trial.kind in FORM_KINDS | {"notes", "schedule"} else .01,
+            'effect_supported': .99,
+            'effect_contradicted': .01,
+            'reply_addresses_request': .99,
+            'reply_grounded': .99,
+        })
+
+    def review_task_failure(self, **_):
+        return True
 
 
 class ScriptedSystemTwo:
@@ -146,6 +143,18 @@ class ScriptedSystemTwo:
         self.requests.append({'purpose': request.purpose.value, 'prompt': request.prompt})
         if len(self.requests) > 24:
             raise RuntimeError('evaluation_inference_budget_exhausted')
+        if request.purpose == InferencePurpose.TASK_UNDERSTANDING:
+            return InferenceResult(json_value={
+                'requested_outcome': self.trial.task.goal, 'supplied_parameters': [], 'constraints': [],
+                'unresolved_dependencies': [], 'superseded_constraints': [],
+            })
+        properties = (request.output_schema or {}).get('properties', {})
+        if 'supporting_answer_refs' in properties:
+            return InferenceResult(json_value={
+                'resolution': 'resolved', 'reason': 'The scripted answer supplies the required input.',
+                'supporting_answer_refs': properties['supporting_answer_refs']['items']['enum'],
+                'remaining_information': [],
+            })
         if request.purpose == InferencePurpose.PHASE_PLANNING:
             value = self.plan()
         else:

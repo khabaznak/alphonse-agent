@@ -78,6 +78,10 @@ class Jev:
         return SystemOneReviewResult(tuple({'criterion_id': c['id'], 'status': 'satisfied',
                                            'evidence_refs': refs} for c in values['contract']['criteria']), ())
 
+    def judge_act(self, *, state):
+        from conftest import act_judgments
+        return act_judgments(effect_requested=.99 if "set its AC" in state["task_understanding"]["inputs"][0]["content"] else .01)
+
     def recommend_act(self, **values):
         return SystemOneActRecommendation('complete', .99, True, 'Synthetic verified outcome', answers={
             'continuation_is_worthwhile': .1, 'user_input_can_unblock': .1,
@@ -312,3 +316,6 @@ def test_missing_shell_capability_blocks_cli_dispatch(household):
     state = new_tactical_state(PhasePlan.from_dict(value))
     assert run(task, context, state).status == PhaseStatus.BLOCKED
     assert len(state.actions) == 2 and device(household)['writes'] == 0
+
+
+pytestmark = pytest.mark.usefixtures("task_understanding_provider")

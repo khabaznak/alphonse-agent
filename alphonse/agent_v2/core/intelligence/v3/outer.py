@@ -675,7 +675,8 @@ def _system_two_acceptance_review(
     if context.inference is None:
         raise SystemOneUnavailableError("acceptance_review_unavailable")
     from .task_understanding import render
-    shared_context = _task_context(task, context) if projections_enabled() else render(task)
+    shared_context = _task_context(task, context) if projections_enabled() or task.metadata.get("event") else render(task)
+    from .context_manifests import event_input_metadata
     review_contract = contract or task.ensure_acceptance_contract()
     valid_refs = _successful_evidence_refs(state)
     schema = {
@@ -719,6 +720,7 @@ def _system_two_acceptance_review(
     request = InferenceRequest(
         prompt=prompt,
         context_manifests=prompt_receipt(prompt, review_parts, purpose='review'),
+        metadata=event_input_metadata(task, 'review'),
         purpose=InferencePurpose.PHASE_REVIEW,
         input_sources=tuple([
             {"source_id": "criterion:" + str(item["id"]), "source_type": "acceptance_criterion", "reason": "completion_review"}

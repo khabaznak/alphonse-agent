@@ -144,9 +144,48 @@ def _native_verified(tool_id, result, target):
             and (tool_id != "native.skill_install" or isinstance(result.get("skill"), dict)))
 
 
+def _management_operation(arguments, result):
+    action = arguments.get("action")
+    values = arguments.get("values")
+    values = values if isinstance(values, dict) else {}
+    if action in {"catalog", "project", "findings", "review"}:
+        return {"kind": "inspection"}
+    if action in {"apply_review", "set_status"}:
+        key, target_kind = "policy_id", "project_check"
+        expected_status = ("active" if values.get("activate") else "disabled") if action == "apply_review" else values.get("status")
+        committed = result.get("status") == expected_status and type(result.get("revision")) is int
+    elif action in {"save_grant", "revoke_grant"}:
+        key, target_kind = "grant_id", "account_grant"
+        committed = (type(result.get("revision")) is int and result.get("grant_id") == values.get("grant_id")
+                     if action == "save_grant" else result.get("revoked") is True)
+    elif action in {"bind_grant", "select_binding"}:
+        key, target_kind = "binding_id", "account_binding"
+        committed = bool(result.get("binding_id")) if action == "bind_grant" else result.get("selected") is True
+    elif action in {"pause", "disconnect", "retry_deletion"}:
+        key, target_kind = "connection_id", "account_connection"
+        expected_status = {"pause": "paused", "disconnect": "disconnected"}.get(action)
+        committed = (result.get("status") == expected_status if expected_status
+                     else result.get("credential_deletion_pending") is False)
+        committed = committed and result.get(key) == values.get(key)
+    else:
+        return {"kind": "unknown"}
+    identity = result.get(key) or values.get(key)
+    operation = {"kind": "mutation", "name": action}
+    if isinstance(identity, str) and identity and (not values.get(key) or identity == values[key]):
+        operation["target"] = {"kind": target_kind, "id": identity}
+        if committed:
+            operation["committed"] = True
+    return operation
+
+
 def _native_commit(tool_id, result, operation):
     if operation["kind"] != "mutation" or not operation.get("target"):
         return None
+    if tool_id == "native.integration_manage" and operation.get("committed"):
+        return "integration_management_commit"
+    if (tool_id == "native.skill_maintain" and result.get("published") is True and result.get("exit_code") == 0
+            and isinstance(result.get("revision"), str) and re.fullmatch(r"[a-f0-9]{64}", result["revision"])):
+        return "skill_publication_commit"
     if tool_id in _OUTBOX_TOOLS and result.get("status") == "queued" and result.get("outbox_message_id") and result.get("recipient_user_id"):
         return "outbox_enqueue"
     if tool_id in _ARTIFACT_TOOLS and isinstance(result.get("artifact"), dict) and result["artifact"].get("artifact_id"):
@@ -210,6 +249,12 @@ def observation(entry, criterion_ids, *, include_result=True):
     operation = {"kind": _NON_EFFECT.get(tool_id, "unknown")}
     if tool_id == "native.bash":
         operation = _shell_operation(arguments, fields)
+    elif tool_id == "native.integration_manage":
+        operation = _management_operation(arguments, fields)
+    elif tool_id == "native.skill_maintain":
+        operation = {"kind": "inspection" if arguments.get("operation") == "inspect" else "mutation"}
+        if isinstance(fields.get("skill_id"), str) and fields["skill_id"] == arguments.get("skill_id"):
+            operation["target"] = {"kind": "skill", "id": fields["skill_id"]}
     elif tool_id in _NATIVE_READBACK or tool_id in _OUTBOX_TOOLS or tool_id in _ARTIFACT_TOOLS or tool_id in {
         "native.read_project_file", "native.scheduled_task_delivery",
     }:
@@ -238,7 +283,7 @@ def observation(entry, criterion_ids, *, include_result=True):
     elif status == "rejected":
         outcome = "rejected"
     elif failure or native_delivery_failed or memory_read_failed or status == "failed" or fields.get("timed_out") is True or (
-        tool_id == "native.bash" and type(fields.get("exit_code")) is int and fields["exit_code"] != 0
+        tool_id in {"native.bash", "native.skill_maintain"} and type(fields.get("exit_code")) is int and fields["exit_code"] != 0
     ):
         outcome = "failed"
     elif status in {"planned", "running"}:

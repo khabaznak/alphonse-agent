@@ -103,7 +103,7 @@ def project(task, context, *, purpose: str, selected_context_ids=()) -> str:
     from alphonse.agent_v2.agent_config import parse_global_context_sections
     from alphonse.agent_v2.core.memory.contracts import conversation_item
 
-    if purpose not in PURPOSES:
+    if purpose not in {*PURPOSES, "progress_review", "decision"}:
         raise ValueError("invalid_context_purpose")
     if context.is_cancelled():
         raise SystemOneUnavailableError("v3_recall_cancelled")
@@ -118,9 +118,11 @@ def project(task, context, *, purpose: str, selected_context_ids=()) -> str:
     records = [Record(meaning.records[0]["source_id"], "Shared task understanding", str(meaning), True),
                Record("policy:recall", "Evidence rules", RECALL_GUIDANCE, True)]
     from .event_evidence import render_event_evidence
-    event = render_event_evidence(task, context, stage=purpose)
-    if event:
-        records.append(Record("event:trigger", "Authorized event evidence", event, True))
+    event_context = render_event_evidence(task, context, stage=purpose)
+    if event_context:
+        budget -= token_count(event_context + "\n\n")
+        if budget < 0:
+            raise ContextBudgetExceeded("v3_required_event_evidence_exceeds_budget")
     from alphonse.agent_v2.core.memory.retry_context import retry_continuity_records
     for part in retry_continuity_records(task, context):
         included = next((r for r in part.records if r['status'] == 'included'), None)
@@ -246,9 +248,17 @@ def project(task, context, *, purpose: str, selected_context_ids=()) -> str:
     manifest["purpose"] = purpose
     task.metadata.setdefault("v3_context_projections", {})[purpose] = manifest
     from alphonse.agent_v2.core.context_manifests import remember_projection
-    remember_projection(text, manifest)
-    from alphonse.agent_v2.core.context_inventory import ContextText
-    return ContextText(text, manifest['records'], **{k: v for k, v in manifest.items() if k != 'records'})
+    from alphonse.agent_v2.core.context_inventory import ContextText, combined, source
+    rendered = ContextText(text, manifest['records'], **{k: v for k, v in manifest.items() if k != 'records'})
+    if event_context:
+        from .context_manifests import record_context_input
+        event_id = task.metadata["v3_event_input_manifests"][purpose]["source_id"]
+        rendered = combined([source(event_context, event_id, "event_evidence"), rendered])
+        manifest["records"] = rendered.records
+        manifest["tokens"] = token_count(rendered)
+        record_context_input(task, purpose, rendered)
+    remember_projection(rendered, manifest)
+    return rendered
 
 
 def _omission(source_id, reason):

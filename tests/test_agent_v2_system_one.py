@@ -285,17 +285,19 @@ def test_jev_request_curation_receives_plan_instructions_and_bounded_context() -
     assert "Does this phase need to send a direct response" not in serialized_questions
 
 
-def test_jev_triages_each_plan_message_with_calibrated_score() -> None:
+def test_jev_triages_each_plan_message_with_bounded_relevance_score() -> None:
     payloads = []
 
     def transport(url, api_key, payload, timeout):
         _ = url, api_key, timeout
         payloads.append(payload)
         answers = {}
-        for key, question in payload["questions"].items():
-            assert question["type"] == "score"
-            answers[key] = {"type": "score", "score": 1.9, "confidence": .94,
-                            "probabilities": {"0": .02, "1": .06, "2": .92}}
+        for index, key in enumerate(payload["questions"]):
+            level = (1, 0, 2)[index]
+            probabilities = {str(value): 0.03 for value in range(3)}
+            probabilities[str(level)] = 0.94
+            answers[key] = {"type": "score", "score": float(level), "confidence": 0.94,
+                            "probabilities": probabilities}
         return {"answers": answers, "model": "jev-latest"}
 
     provider = JevCriterionDecisionProvider(
@@ -310,9 +312,10 @@ def test_jev_triages_each_plan_message_with_calibrated_score() -> None:
         ],
     )
 
-    assert selected == ("m1",)
-    assert list(payloads[0]["questions"]) == ["message_relevance_0"]
+    assert selected == ("m1", "m3")
+    assert list(payloads[0]["questions"]) == [f"message_relevance_{i}" for i in range(3)]
     assert payloads[0]["questions"]["message_relevance_0"]["type"] == "score"
+    assert len(payloads[0]["questions"]["message_relevance_0"]["criteria"]) == 3
 
 
 def test_jev_admission_classifies_work_beyond_one_direct_text_reply() -> None:
@@ -389,7 +392,8 @@ def test_jev_native_registry_template_covers_every_out_of_box_tool() -> None:
         "native.scheduled_task",
         "native.scheduled_task_delivery",
         "native.skill_install",
-        "native.artifact_metadata_update",
+        "native.skill_maintain",
+        "native.skill_read",
         "native.web_search",
         "native.web_fetch",
         "native.search_memory",

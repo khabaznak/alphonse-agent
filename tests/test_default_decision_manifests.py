@@ -125,24 +125,22 @@ def test_default_admission_planning_curation_and_both_reviews_match_call_inputs(
     assert result['manifests'] == manifests
 
 
-def test_default_skill_clips_and_unavailable_guidance_are_explicit(default_calls):
-    task, context, *_ = default_calls
-    skill = SimpleNamespace(skill_id='skill:diagnostics', name='Diagnostics', description='Diagnostics', directory='/synthetic/skills', instructions='Long operating instructions. ' * 900)
-    context.skill_store = SimpleNamespace(get=lambda identity: skill if identity in {skill.skill_id, 'skill:later'} else None)
-    task.metadata['v3_skill_selection'] = {'selected_skill_ids': ['skill:missing', skill.skill_id, 'skill:later']}
-    text, loaded = selected_skill_guidance(task, context)
-    assert loaded == [skill.skill_id]
-    row = next(r for r in text.records if r['source_id'] == skill.skill_id)
-    assert row['truncated'] and row['source_range']['end_char'] < row['source_range']['total_chars']
-    assert any(r['source_id'] == 'skill:missing' and r['reason'] == 'unavailable' for r in text.records)
-    assert any(r['source_id'] == 'skill:later' and r['reason'] == 'over_budget' for r in text.records)
-    with manifest_scope(task, context):
-        HierarchicalCAPDProcessor._complete_direct_response(task, context)
-    manifest = task.metadata['decision_context_manifests'][-1]
-    assert manifest['projections'][0]['selected_skill_ids'] == ['skill:missing', skill.skill_id, 'skill:later']
-    assert any(r['source_id'] == skill.skill_id and r['truncated'] for r in all_records(manifest))
-    assert 'Long operating instructions' not in json.dumps(manifest)
+def test_default_skill_instruction_budget_fails_before_inference(default_calls, tmp_path):
+    from alphonse.agent_v2.skills import SkillStore
+    from alphonse.agent_v2.skill_resources import SkillActivationError
 
+    task, context, _, _, inference, *_ = default_calls
+    context.skill_store = SkillStore(tmp_path / "skills")
+    skill = context.skill_store.create_skill("diagnostics", "Diagnostics", "Long operating instructions. " * 350)
+    task.metadata['v3_skill_selection'] = {'selected_skill_ids': [skill.skill_id]}
+    with pytest.raises(SkillActivationError, match='instruction_budget_exceeded'):
+        selected_skill_guidance(task, context, max_chars=5000)
+    assert task.metadata['v3_skill_selection']['loaded_skill_ids'] == []
+    before = len(inference)
+    task.metadata['v3_skill_selection']['selected_skill_ids'] = ['skill:missing']
+    with manifest_scope(task, context), pytest.raises(SkillActivationError, match='v3_skill_activation'):
+        HierarchicalCAPDProcessor._complete_direct_response(task, context)
+    assert len(inference) == before
 
 
 def test_default_memory_and_conversation_budget_keep_source_omissions(default_calls):

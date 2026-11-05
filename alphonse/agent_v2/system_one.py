@@ -22,7 +22,6 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from alphonse.agent_v2.database import connect_database, default_database_path
-from alphonse.agent_v2.outcome_judgments import OUTCOME_QUESTIONS
 from alphonse.agent_v2.core.memory.formatting import bound_context_record, join_context_sections
 
 DEFAULT_SYSTEM_ONE_URL = "https://api.typesafe.ai/v1/systemone"
@@ -1128,70 +1127,6 @@ class JevCriterionDecisionProvider:
             if relevant_probability >= self.settings.route_confidence_threshold:
                 selected.append(message_id)
         return tuple(selected)
-
-    def recommend_act(self, *, state: dict[str, Any]) -> SystemOneActRecommendation:
-        """Recommend the next mission-level action from Check's verdict and durable evidence."""
-        actions = {
-            "complete": "All required acceptance criteria are verified and the task can end successfully.",
-            "continue": "Continue the task using the current strategy.",
-            "replan": "The current strategic approach should change before any further execution.",
-            "ask_user": "A specific answer or steering from the user could materially unblock or redirect the mission.",
-            "fail_explain": "The mission is no longer worth pursuing, but the user should receive a final evidence-based explanation.",
-            "fail": "The mission must stop immediately and no further user-facing closure cycle is appropriate.",
-        }
-        questions = {
-            "recommended_action": {
-                "type": "choice",
-                "instructions": "Recommend the next mission-level action, considering Check's verdict and all supplied evidence and constraints.",
-                "criteria": actions,
-            },
-            "continuation_is_worthwhile": {
-                "type": "noul",
-                "instructions": "Would another execution phase likely create meaningful mission progress under the current strategy?",
-                "criteria": {"true": "There is a plausible, authorized next step.", "false": "The same approach is exhausted, blocked, or unlikely to change the outcome."},
-            },
-            "user_input_can_unblock": {
-                "type": "noul",
-                "instructions": "Could a concrete user answer or steering materially change the mission's prospects?",
-                "criteria": {"true": "A user decision or missing information is a plausible path forward.", "false": "User input would not change the feasibility or safety of the mission."},
-            },
-            "closure_explanation_is_warranted": {
-                "type": "noul",
-                "instructions": "If the mission ends unsuccessfully, should Alphonse produce one final response explaining why to the user?",
-                "criteria": {"true": "A concise explanation of the failure is useful and safe to deliver.", "false": "No additional user-facing closure cycle is appropriate."},
-            },
-        }
-        questions.update(OUTCOME_QUESTIONS)
-        started = monotonic()
-        response = self.client.evaluate(state=state, questions=questions)
-        duration_ms = max(0, round((monotonic() - started) * 1000))
-        answer = response["answers"].get("recommended_action")
-        if not isinstance(answer, dict) or answer.get("type") != "choice":
-            raise ValueError("system_one_act_recommendation_invalid")
-        action = str(answer.get("choice") or "")
-        if action not in actions:
-            raise ValueError("system_one_act_action_invalid")
-        probabilities = answer.get("probabilities") if isinstance(answer.get("probabilities"), dict) else {}
-        confidence = max(0.0, min(1.0, float(probabilities.get(action) or 0.0)))
-        fuse_answers: dict[str, float] = {}
-        for question_id in ("continuation_is_worthwhile", "user_input_can_unblock", "closure_explanation_is_warranted", *OUTCOME_QUESTIONS):
-            fuse = response["answers"].get(question_id)
-            if (not isinstance(fuse, dict) or fuse.get("type") != "noul"
-                    or type(fuse.get("noul")) not in {int, float}
-                    or not math.isfinite(fuse["noul"]) or not 0 <= fuse["noul"] <= 1):
-                raise ValueError(f"system_one_act_fuse_invalid:{question_id}")
-            fuse_answers[question_id] = float(fuse["noul"])
-        return SystemOneActRecommendation(
-            action=action,
-            confidence=confidence,
-            confident=confidence >= self.settings.act_route_confidence_threshold,
-            rationale=actions[action],
-            answers=fuse_answers,
-            yes_threshold=self.settings.yes_threshold,
-            model=str(response.get("model") or self.settings.model),
-            usage=dict(response.get("usage") or {}),
-            duration_ms=duration_ms,
-        )
 
     def judge_act(self, *, state: dict[str, Any]) -> SystemOneActJudgments:
         """Judge independent facts about the request and its observed results."""

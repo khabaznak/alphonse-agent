@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from alphonse.agent_v2.core.io import SQLiteOutboundStore
 from alphonse.agent_v2.core.messages import CommunicationChannel, SQLiteMessageQueue
 from alphonse.agent_v2.core.projects import ProjectStore

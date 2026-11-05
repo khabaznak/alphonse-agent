@@ -232,3 +232,6 @@ def test_conflicting_explicit_destinations_wait_for_owner_without_touching_eithe
     assert (first / 'notes.md').read_text() == 'keep first'
     assert (second / 'notes.md').read_text() == 'keep second'
     assert not (store.users_root() / 'alice' / 'workspace').exists()
+
+
+pytestmark = pytest.mark.usefixtures("task_understanding_provider")

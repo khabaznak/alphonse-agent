@@ -31,7 +31,6 @@ from alphonse.agent_v2.core.tools.registry.native.scheduled_task_delivery import
 from alphonse.agent_v2.core.tools.registry.native.web import build_web_fetch_tool_definition
 from alphonse.agent_v2.core.tools.registry.native.web import build_web_search_tool_definition
 from alphonse.agent_v2.web_tools_settings import WebToolsSettings
-from alphonse.agent_v2.core.tools.registry.native.media import build_analyze_image_tool_definition
 from alphonse.agent_v2.media_tools_settings import MediaToolsSettings
 from alphonse.agent_v2.skills import SkillStore
 from alphonse.agent_v2.core.tools.registry.native.skill_read import build_skill_read_tool_definition
@@ -60,8 +59,6 @@ def build_native_tool_registry(web_tools_settings: WebToolsSettings | None = Non
         registry.register(build_skill_install_tool_definition(
             skill_store, is_admin=getattr(user_store, "is_admin", None),
         ))
-    media = media_tools_settings or MediaToolsSettings()
-    registry.register(build_analyze_image_tool_definition(media.ocr, asset_store))
     settings = web_tools_settings or WebToolsSettings()
     registry.register(build_web_search_tool_definition(settings))
     registry.register(build_web_fetch_tool_definition(settings))

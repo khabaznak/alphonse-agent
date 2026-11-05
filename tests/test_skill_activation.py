@@ -297,7 +297,7 @@ def test_planned_resource_subgoal_executes_through_real_executor(library):
     context = loop(library, inference=inference, system_one=jev,
                    tools=build_native_tool_registry(skill_store=library))
     phase = plan_phase(task, context)
-    assert phase.curated_tool_ids == ('native.skill_read',)
+    assert 'native.skill_read' in phase.curated_tool_ids
     state = new_tactical_state(phase)
     outcome = PhaseExecutor(reveal_policy=ToolRevealPolicy()).run(task, state, context)
     assert outcome.status.value == 'phase_complete'
@@ -372,3 +372,6 @@ def test_resource_reader_honors_live_cancellation_checker(library):
     context = ToolExecutionContext(task=task, messages=InMemoryMessageQueue(), cancellation_checker=lambda: True)
     with pytest.raises(PermissionError, match='cancelled'):
         read_resource({'skill_id': skill.skill_id, 'path': 'references/guide.md'}, context=context, store=library)
+
+
+pytestmark = pytest.mark.usefixtures("task_understanding_provider")

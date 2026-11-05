@@ -123,9 +123,11 @@ class HierarchicalCAPDProcessor:
                     self._persist(task, context)
                     break
                 review, decision = self.outer.review_and_route(task, state, outcome, context)
-            except (SystemOneUnavailableError, EventEvidenceDenied) as exc:
-                task.status = "failed"
-                task.outcome = {"status": "failure", "reason": str(exc)}
+            except (SystemOneUnavailableError, EventEvidenceDenied, SkillActivationError) as exc:
+                cancelled = context.is_cancelled()
+                task.status = "cancelled" if cancelled else "failed"
+                task.outcome = {"status": "cancelled" if cancelled else "failure",
+                                "reason": "Task cancelled." if cancelled else str(exc)}
                 task.metadata["v3_route"] = "end"
                 self._persist(task, context)
                 break

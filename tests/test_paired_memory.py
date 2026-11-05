@@ -174,7 +174,7 @@ def test_partial_search_and_pagination_preserve_real_native_results(tmp_path):
     assert 'search_next_page' in f.state['reads']
 
 
-def test_operating_tail_is_bound_to_actual_selected_guidance(tmp_path):
+def test_retired_operating_tail_is_excluded_from_selected_guidance(tmp_path):
     from alphonse.agent_v2.evaluation.context_pilot import projection_flag
     from alphonse.agent_v2.core.context_inventory import receipt
     from alphonse.agent_v2.core.intelligence.v3.context import task_context_for_decision
@@ -184,7 +184,7 @@ def test_operating_tail_is_bound_to_actual_selected_guidance(tmp_path):
     assert 'PRIVATE_SENTINEL' not in prompt
     manifest = {'projections': [receipt(prompt, input_section='prompt')]}
     ranges = delivered_ranges({'prompt': prompt}, manifest, f.sources)
-    assert any(r['source_id'] == 'operating-tail' for r in ranges)
+    assert all(r['source_id'] != 'operating-tail' for r in ranges)
     assert all('artifact.' not in descriptor.tool_id for descriptor in f.registry.list())
 
 

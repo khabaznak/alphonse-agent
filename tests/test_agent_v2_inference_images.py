@@ -114,9 +114,11 @@ def test_direct_response_sees_images_and_selected_skill_instructions(tmp_path):
     from alphonse.agent_v2.core.intelligence.v3.processor import HierarchicalCAPDProcessor
     store, image, task = _fixture(tmp_path)
     task.metadata['v3_skill_selection'] = {'selected_skill_ids': ['skill:reading']}
-    skill = SimpleNamespace(skill_id='skill:reading', name='Reading', description='Read documents', instructions='Extract only printed dates.', directory=str(tmp_path))
+    from alphonse.agent_v2.skills import SkillStore
+    skills = SkillStore(tmp_path / 'skills')
+    skill = skills.create_skill('reading', 'Read documents', 'Extract only printed dates.')
     provider = StubInferenceProvider(markdown_by_purpose={InferencePurpose.FINAL_RESPONSE: 'Visible date'})
-    context = CoreLoopContext(messages=InMemoryMessageQueue(), asset_store=store, inference=InferenceRouter(provider=provider, default_profile=ModelProfile('stub', 'selected', 'selected')), skill_store=SimpleNamespace(get=lambda _: skill))
+    context = CoreLoopContext(messages=InMemoryMessageQueue(), asset_store=store, inference=InferenceRouter(provider=provider, default_profile=ModelProfile('stub', 'selected', 'selected')), skill_store=skills)
     HierarchicalCAPDProcessor._complete_direct_response(task, context)
     assert provider.requests[0].images[0].asset_id == image.asset_id
     assert 'Extract only printed dates.' in provider.requests[0].prompt

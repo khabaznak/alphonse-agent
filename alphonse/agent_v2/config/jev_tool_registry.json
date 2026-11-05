@@ -115,14 +115,6 @@
         "false": "The supplied passages already suffice or no historical information is involved."
       }
     },
-    "native.analyze_image": {
-      "type": "noul",
-      "instructions": "Does this phase need to inspect or extract text from an image attached to the task?",
-      "criteria": {
-        "true": "An attached image contains visual or textual information required for the current phase, including OCR of receipts or documents.",
-        "false": "There is no relevant image attachment, the source is already text, or image contents are unnecessary."
-      }
-    },
     "native.skill_maintain": {
       "type": "noul",
       "instructions": "Does this request or phase need to repair or extend an existing skill package?",

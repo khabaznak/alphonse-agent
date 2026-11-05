@@ -105,7 +105,7 @@ def test_tui_project_commands_are_intercepted_and_not_queued(tmp_path: Path) -> 
     assert indented.command == ""
 
 
-def test_tui_project_selection_keeps_ordinary_conversation_projectless(tmp_path: Path) -> None:
+def test_tui_project_selection_does_not_implicitly_scope_conversations(tmp_path: Path) -> None:
     runtime = build_tui_runtime(user="alex", project_store=ProjectStore(":memory:"))
     runtime.conversation_store.set_daily_ledger_projector(None)
     project = create_tui_project(
@@ -115,11 +115,8 @@ def test_tui_project_selection_keeps_ordinary_conversation_projectless(tmp_path:
         root_path=str(tmp_path / "alpha"),
         visibility="private",
     )
-    with pytest.raises(ValueError, match="legacy_project_context_read_only"):
-        save_tui_project_context(runtime, "Use the alpha rules.")
     runtime.project_store.write_project_config(project.project_id, {"scope": "Use the alpha rules."}, requester_user_id="alex")
 
-    runtime.channel.conversation_store = None
     result = queue_tui_input(runtime, "List files")
 
     assert runtime.active_project_id == project.project_id

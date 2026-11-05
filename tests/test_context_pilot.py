@@ -46,9 +46,8 @@ def test_fixture_bash_rejects_arbitrary_command(tmp_path):
         with pytest.raises(PermissionError, match='allowlist'):
             definition.callable({'command': 'touch ' + str(tmp_path / 'should-not-exist')})
         assert not (tmp_path / 'should-not-exist').exists()
-        result = definition.callable({'artifact_id': 'artifact.pilot-sensor', 'command': COMMAND})
-        assert result['exit_code'] == 0
-        assert '23' in result['stdout']
+        with pytest.raises(ValueError, match='legacy_artifact_execution_retired'):
+            definition.callable({'artifact_id': 'artifact.pilot-sensor', 'command': COMMAND})
         assert not any(t.tool_id.startswith('artifact.') for t in fixture.registry.list())
     finally:
         fixture.close()

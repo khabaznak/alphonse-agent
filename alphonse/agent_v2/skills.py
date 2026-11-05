@@ -603,7 +603,7 @@ def _validate_description(value: Any) -> str:
 
 
 def _validate_optional_fields(metadata: dict[str, Any]) -> None:
-    if set(metadata) - _FRONTMATTER_FIELDS:
+    if set(metadata) - _FRONTMATTER_FIELDS - {"appearance"}:
         raise ValueError("skill_frontmatter_unknown_fields: put custom fields in metadata")
     for key in ("license", "compatibility", "allowed-tools"):
         if key in metadata and not isinstance(metadata[key], str):

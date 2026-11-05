@@ -85,12 +85,12 @@ success.
 5. [Compatibility, observability, evaluation, and rollout](05-rollout.md)
 6. [System One Do, Check, and Act](06-system-one-check-act.md)
 7. [Shared task understanding and source-linked revisions](07-shared-task-understanding.md)
-7. [Memory evaluation and rollout gates](07-memory-evaluation.md)
-8. [Canonical history and source contracts](08-memory-contracts.md)
-9. [Durable person/audience knowledge](09-durable-knowledge.md)
-10. [Structured memory recall](10-memory-recall.md)
-11. [Bounded conversation and active-task continuity](11-conversation-continuity.md)
-12. [Synthetic lifecycle qualification](14-lifecycle-qualification.md)
+8. [Memory evaluation and rollout gates](07-memory-evaluation.md)
+9. [Canonical history and source contracts](08-memory-contracts.md)
+10. [Durable person/audience knowledge](09-durable-knowledge.md)
+11. [Structured memory recall](10-memory-recall.md)
+12. [Bounded conversation and active-task continuity](11-conversation-continuity.md)
+13. [Synthetic lifecycle qualification](14-lifecycle-qualification.md)
 
 Stages are ordered. A later stage may be prototyped early, but it must not be declared
 complete before its dependencies and exit gates pass.

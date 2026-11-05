@@ -84,24 +84,24 @@ def request_tool_state(task, context) -> dict:
         add('known_context', {'kind': 'legacy_conversation', 'text': task.recent_conversation_md}, 'legacy_conversation')
 
     selection = task.metadata.get('v3_skill_selection') or {}
+    from alphonse.agent_v2.skill_resources import authorized
     getter = getattr(getattr(context, 'skill_store', None), 'get', None)
     for identity in dict.fromkeys(selection.get('selected_skill_ids') or []):
         try:
-            skill = getter(identity) if callable(getter) else None
+            skill = getter(identity) if callable(getter) and authorized(context.skill_store, identity, str(task.user or "")) else None
             if skill is None:
                 raise ValueError('skill_unavailable')
             entry = {'source_id': identity, 'name': skill.name, 'description': skill.description,
                      'package_directory': skill.directory,
                      'workflow': re.split(r'(?m)^## Artifact: ', skill.instructions)[0].rstrip(), 'resources': []}
-            resources = getattr(context, 'artifact_resources', None)
-            if resources is not None:
-                for record in resources.store.list():
-                    if record.skill_id == identity and resources.can_use(record, str(task.user or '')):
-                        entry['resources'].append({'manifest': resources.describe(record, str(task.user or '')),
-                            'operating_instructions': resources.skills.artifact_instructions(identity, record.artifact_id)})
             add('selected_skills', entry, identity)
         except Exception:
             state['omissions'].append({'source_id': identity, 'reason': 'unavailable'})
+
+    from .event_evidence import project_event_evidence
+    event = project_event_evidence(task, context)
+    if event is not None:
+        add('evidence', {'kind': 'authorized_trigger_snapshot', **event}, event['source_id'])
 
     from .context import selected_project_context
     project = selected_project_context(task, context)

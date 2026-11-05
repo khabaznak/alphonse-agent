@@ -310,7 +310,7 @@ def test_onboarding_wires_skill_library_and_artifact_repository_to_new_workspace
 
 
 @pytest.mark.parametrize("purpose", ["admission", "curation", "planning", "execution", "review", "response"])
-def test_candidate_projection_keeps_complete_authorized_artifact_instructions(setup, monkeypatch, purpose):
+def test_candidate_projection_excludes_retired_artifact_instructions(setup, monkeypatch, purpose):
     from alphonse.agent_v2.core.intelligence.v3.projections import project
     skills, skill, _, _, resources = setup
     instructions = 'Read this disposable fixture carefully.\n' * 500 + 'ARTIFACT_INSTRUCTION_TAIL'
@@ -319,9 +319,10 @@ def test_candidate_projection_keeps_complete_authorized_artifact_instructions(se
     context = CoreLoopContext(messages=InMemoryMessageQueue(), skill_store=skills, artifact_resources=resources)
     monkeypatch.setenv('ALPHONSE_V3_CONTEXT_TOKEN_BUDGET', '60000')
     text = project(task, context, purpose=purpose)
-    assert 'ARTIFACT_INSTRUCTION_TAIL' in text
-    assert str(root / 'reader.py') in text
-    assert 'Registered argument schema' in text
+    assert 'Read the registered fixture.' in text
+    assert 'ARTIFACT_INSTRUCTION_TAIL' not in text
+    assert str(root / 'reader.py') not in text
+    assert 'Registered argument schema' not in text
     assert build_artifact_tool_definitions(resources.store, resources.projects) == []
     from alphonse.agent_v2.core.intelligence.v3.projections import ContextBudgetExceeded
     monkeypatch.setenv('ALPHONSE_V3_CONTEXT_TOKEN_BUDGET', '1000')

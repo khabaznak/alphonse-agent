@@ -190,6 +190,10 @@ class PhaseExecutor:
                         "acceptance_questions": [dict(item) for item in completed.acceptance_questions],
                     }
                 )
+                interruption = self._interruption(task, state, context)
+                if interruption is not None:
+                    self._checkpoint(task, state, context)
+                    return interruption
                 if completed.status == "waiting":
                     state.transition(PhaseStatus.WAITING_USER)
                     self._checkpoint(task, state, context)
@@ -343,9 +347,6 @@ class PhaseExecutor:
         if context.inference is None:
             return None
         skill_guidance, loaded_skill_ids = ("", []) if projections_enabled() else selected_skill_guidance(task, context)
-        if projections_enabled():
-            selection = task.metadata.get("v3_context_selection", {})
-            skill_guidance = task_context_for_decision(task, context, purpose="execution", selected_context_ids=selection.get("selected_context_ids", []))
         skill_selection = task.metadata.get("v3_skill_selection")
         if isinstance(skill_selection, dict) and not projections_enabled():
             skill_selection["loaded_skill_ids"] = loaded_skill_ids
@@ -371,6 +372,9 @@ class PhaseExecutor:
                 'task:' + str(task.task_id) + ':inspection_handoff', 'inspection_handoff',
             )
         skill_guidance = skill_guidance + "\n" + MEMORY_WORKFLOW
+        selection = task.metadata.get("v3_context_selection") or {}
+        task_context = task_context_for_decision(task, context, purpose="execution",
+                                                selected_context_ids=selection.get("selected_context_ids", []))
         prompt = _tactical_prompt(
             state,
             subgoal,
@@ -379,7 +383,7 @@ class PhaseExecutor:
             task_project_root=_task_project_root(task, context),
             attachment_manifest=_task_attachment_manifest(task),
             skill_guidance=skill_guidance,
-            task_context=task_context_for_decision(task, context, stage="execution") + "\n" + ordinary_workspace_context(task, context),
+            task_context=task_context + "\n" + ordinary_workspace_context(task, context),
         )
         from .context_manifests import event_input_metadata
         images = context.image_inputs(task)
@@ -387,7 +391,7 @@ class PhaseExecutor:
             InferenceRequest(
                 prompt=prompt,
                 purpose=InferencePurpose.TACTICAL_ACTION,
-                context_manifests=prompt_receipt(prompt, [skill_guidance,
+                context_manifests=prompt_receipt(prompt, [task_context, skill_guidance,
                     source('Strategic plan: ' + json.dumps(state.phase.to_dict(), ensure_ascii=False), 'phase:' + state.phase.phase_id, 'strategic_plan'),
                     source('Complete tool execution log (every entry, no omissions or truncation):\n' + state.prompt_projection(max_evidence_entries=None, max_chars=None), 'phase:' + state.phase.phase_id + ':execution', 'execution_evidence'),
                     *([source('Goal: ' + task.goal, 'request:' + str(task.message_id or task.task_id), 'current_request')] if not projections_enabled() else []),
@@ -479,7 +483,7 @@ class PhaseExecutor:
                 questions=list(action.acceptance_questions),
                 execution_log=[dict(item) for item in state.evidence.entries],
                 task_context=task_context_for_decision(
-                    task, context, purpose="review",
+                    task, context, purpose="progress_review",
                     selected_context_ids=(
                         task.metadata.get("v3_context_selection", {}).get("selected_context_ids", [])
                         if isinstance(task.metadata.get("v3_context_selection"), dict) else []

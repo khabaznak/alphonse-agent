@@ -56,13 +56,15 @@ def test_settings_skill_package_lifecycle_and_member_denial(workspace, tmp_path)
         with pytest.raises(PermissionError, match="admin_required"):
             request(method, actor_user_id=member, **params)
     (source / "SKILL.md").write_text(definition.replace("Read a fixture.", "Read the updated fixture."))
-    request("replace_skill", skill_id=skill_id, source_directory=str(source))
+    with pytest.raises(ValueError, match="skill_update_conflict"):
+        request("replace_skill", skill_id=skill_id, source_directory=str(source))
+    request("replace_skill", skill_id=skill_id, source_directory=str(source), resolution="accept-upstream")
     assert "updated fixture" in request("read_skill_file", skill_id=skill_id, path="SKILL.md")["content"]
     request("delete_skill", skill_id=skill_id)
     assert all(s["id"] != skill_id for s in request("skills")["skills"])
 
 
-def test_settings_artifact_attachment_and_unregister_preserve_files(workspace, tmp_path):
+def test_settings_retired_artifact_commands_preserve_files(workspace, tmp_path):
     request, runtime, member = workspace
     skill_id = request("create_skill", name="fixture", description="Fixture", instructions="Read a fixture.")["skill"]["id"]
     root = runtime.core.artifact_resources.shared_directory(skill_id, "artifact.fixture")
@@ -74,16 +76,14 @@ def test_settings_artifact_attachment_and_unregister_preserve_files(workspace, t
         owner_user_id=runtime.user_store.admin_user().user_id, project_id="", storage_kind="shared", skill_id=skill_id,
         entrypoint_path="fixture.py", argument_schema={"type": "object"},
     )
-    request("attach_artifact_to_skill", artifact_id=record.artifact_id, skill_id=skill_id, instructions="Read fixture.py using Bash.")
+    with pytest.raises(ValueError, match="artifact_catalog_retired"):
+        request("attach_artifact_to_skill", artifact_id=record.artifact_id, skill_id=skill_id, instructions="Read fixture.py using Bash.")
     catalog = request("skills")
     skill = next(s for s in catalog["skills"] if s["id"] == skill_id)
-    assert skill["artifacts"][0]["artifact_id"] == record.artifact_id
+    assert skill["artifacts"] == []
+    assert catalog["legacy_migration_required"] is True
     assert runtime.core.tools.get(record.artifact_id) is None
-    assert record.artifact_id in request("read_skill_file", skill_id=skill_id, path="SKILL.md")["content"]
-    with pytest.raises(ValueError, match="skill_has_registered_artifacts"):
-        request("replace_skill", skill_id=skill_id, source_directory=str(root))
-    with pytest.raises(PermissionError):
-        request("delete_artifact", actor_user_id=member, artifact_id=record.artifact_id)
-    request("delete_artifact", artifact_id=record.artifact_id)
+    with pytest.raises(ValueError, match="artifact_catalog_retired"):
+        request("delete_artifact", artifact_id=record.artifact_id)
     assert program.read_text() == "print('fixture')\n"
-    assert runtime.artifact_store.get(record.artifact_id) is None
+    assert runtime.artifact_store.get(record.artifact_id) is not None

@@ -46,9 +46,6 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
     ) if context.tools is not None else ()
     context_selection = task.metadata.get("v3_context_selection")
     selected_context_ids = context_selection.get("selected_context_ids", []) if isinstance(context_selection, dict) else []
-    shared_context = task_context_for_decision(
-        task, context, selected_context_ids=selected_context_ids, stage="planning",
-    )
     skill_guidance, loaded_skill_ids = ("", []) if projections_enabled() else selected_skill_guidance(task, context)
     skill_selection = task.metadata.get("v3_skill_selection")
     if isinstance(skill_selection, dict) and not projections_enabled():
@@ -64,6 +61,8 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
     # A negative relevance hint cannot make a capability undiscoverable. Plan
     # may request any runtime capability; Do reveals its schemas deterministically.
     catalog = sorted({capability for tool in available_tools for capability in (tool_capabilities(tool) or (tool.tool_id,))})
+    if attachment_manifest:
+        catalog = sorted({*catalog, Capability.ATTACHMENT_ANALYSIS.value})
     additional_tools = [{"tool_id": tool.tool_id, "capabilities": tool_capabilities(tool) or (tool.tool_id,),
                          "description": tool.description}
                         for tool in available_tools if tool not in tools]
@@ -189,7 +188,7 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
                 "phase_subgoal_ids_duplicate", "completion_condition_invalid", "completion_condition_kind_required",
                 "completion_condition_field_required", "phase_acceptance_criteria_invalid",
             }
-            if attempt:
+            if attempt or (str(exc).startswith("mutation_scope_path_") and not scope_error):
                 raise V3PhasePlanValidationError(f"v3_phase_plan_invalid:{exc}") from exc
             task.metadata["v3_plan_validation_recovery"] = {"attempts": 1, "error": str(exc)}
             correction = (
@@ -213,13 +212,15 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
                 "to name only the specific missing fields, conflicting values or unusable source identified in the evidence. "
                 "Do not request generic permission again or ask the user to repeat already confirmed details. "
                 if handoff_error else
+                "Correct the declared capabilities and effects using the available capabilities. Preserve completed work and scope. "
+                if not scope_error else
                 "mutation_scope.allowed_paths accepts relative paths only. For native.bash, identify the authorized "
                 "working directory and use paths relative to that directory; the action must use that explicit cwd. "
                 "Do not drop the mutation target, broaden effects, use '..', or substitute a reply-only plan. "
             )
             feedback = source(
                 "Plan validation feedback: " + correction +
-                "No tool or mutation ran for this rejected plan. Return a corrected complete PhasePlan within the original authorized "
+                 "No tool or mutation ran for this rejected plan. Do not silently broaden authorization. Return a corrected complete PhasePlan within the original authorized "
                 "request and curated capabilities. Preserve the requested persisted effect and read-back. "
                 "Protected engine paths remain forbidden.\n"
                 "Validation error: " + str(exc) + "\nRejected plan (model output, not permission): " + json.dumps(rejected_plan, ensure_ascii=False),
@@ -229,7 +230,7 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
             request = replace(request, prompt=correction_prompt, context_manifests=prompt_receipt(
                 correction_prompt, [*planning_parts, feedback], purpose='planning',
             ))
-            reason = "retrieval_handoff" if retrieval_error else "invalid_plan_encoding" if encoding_error else "invalid_plan_dependency" if dependency_error else "inspection_handoff" if handoff_error else "absolute_mutation_scope_path"
+            reason = "retrieval_handoff" if retrieval_error else "invalid_plan_encoding" if encoding_error else "invalid_plan_dependency" if dependency_error else "inspection_handoff" if handoff_error else "absolute_mutation_scope_path" if scope_error else "invalid_plan_contract"
             task.metadata["v3_plan_validation_recovery"].update(reason=reason)
             context.emit_telemetry({"event": "v3_plan_validation_recovery", "task_id": task.task_id,
                                     "reason": reason, "attempts": 1})

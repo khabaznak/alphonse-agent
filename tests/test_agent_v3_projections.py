@@ -284,8 +284,9 @@ def test_dc1_required_integrity_and_failure_before_any_provider(setup, monkeypat
     config = AgentConfigStore(tmp_path / 'config')
     config.save(GLOBAL_CONTEXT_FILE, '## Privacy and sharing boundaries\nPOLICY_TAIL')
     context.prompts = AgentConfigPromptLoader.from_store(config)
-    skill = SimpleNamespace(skill_id='skill:fixture', name='Fixture', description='Synthetic', directory='/fixture', instructions='SKILL_HEAD\n' + 'x' * 2000 + 'SKILL_TAIL')
-    context.skill_store = SimpleNamespace(get=lambda identity: skill)
+    from alphonse.agent_v2.skills import SkillStore
+    context.skill_store = SkillStore(tmp_path / 'skills')
+    skill = context.skill_store.create_skill('fixture', 'Synthetic', 'SKILL_HEAD\n' + 'x' * 2000 + 'SKILL_TAIL')
     task.metadata['v3_skill_selection'] = {'selected_skill_ids': [skill.skill_id]}
     calls = []
     context.system_one.judge_recall = lambda **kw: calls.append(kw) or False
@@ -333,7 +334,7 @@ def test_dc1_cancellation_and_unavailable_required_skill_fail_explicitly(setup, 
     from alphonse.agent_v2.system_one import SystemOneUnavailableError
     task, context = setup
     task.metadata['v3_skill_selection'] = {'selected_skill_ids': ['skill:missing']}
-    with pytest.raises(SystemOneUnavailableError, match='selected_skill_unavailable'):
+    with pytest.raises(SystemOneUnavailableError, match='v3_skill_activation:package_unavailable'):
         project(task, context, purpose=purpose)
     context.cancellation_checker = lambda: True
     with pytest.raises(SystemOneUnavailableError, match='cancelled'):

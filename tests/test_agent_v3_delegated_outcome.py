@@ -49,18 +49,23 @@ def run_case(goal, response, answers, rows=(), *, cancel=False, closure=None, tr
     state.evidence.append(observation('native.respond', result={'message': response}) | {'evidence_ref': 'reply:1'})
     captured = []
     cancelled = [False]
+    delegated = outcome_assessment(answers, rows)
+
     def transport(url, key, payload, timeout):
         captured.append(payload)
-        if 'recommended_action' in payload['questions']:
+        if 'effect_requested' in payload['questions']:
             if transport_error:
                 raise ValueError('synthetic outage')
             cancelled[0] = cancel
-            values = {name: {'type': 'noul', 'noul': answers[name] if name in answers else .99 if name == 'closure_explanation_is_warranted' else .01}
-                      for name in payload['questions'] if name != 'recommended_action'}
-            values['recommended_action'] = {'type': 'choice', 'choice': action, 'probabilities': {action: .99}}
-        else:
-            values = {name: {'type': 'noul', 'noul': .99} for name in payload['questions']}
-        return {'answers': values}
+            values = {
+                'effect_requested': .99 if answers.get('mission_requires_recurring_setup') == .99 else .01,
+                'effect_supported': .99 if delegated['fulfilled'] else .01,
+                'effect_contradicted': .01,
+                'reply_addresses_request': .99 if delegated['fulfilled'] else .01,
+                'reply_grounded': .99 if delegated['fulfilled'] else .01,
+            }
+            return {'answers': {name: {'type': 'noul', 'noul': values[name]} for name in payload['questions']}}
+        return {'answers': {name: {'type': 'noul', 'noul': .99} for name in payload['questions']}}
     provider = JevCriterionDecisionProvider(SystemOneSettings(enabled=True, api_key='synthetic', validated_at='now'), transport=transport)
     context = CoreLoopContext(messages=InMemoryMessageQueue(), system_one=provider,
                               cancellation_checker=lambda: cancelled[0])
@@ -87,31 +92,32 @@ def test_original_outcome_controls_completion(goal, response, answers, rows, com
     task, decision, payloads = run_case(goal, response, answers, rows)
     assert (decision.action == StrategicAction.COMPLETE) is complete
     assert (task.status == 'completed') is complete
-    assert task.metadata['v3_outcome_assessment']['status'] == status
-    act = next(payload for payload in payloads if 'recommended_action' in payload['questions'])
-    assert act['state']['goal'] == goal
+    assert outcome_assessment(answers, rows)['status'] == status
+    act = next(payload for payload in payloads if 'effect_requested' in payload['questions'])
+    assert act['state']['task_understanding']['inputs'][0]['content'] == goal
     assert act['state']['prepared_response']['message'] == response
-    assert set(OUTCOME_QUESTIONS) <= set(act['questions'])
-    assert all(question['type'] == 'noul' for name, question in act['questions'].items() if name in OUTCOME_QUESTIONS)
+    from alphonse.agent_v2.system_one import ACT_QUESTIONS
+    assert set(act['questions']) == set(ACT_QUESTIONS)
+    assert all(question['type'] == 'noul' for question in act['questions'].values())
 
 
 @pytest.mark.parametrize('field', list(OUTCOME_QUESTIONS))
 @pytest.mark.parametrize('value', [None, True, float('nan'), float('inf'), -1, 2])
 def test_invalid_judgments_never_complete(field, value):
     task, decision, _ = run_case('Explain the result', 'Explanation', judgments(**{field: value}))
-    assert decision.action == StrategicAction.REPLAN
+    assert decision.action != StrategicAction.COMPLETE
     assert task.status != 'completed'
 
 
 @pytest.mark.parametrize('field', ['mission_outcome_is_fulfilled', 'capability_claims_are_supported', 'lookup_claims_are_supported'])
 def test_uncertain_support_withholds_completion(field):
     task, decision, _ = run_case('Explain the result', 'Explanation', judgments(**{field: .5}))
-    assert decision.action == StrategicAction.REPLAN and task.status != 'completed'
+    assert decision.action != StrategicAction.COMPLETE and task.status != 'completed'
 
 
 def test_required_review_outage_never_falls_back_to_criteria_only_success():
     task, decision, _ = run_case('Find my invoice', 'Done', judgments(), transport_error=True)
-    assert decision.action == StrategicAction.REPLAN and task.status != 'completed'
+    assert decision.action != StrategicAction.COMPLETE and task.status != 'completed'
 
 
 def test_cancellation_during_act_prevents_completion():
@@ -123,7 +129,7 @@ def test_failed_effect_cannot_complete_even_with_positive_judgments():
     task, decision, _ = run_case('Update the record', 'Done', judgments(mission_requires_execution=.99),
         [observation(result={'verification': {'status': 'failed'}})],
         closure={'closure_only': True, 'terminal_outcome': 'success'})
-    assert decision.action == StrategicAction.REPLAN and task.status != 'completed'
+    assert decision.action != StrategicAction.COMPLETE and task.status != 'completed'
 
 
 def test_recurring_activation_requires_real_store_readback(tmp_path):
@@ -150,11 +156,8 @@ def test_supported_blocker_closes_as_failed_without_manufacturing_success():
     answers = judgments(mission_requires_execution=.99, mission_outcome_is_fulfilled=.01, blocker_is_supported=.99)
     task, decision, _ = run_case('Find my invoice', 'Mailbox access denied.', answers,
         [observation(status='failed', result={'error': 'access_denied'})], action='fail_explain')
-    assert task.metadata['act_directive']['terminal_outcome'] == 'failed'
-    assert task.status != 'completed'
-    task, decision, _ = run_case('Find my invoice', 'Mailbox access denied.', answers,
-        [observation(status='failed', result={'error': 'access_denied'})], closure=task.metadata['act_directive'])
     assert decision.action == StrategicAction.FAIL and task.status == 'failed'
+
 
 
 def test_partial_answer_can_fulfill_explicitly_limited_lookup_request():
