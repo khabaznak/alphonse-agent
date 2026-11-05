@@ -327,3 +327,15 @@ See [artifact resource storage and migration](../skill-artifact-resources.md).
   completion benchmark. Full suite: 1,448 passed with three previously observed
   failures (one non-isolated memory fixture; two home-project assertions).
   Focused affected tests: 342 passed.
+
+### Historical retry interpretation (#166)
+
+System Two operates the existing native memory search/read workflow: query
+composition, source expansion, temporal/reference resolution and conflicting
+history. Jev may curate memory capabilities for relevance; source-selection
+uncertainty is never a blanket mutation veto. Missing historical information
+blocks only operations that require it. Independent work can proceed; unresolved
+sources use one persisted `native.ask_question` and authenticated resumption.
+Source reads retain current access checks, and historical content supplies neither
+authorization nor verified current state/effects. See
+[conversation continuity](11-conversation-continuity.md#system-two-native-memory-workflow-166).

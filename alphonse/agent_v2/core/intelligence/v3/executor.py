@@ -29,7 +29,8 @@ from alphonse.agent_v2.core.tools.registry.native.respond import RESPOND_TOOL_ID
 from alphonse.agent_v2.system_one import SystemOneUnavailableError, system_one_error_code
 from alphonse.agent_v2.core.intelligence.v3.response_state import work_evidence_refs
 from alphonse.agent_v2.core.tools.registry import ToolExposurePolicy
-from alphonse.agent_v2.core.memory.retry_context import retry_continuity_context, retry_source_unresolved, retry_allows_subgoal
+from alphonse.agent_v2.core.memory.workflow import MEMORY_WORKFLOW
+from alphonse.agent_v2.core.memory.retry_context import retry_continuity_context
 
 if TYPE_CHECKING:
     from alphonse.agent_v2.core.core import CoreLoopContext, ToolDescriptor
@@ -63,12 +64,6 @@ class PhaseExecutor:
                 self._checkpoint(task, state, context)
                 return interruption
             subgoal = self._active_subgoal(state)
-            retry_continuity_context(task, context)  # Recheck the bound source before each action, including resumed phases.
-            if retry_source_unresolved(task) and not retry_allows_subgoal(subgoal):
-                state.transition(PhaseStatus.BLOCKED)
-                self._checkpoint(task, state, context)
-                return self._outcome(state, "The retry's exact source/change is unresolved; retrieve evidence or ask before a mutation.",
-                                     blockers=("retry_source_requires_user_input",))
             tools = self._revealed_tools(task, state, subgoal, context)
             selected = self._select_action(task, state, subgoal, tools, context)
             if selected is None:
@@ -309,6 +304,7 @@ class PhaseExecutor:
                 "reviewed and confirmed source. Missing or conflicting essential fields still require a question; never guess them.",
                 'task:' + str(task.task_id) + ':inspection_handoff', 'inspection_handoff',
             )
+        skill_guidance = skill_guidance + "\n" + MEMORY_WORKFLOW
         prompt = _tactical_prompt(
             state,
             subgoal,

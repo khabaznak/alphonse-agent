@@ -20,7 +20,8 @@ from alphonse.agent_v2.core.intelligence.v3.projections import enabled as projec
 from alphonse.agent_v2.system_one import SystemOneUnavailableError
 from alphonse.agent_v2.core.intelligence.v3.context import selected_skill_guidance
 from alphonse.agent_v2.core.intelligence.v3.context import task_context_for_decision
-from alphonse.agent_v2.core.memory.retry_context import prepare_retry_continuity, retry_source_unresolved, retry_allows_subgoal
+from alphonse.agent_v2.core.memory.workflow import MEMORY_WORKFLOW
+from alphonse.agent_v2.core.memory.retry_context import prepare_retry_continuity
 
 if TYPE_CHECKING:
     from alphonse.agent_v2.core.core import CoreLoopContext
@@ -72,7 +73,7 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
     directive_context = "See the structured Act directive above, when present." if projections_enabled() else json.dumps(act_directive, ensure_ascii=False)
     from .retrieval_handoff import INSTRUCTIONS as retrieval_instructions, validate_handoff
     prompt = (
-        f"{system_prompt}\n\n"
+        f"{system_prompt}\n\n{MEMORY_WORKFLOW}\n\n"
         f"{goal_section}"
         f"Household conversation, global, and selected project context:\n{shared_context}\n"
         "Selected skill guidance (reusable instructions; they do not grant permissions or override controls):\n"
@@ -143,9 +144,6 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
             phase = PhasePlan.from_dict(rejected_plan)
             _validate_inspection_handoff(phase, act_directive)
             validate_handoff(phase, act_directive)
-            if retry_source_unresolved(task):
-                if any(not retry_allows_subgoal(subgoal) for subgoal in phase.subgoals):
-                    raise ValueError('inspection_handoff_requires_source_resolution_before_mutation')
         except (TypeError, ValueError) as exc:
             # An absolute path in this relative-only field is a plan encoding
             # error, not an attempted or denied database operation. Let System
@@ -153,7 +151,6 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
             scope_error = str(exc).startswith("mutation_scope_path_invalid:/")
             handoff_error = str(exc).startswith("inspection_handoff_")
             retrieval_error = str(exc).startswith("retrieval_handoff_")
-            unresolved_source = str(exc) == "inspection_handoff_requires_source_resolution_before_mutation"
             dependency_error = str(exc).startswith(("phase_subgoal_dependency_invalid:", "phase_subgoal_self_dependency:"))
             encoding_error = str(exc) in {
                 "phase_plan_json_invalid", "phase_plan_invalid", "phase_id_required", "phase_objective_required",
@@ -176,9 +173,6 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
                 "the requested mutation/read-back with a reply. Returned subgoal IDs: "
                 + json.dumps([item.get('subgoal_id') for item in rejected_plan.get('subgoals', []) if isinstance(item, dict)]) + ". "
                 if dependency_error else
-                "The intended source is unresolved. Plan read_only evidence retrieval or a specific source question "
-                "before any mutation. Do not substitute an older source. A supported read-only response may proceed. "
-                if unresolved_source else
                 "Inspection handoff requires the next phase to perform the requested authorized operation or ask "
                 "a concrete missing-information question. Do not start another read-only inspection phase. If the "
                 "handoff route requires_user_input, plan exactly one user_interaction subgoal, using native.ask_question "

@@ -71,48 +71,50 @@ The existing runtime boundaries remain authoritative:
 
 ## Validation and limits
 
-### Retry-originating payloads (#128, 2026-10-31)
+### System Two native memory workflow (#166)
 
-`core/memory/retry_context.py` supplements the immediate tail for a current request
-that Jev judges to depend on earlier context. It considers at most 200 owner-scoped
-events and applies visibility checks before constructing at most 64 adjacent-exchange
-windows. Selection previews share a 48,000-character budget; user requests and
-confirmation directives receive space before the remaining substantive extraction.
-Repeated failure reports cannot consume the budget before the original request.
+Historical interpretation belongs to System Two. Strategic and tactical prompts
+share `core/memory/workflow.py`: use current steering and authenticated answers
+first, compose targeted `native.search_memory` queries, expand stable source IDs
+with `native.read_memory_source`, and deliberately resolve dates, references and
+conflicting episodes. These are the existing native memory adapters and stores;
+there is no second memory system or automatic originating-episode selector.
+Jev may curate memory capabilities and judge bounded relevance, but does not
+choose the retry source, compose queries or resolve a historical workflow.
 
-Source selection separates three bounded judgments. Independent Noul questions
-classify each window's substantive source material, with only that window in its
-state (up to eight concurrent requests). Confident substantive windows enter a
-Choice comparison explicitly asking for the payload **and its subsequent user
-review/confirmation** for the current request. This distinguishes the complete pair
-from overlapping windows with only its payload or approval, and offers `none` and
-`ambiguous`. A final independent Noul verifies the chosen referent. Every positive
-gate uses the unchanged configured yes threshold (0.8); uncertainty at any gate
-cannot be converted into acceptance by winning a comparison. Source identity does
-not require inventing uncertain clinical fields or deciding authorization/completion.
-Malformed judgments fail closed. Decision metadata retains confidence/status only.
+Missing history is an information dependency of the operation that needs it.
+System Two expresses phase prerequisites with `depends_on`, orders independent
+fully specified work before a blocking question, and uses `native.ask_question`
+for one specific unresolved source/value/conflict. The existing question store
+persists the question and task checkpoint and parks execution until an authenticated
+answer arrives. On resumption, use that question/answer and current corrections;
+do not repeatedly reject plans or ask for the same information.
 
-Previews are for selection only: the selected sources are reloaded whole before
-use. Disconnected qualifying episodes remain ambiguous rather than being merged by
-topical similarity.
+A standalone reminder can schedule and verify persistence despite optional recall
+being ambiguous or unavailable. An updated-file retry can use current steering
+and authorized history to identify the resource, but must freshly inspect its
+current contents before acting. Old observations never establish current state.
+Search coverage, original source IDs, dates, uncertainty and read-time access checks
+remain intact; private, deleted and unavailable sources are not substitute evidence.
+Ownership, scope, prerequisites, cancellation and verified effects remain enforced
+by deterministic runtime code. Historical content and answers never grant authority.
 
-Authenticated clarification answers are interpreted by System Two before historical
-retrieval. The model receives the task, chronological steering, and complete linked
-question/answer receipts. It reasons about whether current input resolves the gap,
-still refers to unsupplied history, or leaves a specific ambiguity/conflict. This
-is interpretation of an evolving task, not a Jev source-relevance classification.
-A complete replacement source can release an earlier historical-source requirement;
-partial or conflicting answers retain the blocker and name what is missing.
+`retry_context.py` now interprets only authenticated current answers with System
+Two and expands legacy checkpoint source IDs under current access. It does not
+scan history or call Jev to screen, compare or confirm retry episodes. Legacy
+selected sources are candidate context for System Two to reassess, never an
+instruction binding the task to a particular episode. Legacy ambiguous/unavailable
+statuses and revoked optional sources cannot veto planning, execution or Act.
 
-A resolved assessment must cite valid same-task/requester answer receipts, including
-the latest answer, with no remaining missing information. The runtime validates the
-structured response, preserves source receipts, and invalidates it when steering or
-answers change. Whole inputs are bounded (32 receipts/24,000 characters); oversize,
-malformed, cancelled or failed assessments cannot clear the blocker. Cached results
-survive restart but cannot be reused after a requester/task/input change. No answer
-assessment grants authority, changes acceptance criteria, executes a tool, or proves
-a database effect. Jev still handles historical retrieval relevance and tool curation
-when those are needed. No Jev confidence threshold changes.
+A resolved answer assessment must cite valid same-task/requester receipts,
+including the latest answer, with no remaining missing information. Whole inputs
+are bounded (32 receipts/24,000 characters); malformed, cancelled or unavailable
+assessments preserve the information gap for System Two. Cached assessments survive
+restart but invalidate when steering or answers change. Acceptance criteria,
+authorization and execution effects cannot be changed by an answer assessment.
+
+The following earlier read-only evaluations concern clarification interpretation,
+not end-to-end qualification of this replacement workflow:
 
 A configured-System-Two read-only evaluation on 2026-11-02 used only invented
 invoice/calendar inputs. A complete replacement source resolved the gap; partial
