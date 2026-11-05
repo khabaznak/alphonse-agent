@@ -42,6 +42,7 @@ class TaskState:
     goal: str = ""
     facts_md: str = EMPTY_MARKDOWN
     recent_conversation_md: str = EMPTY_MARKDOWN
+    conversation_records: list[dict[str, str]] = field(default_factory=list)
     conversation_history_md: str = EMPTY_MARKDOWN
     memory_context_md: str = EMPTY_MARKDOWN
     plan_json: str = EMPTY_MARKDOWN
@@ -112,6 +113,7 @@ class TaskState:
             goal=str(value.get("goal") or "").strip(),
             facts_md=_markdown_or_default(value.get("facts_md")),
             recent_conversation_md=_markdown_or_default(value.get("recent_conversation_md")),
+            conversation_records=[dict(item) for item in value.get("conversation_records") or [] if isinstance(item, dict)],
             conversation_history_md=_markdown_or_default(value.get("conversation_history_md")),
             memory_context_md=_markdown_or_default(value.get("memory_context_md")),
             plan_json=_markdown_or_default(
@@ -155,6 +157,7 @@ class TaskState:
             "goal": self.goal,
             "facts_md": self.facts_md,
             "recent_conversation_md": self.recent_conversation_md,
+            "conversation_records": [dict(item) for item in self.conversation_records],
             "conversation_history_md": self.conversation_history_md,
             "memory_context_md": self.memory_context_md,
             "plan_json": self.plan_json,
@@ -371,6 +374,19 @@ class TaskState:
         }
         self.evidence_journal.append(entry)
 
+    def evidence_items(self, requester_user_id: str) -> list[Any]:
+        """Source-linked audit projection; repeated attempts keep distinct IDs."""
+        from alphonse.agent_v2.core.memory.contracts import AccessScope, ContextItem, SourceReference
+
+        task_id = self.task_id or self.message_id
+        if not task_id or not self.user or requester_user_id != self.user:
+            return []
+        return [ContextItem(
+            SourceReference(f"task-evidence:{task_id}:{index}", "task_evidence", AccessScope(self.user),
+                            sequence=index, recorded_at=entry.get("recorded_at") or None),
+            json.dumps(entry, ensure_ascii=False, sort_keys=True), "audit",
+        ) for index, entry in enumerate(self.evidence_journal)]
+
     def append_acceptance_criterion(self, criterion: str) -> None:
         self.acceptance_criteria_md = _append_markdown_line(self.acceptance_criteria_md, criterion)
         self.acceptance_contract = contract_from_markdown(
@@ -390,6 +406,7 @@ class TaskState:
         if not rendered_prompt:
             return
         escaped_prompt = rendered_prompt.replace('"', '\\"')
+        self.conversation_records.append({"speaker": speaker, "content": rendered_prompt})
         self.append_recent_conversation_line(f'{speaker}: "{escaped_prompt}"')
 
     def append_update(self, update: str) -> None:

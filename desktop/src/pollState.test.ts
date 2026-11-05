@@ -22,3 +22,15 @@ describe("idle desktop poll state", () => {
     });
   });
 });
+
+import { reconcileQuestionSurfaces } from "./pollState";
+it("drops stale question controls from the authoritative poll even if delete events were lost", () => {
+  const surface = { surfaceId: "question:old", catalogId: "alphonse.desktop.catalog.v2", components: {}, dataModel: {} };
+  expect(reconcileQuestionSurfaces({"question:old":surface,"scheduled-task:one":{...surface,surfaceId:"scheduled-task:one"}},[])).toEqual({"scheduled-task:one":{...surface,surfaceId:"scheduled-task:one"}});
+});
+it("updates expiry and context revocations without resetting unchanged question records", () => {
+  const q = { question_id:"q",task_id:"t",project_id:"",message:"Fixture",kind:"open_text" as const,choices:[],context:{text:"Context"} };
+  const current=[q];
+  expect(reuseQuestions(current,[{...q,context:{text:"Updated"}}])).not.toBe(current);
+  expect(reuseQuestions(current,[{...q,expires_at:"2026-10-30T00:00:00Z"}])).not.toBe(current);
+});

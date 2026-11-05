@@ -408,7 +408,8 @@ def test_task_context_separates_recorded_conversation_from_audit_memory(tmp_path
     assert "Old ledger question" not in task.conversation_history_md
     assert "Old mission criterion" not in task.to_markdown_prompt()
     assert "Old proposed answer" not in task.to_markdown_prompt()
-    assert "Old ledger question" in task.memory_context_md
+    assert "Old ledger question" not in task.memory_context_md
+    assert "Old ledger question" in memory.latest_content(user_id="alex")
     progress = _task_progress_snapshot(task)
     assert prompt in progress["conversation_history"]
     assert "Old ledger question" not in progress["conversation_history"]

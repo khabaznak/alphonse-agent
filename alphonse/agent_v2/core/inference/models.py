@@ -20,7 +20,9 @@ class InferencePurpose(str, Enum):
     STRATEGIC_ACT = "strategic_act"
     FINAL_RESPONSE = "final_response"
     PHASE_PLANNING = "phase_planning"
+    TASK_UNDERSTANDING = "task_understanding"
     MEMORY_COMPACTION = "memory_compaction"
+    MEMORY_EXTRACTION = "memory_extraction"
 
 
 @dataclass(frozen=True)
@@ -38,6 +40,15 @@ class ModelProfile:
 
 
 @dataclass(frozen=True)
+class InferenceImage:
+    """Authorized immutable image bytes; never included in text telemetry."""
+
+    asset_id: str
+    mime_type: str
+    content: bytes = field(repr=False)
+
+
+@dataclass(frozen=True)
 class InferenceRequest:
     """One model request from a CAPD node."""
 
@@ -50,6 +61,10 @@ class InferenceRequest:
     model_profile: ModelProfile | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     cancel_checker: Callable[[], bool] | None = field(default=None, repr=False, compare=False)
+    images: tuple[InferenceImage, ...] = ()
+    output_schema: dict[str, Any] | None = None
+    context_manifests: tuple[dict[str, Any], ...] = field(default=(), repr=False, compare=False)
+    input_sources: tuple[dict[str, Any], ...] = field(default=(), repr=False, compare=False)
 
 
 @dataclass(frozen=True)

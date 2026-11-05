@@ -44,6 +44,14 @@ ASK_QUESTION_ARGUMENT_SCHEMA: dict[str, Any] = {
             "type": "string",
             "description": "Optional registered user to ask; defaults to the task owner.",
         },
+        "question_context": {
+            "type": "object", "additionalProperties": False,
+            "description": "Optional respondent-visible context. Artifact references are read-only and checked for current access by Desktop; answering is never an authorization grant.",
+            "properties": {
+                "text": {"type": "string", "maxLength": 4000},
+                "artifact_ids": {"type": "array", "maxItems": 8, "uniqueItems": True, "items": {"type": "string", "pattern": "^artifact\\."}},
+            },
+        },
         "expires_in_seconds": {
             "type": "integer",
             "description": "Optional expiry window, in seconds.",
@@ -98,6 +106,11 @@ def execute_ask_question(
         if isinstance(context.task.metadata.get("channel"), dict)
         else {},
     }
+    question_context = arguments.get("question_context")
+    if question_context is not None:
+        from jsonschema import validate
+        validate(question_context, ASK_QUESTION_ARGUMENT_SCHEMA["properties"]["question_context"])
+        delivery_metadata["question_context"] = dict(question_context)
     # The question is part of the dialogue the planner must see when the task
     # resumes. Store it on the task before the interrupt checkpoint is written.
     context.task.append_conversation_message("Alphonse", question)

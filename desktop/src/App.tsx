@@ -1,6 +1,16 @@
 import { OptionalAccounts, ProjectCheckPanel, CheckAgenda } from "./OptionalIntegrations";
+import { appendWidgetDraft, CoordinationList, type CoordinationData } from "./CoordinationWidgets";
+import { authorizedWidgets, type WidgetContext } from "./widgetContext";
+import { Agenda } from "./Agenda";
+import { SkillMascot, SkillAppearanceSettings } from "./SkillMascot";
+import { BASE_CONTEXT, type AppearanceContext, type SkillAppearance } from "./skillAppearances";
+import { HouseholdWorkspace } from "./HouseholdWorkspace";
+import { QuestionCard } from "./QuestionCard";
+import { WorkOverview } from "./WorkOverview";
+import { TaskProgressBubble } from "./TaskProgressBubble";
+import { AtHandDrawer, useAtHand } from "./AtHandDrawer";
 import { FormEvent, KeyboardEvent, memo, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CalendarClock, ChevronLeft, ChevronRight, FolderKanban, FolderOpen, Settings, UsersRound, Sparkles } from "lucide-react";
+import { CalendarClock, ChevronLeft, ChevronRight, FolderKanban, FolderOpen, Settings, UsersRound, Sparkles, MessageCircle, CircleHelp, PanelRightClose, PanelRightOpen, Palette, Wrench, Plug, Brain, Gauge, FileText } from "lucide-react";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { onAction } from "@tauri-apps/plugin-notification";
@@ -13,23 +23,25 @@ import { mergeFreshConversationHistory } from "./conversationHistory";
 import { projectTaskProgress } from "./taskProgress";
 import { buildConversationTimeline } from "./conversationTimeline";
 import { A2uiSurfaceView, DESKTOP_CATALOG_ID, type A2uiSurface } from "./a2ui";
-import { DESKTOP_STYLE_STORAGE_KEY, parseDesktopStyle, type DesktopStyle } from "./desktopStyle";
+import { followDesktopStyle, readDesktopStyle, saveDesktopStyle, type DesktopStyle } from "./desktopStyle";
 import { desktopDiagnosticBehavior, type DesktopDiagnosticMode } from "./diagnosticMode";
 import { createDesktopNotifier, DESKTOP_NOTIFICATION_PREFERENCES_KEY, notificationForCompletion, notificationForQuestion, readDesktopNotificationPreferences, type DesktopNotificationPreferences } from "./desktopNotifications";
 import { readDismissedScheduledSurfaces, rememberDismissedScheduledSurface, withoutDismissedSurfaces, withoutSurface } from "./dismissedSurfaces";
-import { avatarState, avatarStateLabel, capdActivityLabel } from "./layoutState";
-import { formatMessageTime } from "./messageTime";
-import { reuseQuestions, withoutTaskProgressSurfaces } from "./pollState";
+import { avatarState, avatarStateLabel, capdActivityLabel, type Workspace, SETTINGS_SECTIONS } from "./layoutState";
+import { ConversationMessage, MemoizedConversationMessage } from "./ConversationMessage";
+import { reconcileQuestionSurfaces, reuseQuestions, withoutTaskProgressSurfaces } from "./pollState";
 import { QueueWorkloadChart } from "./QueueWorkloadChart";
 import { appendQueueSample, type QueueSample } from "./queueHistory";
 import { PdcaActivityChart } from "./PdcaActivityChart";
 import { appendPdcaActivity, type PdcaSample } from "./pdcaHistory";
 import type { ActivityEvent, AgentDocument, ChatMessage, CodeModeSettings, InferenceSettings, MediaToolsSettings, MemorySettings, Project, Question, SystemOneSettings, WebToolsSettings } from "./types";
 
-type Modal = "scheduled-tasks" | "settings" | "users" | "onboarding" | null;
-type SettingsTab = "general" | "appearance" | "tools" | "integrations" | "automations" | "model" | "system-one" | "agent-config";
+type Modal = "onboarding" | null;
+type SettingsTab = (typeof SETTINGS_SECTIONS)[number][0];
 type ManagedProject = Project & { owner?: { display_name?: string; user_id?: string } | null };
 type PollResponse = {
+  mascot?: AppearanceContext;
+  widget_context?: WidgetContext;
   daemon_id?: string;
   daemon_changed?: boolean;
   events: ActivityEvent[];
@@ -39,7 +51,7 @@ type PollResponse = {
   deliveries: Array<{ outbox_message_id: string; message: string; task_id?: string; project_id: string; created_at: string; conversation_sequence: number }>;
   questions: Question[];
   conversation_has_unseen_messages?: boolean;
-  status: { active_work: Record<string, string>; activity: { state?: string }; queue?: { ready?: number; processing?: number } };
+  status: { active_work: Record<string, string>; activity: { state?: string }; queue?: { ready?: number; processing?: number; retry_wait?: number } };
 };
 type HistoryResponse = { messages: ChatMessage[] };
 type Provider = {
@@ -51,7 +63,7 @@ type Provider = {
   cli_path?: string;
   catalog_cli_matches_runtime?: boolean | null;
 };
-const REMARK_PLUGINS = [remarkGfm];
+const SETTINGS_ICONS = { general: Settings, appearance: Palette, tools: Wrench, integrations: Plug, automations: CalendarClock, model: Brain, "system-one": Gauge, "agent-config": FileText, skills: Sparkles, members: UsersRound };
 const localDay = (timezone: string) => {
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone: timezone || "UTC", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
   const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
@@ -72,11 +84,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const uiSequence = useRef(0);
   const daemonId = useRef("");
   const delivered = useRef(new Set<string>());
-  const progressTaskIdsRef = useRef(new Set<string>());
   const autoScrolledProgressTaskIdsRef = useRef(new Set<string>());
-  const progressStartedAtRef = useRef(new Map<string, number>());
-  const progressMeaningfulAtRef = useRef(new Map<string, number>());
-  const progressCompletionTimersRef = useRef(new Map<string, number>());
   const conversationHistoryRequestRef = useRef(0);
   const conversationHistoryLoadingRef = useRef(0);
   const activeHistoryRefreshRef = useRef(false);
@@ -95,16 +103,45 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const [prompt, setPrompt] = useState("");
   const [connected, setConnected] = useState(false);
   const [activity, setActivity] = useState("idle");
+  const [mascotContext, setMascotContext] = useState(BASE_CONTEXT);
   const [questions, setQuestions] = useState<Question[]>([]);
   const [contextProjects, setContextProjects] = useState<Project[]>([]);
   const [conversationDay, setConversationDay] = useState(() => localDay("UTC"));
   const conversationDayRef = useRef(conversationDay);
-  const [projectsOpen, setProjectsOpen] = useState(false);
-  const [skillsOpen, setSkillsOpen] = useState(false);
-  const [scheduledTaskForView, setScheduledTaskForView] = useState("");
-  const [modal, setModal] = useState<Modal>(null);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
+  const [workspace, setWorkspace] = useState<Workspace>("conversation");
+  // Mount once per visit history so navigation preserves local forms and scroll.
+  const [visited, setVisited] = useState<Set<Workspace>>(() => new Set(["conversation"]));
+  const [returnWorkspace, setReturnWorkspace] = useState<Workspace>("conversation");
+  const [projectForView, setProjectForView] = useState({ id: "", request: 0 });
+  const [memberName, setMemberName] = useState("");
+  const [isAdmin, setIsAdmin] = useState(false);
+  const workspaceRef = useRef(workspace);
+  workspaceRef.current = workspace;
+  const workspaceHostRef = useRef<HTMLDivElement>(null);
+  const drawerToggleRef = useRef<HTMLButtonElement>(null);
+  const navigate = (next: Workspace) => {
+    if (workspaceRequired && next !== "settings") return;
+    if (next === "settings" && workspace !== "settings") setReturnWorkspace(workspace);
+    setVisited((current) => new Set([...current, next]));
+    setWorkspace(next);
+  };
+  useEffect(() => {
+    workspaceHostRef.current?.querySelector<HTMLElement>(".workspace-panel:not([hidden])")?.focus({ preventScroll: true });
+  }, [workspace, settingsTab]);
+  const [scheduledTaskForView, setScheduledTaskForView] = useState("");
+  const [scheduleViewRequest, setScheduleViewRequest] = useState(0);
+  const [workTaskForView, setWorkTaskForView] = useState("");
+  const [modal, setModal] = useState<Modal>(null);
   const [user, setUser] = useState("");
+  const { state: drawer, act: changeDrawer, saveFailed: drawerSaveFailed, reconcile: reconcileWidgets } = useAtHand(user);
+  const [widgetContext, setWidgetContext] = useState<WidgetContext>();
+  const [widgetItem, setWidgetItem] = useState<{ member: string; artifactId: string; itemId: string; family: CoordinationData["family"] }>();
+
+  const drawerIdsRef = useRef<string[]>([]);
+  drawerIdsRef.current = drawer.widgets.filter((widget) => widget.kind === "skill").map((widget) => widget.id);
+  const atHandOpen = Boolean(user && drawer.open);
+  const [questionsMember, setQuestionsMember] = useState("");
   const [workspaceRequired, setWorkspaceRequired] = useState(false);
   const [error, setError] = useState("");
   const [surfaces, setSurfaces] = useState<Record<string, import("./a2ui").A2uiSurface>>({});
@@ -117,11 +154,8 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const archivedProgressRef = useRef<Record<string, A2uiSurface>>({});
   const [archivedProgress, setArchivedProgress] = useState<Record<string, A2uiSurface>>({});
   const [progressTaskIds, setProgressTaskIds] = useState<string[]>([]);
-  const [pendingProgressMessages, setPendingProgressMessages] = useState<Record<string, ChatMessage>>({});
-  const [morphedMessageTaskIds, setMorphedMessageTaskIds] = useState<Record<string, string>>({});
-  const [heldProgressSurfaces, setHeldProgressSurfaces] = useState<Record<string, A2uiSurface>>({});
   const [enterToSend, setEnterToSend] = useState(() => window.localStorage.getItem("alphonse.desktop.enterToSend") !== "false");
-  const [desktopStyle, setDesktopStyle] = useState<DesktopStyle>(() => parseDesktopStyle(window.localStorage.getItem(DESKTOP_STYLE_STORAGE_KEY)));
+  const [desktopStyle, setDesktopStyle] = useState<DesktopStyle>("system");
   const [desktopNotifications, setDesktopNotifications] = useState<DesktopNotificationPreferences>(() => readDesktopNotificationPreferences(window.localStorage));
   const [diagnosticRenderTick, forceDiagnosticRender] = useState(0);
   const currentAvatarState = avatarState(connected, error, activity);
@@ -148,12 +182,18 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       messagesDuringConversationReloadRef.current.set(loadingRequest, [...pending, message]);
     }
     setMessages((current) => {
+      // Polls repeat pending questions. Preserve identity (and reading position)
+      // when that message is already present instead of triggering auto-scroll.
+      if (current.some((existing) => existing.id === message.id)) return current;
       const next = mergeFreshConversationHistory(current, [message]);
       return next;
     });
   }, []);
 
+  const pollGeneration = useRef(0);
+  const committedPollGeneration = useRef(0);
   const pollTransport = useCallback(async () => {
+    const generation = ++pollGeneration.current;
     const response = await daemonRequest<PollResponse>("desktop_poll", {
         client_id: clientId,
         user,
@@ -162,39 +202,39 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
         after_sequence: sequence.current,
         after_ui_sequence: uiSequence.current,
         daemon_id: daemonId.current,
-        client_capabilities: { supportedCatalogIds: [DESKTOP_CATALOG_ID] },
+        client_capabilities: { supportedCatalogIds: [DESKTOP_CATALOG_ID], widgetIds: drawerIdsRef.current },
         limit: 50,
     });
+    if (generation < committedPollGeneration.current) return { response, daemonChanged: false, stale: true };
+    committedPollGeneration.current = generation;
     const previousDaemonId = daemonId.current;
     const daemonChanged = Boolean(response.daemon_changed || (previousDaemonId && response.daemon_id && previousDaemonId !== response.daemon_id));
     if (response.daemon_id) daemonId.current = response.daemon_id;
     sequence.current = response.next_sequence;
     uiSequence.current = response.next_ui_sequence ?? uiSequence.current;
-    return { response, daemonChanged };
+    return { response, daemonChanged, stale: false };
   }, [clientId, conversationDay, user]);
 
   const poll = useCallback(async () => {
     try {
-      const { response, daemonChanged } = await pollTransport();
+      const { response, daemonChanged, stale } = await pollTransport();
+      if (stale) return;
       if (!diagnosticBehavior.commitsPollResponses) return;
       if (daemonChanged) {
-        progressCompletionTimersRef.current.forEach((timer) => window.clearTimeout(timer));
-        progressCompletionTimersRef.current.clear();
-        progressTaskIdsRef.current.clear();
         autoScrolledProgressTaskIdsRef.current.clear();
-        progressStartedAtRef.current.clear();
-        progressMeaningfulAtRef.current.clear();
         archivedProgressRef.current = {};
         setArchivedProgress({});
         setProgressTaskIds([]);
-        setPendingProgressMessages({});
-        setHeldProgressSurfaces({});
         const retainedSurfaces = withoutTaskProgressSurfaces(surfacesRef.current);
         surfacesRef.current = retainedSurfaces;
         setSurfaces(retainedSurfaces);
       }
       setConnected(true);
       setError("");
+      setQuestionsMember(user);
+      setMascotContext(response.mascot || BASE_CONTEXT);
+      setWidgetContext(response.widget_context);
+      reconcileWidgets(response.widget_context);
       setQuestions((current) => reuseQuestions(current, response.questions));
       response.questions.forEach((question) => appendMessage({
         id: `question:${question.question_id}`,
@@ -223,10 +263,6 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       ));
       const newProgressTaskIds = taskProgressIds(response.ui_events || []);
       if (newProgressTaskIds.length) {
-        newProgressTaskIds.forEach((taskId) => {
-          progressTaskIdsRef.current.add(taskId);
-          if (!progressStartedAtRef.current.has(taskId)) progressStartedAtRef.current.set(taskId, Date.now());
-        });
         setProgressTaskIds((current) => [...current, ...newProgressTaskIds.filter((taskId) => !current.includes(taskId))]);
       }
       const progressProjection = projectTaskProgress(
@@ -235,28 +271,16 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
         response.ui_events || [],
         ["idle", "error"].includes(response.status.activity.state || "idle")
           && !Object.keys(response.status.active_work).length
-          && !response.status.queue?.processing,
+          && !response.status.queue?.processing && !response.status.queue?.ready && !response.status.queue?.retry_wait,
       );
       archivedProgressRef.current = progressProjection.archived;
       setArchivedProgress(progressProjection.archived);
-      Object.keys(progressProjection.archived).forEach((taskId) => {
-        progressTaskIdsRef.current.delete(taskId);
-        progressStartedAtRef.current.delete(taskId);
-        progressMeaningfulAtRef.current.delete(taskId);
-      });
       const projectedSurfaces = withoutDismissedSurfaces(
-        progressProjection.surfaces,
+        reconcileQuestionSurfaces(progressProjection.surfaces, response.questions),
         dismissedScheduledSurfacesRef.current,
       );
       surfacesRef.current = projectedSurfaces;
       setSurfaces(projectedSurfaces);
-      newProgressTaskIds.forEach((taskId) => {
-        if (progressProjection.archived[taskId]) return;
-        const components = projectedSurfaces[`task-progress:${taskId}`]?.components || {};
-        if (["criteria", "intention", "tool", "result"].some((componentId) => String(components[componentId]?.text || "").trim()) || Object.keys(components).some((componentId) => componentId.startsWith("step_"))) {
-          progressMeaningfulAtRef.current.set(taskId, Date.now());
-        }
-      });
       const latest = response.events.at(-1);
       setActivity(capdActivityLabel(latest, response.status.activity.state || "idle"));
       for (const delivery of response.deliveries) {
@@ -274,49 +298,17 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
           project_id: delivery.project_id,
           sequence: delivery.conversation_sequence,
         };
-        if (delivery.task_id) {
-          if (progressTaskIdsRef.current.has(delivery.task_id)) {
-            const taskId = delivery.task_id;
-            const progressSurface = surfacesRef.current[`task-progress:${taskId}`];
-            if (progressSurface) setHeldProgressSurfaces((current) => ({ ...current, [taskId]: progressSurface }));
-            setPendingProgressMessages((current) => ({ ...current, [taskId]: completedMessage }));
-            const visibleSince = progressMeaningfulAtRef.current.get(taskId) || progressStartedAtRef.current.get(taskId) || Date.now();
-            const elapsed = Date.now() - visibleSince;
-            const finish = () => {
-              progressCompletionTimersRef.current.delete(taskId);
-              progressTaskIdsRef.current.delete(taskId);
-              progressStartedAtRef.current.delete(taskId);
-              progressMeaningfulAtRef.current.delete(taskId);
-              setMorphedMessageTaskIds((current) => ({ ...current, [completedMessage.id]: taskId }));
-              setProgressTaskIds((current) => current.filter((value) => value !== taskId));
-              setPendingProgressMessages((current) => {
-                const next = { ...current };
-                delete next[taskId];
-                return next;
-              });
-              setHeldProgressSurfaces((current) => { const next = { ...current }; delete next[taskId]; return next; });
-              const nextSurfaces = { ...surfacesRef.current };
-              delete nextSurfaces[`task-progress:${taskId}`];
-              surfacesRef.current = nextSurfaces;
-              setSurfaces(nextSurfaces);
-              appendMessage(completedMessage);
-            };
-            const remaining = Math.max(0, 1500 - elapsed);
-            if (remaining) progressCompletionTimersRef.current.set(taskId, window.setTimeout(finish, remaining)); else finish();
-            await daemonRequest("desktop_ack_delivery", { client_id: clientId, outbox_message_id: delivery.outbox_message_id });
-            continue;
-          }
-        }
         appendMessage(completedMessage);
         await daemonRequest("desktop_ack_delivery", { client_id: clientId, outbox_message_id: delivery.outbox_message_id });
       }
     } catch (cause) {
       if (!diagnosticBehavior.commitsPollResponses) return;
       setConnected(false);
+      setMascotContext(BASE_CONTEXT);
       setError(cause instanceof Error ? cause.message : "Daemon connection lost");
       setActivity("idle");
     }
-  }, [appendMessage, clientId, contextProjects, desktopNotifications, diagnosticBehavior.commitsPollResponses, pollTransport, user]);
+  }, [appendMessage, clientId, contextProjects, desktopNotifications, diagnosticBehavior.commitsPollResponses, pollTransport, reconcileWidgets, user]);
 
   useEffect(() => {
     const runCycle = diagnosticBehavior.cycle === "ping"
@@ -334,10 +326,12 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
         setUser(current.user.user_id);
         setMessages(history.messages);
       } else if (diagnosticMode === "normal") {
-        const current = await daemonRequest<{ onboarded: boolean; workspace_configured?: boolean; user: { user_id: string } | null }>("current_user");
+        const current = await daemonRequest<{ onboarded: boolean; workspace_configured?: boolean; user: { user_id: string; display_name?: string; role?: string; is_active?: boolean } | null }>("current_user");
+        setMemberName(current.user?.display_name || current.user?.user_id || "");
+        setIsAdmin(current.user?.role === "admin" && current.user?.is_active !== false);
         if (!current.onboarded || !current.user) setModal("onboarding"); else {
           setUser(current.user.user_id);
-          if (!current.workspace_configured) { setWorkspaceRequired(true); setModal("settings"); }
+          if (!current.workspace_configured) { setWorkspaceRequired(true); setSettingsTab("general"); setVisited((value) => new Set([...value, "settings"])); setWorkspace("settings"); }
         }
       }
       if (runCycle) await runCycle();
@@ -361,9 +355,17 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   }, [enterToSend]);
 
   useEffect(() => {
-    window.localStorage.setItem(DESKTOP_STYLE_STORAGE_KEY, desktopStyle);
-    document.documentElement.dataset.alphonseStyle = desktopStyle;
-  }, [desktopStyle]);
+    setDesktopStyle(readDesktopStyle(window.localStorage, user));
+  }, [user]);
+
+  useEffect(() => followDesktopStyle(
+    document.documentElement, window.matchMedia("(prefers-color-scheme: dark)"), desktopStyle,
+  ), [desktopStyle]);
+
+  const changeDesktopStyle = (next: DesktopStyle) => {
+    saveDesktopStyle(window.localStorage, user, next);
+    setDesktopStyle(next);
+  };
 
   useEffect(() => {
     window.localStorage.setItem(DESKTOP_NOTIFICATION_PREFERENCES_KEY, JSON.stringify(desktopNotifications));
@@ -443,13 +445,13 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
 
   useEffect(() => {
     const element = timelineRef.current;
-    if (!element) return;
+    if (!element || workspaceRef.current !== "conversation") return;
     element.scrollTop = element.scrollHeight;
   }, [messages]);
 
   useEffect(() => {
     const unseen = progressTaskIds.filter((taskId) => !autoScrolledProgressTaskIdsRef.current.has(taskId));
-    if (!unseen.length) return;
+    if (!unseen.length || workspaceRef.current !== "conversation") return;
     unseen.forEach((taskId) => autoScrolledProgressTaskIdsRef.current.add(taskId));
     const frame = window.requestAnimationFrame(() => {
       const element = timelineRef.current;
@@ -463,7 +465,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
     if (!element) return;
     element.style.height = "auto";
     element.style.height = `${Math.min(element.scrollHeight, 4 * 22 + 24)}px`;
-  }, [prompt]);
+  }, [prompt, workspace]);
 
   const submitPrompt = async () => {
     const value = prompt.trim();
@@ -535,13 +537,13 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   };
 
   const runCommand = async (command: string) => {
-    if (command === "/project") return setProjectsOpen(true);
-    if (command === "/integrations") { setSettingsTab("integrations"); return setModal("settings"); }
-    if (command === "/model" || command === "/model-provider") { setSettingsTab("model"); return setModal("settings"); }
-    if (command === "/agent-config") { setSettingsTab("agent-config"); return setModal("settings"); }
-    if (command === "/scheduled-tasks") return setModal("scheduled-tasks");
-    if (command === "/settings") { setSettingsTab("general"); return setModal("settings"); }
-    if (command === "/users") return setModal("users");
+    if (command === "/project") return navigate("projects");
+    if (command === "/integrations") { setSettingsTab("integrations"); return navigate("settings"); }
+    if (command === "/model" || command === "/model-provider") { setSettingsTab("model"); return navigate("settings"); }
+    if (command === "/agent-config") { setSettingsTab("agent-config"); return navigate("settings"); }
+    if (command === "/scheduled-tasks") return navigate("agenda");
+    if (command === "/settings") { setSettingsTab("general"); return navigate("settings"); }
+    if (command === "/users") return navigate("household");
     if (command === "/stop") {
       if (window.confirm("Stop the Alphonse daemon?")) await stopDaemon();
       return;
@@ -549,58 +551,61 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
     if (command === "/exit" || command === "/quit") window.close();
   };
 
+  const selectedWidgetData = connected && widgetItem?.member === user ? authorizedWidgets(widgetContext, user).find((row) => row.status === "ready" && row.coordination?.artifactId === widgetItem.artifactId && row.coordination.family === widgetItem.family)?.coordination : undefined;
+  const selectedWidgetItem = selectedWidgetData?.items.find((item) => item.id === widgetItem?.itemId);
+
   const suggestions = useMemo(() => matchingCommands(prompt), [prompt]);
-  const activeSurface = Object.values(surfaces).find((surface) => !surface.surfaceId.startsWith("task-progress:") && !progressTaskIds.includes(questionTaskId(surface)));
-  const fallbackQuestion = questions.find((question) => !surfaces[`question:${question.question_id}`]);
+  const activeSurface = Object.values(surfaces).find((surface) => !surface.surfaceId.startsWith("question:") && !surface.surfaceId.startsWith("task-progress:") && !progressTaskIds.includes(questionTaskId(surface)));
   const timelineRenderVersion = diagnosticBehavior.memoizesTimeline ? 0 : diagnosticRenderTick;
-  const questionTaskIds = new Set(questions.filter((question) => surfaces[`question:${question.question_id}`]).map((question) => question.task_id));
+  const questionTaskIds = new Set(questions.map((question) => question.task_id));
   const timelineNodes: ReactNode[] = useMemo(() => buildConversationTimeline(
       messages,
       progressTaskIds.filter((taskId) => !questionTaskIds.has(taskId)),
-      pendingProgressMessages,
-      morphedMessageTaskIds,
+      {},
+      {},
+      Object.keys(archivedProgress),
     ).map((item) => {
       if (item.kind === "message") {
-        const question = questions.find((candidate) => item.message.id === `question:${candidate.question_id}`);
-        const questionSurface = question ? surfaces[`question:${question.question_id}`] : undefined;
-        if (questionSurface) return <article className="message assistant task-question-bubble" key={item.key}><A2uiSurfaceView surface={questionSurface} clientId={clientId} user={user} onDone={poll} /></article>;
-        const Bubble = diagnosticBehavior.memoizesMessages ? MemoizedMessageBubble : MessageBubble;
-        return <Bubble key={item.key} message={item.message} timezone={timezone} projectName={contextProjects.find((projectItem) => projectItem.project_id === item.message.project_id)?.name || ""} renderMarkdown={!diagnosticBehavior.plainTextMessages} />;
+        if (questions.some((question) => item.message.id === `question:${question.question_id}`)) return null;
+        const Bubble = diagnosticBehavior.memoizesMessages ? MemoizedConversationMessage : ConversationMessage;
+        const bubble = <Bubble key={item.key} message={item.message} timezone={timezone} projectName={contextProjects.find((projectItem) => projectItem.project_id === item.message.project_id)?.name || ""} renderMarkdown={!diagnosticBehavior.plainTextMessages} />;
+        return bubble;
       }
       const archivedSurface = archivedProgress[item.taskId];
-      const surface = archivedSurface || surfaces[`task-progress:${item.taskId}`] || heldProgressSurfaces[item.taskId];
-      const questionSurface = Object.values(surfaces).find((candidate) => questionTaskId(candidate) === item.taskId);
-      if (questionSurface) {
-        return <article className="message assistant task-question-bubble" key={item.key}><A2uiSurfaceView surface={questionSurface} clientId={clientId} user={user} onDone={poll} /></article>;
-      }
-      return surface ? <TaskProgressBubble key={item.key} surface={surface} archived={Boolean(archivedSurface)} /> : null;
-    }), [archivedProgress, clientId, contextProjects, diagnosticBehavior.memoizesMessages, diagnosticBehavior.plainTextMessages, heldProgressSurfaces, messages, morphedMessageTaskIds, pendingProgressMessages, poll, progressTaskIds, questionTaskIds, questions, surfaces, timelineRenderVersion, timezone, user]);
+      const surface = archivedSurface || surfaces[`task-progress:${item.taskId}`];
+      return surface ? <TaskProgressBubble key={item.key} surface={surface} archived={Boolean(archivedSurface)} connected={connected} timezone={timezone} /> : null;
+    }), [archivedProgress, clientId, connected, contextProjects, diagnosticBehavior.memoizesMessages, diagnosticBehavior.plainTextMessages, messages, poll, progressTaskIds, questionTaskIds, questions, surfaces, timelineRenderVersion, timezone, user]);
 
   return (
-    <main className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${projectsOpen || skillsOpen ? "projects-mode" : ""}`}>
-      {!projectsOpen && !skillsOpen && <aside className="sidebar" aria-label="Alphonse navigation">
+    <main className={`app-shell desktop-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${atHandOpen ? "at-hand-open" : ""}`}>
+      <aside className="sidebar" aria-label="Alphonse navigation">
         <div className="brand">
           <div className="brand-avatar" title={`Alphonse is ${currentAvatarStateLabel}`}>
-            <img key={currentAvatarState} className="brand-mascot" src={`/alphonse-states/${currentAvatarState}.png`} alt={`Alphonse is ${currentAvatarStateLabel}.`} />
+            <SkillMascot user={user} state={currentAvatarState} context={mascotContext} />
             {currentAvatarState === "disconnected" && <span className="brand-avatar-status">Disconnected</span>}
           </div>
           <span className="brand-name">Alphonse</span>
           <button className="collapse-toggle" type="button" onClick={() => setSidebarCollapsed((value) => !value)} aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}>{sidebarCollapsed ? <ChevronRight aria-hidden="true" /> : <ChevronLeft aria-hidden="true" />}</button>
         </div>
-        <section className="project-sidebar-section">
-          <div className="project-sidebar-header">
-            <button className={`project-selector${projectsOpen ? " selected" : ""}`} title="Projects" onClick={() => setProjectsOpen((open) => !open)}><span className="nav-icon" aria-hidden="true"><FolderKanban /></span><span className="nav-label">Projects</span><small>Manage</small></button>
-          </div>
-        </section>
-        <button title="Skills" onClick={() => setSkillsOpen(true)}><span className="nav-icon" aria-hidden="true"><Sparkles /></span><span className="nav-label">Skills</span></button>
-        <button title="Scheduled tasks" onClick={() => setModal("scheduled-tasks")}><span className="nav-icon" aria-hidden="true"><CalendarClock /></span><span className="nav-label">Scheduled tasks</span></button>
-        <button title="Users" onClick={() => setModal("users")}><span className="nav-icon" aria-hidden="true"><UsersRound /></span><span className="nav-label">Users</span></button>
-        <button title="Settings" onClick={() => { setSettingsTab("general"); setModal("settings"); }}><span className="nav-icon" aria-hidden="true"><Settings /></span><span className="nav-label">Settings</span></button>
+        <div className="member-context"><strong>{memberName || user || "Local household"}</strong><small>{connected ? "Connected locally" : "Disconnected"} · {currentAvatarStateLabel}</small></div>
+        <nav className="shell-navigation" aria-label={workspace === "settings" ? "Settings navigation" : "Workspaces"}>
+          {workspace === "settings" ? <>
+            <button disabled={workspaceRequired} title="Back to workspace" onClick={() => navigate(returnWorkspace)}><ChevronLeft /><span>Back to workspace</span></button>
+            {SETTINGS_SECTIONS.filter(([id]) => (!workspaceRequired || id === "general") && (isAdmin || ["general", "appearance"].includes(id))).map(([id, label]) => { const Icon = SETTINGS_ICONS[id]; return <button key={id} title={label} aria-current={workspace === "settings" && settingsTab === id ? "page" : undefined} onClick={() => { setSettingsTab(id); navigate("settings"); }}><Icon /><span>{label}</span></button>; })}
+          </> : <>
+            {([["conversation", "Conversation", MessageCircle], ["household", "Household", UsersRound], ["projects", "Projects & Tasks", FolderKanban], ["agenda", "Agenda", CalendarClock], ["attention", "Needs your attention", CircleHelp]] as const).map(([id, label, Icon]) => <button key={id} title={label} aria-current={workspace === id ? "page" : undefined} onClick={() => navigate(id)}><Icon /><span>{label}</span>{id === "attention" && questions.length > 0 && <small>{questions.length}</small>}</button>)}
+            <div className="in-progress-projects"><small>In progress</small>{contextProjects.filter((item) => item.status === "active" && !item.is_system_home).map((item) => <button key={item.project_id} title={item.name} onClick={() => { setProjectForView((current) => ({ id: item.project_id, request: current.request + 1 })); navigate("projects"); }}><FolderKanban /><span>{item.name}</span></button>)}</div>
+            <button title="Settings" onClick={() => navigate("settings")}><Settings /><span>Settings</span></button>
+          </>}
+        </nav>
         <QueueWorkloadChart samples={queueHistory} />
         <PdcaActivityChart samples={pdcaHistory} now={queueHistory.at(-1)?.at || Date.now()} />
-      </aside>}
-
-      {projectsOpen ? <ProjectsWorkspace user={user} onClose={() => setProjectsOpen(false)} /> : skillsOpen ? <SkillsWorkspace user={user} onClose={() => setSkillsOpen(false)} /> : <section className="conversation">
+      </aside>
+      <div className="workspace-host" ref={workspaceHostRef}>
+        <div className="shell-toolbar"><span>{memberName || user || "Local household"} · {connected ? currentAvatarStateLabel : "Disconnected"}</span><button ref={drawerToggleRef} aria-label="Toggle At hand" aria-controls="at-hand" aria-expanded={atHandOpen} disabled={!user} onClick={() => changeDrawer({ type: "visibility", open: !atHandOpen })}>{atHandOpen ? <PanelRightClose /> : <PanelRightOpen />} At hand</button></div>
+        {widgetItem?.member === user && (workspace === "agenda" && ["appointments", "reminders"].includes(widgetItem.family) || workspace === "projects" && ["todos", "shopping"].includes(widgetItem.family)) && <section className="card widget-item-detail" aria-label="Widget item details"><button onClick={() => setWidgetItem(undefined)}>Close item</button><h2>Selected item</h2>{selectedWidgetData && selectedWidgetItem ? <CoordinationList data={{ ...selectedWidgetData, items: [selectedWidgetItem] }} timezone={timezone} onAgenda={() => navigate("agenda")} onWork={() => navigate("projects")} onRequest={(draft) => { setPrompt((current) => appendWidgetDraft(current, draft)); navigate("conversation"); }} /> : <p role="status">Item unavailable. Refresh the source or check access.</p>}</section>}
+        <section className="workspace-panel" tabIndex={-1} aria-label="Conversation workspace" hidden={workspace !== "conversation"}>
+        <section className="conversation">
         <header className="topbar">
           <div className="topbar-project"><p className="eyebrow">Main conversation</p><h1>Conversation</h1></div>
           <div className="conversation-day-controls" aria-label="Conversation day history">
@@ -613,51 +618,37 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
         {error && <div className="error" role="alert">{error}</div>}
         <div className="timeline" ref={timelineRef} aria-live="polite">
           {timelineNodes}
+          {questions.length > 0 && <section className="pending-questions" aria-label="Pending questions"><h2>Questions for you</h2>{questions.map((question) => <QuestionCard key={`${user}:${question.question_id}`} question={question} user={user} timezone={timezone} onDone={poll} />)}</section>}
         </div>
         <section className="input-dock">
-          {activeSurface ? (
-            <A2uiSurfaceView surface={activeSurface} clientId={clientId} user={user} onDone={poll} onDismiss={dismissScheduledSurface} onAction={(result) => { if (result.action === "view_scheduled_task" && typeof result.scheduled_task_id === "string") { dismissScheduledSurface(activeSurface.surfaceId); setScheduledTaskForView(result.scheduled_task_id); setModal("scheduled-tasks"); } }} />
-          ) : fallbackQuestion ? (
-            <QuestionCard question={fallbackQuestion} onDone={poll} />
-          ) : (
-            <form className="composer" onSubmit={submit}>
+          {activeSurface && (
+            <A2uiSurfaceView surface={activeSurface} clientId={clientId} user={user} onDone={poll} onDismiss={dismissScheduledSurface} onAction={(result) => { if (result.action === "view_scheduled_task" && typeof result.scheduled_task_id === "string") { dismissScheduledSurface(activeSurface.surfaceId); setScheduledTaskForView(result.scheduled_task_id); navigate("agenda"); } }} />
+          )}
+          <form className="composer" onSubmit={submit}>
               {suggestions.length > 0 && <div className="suggestions">{suggestions.map((item) => <button type="button" key={item} onClick={() => setPrompt(item)}>{item}</button>)}</div>}
               <textarea ref={textareaRef} value={prompt} onKeyDown={onComposerKeyDown} onChange={(event) => setPrompt(event.target.value)} placeholder="Message Alphonse... Type / for commands" rows={1} />
               <button className="send" type="submit">Send</button>
-            </form>
-          )}
+          </form>
         </section>
-      </section>}
-
-      {modal === "scheduled-tasks" && <ScheduledTasksModal actorUserId={user} initialTaskId={scheduledTaskForView} onClose={() => { setScheduledTaskForView(""); setModal(null); }} />}
-      {modal === "settings" && <SettingsModal user={user} initialTab={settingsTab} workspaceRequired={workspaceRequired} enterToSend={enterToSend} desktopStyle={desktopStyle} desktopNotifications={desktopNotifications} onDesktopStyleChange={setDesktopStyle} onDesktopNotificationsChange={setDesktopNotifications} onEnterToSendChange={setEnterToSend} onTimezoneChange={setTimezone} onWorkspaceConfigured={() => setWorkspaceRequired(false)} onTestDesktopNotification={() => void desktopNotifierRef.current.notify({ id: `test:${Date.now()}`, title: "Alphonse test alert", body: "Desktop notifications are ready." }, { ...desktopNotifications, onlyWhenUnfocused: false })} onClose={() => { if (!workspaceRequired) setModal(null); }} />}
-      {modal === "users" && <UsersModal onClose={() => setModal(null)} />}
-      {modal === "onboarding" && <OnboardingModal onComplete={(next) => { setUser(next); setWorkspaceRequired(false); setModal(null); void poll(); }} />}
+        </section></section>
+        {visited.has("projects") && <section className="workspace-panel" tabIndex={-1} aria-label="Projects and tasks workspace" hidden={workspace !== "projects"}><ProjectsWorkspace active={workspace === "projects"} user={user} initialTaskId={workTaskForView} initialProjectId={projectForView.id} selectionRequest={projectForView.request} onAgenda={(id) => { setScheduledTaskForView(id); navigate("agenda"); }} onConversation={(day) => { setConversationDay(day); navigate("conversation"); }} onQuestions={() => navigate("attention")} onClose={() => navigate("conversation")} /></section>}
+        {visited.has("household") && <section className="workspace-panel" tabIndex={-1} aria-label="Household workspace" hidden={workspace !== "household"}><HouseholdWorkspace key={user} user={user} active={workspace === "household"} connected={connected} isAdmin={isAdmin} onProject={(id) => { setProjectForView((current) => ({ id, request: current.request + 1 })); navigate("projects"); }} onAgenda={(id) => { setScheduledTaskForView(id); navigate("agenda"); }} onConversation={(day) => { setConversationDay(day); navigate("conversation"); }} onQuestions={() => navigate("attention")} onMembers={() => { setSettingsTab("members"); navigate("settings"); }} /></section>}
+        {visited.has("agenda") && <section className="workspace-panel" tabIndex={-1} aria-label="Agenda workspace" hidden={workspace !== "agenda"}><AgendaWorkspace key={user} selectionRequest={scheduleViewRequest} member={user} timezone={timezone} active={workspace === "agenda"} initialTaskId={scheduledTaskForView} onProjects={() => navigate("projects")} onConversation={() => navigate("conversation")} /></section>}
+        {visited.has("attention") && <section className="workspace-panel attention-workspace" tabIndex={-1} aria-label="Needs your attention workspace" hidden={workspace !== "attention"}><h1>Needs your attention</h1>{questions.length ? questions.map((question) => <article className="card" key={question.question_id}><p>{question.message}</p><button onClick={() => { navigate("conversation"); window.requestAnimationFrame(() => {
+              const target = Array.from(document.querySelectorAll<HTMLElement>("[data-question-id]")).find((element) => element.dataset.questionId === question.question_id);
+              (target?.querySelector<HTMLElement>(".message") || target)?.scrollIntoView({ block: "center" });
+              target?.querySelector<HTMLElement>("input, textarea, button")?.focus({ preventScroll: true });
+            }); }}>View in conversation</button></article>) : <p>No pending questions.</p>}</section>}
+      {visited.has("settings") && <section className="workspace-panel" tabIndex={-1} aria-label="Settings workspace" hidden={workspace !== "settings"}><SettingsWorkspace isAdmin={isAdmin} user={user} initialTab={settingsTab} workspaceRequired={workspaceRequired} enterToSend={enterToSend} desktopStyle={desktopStyle} desktopNotifications={desktopNotifications} onDesktopStyleChange={changeDesktopStyle} onDesktopNotificationsChange={setDesktopNotifications} onEnterToSendChange={setEnterToSend} onTimezoneChange={setTimezone} onWorkspaceConfigured={() => setWorkspaceRequired(false)} onTestDesktopNotification={() => void desktopNotifierRef.current.notify({ id: `test:${Date.now()}`, title: "Alphonse test alert", body: "Desktop notifications are ready." }, { ...desktopNotifications, onlyWhenUnfocused: false })} onClose={() => { navigate(returnWorkspace); }} /></section>}
+      </div>
+      <AtHandDrawer state={{ ...drawer, open: atHandOpen }} act={changeDrawer} member={user} connected={connected} questionCount={questions.length} questionsMember={questionsMember} onAttention={() => navigate("attention")} onAgenda={(id) => { setScheduleViewRequest((value) => value + 1); setScheduledTaskForView(id || ""); navigate("agenda"); }} toggleRef={drawerToggleRef} saveFailed={drawerSaveFailed} widgetContext={widgetContext} timezone={timezone} onItem={(artifactId, itemId, family) => { setWidgetItem({ member: user, artifactId, itemId, family }); navigate(["appointments", "reminders"].includes(family) ? "agenda" : "projects"); }} onWork={(id, taskId) => { setWorkTaskForView(taskId || ""); setProjectForView((current) => ({ id: taskId ? "" : id, request: current.request + 1 })); navigate("projects"); }} onRequest={(draft) => { setPrompt((current) => appendWidgetDraft(current, draft)); setConversationDay(localDay(timezone)); navigate("conversation"); window.requestAnimationFrame(() => textareaRef.current?.focus()); }} />
+      {modal === "onboarding" && <OnboardingModal onComplete={(next) => { setUser(next); setIsAdmin(true); setWorkspaceRequired(false); setModal(null); void poll(); }} />}
     </main>
   );
 }
 
-function QuestionCard({ question, onDone }: { question: Question; onDone: () => Promise<void> }) {
-  const [value, setValue] = useState("");
-  const [selected, setSelected] = useState<string[]>([]);
-  const answer = async (payload: Record<string, unknown>, text = "") => {
-    await daemonRequest("answer_question", { question_id: question.question_id, payload, text });
-    await onDone();
-  };
-  const cancel = async () => {
-    await daemonRequest("cancel_question", { question_id: question.question_id });
-    await onDone();
-  };
-  return <section className="question-card"><strong>Alphonse needs your input</strong><p>{question.message}</p>
-    {question.kind === "yes_no" && <div className="question-actions"><button onClick={() => void answer({ answer: true }, "yes")}>Yes</button><button onClick={() => void answer({ answer: false }, "no")}>No</button><button className="question-cancel" onClick={() => void cancel()}>Cancel</button></div>}
-    {question.kind === "single_choice" && <><div>{question.choices.map((choice) => <button key={choice.id} onClick={() => void answer({ choice_id: choice.id }, choice.label)}>{choice.label}</button>)}</div><div className="question-actions"><button className="question-cancel" onClick={() => void cancel()}>Cancel</button></div></>}
-    {question.kind === "multi_choice" && <form onSubmit={(event) => { event.preventDefault(); void answer({ choice_ids: selected }, selected.join(", ")); }}><fieldset className="a2ui-choice-picker"><legend>Choose one or more options</legend>{question.choices.map((choice) => <label key={choice.id}><input type="checkbox" checked={selected.includes(choice.id)} onChange={(event) => setSelected((current) => event.target.checked ? [...current, choice.id] : current.filter((id) => id !== choice.id))} />{choice.label}</label>)}</fieldset><span className="question-actions"><button disabled={!selected.length}>Answer</button><button type="button" className="question-cancel" onClick={() => void cancel()}>Cancel</button></span></form>}
-    {question.kind === "datetime" && <form onSubmit={(event) => { event.preventDefault(); void answer({ datetime: value }, value); }}><input type="datetime-local" value={value} onChange={(event) => setValue(event.target.value)} aria-label="Date and time" /><span className="question-actions"><button disabled={!value}>Answer</button><button type="button" className="question-cancel" onClick={() => void cancel()}>Cancel</button></span></form>}
-    {question.kind === "open_text" && <form onSubmit={(event) => { event.preventDefault(); void answer({ text: value }, value); }}><input value={value} onChange={(event) => setValue(event.target.value)} placeholder="Your answer" /><span className="question-actions"><button>Answer</button><button type="button" className="question-cancel" onClick={() => void cancel()}>Cancel</button></span></form>}
-  </section>;
-}
-
-function ModalFrame({ title, children, tabs, className = "", onClose }: { title: string; children: ReactNode; tabs?: ReactNode; className?: string; onClose: () => void }) {
+function ModalFrame({ title, children, tabs, className = "", embedded = false, onClose }: { title: string; children: ReactNode; tabs?: ReactNode; className?: string; embedded?: boolean; onClose: () => void }) {
+  if (embedded) return <section className={`modal embedded-workspace ${className}`}><header><h2>{title}</h2><button onClick={onClose}>← Back</button></header>{tabs && <div className="modal-tabs">{tabs}</div>}<div className="modal-content">{children}</div></section>;
   return <div className="modal-backdrop" role="presentation"><section className={`modal ${className}`} role="dialog" aria-modal="true" aria-label={title}><header><h2>{title}</h2><button onClick={onClose}>Close</button></header>{tabs && <div className="modal-tabs">{tabs}</div>}<div className="modal-content">{children}</div></section></div>;
 }
 
@@ -668,15 +659,20 @@ function OnboardingModal({ onComplete }: { onComplete: (userId: string) => void 
   return <ModalFrame title="Set up Alphonse" onClose={() => undefined}><p>Create the local administrator and choose Alphonse’s Workspace directory. This is the root for users, projects, skills, and agent configuration.</p><label>Workspace directory</label><div className="workspace-picker"><input aria-label="Selected Workspace directory" readOnly value={root} placeholder="Choose a folder in Finder" /><button type="button" onClick={() => void chooseRoot()}>Choose folder…</button></div><label>Your name<input value={name} onChange={(event) => setName(event.target.value)} placeholder="Your name" /></label><button disabled={!name.trim() || !root.trim()} onClick={() => void save()}>Create administrator</button><p>{error}</p></ModalFrame>;
 }
 
-function SettingsModal({ user, initialTab, workspaceRequired, enterToSend, desktopStyle, desktopNotifications, onDesktopStyleChange, onDesktopNotificationsChange, onEnterToSendChange, onTimezoneChange, onWorkspaceConfigured, onTestDesktopNotification, onClose }: { user: string; initialTab: SettingsTab; workspaceRequired: boolean; enterToSend: boolean; desktopStyle: DesktopStyle; desktopNotifications: DesktopNotificationPreferences; onDesktopStyleChange: (value: DesktopStyle) => void; onDesktopNotificationsChange: (value: DesktopNotificationPreferences) => void; onEnterToSendChange: (value: boolean) => void; onTimezoneChange: (value: string) => void; onWorkspaceConfigured: () => void; onTestDesktopNotification: () => void; onClose: () => void }) {
-  const [root, setRoot] = useState(""); const [timezone, setTimezone] = useState("UTC"); const [mirrorAutomationMessages, setMirrorAutomationMessages] = useState(false); const [notice, setNotice] = useState(""); const [workspaceNotice, setWorkspaceNotice] = useState(""); const [savingWorkspace, setSavingWorkspace] = useState(false); const [tab, setTab] = useState<SettingsTab>(initialTab);
+function SettingsWorkspace({ isAdmin, user, initialTab, workspaceRequired, enterToSend, desktopStyle, desktopNotifications, onDesktopStyleChange, onDesktopNotificationsChange, onEnterToSendChange, onTimezoneChange, onWorkspaceConfigured, onTestDesktopNotification, onClose }: { isAdmin: boolean; user: string; initialTab: SettingsTab; workspaceRequired: boolean; enterToSend: boolean; desktopStyle: DesktopStyle; desktopNotifications: DesktopNotificationPreferences; onDesktopStyleChange: (value: DesktopStyle) => void; onDesktopNotificationsChange: (value: DesktopNotificationPreferences) => void; onEnterToSendChange: (value: boolean) => void; onTimezoneChange: (value: string) => void; onWorkspaceConfigured: () => void; onTestDesktopNotification: () => void; onClose: () => void }) {
+  const [root, setRoot] = useState(""); const [timezone, setTimezone] = useState("UTC"); const [mirrorAutomationMessages, setMirrorAutomationMessages] = useState(false); const [notice, setNotice] = useState(""); const [workspaceNotice, setWorkspaceNotice] = useState(""); const [savingWorkspace, setSavingWorkspace] = useState(false); const tab = workspaceRequired ? "general" : initialTab;
+  const [visitedSections, setVisitedSections] = useState<Set<SettingsTab>>(() => new Set([tab]));
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    setVisitedSections((value) => new Set([...value, tab]));
+    headingRef.current?.focus({ preventScroll: true });
+  }, [tab]);
   const [web, setWeb] = useState<WebToolsSettings | null>(null); const [webNotice, setWebNotice] = useState("");
   const [memory, setMemory] = useState<MemorySettings | null>(null); const [memoryNotice, setMemoryNotice] = useState("");
-  useEffect(() => { void daemonRequest<{ workspace_root: string; workspace_configured: boolean; legacy_users_root: string; mirror_automation_messages_to_preferred_channel: boolean }>("settings").then((result) => { setRoot(result.workspace_root || ""); setMirrorAutomationMessages(Boolean(result.mirror_automation_messages_to_preferred_channel)); if (!result.workspace_configured) setNotice("Workspace directory is not configured. Set it here to continue."); }); void daemonRequest<{ timezone: string }>("timezone_settings", { actor_user_id: user }).then((result) => setTimezone(result.timezone)).catch((cause: unknown) => setNotice(timezoneSettingsError(cause))); }, [user]);
-  useEffect(() => { setTab(initialTab); }, [initialTab]);
-  useEffect(() => { if (tab === "tools") void daemonRequest<{ user: { user_id: string } | null }>("current_user").then(async (current) => { if (!current.user) return; const result = await daemonRequest<{ settings: WebToolsSettings }>("web_tools_settings", { actor_user_id: current.user.user_id }); setWeb(result.settings); }).catch((cause: unknown) => setWebNotice(cause instanceof Error ? cause.message : "Web Tools unavailable")); }, [tab]);
-  useEffect(() => { void daemonRequest<{ user: { user_id: string } | null }>("current_user").then(async (current) => { if (!current.user) return; const result = await daemonRequest<{ settings: MemorySettings }>("memory_settings", { actor_user_id: current.user.user_id }); setMemory(result.settings); }).catch((cause: unknown) => setMemoryNotice(cause instanceof Error ? cause.message : "Memory settings unavailable")); }, []);
-  const save = async () => { try { const result = await daemonRequest<{ workspace_root: string; warning_repository_path?: boolean; mirror_automation_messages_to_preferred_channel: boolean }>("save_settings", { actor_user_id: user, workspace_root: root, mirror_automation_messages_to_preferred_channel: mirrorAutomationMessages }); setRoot(result.workspace_root); setMirrorAutomationMessages(Boolean(result.mirror_automation_messages_to_preferred_channel)); onWorkspaceConfigured(); setNotice(result.warning_repository_path ? "Saved. This path is inside the repository; keep it ignored." : "Delivery settings saved."); } catch (cause) { setNotice(timezoneSettingsError(cause)); } };
+  useEffect(() => { if (!isAdmin) return; void daemonRequest<{ workspace_root: string; workspace_configured: boolean; legacy_users_root: string; mirror_automation_messages_to_preferred_channel: boolean }>("settings").then((result) => { setRoot(result.workspace_root || ""); setMirrorAutomationMessages(Boolean(result.mirror_automation_messages_to_preferred_channel)); if (!result.workspace_configured) setNotice("Workspace directory is not configured. Set it here to continue."); }).catch((cause: unknown) => setWorkspaceNotice(timezoneSettingsError(cause))); void daemonRequest<{ timezone: string }>("timezone_settings", { actor_user_id: user }).then((result) => setTimezone(result.timezone)).catch((cause: unknown) => setNotice(timezoneSettingsError(cause))); }, [user, isAdmin]);
+  useEffect(() => { if (isAdmin && tab === "tools" && !web) void daemonRequest<{ user: { user_id: string } | null }>("current_user").then(async (current) => { if (!current.user) return; const result = await daemonRequest<{ settings: WebToolsSettings }>("web_tools_settings", { actor_user_id: current.user.user_id }); setWeb(result.settings); }).catch((cause: unknown) => setWebNotice(cause instanceof Error ? cause.message : "Web Tools unavailable")); }, [tab, isAdmin]);
+  useEffect(() => { if (!isAdmin) return; void daemonRequest<{ user: { user_id: string } | null }>("current_user").then(async (current) => { if (!current.user) return; const result = await daemonRequest<{ settings: MemorySettings }>("memory_settings", { actor_user_id: current.user.user_id }); setMemory(result.settings); }).catch((cause: unknown) => setMemoryNotice(cause instanceof Error ? cause.message : "Memory settings unavailable")); }, [user, isAdmin]);
+  const save = async () => { try { const persisted = await daemonRequest<{ workspace_root: string }>("settings"); const result = await daemonRequest<{ workspace_root: string; warning_repository_path?: boolean; mirror_automation_messages_to_preferred_channel: boolean }>("save_settings", { actor_user_id: user, workspace_root: persisted.workspace_root, mirror_automation_messages_to_preferred_channel: mirrorAutomationMessages }); setMirrorAutomationMessages(Boolean(result.mirror_automation_messages_to_preferred_channel)); onWorkspaceConfigured(); setNotice(result.warning_repository_path ? "Saved. This path is inside the repository; keep it ignored." : "Delivery settings saved."); } catch (cause) { setNotice(timezoneSettingsError(cause)); } };
   const saveWorkspace = async () => { if (!root.trim() || savingWorkspace) return; setSavingWorkspace(true); setWorkspaceNotice("Checking and migrating existing files if needed. The first save can take a few minutes while skills and managed project files are copied."); let workspaceSaved = false; try { const result = await daemonRequest<{ workspace_root: string; warning_repository_path?: boolean }>("save_settings", { actor_user_id: user, workspace_root: root }); setRoot(result.workspace_root); onWorkspaceConfigured(); workspaceSaved = true; setWorkspaceNotice("Workspace saved. Saving timezone…"); const timezoneResult = await daemonRequest<{ timezone: string }>("save_timezone_settings", { actor_user_id: user, timezone }); if (timezoneResult.timezone !== timezone.trim()) throw new Error("The daemon did not persist the requested timezone"); setTimezone(timezoneResult.timezone); onTimezoneChange(timezoneResult.timezone); setWorkspaceNotice(result.warning_repository_path ? `Workspace and timezone saved. Workspace: ${result.workspace_root}. This path is inside the repository; keep it ignored.` : `Workspace and timezone saved. Workspace: ${result.workspace_root}.`); } catch (cause) { const message = cause instanceof Error ? cause.message : "Settings could not be saved."; setWorkspaceNotice(workspaceSaved ? `Workspace saved, but timezone could not be saved: ${message}` : timezoneSettingsError(cause)); } finally { setSavingWorkspace(false); } };
   const chooseWorkspace = async () => { try { const selected = await openFileDialog({ title: "Choose Alphonse Workspace", multiple: false, directory: true }); if (typeof selected === "string") { setRoot(selected); setWorkspaceNotice(""); } } catch (cause) { setWorkspaceNotice(cause instanceof Error ? cause.message : "Folder picker could not be opened."); } };
   const saveWeb = async () => { if (!web) return; try { const current = await daemonRequest<{ user: { user_id: string } | null }>("current_user"); if (!current.user) return; const result = await daemonRequest<{ settings: WebToolsSettings }>("save_web_tools_settings", { actor_user_id: current.user.user_id, values: web }); setWeb(result.settings); setWebNotice("Saved. Newly started tasks can use enabled Web Tools."); } catch (cause) { setWebNotice(cause instanceof Error ? cause.message : "Save failed"); } };
@@ -691,9 +687,12 @@ function SettingsModal({ user, initialTab, workspaceRequired, enterToSend, deskt
   };
   const verify = async (kind: "search" | "fetch") => { try { const current = await daemonRequest<{ user: { user_id: string } | null }>("current_user"); if (!current.user) return; const result = await daemonRequest<{ result: { exception?: { message?: string } } }>("verify_web_tools", { actor_user_id: current.user.user_id, kind }); setWebNotice(result.result.exception?.message || `${kind === "search" ? "SearXNG search" : "Public fetch"} verified.`); } catch (cause) { setWebNotice(cause instanceof Error ? cause.message : "Verification failed"); } };
   const saveMemory = async () => { if (!memory) return; try { const current = await daemonRequest<{ user: { user_id: string } | null }>("current_user"); if (!current.user) return; const result = await daemonRequest<{ settings: MemorySettings }>("save_memory_settings", { actor_user_id: current.user.user_id, values: memory }); setMemory(result.settings); setMemoryNotice("Saved. New tasks use these limits."); } catch (cause) { setMemoryNotice(cause instanceof Error ? cause.message : "Memory settings could not be saved"); } };
-  const tabs = <div className="settings-tabs" role="tablist" aria-label="Settings sections">{(workspaceRequired ? ["general"] as SettingsTab[] : ["general", "appearance", "tools", "integrations", "automations", "model", "system-one", "agent-config"] as SettingsTab[]).map((item) => <button key={item} type="button" role="tab" aria-selected={tab === item} className={tab === item ? "active" : ""} onClick={() => setTab(item)}>{item === "agent-config" ? "Agent configuration" : item === "system-one" ? "System One" : item[0].toUpperCase() + item.slice(1)}</button>)}</div>;
-  return <ModalFrame title={workspaceRequired ? "Set up Alphonse Workspace" : "Settings"} tabs={tabs} className="settings-modal" onClose={onClose}>
-    {tab === "general" && <div className="general-settings">
+  const allowed = isAdmin || ["general", "appearance"].includes(tab);
+  return <section className="settings-workspace">
+    <header className="settings-workspace-header"><div><p className="eyebrow">Settings</p><h1 ref={headingRef} tabIndex={-1}>{workspaceRequired ? "Set up Alphonse Workspace" : SETTINGS_SECTIONS.find(([id]) => id === tab)?.[1]}</h1><p>Edits stay here while you navigate, until you close the app. Use each section’s save button to apply changes. Appearance, messaging and alerts save immediately.</p></div><button disabled={workspaceRequired} onClick={onClose}>← Back to workspace</button></header>
+    {!allowed && <p role="alert">This section requires an administrator.</p>}
+    {workspaceRequired && <p className="settings-setup-notice" role="alert">{isAdmin ? "Choose and save a Workspace directory to continue." : "Ask the administrator to configure the Workspace directory."}</p>}
+    {visitedSections.has("general") && <div hidden={tab !== "general"} className="general-settings">
       <section className="setting-group">
         <div className="setting-group-heading"><h3>Messaging</h3><p>Choose how messages are sent from the desktop conversation.</p></div>
         <label className="setting-row"><input type="checkbox" checked={enterToSend} onChange={(event) => onEnterToSendChange(event.target.checked)} /> Enter sends message</label>
@@ -707,7 +706,7 @@ function SettingsModal({ user, initialTab, workspaceRequired, enterToSend, deskt
         <label className="setting-row"><input type="checkbox" checked={desktopNotifications.onlyWhenUnfocused} disabled={!desktopNotifications.enabled} onChange={(event) => onDesktopNotificationsChange({ ...desktopNotifications, onlyWhenUnfocused: event.target.checked })} /> Notify only when Alphonse is not focused</label>
         <div className="settings-save-actions"><button type="button" disabled={!desktopNotifications.enabled} onClick={onTestDesktopNotification}>Test alert</button></div>
       </section>
-      <section className="setting-group">
+      {isAdmin && <><section className="setting-group">
         <div className="setting-group-heading"><h3>Workspace &amp; time</h3><p>Set the root directory Alphonse uses for users, projects, skills, and agent configuration. This must match the Workspace directory selected by the administrator.</p></div>
         {!root && <p role="alert">No Workspace directory has been configured. Choose one to enable normal use.</p>}
         <label>Workspace directory</label><div className="workspace-picker"><input aria-label="Selected Workspace directory" readOnly value={root} placeholder="Choose a folder in Finder" /><button type="button" onClick={() => void chooseWorkspace()}>Choose folder…</button></div>
@@ -725,9 +724,10 @@ function SettingsModal({ user, initialTab, workspaceRequired, enterToSend, deskt
         {memory && <><label>Ledger limit (bytes)<input type="number" value={memory.max_ledger_bytes} onChange={(event) => setMemory({ ...memory, max_ledger_bytes: Number(event.target.value) })} /></label><label>Compaction limit (words)<input type="number" value={memory.compaction_summary_max_words} onChange={(event) => setMemory({ ...memory, compaction_summary_max_words: Number(event.target.value) })} /></label><div className="settings-save-actions"><button onClick={() => void saveMemory()}>Save memory settings</button>{memoryNotice && <p role="status">{memoryNotice}</p>}</div></>}
         {!memory && memoryNotice && <p role="status">{memoryNotice}</p>}
       </section>
+      </>}
     </div>}
-    {tab === "appearance" && <AppearanceSettingsSection value={desktopStyle} onChange={onDesktopStyleChange} />}
-    {tab === "tools" && <div className="tools-settings">
+    {visitedSections.has("appearance") && <div hidden={tab !== "appearance"}><AppearanceSettingsSection value={desktopStyle} onChange={onDesktopStyleChange} /></div>}
+    {visitedSections.has("tools") && isAdmin && <div hidden={tab !== "tools"} className="tools-settings">
       <CodeModeSettingsSection user={user} />
       <section className="setting-group">
         <div className="setting-group-heading"><h3>Web Tools</h3><p>Run SearXNG separately in Docker with JSON output enabled. Alphonse connects to it; it does not manage Docker.</p></div>
@@ -743,12 +743,14 @@ function SettingsModal({ user, initialTab, workspaceRequired, enterToSend, deskt
       </section>
       <div className="setting-group"><MediaToolsSettingsSection /></div>
     </div>}
-    {tab === "integrations" && <><OptionalAccounts key={user} identity={user} /><IntegrationsSettingsSection user={user} /></>}
-    {tab === "automations" && <AutomationsSettingsSection user={user} />}
-    {tab === "model" && <ModelSettingsSection />}
-    {tab === "system-one" && <SystemOneSettingsSection user={user} />}
-    {tab === "agent-config" && <AgentConfigSettingsSection />}
-  </ModalFrame>;
+    {visitedSections.has("integrations") && isAdmin && <div hidden={tab !== "integrations"}><OptionalAccounts key={user} identity={user} /><IntegrationsSettingsSection user={user} /></div>}
+    {visitedSections.has("automations") && isAdmin && <div hidden={tab !== "automations"}><AutomationsSettingsSection user={user} /></div>}
+    {visitedSections.has("model") && isAdmin && <div hidden={tab !== "model"}><ModelSettingsSection /></div>}
+    {visitedSections.has("system-one") && isAdmin && <div hidden={tab !== "system-one"}><SystemOneSettingsSection user={user} /></div>}
+    {visitedSections.has("agent-config") && isAdmin && <div hidden={tab !== "agent-config"}><AgentConfigSettingsSection /></div>}
+    {visitedSections.has("skills") && isAdmin && <div className="settings-skills-screen" hidden={tab !== "skills"}><SkillsWorkspace user={user} /></div>}
+    {visitedSections.has("members") && isAdmin && <div hidden={tab !== "members"}><UsersModal embedded onClose={onClose} /></div>}
+  </section>;
 }
 
 function CodeModeSettingsSection({ user }: { user: string }) {
@@ -806,29 +808,26 @@ function CodeModeSettingsSection({ user }: { user: string }) {
 }
 
 function AppearanceSettingsSection({ value, onChange }: { value: DesktopStyle; onChange: (value: DesktopStyle) => void }) {
-  const options: Array<{ value: DesktopStyle; label: string; description: string }> = [
-    { value: "classic", label: "Classic", description: "The current green editorial style with Fraunces and DM Mono." },
-    { value: "modern", label: "Modern", description: "A crisp Helvetica interface with neutral surfaces and teal accents." },
-  ];
   return <section className="settings-panel appearance-settings">
-    <div><h3>Appearance</h3><p>Choose how Alphonse Desktop looks on this Mac. Your selection applies immediately.</p></div>
-    <div className="style-picker" role="radiogroup" aria-label="Desktop style">
-      {options.map((option) => <button key={option.value} type="button" role="radio" aria-checked={value === option.value} className={`style-preview ${option.value}${value === option.value ? " selected" : ""}`} onClick={() => onChange(option.value)}>
-        <span className="style-preview-window" aria-hidden="true"><span className="style-preview-sidebar" /><span className="style-preview-content"><span /><span /><i /></span></span>
-        <span className="style-preview-copy"><strong>{option.label}</strong><small>{option.description}</small></span>
-        <span className="style-preview-selected">{value === option.value ? "Selected" : "Select"}</span>
-      </button>)}
-    </div>
+    <div><h3>Appearance</h3><p>Warm, quiet surfaces for everyday life. Your preference applies immediately and is saved for your household profile on this Mac.</p></div>
+    <label>Color appearance
+      <select value={value} onChange={(event) => onChange(event.target.value as DesktopStyle)}>
+        <option value="system">Follow system</option>
+        <option value="light">Light</option>
+        <option value="dark">Dark</option>
+      </select>
+    </label>
+    <div className="typography-preview"><h4>A little help, every day.</h4><p>Manrope headings · DM Sans reading and controls</p><small>Bundled fonts work offline. Motion follows your system’s reduced-motion preference.</small></div>
   </section>;
 }
 
 function MediaToolsSettingsSection() {
-  const [settings, setSettings] = useState<MediaToolsSettings | null>(null); const [notice, setNotice] = useState(""); const [verifying, setVerifying] = useState<"" | "tts" | "stt" | "ocr">(""); const [samples, setSamples] = useState<Record<string, string>>({ tts: "Alphonse text-to-speech verification.", stt: "", ocr: "" });
+  const [settings, setSettings] = useState<MediaToolsSettings | null>(null); const [notice, setNotice] = useState(""); const [verifying, setVerifying] = useState<"" | "tts" | "stt">(""); const [samples, setSamples] = useState<Record<string, string>>({ tts: "Alphonse text-to-speech verification.", stt: "" });
   const [recording, setRecording] = useState(false); const recorder = useRef<MediaRecorder | null>(null); const recordingStartedAt = useRef(0); const recordingTimeout = useRef<number | null>(null);
   const load = async () => { const current = await daemonRequest<{ user: { user_id: string } | null }>("current_user"); if (!current.user) return; const result = await daemonRequest<{ settings: MediaToolsSettings }>("media_tools_settings", { actor_user_id: current.user.user_id }); setSettings(result.settings); };
   useEffect(() => { void load().catch((cause: unknown) => setNotice(cause instanceof Error ? cause.message : "Media Tools unavailable")); }, []);
-  const save = async (kind: "tts" | "stt" | "ocr") => { if (!settings) return; try { const current = await daemonRequest<{ user: { user_id: string } | null }>("current_user"); if (!current.user) return; const result = await daemonRequest<{ settings: MediaToolsSettings }>("save_media_tools_settings", { actor_user_id: current.user.user_id, kind, values: settings[kind] }); setSettings(result.settings); setNotice(`${kind.toUpperCase()} saved; verify it to mark it ready.`); } catch (cause) { setNotice(cause instanceof Error ? cause.message : "Save failed"); } };
-  const verify = async (kind: "tts" | "stt" | "ocr") => { setVerifying(kind); setNotice(kind === "ocr" ? "Verifying OCR with the selected image…" : `Verifying ${kind.toUpperCase()}… this may take a while while the local model loads.`); try { const current = await daemonRequest<{ user: { user_id: string } | null }>("current_user"); if (!current.user) return; const result = await daemonRequest<{ settings: MediaToolsSettings; result: { exception?: { message?: string } } }>("verify_media_tools", { actor_user_id: current.user.user_id, kind, sample: samples[kind] }); setSettings(result.settings); setNotice(result.result.exception?.message || `${kind.toUpperCase()} verified.`); } catch (cause) { setNotice(cause instanceof Error ? cause.message : "Verification failed"); } finally { setVerifying(""); } };
+  const save = async (kind: "tts" | "stt") => { if (!settings) return; try { const current = await daemonRequest<{ user: { user_id: string } | null }>("current_user"); if (!current.user) return; const result = await daemonRequest<{ settings: MediaToolsSettings }>("save_media_tools_settings", { actor_user_id: current.user.user_id, kind, values: settings[kind] }); setSettings(result.settings); setNotice(`${kind.toUpperCase()} saved; verify it to mark it ready.`); } catch (cause) { setNotice(cause instanceof Error ? cause.message : "Save failed"); } };
+  const verify = async (kind: "tts" | "stt") => { setVerifying(kind); setNotice(`Verifying ${kind.toUpperCase()}… this may take a while while the local model loads.`); try { const current = await daemonRequest<{ user: { user_id: string } | null }>("current_user"); if (!current.user) return; const result = await daemonRequest<{ settings: MediaToolsSettings; result: { exception?: { message?: string } } }>("verify_media_tools", { actor_user_id: current.user.user_id, kind, sample: samples[kind] }); setSettings(result.settings); setNotice(result.result.exception?.message || `${kind.toUpperCase()} verified.`); } catch (cause) { setNotice(cause instanceof Error ? cause.message : "Verification failed"); } finally { setVerifying(""); } };
   const stopTracks = (stream: MediaStream | null) => stream?.getTracks().forEach((track) => track.stop());
   const stopRecording = () => { if (recordingTimeout.current !== null) { window.clearTimeout(recordingTimeout.current); recordingTimeout.current = null; } if (recorder.current?.state === "recording") recorder.current.stop(); };
   const startRecording = async () => {
@@ -858,12 +857,12 @@ function MediaToolsSettingsSection() {
   };
   useEffect(() => () => { if (recordingTimeout.current !== null) window.clearTimeout(recordingTimeout.current); stopRecording(); }, []);
   if (!settings) return <section><h3>Local Media Tools</h3><p>{notice || "Loading…"}</p></section>;
-  const field = (kind: "tts" | "stt" | "ocr", key: string, label: string, type = "text") => <div className="input-row"><label>{label}<input type={type} value={String((settings[kind] as Record<string, unknown>)[key] ?? "")} onChange={(event) => setSettings({ ...settings, [kind]: { ...settings[kind], [key]: type === "number" ? Number(event.target.value) : event.target.value } })} /></label></div>;
-  const toggle = (kind: "tts" | "stt" | "ocr", key: string, label: string) => <label className="setting-row"><input type="checkbox" checked={Boolean((settings[kind] as Record<string, unknown>)[key])} onChange={(event) => setSettings({ ...settings, [kind]: { ...settings[kind], [key]: event.target.checked } })} /> {label}</label>;
-  const verification = (kind: "tts" | "stt" | "ocr") => <p>{verifying === kind && <><span className="verification-spinner" aria-label="Verifying" /> Verifying {kind.toUpperCase()}… </>}Ready: {String(settings[kind].available)}. {settings[kind].verification.error || settings[kind].verification.preview || "Not yet verified."}</p>;
-  const verifyLabel = (kind: "tts" | "stt" | "ocr", label: string) => verifying === kind ? `Verifying ${kind.toUpperCase()}…` : label;
+  const field = (kind: "tts" | "stt", key: string, label: string, type = "text") => <div className="input-row"><label>{label}<input type={type} value={String((settings[kind] as Record<string, unknown>)[key] ?? "")} onChange={(event) => setSettings({ ...settings, [kind]: { ...settings[kind], [key]: type === "number" ? Number(event.target.value) : event.target.value } })} /></label></div>;
+  const toggle = (kind: "tts" | "stt", key: string, label: string) => <label className="setting-row"><input type="checkbox" checked={Boolean((settings[kind] as Record<string, unknown>)[key])} onChange={(event) => setSettings({ ...settings, [kind]: { ...settings[kind], [key]: event.target.checked } })} /> {label}</label>;
+  const verification = (kind: "tts" | "stt") => <p>{verifying === kind && <><span className="verification-spinner" aria-label="Verifying" /> Verifying {kind.toUpperCase()}… </>}Ready: {String(settings[kind].available)}. {settings[kind].verification.error || settings[kind].verification.preview || "Not yet verified."}</p>;
+  const verifyLabel = (kind: "tts" | "stt", label: string) => verifying === kind ? `Verifying ${kind.toUpperCase()}…` : label;
   return <section className="media-tools-settings">
-    <div className="setting-group-heading"><h3>Local Media Tools</h3><p>Install models and runtimes separately, then save and verify each backend. These tools are not yet exposed to conversations.</p></div>
+    <div className="setting-group-heading"><h3>Local Media Tools</h3><p>Install models and runtimes separately, then save and verify each backend. Images are processed by the selected inference model; skills guide their interpretation.</p></div>
     <section className="media-tool-panel">
       <div className="media-tool-panel-heading"><h4>Qwen TTS</h4><span className={`feature-status ${settings.tts.enabled ? "enabled" : "disabled"}`}>{settings.tts.enabled ? "Enabled" : "Disabled"}</span></div>{toggle("tts", "enabled", "Enable Qwen TTS")}{field("tts", "model_id", "Model ID or local path")}{field("tts", "device_map", "Device map")}{field("tts", "dtype", "Precision")}{field("tts", "language", "Language")}{field("tts", "speaker", "Speaker")}{field("tts", "instruct", "Voice instruction")}{field("tts", "attn_implementation", "Attention implementation")}{toggle("tts", "local_files_only", "Use local model files only")}{verification("tts")}
       <div className="input-row"><label>Test phrase<input disabled={verifying !== ""} value={samples.tts} onChange={(event) => setSamples({ ...samples, tts: event.target.value })} /></label></div>
@@ -877,12 +876,7 @@ function MediaToolsSettingsSection() {
       <div className="input-row"><label>Audio sample path (advanced)<input disabled={verifying !== "" || recording} value={samples.stt} onChange={(event) => setSamples({ ...samples, stt: event.target.value })} /></label></div>
       <div className="settings-save-actions"><button disabled={verifying !== "" || recording} onClick={() => void save("stt")}>Save STT</button><button disabled={verifying !== "" || recording} onClick={() => void verify("stt")}>{verifyLabel("stt", "Verify Whisper file")}</button></div>
     </section>
-    <section className="media-tool-panel">
-      <div className="media-tool-panel-heading"><div className="media-tool-panel-title"><h4>Ollama OCR</h4>{notice.startsWith("OCR") && <p className="media-tool-notice" role="status">{notice}</p>}</div><span className={`feature-status ${settings.ocr.enabled ? "enabled" : "disabled"}`}>{settings.ocr.enabled ? "Enabled" : "Disabled"}</span></div>{toggle("ocr", "enabled", "Enable OCR")}{field("ocr", "ollama_base_url", "Ollama URL")}{field("ocr", "model_id", "Vision model")}{field("ocr", "timeout_seconds", "Timeout seconds", "number")}{verification("ocr")}
-      <div className="input-row"><label>Image sample path<input disabled={verifying !== ""} value={samples.ocr} onChange={(event) => setSamples({ ...samples, ocr: event.target.value })} /></label></div>
-      <div className="settings-save-actions"><button disabled={verifying !== ""} onClick={() => void save("ocr")}>Save OCR</button><button disabled={verifying !== ""} onClick={() => void verify("ocr")}>{verifyLabel("ocr", "Verify OCR")}</button></div>
-    </section>
-    {notice && !notice.startsWith("OCR") && <p role="status">{notice}</p>}
+    {notice && <p role="status">{notice}</p>}
   </section>;
 }
 
@@ -930,10 +924,6 @@ function calendarDateLabel(value: string | null | undefined, timezone: string): 
   }
 }
 
-function sourceLabel(source: string): string {
-  return source.replace(/[-_]/g, " ").replace(/\b\w/g, (character) => character.toUpperCase());
-}
-
 function timezoneSettingsError(cause: unknown): string {
   const message = cause instanceof Error ? cause.message : "Timezone settings unavailable";
   return message.includes("unknown_method") ? "Restart the Alphonse daemon once to enable timezone settings." : message;
@@ -949,76 +939,58 @@ function taskProgressIds(events: Array<{ event: { type: string; name?: string; v
   return [...ids];
 }
 
-function MessageBubble({ message, timezone, projectName = "", renderMarkdown = true }: { message: ChatMessage; timezone: string; projectName?: string; renderMarkdown?: boolean }) {
-  const timestamp = message.created_at ? formatMessageTime(message.created_at, timezone) : null;
-  return <article className={`message ${message.role}`}>
-    {message.source && !["desktop", "ledger"].includes(message.source) && <small className="message-source" title={`Sent from ${message.source}`}>↗ {sourceLabel(message.source)}</small>}
-    {message.project_id && <small className="message-project-association" title="Task project context">Project · {projectName || message.project_id}</small>}
-    {message.role === "assistant" && renderMarkdown ? <div className="message-markdown"><ReactMarkdown remarkPlugins={REMARK_PLUGINS}>{message.content}</ReactMarkdown></div> : message.content}
-    {timestamp && <time className="message-timestamp" dateTime={message.created_at} title={timestamp.tooltip}>{timestamp.visible}</time>}
-  </article>;
-}
-
-const MemoizedMessageBubble = memo(MessageBubble);
-
-function TaskProgressBubble({ surface, archived = false }: { surface: A2uiSurface; archived?: boolean }) {
-  const text = (id: string) => String(surface.components[id]?.text || "").trim();
-  const steps = Object.values(surface.components).filter((component) => component.id.startsWith("step_") && component.text).sort((left, right) => left.id.localeCompare(right.id, undefined, { numeric: true }));
-  const taskContext = text("task_context");
-  const criteria = text("criteria").replace(/^Acceptance criteria\n?/, "").trim();
-  const visibleCriteria = criteria === "- (none)" ? "" : criteria;
-  const hasConcreteProgress = Boolean(visibleCriteria || text("intention") || steps.length || text("tool") || taskContext);
-  const Container = archived ? "details" : "div";
-  return <article className="message assistant task-progress-bubble" aria-live="polite">
-    <Container className="task-progress-log">
-      {archived && <summary>Work log</summary>}
-    <div className="task-progress-content">
-      {!archived && <div className="task-progress-heading"><span className="task-progress-spinner" aria-hidden="true">◌</span><strong>Alphonse is working</strong></div>}
-      {!hasConcreteProgress && text("summary") && <p>{text("summary")}</p>}
-      {visibleCriteria && <section><small>Acceptance criteria</small><div className="task-progress-checklist"><ReactMarkdown remarkPlugins={[remarkGfm]}>{acceptanceCriteriaMarkdown(visibleCriteria)}</ReactMarkdown></div></section>}
-      {text("intention") && <section><small>Intention</small><p>{text("intention").replace(/^Intention:\s*/, "")}</p></section>}
-      {steps.length ? <section className="task-progress-trace"><small>Work log</small>{steps.map((step) => {
-        const [summary, ...detail] = String(step.text || "").split("\n");
-        return <details className="task-progress-step" key={step.id}><summary>{summary}</summary><pre className="task-progress-detail">{detail.filter((line) => line !== "Details:").join("\n") || "No additional action details."}</pre></details>;
-      })}</section> : <>{text("tool") && <p className="task-progress-detail">{text("tool")}</p>}{text("arguments") && <pre className="task-progress-detail">{text("arguments")}</pre>}{text("result") && <pre className="task-progress-detail">{text("result")}</pre>}</>}
-      {taskContext && <details className="task-progress-context"><summary>Task context</summary><pre className="task-progress-detail">{taskContext}</pre></details>}
-    </div>
-    </Container>
-  </article>;
-}
-
 function questionTaskId(surface: A2uiSurface): string {
   const question = surface.dataModel.question;
   return typeof question === "object" && question !== null && "task_id" in question ? String((question as { task_id?: unknown }).task_id || "") : "";
 }
 
-function acceptanceCriteriaMarkdown(value: string): string {
-  return value.split("\n").map((line) => line.replace(/^\s*\d+\s*\.\s*-?\s*(\[[ xX]\])\s*/, "- $1 ")).join("\n");
+function AgendaWorkspace({ member, timezone, active, initialTaskId, selectionRequest = 0, onProjects, onConversation }: { member: string; timezone: string; active: boolean; initialTaskId: string; selectionRequest?: number; onProjects: () => void; onConversation: () => void }) {
+  const [selected, setSelected] = useState(initialTaskId);
+  const [revision, setRevision] = useState(0);
+  const [managing, setManaging] = useState(Boolean(initialTaskId));
+  useEffect(() => { if (initialTaskId) { setSelected(initialTaskId); setManaging(true); } }, [initialTaskId, active, selectionRequest]);
+  return <><Agenda revision={revision} member={member} timezone={timezone} active={active} onSchedule={(id) => { setSelected(id); setManaging(true); }} onProjects={onProjects} />
+    <div className="agenda-toolbar"><button aria-expanded={managing} onClick={() => setManaging(!managing)}>{managing ? "Hide schedule management" : "Manage schedules & execution history"}</button><button onClick={onConversation}>Create a schedule in Conversation</button></div>
+    {managing && active && <ScheduleManager onChanged={() => setRevision(value => value + 1)} embedded actorUserId={member} initialTaskId={selected} onClose={() => setManaging(false)} />}</>;
 }
 
-function ScheduledTasksModal({ actorUserId, initialTaskId = "", onClose }: { actorUserId: string; initialTaskId?: string; onClose: () => void }) {
+function ScheduleManager({ embedded = false, actorUserId, initialTaskId = "", onClose, onChanged }: { onChanged: () => void; embedded?: boolean; actorUserId: string; initialTaskId?: string; onClose: () => void }) {
   const [users, setUsers] = useState<ManagedUser[]>([]); const [ownerId, setOwnerId] = useState(actorUserId); const [status, setStatus] = useState("");
   const [tasks, setTasks] = useState<ScheduledTask[]>([]); const [selected, setSelected] = useState<ScheduledTask | null>(null); const [executions, setExecutions] = useState<ScheduledExecution[]>([]);
   const [name, setName] = useState(""); const [prompt, setPrompt] = useState(""); const [notice, setNotice] = useState(""); const [removeOpen, setRemoveOpen] = useState(false);
+  const requests = useRef({ list: 0, history: 0 });
+  const initialSelection = useRef("");
+  const [loading, setLoading] = useState(true);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  useEffect(() => () => { requests.current.list++; requests.current.history++; }, []);
   const isAdmin = users.some((item) => item.user_id === actorUserId && item.role === "admin");
   const load = useCallback(async () => {
+    const request = ++requests.current.list;
+    requests.current.history++;
+    setLoading(true); setTasks([]); setExecutions([]);
     try {
       const [taskResult, userResult] = await Promise.all([
-        daemonRequest<{ tasks: ScheduledTask[] }>("scheduled_tasks", { actor_user_id: actorUserId, owner_user_id: ownerId, status }),
+        daemonRequest<{ tasks: ScheduledTask[] }>("scheduled_tasks", { actor_user_id: actorUserId, owner_user_id: ownerId, status, limit: 1000 }),
         daemonRequest<{ users: ManagedUser[] }>("users"),
       ]);
+      if (request !== requests.current.list) return;
       setTasks(taskResult.tasks.filter(task => task.job_kind !== "project_check")); setUsers(userResult.users); setNotice("");
       setSelected((current) => current ? taskResult.tasks.find((task) => task.scheduled_task_id === current.scheduled_task_id) || null : null);
-    } catch (cause) { setNotice(cause instanceof Error ? cause.message : "Scheduled tasks could not be loaded."); }
+    } catch (cause) { if (request === requests.current.list) { setTasks([]); setSelected(null); setExecutions([]); setNotice(cause instanceof Error ? cause.message : "Scheduled tasks could not be loaded."); } }
+    finally { if (request === requests.current.list) setLoading(false); }
   }, [actorUserId, ownerId, status]);
   useEffect(() => { void load(); }, [load]);
   const select = async (task: ScheduledTask) => {
-    setSelected(task); setName(task.name); setPrompt(task.prompt); setRemoveOpen(false);
-    try { const result = await daemonRequest<{ executions: ScheduledExecution[] }>("scheduled_executions", { actor_user_id: actorUserId, scheduled_task_id: task.scheduled_task_id, limit: 8 }); setExecutions(result.executions); } catch (cause) { setNotice(cause instanceof Error ? cause.message : "Execution history could not be loaded."); }
+    const request = ++requests.current.history;
+    setHistoryLoading(true);
+    setSelected(task); setExecutions([]); setName(task.name); setPrompt(task.prompt); setRemoveOpen(false);
+    try { const result = await daemonRequest<{ executions: ScheduledExecution[] }>("scheduled_executions", { actor_user_id: actorUserId, scheduled_task_id: task.scheduled_task_id, limit: 8 }); if (request === requests.current.history) setExecutions(result.executions); } catch (cause) { if (request === requests.current.history) setNotice(cause instanceof Error ? cause.message : "Execution history could not be loaded."); }
+    finally { if (request === requests.current.history) setHistoryLoading(false); }
   };
   useEffect(() => {
-    const task = tasks.find((item) => item.scheduled_task_id === initialTaskId);
-    if (task && selected?.scheduled_task_id !== task.scheduled_task_id) void select(task);
+    const target = initialTaskId !== initialSelection.current ? initialTaskId : selected?.scheduled_task_id || initialTaskId;
+    const task = tasks.find((item) => item.scheduled_task_id === target);
+    if (task) { initialSelection.current = initialTaskId; void select(task); }
   }, [initialTaskId, tasks]);
   const mutate = async (method: string, extra: Record<string, unknown> = {}) => {
     if (!selected) return;
@@ -1026,22 +998,23 @@ function ScheduledTasksModal({ actorUserId, initialTaskId = "", onClose }: { act
       await daemonRequest(method, { actor_user_id: actorUserId, scheduled_task_id: selected.scheduled_task_id, ...extra });
       setNotice(method === "delete_scheduled_task" ? "Task permanently deleted." : "Task updated."); setRemoveOpen(false);
       if (method === "delete_scheduled_task") { setSelected(null); setExecutions([]); }
-      await load();
+      await load(); onChanged();
     } catch (cause) { setNotice(cause instanceof Error ? cause.message : "Scheduled task could not be updated."); }
   };
   const editable = selected?.status === "active" || selected?.status === "paused";
-  return <ModalFrame title="Scheduled tasks" onClose={onClose}>
+  return <ModalFrame embedded={embedded} title="Manage schedules" onClose={onClose}>
     <CheckAgenda identity={actorUserId} />
     {isAdmin && <div className="form-field"><label htmlFor="scheduled-owner">User</label><select id="scheduled-owner" value={ownerId} onChange={(event) => { setOwnerId(event.target.value); setSelected(null); setExecutions([]); }}>{users.map((item) => <option key={item.user_id} value={item.user_id}>{item.display_name}</option>)}</select></div>}
     <div className="form-field"><label htmlFor="scheduled-status">Status</label><select id="scheduled-status" value={status} onChange={(event) => { setStatus(event.target.value); setSelected(null); setExecutions([]); }}><option value="">All statuses</option>{["active", "paused", "completed", "cancelled", "failed"].map((value) => <option key={value} value={value}>{value}</option>)}</select></div>
-    <div className="stack scheduled-task-list">{tasks.length ? tasks.map((task) => {
+    <div className="stack scheduled-task-list">{loading ? <p role="status">Loading schedules…</p> : tasks.length ? tasks.map((task) => {
       const calendar = calendarDateLabel(task.next_run_at, task.timezone);
       return <button className={`scheduled-task-row${task.scheduled_task_id === selected?.scheduled_task_id ? " selected" : ""}`} key={task.scheduled_task_id} onClick={() => void select(task)}>
         <span className="scheduled-task-row-calendar" aria-label={calendar.pending ? "Schedule pending" : `Next run on ${calendar.month} ${calendar.day}`}><span>{calendar.month}</span><strong>{calendar.day}</strong></span>
         <span className="scheduled-task-row-summary"><span className="scheduled-task-row-title"><strong>{task.name}</strong><small className="scheduled-task-row-status">{task.status}</small></span><small>{calendar.pending ? "Schedule pending" : `Next: ${dateLabel(task.next_run_at, task.timezone)}`}</small><small>{scheduleLabel(task.schedule)} · {task.timezone}</small><small>Owner: {users.find((item) => item.user_id === task.owner_user_id)?.display_name || task.owner_user_id} · Latest: {task.latest_execution?.status || "not run"}</small></span>
       </button>;
     }) : <p>No scheduled tasks match this filter.</p>}</div>
-    {selected && <section className="scheduled-task-detail">
+    {tasks.length >= 1000 && <p role="status">Showing up to 1,000 schedules. Filter by status to narrow the list.</p>}
+    {selected && !loading && <section className="scheduled-task-detail">
       <div className="form-field"><label htmlFor="scheduled-name">Task name</label><input id="scheduled-name" value={name} disabled={!editable} onChange={(event) => setName(event.target.value)} /></div>
       <div className="form-field"><label htmlFor="scheduled-prompt">Stored prompt</label><textarea id="scheduled-prompt" value={prompt} disabled={!editable} onChange={(event) => setPrompt(event.target.value)} rows={6} /></div>
       <div className="form-field task-readonly"><label>Owner</label><output>{users.find((item) => item.user_id === selected.owner_user_id)?.display_name || selected.owner_user_id}</output><small>{selected.owner_user_id}</small></div>
@@ -1049,13 +1022,13 @@ function ScheduledTasksModal({ actorUserId, initialTaskId = "", onClose }: { act
       {editable && <button onClick={() => void mutate("update_scheduled_task", { name, prompt })}>Save name and prompt</button>}
       <div className="dialog-actions">{selected.status === "active" && <button onClick={() => void mutate("pause_schedule")}>Suspend</button>}{selected.status === "paused" && <button onClick={() => void mutate("resume_schedule")}>Resume</button>}<button onClick={() => setRemoveOpen((value) => !value)}>Remove…</button></div>
       {removeOpen && <div className="form-field destructive-action"><p>Cancel keeps this task and its execution history. Permanent deletion removes both.</p><div className="dialog-actions">{["active", "paused"].includes(selected.status) && <button onClick={() => void mutate("cancel_schedule")}>Cancel task</button>}<button onClick={() => void mutate("delete_scheduled_task")}>Delete permanently</button></div></div>}
-      <h3>Recent executions</h3><div className="execution-list">{executions.length ? executions.map((execution) => <p key={execution.run_id}><strong>{execution.status}</strong> · {dateLabel(execution.started_at)}{execution.error || execution.last_error ? ` · ${execution.error || execution.last_error}` : ""}</p>) : <p>No executions yet.</p>}</div>
+      <h3>Recent executions</h3><div className="execution-list">{historyLoading ? <p role="status">Loading execution history…</p> : executions.length ? executions.map((execution) => <p key={execution.run_id}><strong>{execution.status}</strong> · {dateLabel(execution.started_at)}{execution.error || execution.last_error ? ` · ${execution.error || execution.last_error}` : ""}</p>) : <p>No executions yet.</p>}</div>
     </section>}
-    <p>{notice}</p>
+    <p>{notice}</p><p>Create schedules by asking Alphonse in Conversation. For a different time or recurrence, cancel the existing schedule and ask Alphonse for a replacement.</p>
   </ModalFrame>;
 }
 
-function UsersModal({ onClose }: { onClose: () => void }) {
+function UsersModal({ embedded = false, onClose }: { embedded?: boolean; onClose: () => void }) {
   const [users, setUsers] = useState<ManagedUser[]>([]); const [selectedId, setSelectedId] = useState("");
   const [name, setName] = useState(""); const [role, setRole] = useState("member"); const [active, setActive] = useState(true); const [context, setContext] = useState(""); const [notice, setNotice] = useState(""); const [addresses, setAddresses] = useState<ManagedAddress[]>([]); const [communicationOptions, setCommunicationOptions] = useState<Array<{ integration_id: string; provider_key: string; label: string }>>([]); const [showCommunicationForm, setShowCommunicationForm] = useState(false); const [integrationId, setIntegrationId] = useState(""); const [providerUserId, setProviderUserId] = useState(""); const [channelTarget, setChannelTarget] = useState(""); const [confirmation, setConfirmation] = useState("");
   const load = useCallback(async () => { const result = await daemonRequest<{ users: ManagedUser[] }>("users"); setUsers(result.users); return result.users; }, []);
@@ -1070,7 +1043,7 @@ function UsersModal({ onClose }: { onClose: () => void }) {
   const removeAddress = async (addressId: string) => { await daemonRequest("remove_user_address", { address_id: addressId }); await load(); setAddresses((current) => current.filter((item) => item.address_id !== addressId)); };
   const remove = async () => { if (!selectedId) return; try { const result = await daemonRequest<{ deleted: number }>("delete_user", { user_id: selectedId, confirmation }); if (result.deleted) { beginCreate(); await load(); setNotice("User and all owned data permanently deleted."); } } catch (cause) { setNotice(cause instanceof Error ? cause.message : "User could not be deleted."); } };
   const beginCreate = () => { setSelectedId(""); setName(""); setRole("member"); setActive(true); setContext("# User Context\n"); setAddresses([]); setShowCommunicationForm(false); setNotice(""); setConfirmation(""); };
-  return <ModalFrame title="Users" onClose={onClose}>
+  return <ModalFrame embedded={embedded} title={embedded ? "Household" : "Users"} onClose={onClose}>
     <div className="stack">{users.map((item) => <button className={item.user_id === selectedId ? "selected user-card" : "user-card"} key={item.user_id} onClick={() => void select(item)}><span className="user-card-icon" aria-hidden="true">👤</span><span>{item.display_name}<small>{item.is_active ? item.role : "inactive"}</small></span></button>)}<button onClick={beginCreate}>New user</button></div>
     <div className="form-field"><label htmlFor="user-name">Name</label><input id="user-name" value={name} onChange={(event) => setName(event.target.value)} placeholder="Name" /></div>
     <div className="form-field"><label htmlFor="user-role">Role</label><select id="user-role" value={role} onChange={(event) => setRole(event.target.value)}><option value="member">Member</option><option value="caregiver">Caregiver</option><option value="admin">Admin</option></select></div>
@@ -1082,32 +1055,46 @@ function UsersModal({ onClose }: { onClose: () => void }) {
   </ModalFrame>;
 }
 
-function ProjectsWorkspace({ user, onClose }: { user: string; onClose: () => void }) {
-  const [projects, setProjects] = useState<ManagedProject[]>([]); const [users, setUsers] = useState<ManagedUser[]>([]); const [ownerId, setOwnerId] = useState(user); const [filter, setFilter] = useState(""); const [showCreate, setShowCreate] = useState(false);
+function ProjectsWorkspace({ active, user, initialTaskId = "", initialProjectId = "", selectionRequest = 0, onClose, onAgenda, onConversation, onQuestions }: { active: boolean; user: string; initialTaskId?: string; initialProjectId?: string; selectionRequest?: number; onClose: () => void; onAgenda: (id: string) => void; onConversation: (day: string) => void; onQuestions: () => void }) {
+  const [projects, setProjects] = useState<ManagedProject[]>([]); const [users, setUsers] = useState<ManagedUser[]>([]); const [ownerId, setOwnerId] = useState(user); const [filter, setFilter] = useState("active"); const [showCreate, setShowCreate] = useState(false);
   const [selectedProject, setSelectedProject] = useState<ManagedProject | null>(null);
+  const [projectsLoading, setProjectsLoading] = useState(true);
+  const [projectsError, setProjectsError] = useState("");
   const [name, setName] = useState(""); const [description, setDescription] = useState(""); const [visibility, setVisibility] = useState<"private" | "shared">("private"); const [rootPath, setRootPath] = useState(""); const [mode, setMode] = useState<"create" | "import">("create"); const [notice, setNotice] = useState(""); const [newMemberIds, setNewMemberIds] = useState<string[]>([]);
-  const load = useCallback(async () => { try { const [projectResult, userResult] = await Promise.all([daemonRequest<{ projects: ManagedProject[] }>("manageable_projects", { user, status: filter }), daemonRequest<{ users: ManagedUser[] }>("users")]); setProjects(projectResult.projects); setUsers(userResult.users); setOwnerId((current) => userResult.users.some((item) => item.user_id === current) ? current : userResult.users.find((item) => item.user_id === user)?.user_id || userResult.users.find((item) => item.role === "admin")?.user_id || ""); } catch (cause) { setNotice(cause instanceof Error ? cause.message : "Projects could not be loaded."); } }, [filter, user]);
+  const load = useCallback(async () => { setProjectsLoading(true); setProjectsError(""); try { const [projectResult, userResult] = await Promise.all([daemonRequest<{ projects: ManagedProject[] }>("manageable_projects", { user }), daemonRequest<{ users: ManagedUser[] }>("users")]); setProjects(projectResult.projects); setUsers(userResult.users); setOwnerId((current) => userResult.users.some((item) => item.user_id === current) ? current : userResult.users.find((item) => item.user_id === user)?.user_id || userResult.users.find((item) => item.role === "admin")?.user_id || ""); } catch (cause) { setProjectsError(cause instanceof Error ? cause.message : "Projects could not be loaded."); } finally { setProjectsLoading(false); } }, [user]);
   useEffect(() => { void load(); }, [load]);
   const refreshProjects = async (selectedId?: string) => { await load(); if (selectedId) { const latest = await daemonRequest<{ projects: ManagedProject[] }>("manageable_projects", { user }); setSelectedProject(latest.projects.find((item) => item.project_id === selectedId) || null); } };
   const createOrImport = async (event: FormEvent) => { event.preventDefault(); try { const method = mode === "import" ? "import_project" : "create_project"; const result = await daemonRequest<{ project: ManagedProject }>(method, { user, name, description, root_path: rootPath, visibility }); if (visibility === "shared" && newMemberIds.length) await daemonRequest("update_project", { user, project_id: result.project.project_id, name, description, visibility, member_user_ids: newMemberIds }); setNotice(mode === "import" ? "Project imported." : "Project created."); setShowCreate(false); await refreshProjects(result.project.project_id); } catch (cause) { setNotice(cause instanceof Error ? cause.message : "Project could not be created."); } };
-  const visibleProjects = projects.filter((item) => item.visibility === "shared" || item.owner_user_id === ownerId);
-  return <div className="projects-workspace">
+  const appliedProjectId = useRef("");
+  useEffect(() => { if (initialTaskId) { setSelectedProject(null); setShowCreate(false); setOwnerId(user); } }, [initialTaskId, selectionRequest, user]);
+  useEffect(() => {
+    if (initialProjectId) setFilter("");
+  }, [initialProjectId, selectionRequest]);
+  useEffect(() => {
+    const requestKey = `${initialProjectId}:${selectionRequest}`;
+    if (!initialProjectId || appliedProjectId.current === requestKey) return;
+    const project = projects.find((item) => item.project_id === initialProjectId);
+    if (project) { appliedProjectId.current = requestKey; setSelectedProject(project); setShowCreate(false); setOwnerId(project.owner_user_id); }
+  }, [initialProjectId, selectionRequest, projects]);
+  const ownerProjects = projects.filter((item) => item.visibility === "shared" || item.owner_user_id === ownerId);
+  const visibleProjects = ownerProjects.filter((item) => !item.is_system_home && (!filter || item.status === filter));
+  return <div className={`projects-workspace${!selectedProject && !showCreate ? " work-overview-mode" : ""}`}>
     <aside className="projects-workspace-sidebar">
-      <header className="projects-workspace-heading"><button className="back-button" onClick={onClose}>← Conversation</button><h2>Projects</h2><button onClick={() => { setShowCreate((value) => !value); setSelectedProject(null); }}>{showCreate ? "Cancel" : "+ New project"}</button></header>
-      <div className="projects-workspace-filters"><label htmlFor="project-status-filter">Show</label><select id="project-status-filter" value={filter} onChange={(event) => setFilter(event.target.value)}><option value="">All projects</option><option value="active">Active</option><option value="paused">Paused</option><option value="completed">Completed</option><option value="archived">Archived</option></select><label htmlFor="project-owner-filter">Owner</label><select id="project-owner-filter" value={ownerId} onChange={(event) => setOwnerId(event.target.value)}>{users.map((item) => <option key={item.user_id} value={item.user_id}>{item.display_name}</option>)}</select></div>
+      <header className="projects-workspace-heading"><button className="back-button" onClick={onClose}>← Conversation</button><h2>Projects &amp; Tasks</h2><button onClick={() => { setOwnerId(user); setShowCreate((value) => !value); setSelectedProject(null); }}>{showCreate ? "Cancel" : "+ New project"}</button></header>
+      <div className="projects-workspace-filters"><button onClick={() => { setSelectedProject(null); setShowCreate(false); }}>Work overview</button><label htmlFor="project-status-filter">Project list</label><select id="project-status-filter" value={filter} onChange={(event) => setFilter(event.target.value)}><option value="">All projects</option><option value="active">Active</option><option value="paused">Paused</option><option value="completed">Completed</option><option value="archived">Archived</option></select><label htmlFor="project-owner-filter">Owner</label><select id="project-owner-filter" value={ownerId} onChange={(event) => { setOwnerId(event.target.value); setSelectedProject(null); setShowCreate(false); }}>{users.map((item) => <option key={item.user_id} value={item.user_id}>{item.display_name}</option>)}</select></div>
       {showCreate && <form className="project-create" onSubmit={createOrImport}><h3>{mode === "import" ? "Import existing folder" : "New project"}</h3><div className="dialog-actions"><button type="button" onClick={() => setMode("create")}>New</button><button type="button" onClick={() => setMode("import")}>Import</button></div><div className="form-field"><label htmlFor="new-project-name">Name</label><input id="new-project-name" value={name} onChange={(event) => setName(event.target.value)} required /></div><div className="form-field"><label htmlFor="new-project-description">Description</label><input id="new-project-description" value={description} onChange={(event) => setDescription(event.target.value)} /></div><div className="form-field"><label htmlFor="new-project-visibility">Visibility</label><select id="new-project-visibility" value={visibility} onChange={(event) => setVisibility(event.target.value as "private" | "shared")}><option value="private">Private</option><option value="shared">Shared</option></select></div>{visibility === "shared" && <fieldset className="form-field"><legend>Share with family members</legend>{users.filter((item) => item.is_active && item.user_id !== ownerId).map((member) => <label key={member.user_id}><input type="checkbox" checked={newMemberIds.includes(member.user_id)} onChange={(event) => setNewMemberIds((current) => event.target.checked ? [...current, member.user_id] : current.filter((id) => id !== member.user_id))} /> {member.display_name}</label>)}</fieldset>}<div className="form-field"><label htmlFor="new-project-path">{mode === "import" ? "Existing folder" : "Parent directory (optional)"}</label><input id="new-project-path" value={rootPath} onChange={(event) => setRootPath(event.target.value)} required={mode === "import"} /></div><button>{mode === "import" ? "Import project" : "Create project"}</button></form>}
-      <nav className="projects-workspace-list" aria-label="Available projects">{visibleProjects.map((item) => <button type="button" key={item.project_id} className={selectedProject?.project_id === item.project_id ? "active" : ""} onClick={() => { setShowCreate(false); setSelectedProject(item); }}><FolderKanban size={17} /><span>{item.name}<small>{item.status} · {item.visibility === "shared" ? "Shared" : "Private"}</small></span><ChevronRight size={16} /></button>)}{!visibleProjects.length && <p>No projects found.</p>}</nav>
+      <nav className="projects-workspace-list" aria-label="Available projects">{visibleProjects.map((item) => <button type="button" key={item.project_id} className={selectedProject?.project_id === item.project_id ? "active" : ""} onClick={() => { setShowCreate(false); setSelectedProject(item); }}><FolderKanban size={17} /><span>{item.name}<small>{item.status} · {item.visibility === "shared" ? "Shared" : "Private"}</small></span><ChevronRight size={16} /></button>)}{!projectsLoading && !projectsError && !visibleProjects.length && <p>No projects found.</p>}</nav>
       {notice && <p className="projects-workspace-notice">{notice}</p>}
     </aside>
-    <section className="projects-workspace-main">{showCreate ? <div className="projects-workspace-empty"><h1>Create a project</h1><p>Fill out the project details in the sidebar.</p></div> : selectedProject ? <ProjectEditorPanel key={selectedProject.project_id} user={user} project={selectedProject} onBack={() => { setSelectedProject(null); void load(); }} onUpdated={() => void refreshProjects(selectedProject.project_id)} onClose={onClose} /> : <div className="projects-workspace-empty"><FolderKanban size={36} /><h1>Choose a project</h1><p>Select a project from the list to manage its context and files.</p></div>}</section>
+    <section className="projects-workspace-main">{projectsLoading ? <p role="status">Loading projects…</p> : projectsError ? <div role="alert"><p>{projectsError}</p><button onClick={() => void load()}>Retry projects</button></div> : showCreate ? <div className="projects-workspace-empty"><h1>Create a project</h1><p>Fill out the project details in the sidebar.</p></div> : selectedProject ? <><button className="work-back" onClick={() => setSelectedProject(null)}>← Work overview</button><ProjectEditorPanel key={selectedProject.project_id} user={user} project={selectedProject} onBack={() => { setSelectedProject(null); void load(); }} onUpdated={() => void refreshProjects(selectedProject.project_id)} onClose={onClose} /></> : <WorkOverview active={active} initialTaskId={initialTaskId} selectionRequest={selectionRequest} key={`${user}:${ownerId}`} user={user} ownerId={ownerId} projects={ownerProjects} users={users} onProject={(project) => setSelectedProject(project)} onAgenda={onAgenda} onConversation={onConversation} onQuestions={onQuestions} />}</section>
   </div>;
 }
 
 const SKILL_INSTRUCTIONS_MAX_LENGTH = 12_000;
 const SKILL_INSTRUCTIONS_TEMPLATE = "# Purpose\n[What reusable expertise does this skill provide?]\n\n## When to use\n- [Describe the requests that should use this skill.]\n\n## Workflow\n1. [Describe the steps Alphonse should follow.]\n\n## Files and tools\n- [List useful files relative to this skill directory and explain how to use them.]\n\n## Boundaries\n- [Describe safety, privacy, authorization, and uncertainty limits.]\n\n## Response\n- [Describe what a helpful answer or result should include.]";
 
-type SkillWorkspaceRecord = { id: string; title: string; description: string; directory: string; editable: boolean; instructions: string; files: Array<{ path: string; size_bytes: number; text_editable: boolean }>; lifecycle: { kind: string; source?: string; owner?: string; base_revision?: string; local_revision: string; recovery_directory?: string; validation_error?: string; override?: boolean; customized: boolean; provenance_known: boolean; bundled_update_available: boolean }; bindings: Array<{ name: string; status: string }> };
-export function SkillsWorkspace({ user, onClose }: { user: string; onClose: () => void }) {
+type SkillWorkspaceRecord = { appearance?: SkillAppearance | null; appearance_configured?: boolean; id: string; title: string; description: string; directory: string; editable: boolean; instructions: string; files: Array<{ path: string; size_bytes: number; text_editable: boolean }>; lifecycle: { kind: string; source?: string; owner?: string; base_revision?: string; local_revision: string; recovery_directory?: string; validation_error?: string; override?: boolean; customized: boolean; provenance_known: boolean; bundled_update_available: boolean }; bindings: Array<{ name: string; status: string }> };
+export function SkillsWorkspace({ user, onClose }: { user: string; onClose?: () => void }) {
   const [fileEditable, setFileEditable] = useState(false);
   const fileReadSequence = useRef(0);
   const [diagnostics, setDiagnostics] = useState<Array<{ directory: string; error: string; category: string }>>([]);
@@ -1319,7 +1306,6 @@ function SystemOneSettingsSection({ user }: { user: string }) {
         <div className="form-field"><label htmlFor="system-one-check">Check completion threshold</label><input id="system-one-check" type="range" min={Math.min(1, Math.round((settings.no_threshold + 0.01) * 100) / 100)} max="1" step="0.01" value={settings.check_completion_threshold} onChange={(event) => setSettings({ ...settings, check_completion_threshold: Number(event.target.value) })} /><output htmlFor="system-one-check">{settings.check_completion_threshold.toFixed(2)}</output><small>Evidence at or above this value can satisfy an acceptance criterion. Must be higher than the evidence no threshold.</small></div>
         <div className="form-field"><label htmlFor="system-one-yes">Tactical evidence yes threshold</label><input id="system-one-yes" type="number" min="0" max="1" step="0.01" value={settings.yes_threshold} onChange={(event) => setSettings({ ...settings, yes_threshold: Number(event.target.value) })} /></div>
         <div className="form-field"><label htmlFor="system-one-no">Evidence no threshold</label><input id="system-one-no" type="number" min="0" max="1" step="0.01" value={settings.no_threshold} onChange={(event) => setSettings({ ...settings, no_threshold: Number(event.target.value) })} /></div>
-        <div className="form-field"><label htmlFor="system-one-route">Act route confidence</label><input id="system-one-route" type="range" min="0" max="1" step="0.01" value={settings.act_route_confidence_threshold} onChange={(event) => setSettings({ ...settings, act_route_confidence_threshold: Number(event.target.value) })} /><output htmlFor="system-one-route">{settings.act_route_confidence_threshold.toFixed(2)}</output></div>
       </details>
       <p><small>When enabled, bounded phase objectives, acceptance criteria, and verified evidence summaries are sent to the configured TypeSafe.ai endpoint. The API key stays in local settings and is never returned to the desktop.</small></p>
       <button disabled={saving || (settings.enabled && !settings.has_api_key && !apiKey)} onClick={() => void save()}>{settings.enabled ? "Validate & save" : "Save disabled settings"}</button>
@@ -1348,7 +1334,20 @@ function errorNotice(cause: unknown, fallback: string): string {
 
 function AgentConfigSettingsSection() {
   const [documents, setDocuments] = useState<AgentDocument[]>([]); const [fileName, setFileName] = useState(""); const [content, setContent] = useState(""); const [notice, setNotice] = useState("");
-  useEffect(() => { void daemonRequest<{ documents: AgentDocument[] }>("agent_config_documents").then((result) => { setDocuments(result.documents); setFileName(result.documents[0]?.file_name || ""); }); }, []);
-  useEffect(() => { if (fileName) void daemonRequest<{ document: AgentDocument }>("read_agent_config", { file_name: fileName }).then((result) => setContent(result.document.content || "")); }, [fileName]);
-  return <section className="settings-panel"><h3>Agent configuration</h3><select value={fileName} onChange={(event) => setFileName(event.target.value)}>{documents.map((item) => <option value={item.file_name} key={item.file_name}>{item.display_name}</option>)}</select>{fileName === "GlobalContext.md" && <p className="settings-help">Use the household sections: Family definition; Household location and setup; Household norms; Alphonse's household-wide interaction defaults; Privacy and sharing boundaries; Context maintenance. Keep language, accessibility, communication, and address preferences per member in user_context.md or user settings. This file is editable here.</p>}<textarea value={content} onChange={(event) => setContent(event.target.value)} rows={14} /><button onClick={() => void daemonRequest("save_agent_config", { file_name: fileName, content }).then(() => setNotice("Saved. New tasks will read the updated configuration."))}>Save configuration</button><p>{notice}</p></section>;
+  useEffect(() => { void daemonRequest<{ documents: AgentDocument[] }>("agent_config_documents").then((result) => { setDocuments(result.documents); setFileName(result.documents[0]?.file_name || ""); }).catch((cause: unknown) => setNotice(errorNotice(cause, "Configuration unavailable"))); }, []);
+  const drafts = useRef<Record<string, string>>({});
+  const [loading, setLoading] = useState(false);
+  useEffect(() => {
+    if (!fileName) return;
+    if (fileName in drafts.current) { setLoading(false); setContent(drafts.current[fileName]); return; }
+    let active = true;
+    setLoading(true); setContent("");
+    void daemonRequest<{ document: AgentDocument }>("read_agent_config", { file_name: fileName }).then((result) => {
+      if (!active) return;
+      drafts.current[fileName] = result.document.content || ""; setContent(drafts.current[fileName]);
+    }).catch((cause: unknown) => { if (active) setNotice(errorNotice(cause, "Configuration could not be loaded")); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [fileName]);
+  return <section className="settings-panel"><h3>Agent configuration</h3><select aria-label="Configuration document" value={fileName} onChange={(event) => setFileName(event.target.value)}>{documents.map((item) => <option value={item.file_name} key={item.file_name}>{item.display_name}</option>)}</select>{fileName === "GlobalContext.md" && <p className="settings-help">Use the household sections: Family definition; Household location and setup; Household norms; Alphonse's household-wide interaction defaults; Privacy and sharing boundaries; Context maintenance. Keep language, accessibility, communication, and address preferences per member in user_context.md or user settings. This file is editable here.</p>}<textarea aria-label="Configuration contents" disabled={loading || !(fileName in drafts.current)} value={content} onChange={(event) => { drafts.current[fileName] = event.target.value; setContent(event.target.value); }} rows={14} /><button disabled={loading || !(fileName in drafts.current)} onClick={() => void daemonRequest("save_agent_config", { file_name: fileName, content }).then(() => setNotice("Saved. New tasks will read the updated configuration.")).catch((cause: unknown) => setNotice(cause instanceof Error ? cause.message : "Configuration could not be saved."))}>Save configuration</button><p>{notice}</p></section>;
 }

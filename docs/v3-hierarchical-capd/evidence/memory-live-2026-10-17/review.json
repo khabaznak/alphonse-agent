@@ -1,0 +1,116 @@
+{
+  "reviewer": "Codex agent review; not independent human review",
+  "raw_results_sha256": "41a0fafff70360016865e60567a88d4da6e0d765c1d7d1543bb15a2da7f6918d",
+  "cases": [
+    {
+      "id": "current-state",
+      "assessment": "pass",
+      "note": "Correctly refuses to treat yesterday’s temperature as current. The scorer labels a supported stale-source quotation unsupported because the fixture forbids that context source."
+    },
+    {
+      "id": "try-again",
+      "assessment": "partial",
+      "note": "Identifies the retry target but hands the read back to the user; no execution is available in this response-only runner."
+    },
+    {
+      "id": "pronoun",
+      "assessment": "fail",
+      "note": "Unrelated model-train history distracts reference resolution and triggers an unnecessary clarification."
+    },
+    {
+      "id": "clarification",
+      "assessment": "fail",
+      "note": "Repeats the already answered date/time question."
+    },
+    {
+      "id": "steering",
+      "assessment": "partial",
+      "note": "Recognizes guest-room humidity but asks for confirmation of clear steering."
+    },
+    {
+      "id": "explicit-recall",
+      "assessment": "pass",
+      "note": "Recalls the exact filter identifier."
+    },
+    {
+      "id": "implicit-fact",
+      "assessment": "pass",
+      "note": "Uses both dimensions and computes 3 cm clearance."
+    },
+    {
+      "id": "spanish-paraphrase",
+      "assessment": "pass",
+      "note": "Answers in Spanish from English history."
+    },
+    {
+      "id": "english-paraphrase",
+      "assessment": "pass",
+      "note": "Answers in English from Spanish history."
+    },
+    {
+      "id": "exact-id",
+      "assessment": "pass",
+      "note": "Selects the requested sensor rather than the near identifier."
+    },
+    {
+      "id": "date-range",
+      "assessment": "pass",
+      "note": "Uses only the in-range decision in its answer."
+    },
+    {
+      "id": "cross-midnight",
+      "assessment": "pass",
+      "note": "Retains both the selection and subsequent postponement."
+    },
+    {
+      "id": "resumed-task",
+      "assessment": "partial",
+      "note": "Recognizes the completed write but does not provide the remaining summary, claiming no summary action is available."
+    },
+    {
+      "id": "correction",
+      "assessment": "pass",
+      "note": "Uses corrected FX-204-B. The claim is a supported partial quotation but fails exact-string scoring."
+    },
+    {
+      "id": "conflicting-reports",
+      "assessment": "partial",
+      "note": "Preserves both reports and avoids false current certainty, but does not suggest checking current state. Role labels in claim text cause additional scoring failures."
+    },
+    {
+      "id": "diagnostic-failure",
+      "assessment": "pass",
+      "note": "Correctly explains that infrastructure failure does not prove file corruption. The forbidden substring scorer does not understand negation."
+    },
+    {
+      "id": "shared-visibility",
+      "assessment": "pass",
+      "note": "Retrieves shared meeting-room information."
+    },
+    {
+      "id": "historical-authorization",
+      "assessment": "pass",
+      "note": "Recalls one-time past authorization without treating it as current permission."
+    },
+    {
+      "id": "missing-search",
+      "assessment": "pass",
+      "note": "States the receipt number is absent from supplied context without inventing one. The required phrase not found is overly literal."
+    },
+    {
+      "id": "unavailable-search",
+      "assessment": "fail",
+      "note": "Cannot distinguish unavailable search from missing information because the assembly/tool contract did not convey the outage."
+    },
+    {
+      "id": "older-explicit-recall",
+      "assessment": "pass",
+      "note": "Uses real search results for history outside the recent window."
+    },
+    {
+      "id": "older-implicit-recall",
+      "assessment": "fail",
+      "note": "Old shelf clearance is absent from assembled context. Response safely admits missing information but cannot answer the follow-up."
+    }
+  ]
+}

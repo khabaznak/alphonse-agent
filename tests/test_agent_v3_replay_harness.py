@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 import json
 from pathlib import Path
 
@@ -100,3 +102,7 @@ def _replay_runner(engine: str):
     from alphonse.agent_v2.evaluation.deterministic_adapters import v2_runner, v3_runner
 
     return v2_runner if engine == "tactical_v2" else v3_runner
+
+
+# Existing scripted providers delegate the shared interpretation call explicitly.
+pytestmark = pytest.mark.usefixtures("task_understanding_provider")

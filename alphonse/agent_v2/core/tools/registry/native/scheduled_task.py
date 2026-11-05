@@ -28,7 +28,7 @@ SCHEDULED_TASK_ARGUMENT_SCHEMA: dict[str, Any] = {
         },
         "description": {
             "type": "string",
-            "description": "Optional description of why this task exists.",
+            "description": "For direct reminders, the actual message body delivered to the recipient. Include the substantive reminder instructions, not merely why the schedule exists. For deferred agent work, an optional description.",
         },
         "prompt": {
             "type": "string",
@@ -64,6 +64,14 @@ SCHEDULED_TASK_ARGUMENT_SCHEMA: dict[str, Any] = {
             "enum": ["direct", "pdca"],
             "description": "Use direct for a plain reminder; use pdca only for deferred agent work such as device control.",
         },
+        "recipient_user_id": {
+            "type": "string",
+            "description": "Omit for a reminder to the requester: their registered preferred address is resolved automatically. For another household member, use their verified registered Alphonse user ID; never invent an ID or substitute the requester.",
+        },
+        "recipient_provider_key": {
+            "type": "string", "enum": ["telegram"],
+            "description": "Optional registered delivery provider for the reminder recipient; omit to use their preferred address.",
+        },
     },
     "required": ["name", "prompt", "schedule_kind"],
 }
@@ -77,7 +85,8 @@ def build_scheduled_task_tool_definition() -> ToolDefinition:
         kind=ToolKind.NATIVE,
         description=(
             "Schedule a future or recurring task by storing a prompt that will be "
-            "queued back into Alphonse's v2 CAPD loop when due."
+            "queued back into Alphonse's v2 CAPD loop when due. Plain reminders can target another "
+            "registered household member with recipient_user_id; otherwise reminders use the requester's saved preferred communication channel automatically. Do not ask for a channel, account, or chat ID when it is already registered. Ownership and failure notifications remain with the requester."
         ),
         argument_schema=dict(SCHEDULED_TASK_ARGUMENT_SCHEMA),
         capabilities=("scheduling", "reminders", "recurring_tasks", "future_work"),
@@ -115,6 +124,30 @@ def execute_scheduled_task(
     delivery_mode = str(arguments.get("delivery_mode") or "").strip().lower()
     if not delivery_mode:
         delivery_mode = "direct" if _is_plain_reminder(goal) else "pdca"
+    origin_channel = dict(task.metadata.get("channel") or {}) if isinstance(task.metadata.get("channel"), dict) else {}
+    recipient = str(arguments.get("recipient_user_id") or "").strip()
+    if delivery_mode == "direct" or arguments.get("recipient_provider_key"):
+        recipient = recipient or owner_user_id
+    if recipient:
+        if arguments.get("delivery_mode") and delivery_mode != "direct":
+            raise ValueError("scheduled_reminder_recipient_requires_direct_delivery")
+        delivery_mode = "direct"
+        resolver = context.identity_resolver
+        if resolver is None:
+            raise ValueError("scheduled_reminder_recipient_unresolved")
+        preferred = ""
+        if arguments.get("recipient_provider_key"):
+            integration = resolver.integration_for(provider_key=str(arguments["recipient_provider_key"]))
+            preferred = integration.integration_id
+        resolved = resolver.resolve_outbound_address(alphonse_user_id=recipient, preferred_integration_id=preferred)
+        address = resolved.address if resolved.resolved else None
+        if address is None or address.alphonse_user_id != recipient:
+            raise ValueError("scheduled_reminder_recipient_unresolved")
+        if callable(context.user_timezone_provider):
+            default_timezone = context.user_timezone_provider(recipient)
+        origin_channel.update({"reminder_recipient_user_id": recipient,
+                               "reminder_recipient_integration_id": preferred,
+                               "delivery_channels": [address.to_dict()]})
     record = store.create_task(
         owner_user_id=owner_user_id,
         project_id=str(getattr(task, "project_id", "") or "").strip(),
@@ -125,9 +158,7 @@ def execute_scheduled_task(
         run_at=run_at,
         rrule=_optional_text(arguments.get("rrule")),
         dtstart=_optional_text(arguments.get("dtstart")),
-        origin_channel=dict(task.metadata.get("channel") or {})
-        if isinstance(task.metadata.get("channel"), dict)
-        else {},
+        origin_channel=origin_channel,
         timezone_name=str(arguments.get("timezone") or "").strip() or str(default_timezone or "UTC"),
         enabled=bool(arguments.get("enabled", True)),
         delivery_mode=delivery_mode,
@@ -138,6 +169,9 @@ def execute_scheduled_task(
     if stored is None or any(getattr(stored, field) != getattr(record, field) for field in fields):
         raise RuntimeError("scheduled_task_readback_failed")
     record = stored
+    actual_recipient = str(record.origin_channel.get("reminder_recipient_user_id") or owner_user_id)
+    if actual_recipient != (recipient or owner_user_id):
+        raise ValueError("scheduled_reminder_existing_recipient_mismatch")
     return {
         "scheduled_task_id": record.scheduled_task_id,
         "project_id": record.project_id,
@@ -146,6 +180,9 @@ def execute_scheduled_task(
         "next_run_at": record.next_run_at,
         "schedule_summary": schedule_summary(record.schedule),
         "delivery_mode": record.delivery_mode,
+        "recipient_user_id": actual_recipient,
+        "delivery_channels": list(record.origin_channel.get("delivery_channels") or []),
+        "reminder_message": record.description or record.name,
         "prompt": record.prompt,
         "description": record.description,
         "schedule": dict(record.schedule),

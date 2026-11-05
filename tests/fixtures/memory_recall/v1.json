@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "synthetic": true,
+  "cases": [
+    {"id": "identifier", "category": "identifier", "text": "Replacement filter FX-204 fits the kitchen.", "query": "FX-204", "expected": ["target"]},
+    {"id": "identifier-punctuation", "category": "identifier", "text": "Order AB/991_z arrived.", "query": "AB/991_z", "expected": ["target"]},
+    {"id": "spanish-accent", "category": "multilingual", "text": "José dejó el recibo en el cajón.", "query": "Jose recibo", "expected": ["target"]},
+    {"id": "cjk-literal", "category": "multilingual", "text": "家庭晚餐安排", "query": "家庭晚餐安排", "expected": ["target"]},
+    {"id": "cross-language-gap", "category": "multilingual", "text": "La bicicleta está en el garaje.", "query": "bicycle storage", "expected": ["target"]},
+    {"id": "local-yesterday", "category": "temporal", "text": "Receipt before local midnight", "query": "receipt", "created_at": "2026-10-17T05:59:00+00:00", "start_date": "2026-10-16", "end_date": "2026-10-16", "expected": ["target"]},
+    {"id": "local-today-exclusion", "category": "temporal", "text": "Receipt before local midnight", "query": "receipt", "created_at": "2026-10-17T05:59:00+00:00", "start_date": "2026-10-17", "end_date": "2026-10-17", "expected": []},
+    {"id": "dst-day", "category": "temporal", "text": "Receipt during the long local day", "query": "receipt", "timezone": "America/New_York", "created_at": "2026-11-02T04:30:00+00:00", "start_date": "2026-11-01", "end_date": "2026-11-01", "expected": ["target"]},
+    {"id": "lexical-paraphrase", "category": "paraphrase", "text": "The spare filter is stored in the pantry.", "query": "Where did we put the filter?", "expected": ["target"]},
+    {"id": "semantic-paraphrase-gap", "category": "paraphrase", "text": "The bicycle is stored in the garage.", "query": "Where is my two-wheeler kept?", "expected": ["target"]}
+  ]
+}

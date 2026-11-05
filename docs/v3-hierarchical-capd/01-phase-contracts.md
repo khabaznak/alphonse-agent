@@ -11,6 +11,13 @@ resume a phase without reconstructing it from model prose.
 
 This stage must not change the default execution path.
 
+Planning consumes one complete top-level JSON object. The Codex provider must
+reject malformed outer JSON rather than extracting a valid nested subgoal or
+arguments object. Malformed JSON and missing structural plan fields receive one
+explicit System Two correction with the original request and schema. No action
+runs for the rejected plan. A second invalid response fails with a planning
+diagnostic; authorization, protected-path and traversal checks remain enforced.
+
 ## Deliverables
 
 Introduce typed models equivalent to:
@@ -143,6 +150,15 @@ Terminal states must be explicit. Invalid transitions must fail closed.
 
 ## Implementation log
 
+- 2026-10-31 — Issue #128: invalid missing/forward/self/cyclic subgoal
+  dependencies now receive one bounded System Two correction with the rejected
+  plan and exact returned IDs. The schema and instructions require exact earlier
+  IDs, including consistent spelling. No dependency is silently deleted, reordered
+  or normalized by code; the corrected plan must pass the same graph, scope and
+  capability validation before any execution. Repeated invalid plans fail visibly;
+  cancellation and existing acceptance contracts remain intact. Disposable
+  regressions cover the live hyphen/underscore reference error and all invalid
+  dependency shapes without changing household records.
 - 2026-09-20 — Added `intelligence/v3` contracts, V3 fields in `TaskState`, legacy
   one-call adaptation, typed bindings, bounded prompt projections, and
   contract/checkpoint tests. Full suite: 428 passed.

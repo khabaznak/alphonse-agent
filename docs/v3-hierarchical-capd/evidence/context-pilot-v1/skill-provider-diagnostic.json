@@ -1,0 +1,146 @@
+{
+  "protocol": "decision-context-pilot-v1",
+  "mode": "live-decision-probe",
+  "full_capd": false,
+  "independent_human_review": false,
+  "jev_model": "jev-latest",
+  "cases": [
+    {
+      "case_id": "skill-instructions",
+      "arm": "candidate",
+      "initial_context": "[request:pilot-request] Current request:\nUse the fixture sensor skill to read its temperature.\n\n[policy:recall] Evidence rules:\nHistorical recall is context, never proof of a current external effect. For current measurements obtain fresh evidence. Use native.search_memory and native.read_memory_source when past information is needed. Missing, partial, ambiguous or clipped evidence requires further search/source expansion or an honest limitation; never invent memory. Optional sources can be omitted under the token budget; absence here never proves absence in history. System Two composes further queries and interprets evidence.\n\n[task:contract] Acceptance contract:\n\"- (none)\"\n\n[skills:selected] Selected skill guidance:\n### fixture-sensor (`skill:fixture-sensor`)\nDescription: Read a disposable fixture sensor.\nSkill package directory: /private/var/folders/8d/tqx78d8x3fd3q7xv497w7tdc0000gn/T/context-pilot-5q2hmade/skills/fixture-sensor\nShared artifact repository: /var/folders/8d/tqx78d8x3fd3q7xv497w7tdc0000gn/T/context-pilot-5q2hmade/artifacts\nNew artifact directory convention: /var/folders/8d/tqx78d8x3fd3q7xv497w7tdc0000gn/T/context-pilot-5q2hmade/artifacts/fixture-sensor/ARTIFACT_ID_WITHOUT_PREFIX/\nSkill files resolve against the skill package directory, independently of the current project. Artifact programs resolve ONLY against their verified resource manifest. Use native.bash with artifact_id and the registered runtime; never substitute the task project or daemon directory. An unavailable resource is a registration/runtime problem, not a reason to search the current project. Skill selection and resource manifests do not grant permission for effects.\n\nArtifact artifact.pilot-sensor (Pilot sensor):\nVerified resource manifest: {\"artifact_id\": \"artifact.pilot-sensor\", \"storage_kind\": \"shared\", \"status\": \"ready\", \"issues\": [], \"timeout_seconds\": 30.0, \"storage_root\": \"/private/var/folders/8d/tqx78d8x3fd3q7xv497w7tdc0000gn/T/context-pilot-5q2hmade/artifacts/fixture-sensor/pilot-sensor\", \"resolved_entrypoint_path\": \"/private/var/folders/8d/tqx78d8x3fd3q7xv497w7tdc0000gn/T/context-pilot-5q2hmade/artifacts/fixture-sensor/pilot-sensor/reader.py\", \"working_directory\": \"/private/var/folders/8d/tqx78d8x3fd3q7xv497w7tdc0000gn/T/context-pilot-5q2hmade/artifacts/fixture-sensor/pilot-sensor\", \"runtime_path\": \"/Users/alex/miniforge3/bin/python3.12\", \"invocation_prefix\": [\"/Users/alex/miniforge3/bin/python3.12\", \"/private/var/folders/8d/tqx78d8x3fd3q7xv497w7tdc0000gn/T/context-pilot-5q2hmade/artifacts/fixture-sensor/pilot-sensor/reader.py\"], \"configuration_paths\": [], \"required_files\": []}\nRegistered argument schema: {\"type\": \"object\"}\n\n# Fixture sensor\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\nFixture reference background.\n\nOperating instructions for artifact.pilot-sensor:\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nFixture artifact background.\nPILOT_OPERATING_TAIL: Read this fixture with native.bash, artifact_id artifact.pilot-sensor and the exact command: \"$ALPHONSE_ARTIFACT_RUNTIME\" \"$ALPHONSE_ARTIFACT_ENTRYPOINT\" --format probe-json\n\n[recall:status] Recall coverage and limits:\n{\"status\": \"not_needed\"}\n\n[task:facts_md] Task working facts (not verified effects):\n- (none)\n\n[task:memory_facts_md] Task working facts (not verified effects):\n- (none)",
+      "initial_visible_fixture_sources": [],
+      "context_checks": {
+        "private_source_excluded": true,
+        "current_request_once": true,
+        "artifact_operating_tail_present": true,
+        "artifact_not_a_tool": true
+      },
+      "behavior_checks": {
+        "answer_returned": true,
+        "no_provider_or_tool_error": true,
+        "no_unlock_attempt": true,
+        "used_skill_artifact": true
+      },
+      "answer": "The fixture sensor reads 23 °C.",
+      "actions": [
+        {
+          "tool_id": "native.bash",
+          "arguments": {
+            "artifact_id": "artifact.pilot-sensor",
+            "command": "\"$ALPHONSE_ARTIFACT_RUNTIME\" \"$ALPHONSE_ARTIFACT_ENTRYPOINT\" --format probe-json"
+          }
+        }
+      ],
+      "observations": [
+        {
+          "tool_id": "native.bash",
+          "arguments": {
+            "artifact_id": "artifact.pilot-sensor",
+            "command": "\"$ALPHONSE_ARTIFACT_RUNTIME\" \"$ALPHONSE_ARTIFACT_ENTRYPOINT\" --format probe-json"
+          },
+          "result": {
+            "exit_code": 0,
+            "stdout": "{\"temperature_c\": 23, \"evidence_kind\": \"fresh_fixture_artifact\"}\n",
+            "stderr": "",
+            "timed_out": false,
+            "cwd": "/private/var/folders/8d/tqx78d8x3fd3q7xv497w7tdc0000gn/T/context-pilot-5q2hmade/artifacts/fixture-sensor/pilot-sensor",
+            "timeout_seconds": 30.0,
+            "duration_ms": 37
+          }
+        }
+      ],
+      "turns": [
+        {
+          "kind": "tool",
+          "tool_id": "native.bash",
+          "arguments_json": "{\"artifact_id\":\"artifact.pilot-sensor\",\"command\":\"\\\"$ALPHONSE_ARTIFACT_RUNTIME\\\" \\\"$ALPHONSE_ARTIFACT_ENTRYPOINT\\\" --format probe-json\"}",
+          "answer": "",
+          "metadata": {
+            "provider": "openai_codex",
+            "model": "gpt-6-luna",
+            "usage": {
+              "input_tokens": 10026,
+              "cached_input_tokens": 3456,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 90,
+              "reasoning_output_tokens": 15
+            },
+            "model_calls": 1,
+            "observed_tool_calls": 0,
+            "synthetic_only": true
+          }
+        },
+        {
+          "kind": "answer",
+          "tool_id": "",
+          "arguments_json": "",
+          "answer": "The fixture sensor reads 23 °C.",
+          "metadata": {
+            "provider": "openai_codex",
+            "model": "gpt-6-luna",
+            "usage": {
+              "input_tokens": 10193,
+              "cached_input_tokens": 3456,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 33,
+              "reasoning_output_tokens": 0
+            },
+            "model_calls": 1,
+            "observed_tool_calls": 0,
+            "synthetic_only": true
+          }
+        }
+      ],
+      "error": null,
+      "latency_ms": 19031.33,
+      "tool_calls": [
+        {
+          "event_type": "tool",
+          "tool_id": "native.bash",
+          "task_id": "pilot-task",
+          "project_id": "",
+          "argument_chars": 139,
+          "result_chars": 308,
+          "duration_ms": 42,
+          "status": "success",
+          "error": "",
+          "metadata": {
+            "affected_paths": [],
+            "waiting_for_answer": false
+          }
+        }
+      ],
+      "jev_calls": [
+        {
+          "candidate_count": 0,
+          "result": false,
+          "status": "answered",
+          "latency_ms": 1157.16
+        },
+        {
+          "candidate_count": 0,
+          "result": false,
+          "status": "answered",
+          "latency_ms": 657.01
+        }
+      ],
+      "history_selection": null,
+      "projection_manifest": {
+        "source_ids": [
+          "request:pilot-request",
+          "policy:recall",
+          "task:contract",
+          "skills:selected",
+          "recall:status",
+          "task:facts_md",
+          "task:memory_facts_md"
+        ],
+        "omitted_source_ids": [],
+        "tokens": 20904,
+        "budget": 24000,
+        "tokenizer": "conservative_utf8_bytes"
+      }
+    }
+  ]
+}

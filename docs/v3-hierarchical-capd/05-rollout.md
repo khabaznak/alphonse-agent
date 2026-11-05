@@ -6,7 +6,8 @@ Depends on: Stages 1 through 4
 ## Objective
 
 Make hierarchical CAPD safely operable, measurable, restartable, and reversible as
-the single-user installation moves to V3 by default.
+the household installation moves to V3 by default. The main computer's user is the
+administrator; other household members interact through channels such as Telegram.
 
 ## Engine compatibility
 
@@ -73,6 +74,22 @@ Every case includes:
 
 Run V2 and V3 on the same corpus where semantics permit. Store machine-readable
 results and a concise human review report.
+
+The focused memory baseline, synthetic corpus, optional live-response runner, and
+numeric memory rollout thresholds are documented in
+[Memory context evaluation](07-memory-evaluation.md). These supplement the
+end-to-end engine replay; offline context scores do not establish answer quality.
+
+The additive, versioned memory migration, read-only dry run, WAL-aware backup and
+restore drill are documented in [Memory migration and recovery](15-memory-migration.md).
+These are supporting issue #18 evidence only. The decision-context default remains
+disabled pending DC-0 through DC-5; neither the migration tests nor a restore into
+a recovery copy establishes interrupted-task feature rollback or live recall quality.
+
+The next diagnostic layer is the [household delegation pilot](16-household-delegation.md):
+recognizable responsibilities, verified outcomes, visible failures, resourceful
+recovery and reuse of an approved repair. It precedes the larger qualifying run;
+its iterative results do not waive the frozen rollout gates.
 
 ## Rollout gates
 

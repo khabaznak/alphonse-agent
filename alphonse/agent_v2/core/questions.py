@@ -208,6 +208,9 @@ class SQLiteQuestionStore:
         )
 
         task.status = "waiting_user"
+        if task.intelligence_engine == "hierarchical_v3" and task.hierarchical_state.get("status") == "running":
+            # The answer may arrive during delivery, before the executor returns.
+            task.hierarchical_state = {**task.hierarchical_state, "status": "waiting_user"}
         task.metadata["pending_question_id"] = interrupt.question_id
         task.metadata["question_interrupt"] = interrupt.to_dict()
         task.append_update(f"Task parked waiting for answer to question {interrupt.question_id}.")
@@ -320,26 +323,69 @@ class SQLiteQuestionStore:
         ).fetchone()
         version = int(existing["version"]) + 1 if existing is not None else 1
         created_at = str(existing["created_at"]) if existing is not None else now
-        conn.execute(
+        checkpoint_status = str(status or task.status or "running")
+        # A stale parked writer must not overwrite the queued checkpoint created by an answer.
+        cursor = conn.execute(
             """
             INSERT OR REPLACE INTO v2_task_checkpoints (
               task_id, task_state_json, status, owner_id, project_id, correlation_id,
               version, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
+              WHERE NOT EXISTS (SELECT 1 FROM v2_questions WHERE question_id = ? AND status = 'answered')
             """,
             (
                 task_id,
                 json.dumps(task.to_checkpoint_dict(), sort_keys=True),
-                str(status or task.status or "running"),
+                checkpoint_status,
                 str(task.user or ""),
                 task.project_id,
                 task.correlation_id,
                 version,
                 created_at,
                 now,
+                task.metadata.get("pending_question_id") if checkpoint_status == "waiting_user" else None,
             ),
         )
-        return version
+        return version if cursor.rowcount else version - 1
+
+    def list_work_checkpoints(self, *, owner_id: str, view: str = "active", limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+        """Bounded owner-scoped reads; status is independent of serialized state."""
+        statuses = {
+            "active": ("queued", "running", "waiting_user"),
+            "attention": ("waiting_user", "failed"),
+            "history": ("done", "failed", "cancelled"),
+        }
+        if view not in statuses:
+            raise ValueError("work_view_invalid")
+        placeholders = ",".join("?" for _ in statuses[view])
+        status_clause = f"status IN ({placeholders})"
+        if view == "attention":
+            status_clause = (
+                f"({status_clause} OR (status IN ('queued','running') AND EXISTS ("
+                "SELECT 1 FROM json_each(json_extract(task_state_json, '$.acceptance_contract.criteria')) c "
+                "WHERE json_extract(c.value, '$.status')='blocked' "
+                "AND COALESCE(json_extract(c.value, '$.required'), 1)=1 "
+                "AND COALESCE(json_extract(c.value, '$.superseded'), 0)=0)))"
+            )
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"SELECT task_id, owner_id, project_id, status, created_at, updated_at, task_state_json "
+                f"FROM v2_task_checkpoints WHERE owner_id=? AND {status_clause} "
+                "ORDER BY updated_at DESC, task_id LIMIT ? OFFSET ?",
+                (owner_id, *statuses[view], max(1, min(100, limit)), max(0, offset)),
+            ).fetchall()
+        return [{**dict(row), "state": _json_object(row["task_state_json"])} for row in rows]
+
+    def work_project_totals(self, *, owner_id: str) -> dict[str, dict[str, int]]:
+        """Owner-scoped counts, independent of the task page or view."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT project_id, COUNT(*) AS total, SUM(status='done') AS completed, "
+                "SUM(status='failed') AS failed, SUM(status='cancelled') AS cancelled "
+                "FROM v2_task_checkpoints WHERE owner_id=? AND COALESCE(project_id, '')!='' GROUP BY project_id",
+                (owner_id,),
+            ).fetchall()
+        return {row["project_id"]: {key: int(row[key]) for key in ("total", "completed", "failed", "cancelled")} for row in rows}
 
     def load_task_checkpoint(self, task_id: str) -> TaskState | None:
         with self._connect() as conn:
@@ -468,11 +514,16 @@ class SQLiteQuestionStore:
 
         task = self.load_task_checkpoint(question.task_id)
         if task is None:
-            return QuestionAnswerResult(handled=True, question=question, answer=answer, message="Question answered.")
+            return QuestionAnswerResult(handled=True, question=question, invalid=True, message="The waiting task is unavailable. The question has not been answered.")
 
         task.status = "running"
         task.metadata.pop("pending_question_id", None)
         task.metadata.pop("question_answer", None)
+        # Keep the actual question and normalized answer together in the
+        # checkpoint, independently of plan compaction or channel changes.
+        task.metadata["question_interrupt"] = {
+            **question.to_dict(), "status": "answered", "answer": dict(answer),
+        }
         _record_question_answer_tool_result(task=task, question=question, answer=answer)
         task.append_update(f"Question {question.question_id} answered; task resumed.")
 
@@ -482,13 +533,16 @@ class SQLiteQuestionStore:
                 """
                 UPDATE v2_questions
                 SET status = 'answered', answer_json = ?, updated_at = ?
-                WHERE question_id = ? AND respondent_user_id = ? AND status = 'pending'
+                WHERE question_id = ? AND respondent_user_id = ? AND status = 'pending' AND expires_at > ?
+                  AND EXISTS (SELECT 1 FROM v2_task_checkpoints
+                              WHERE task_id = v2_questions.task_id AND status = 'waiting_user')
                 """,
                 (
                     json.dumps(answer, sort_keys=True),
                     now,
                     question.question_id,
                     respondent,
+                    now,
                 ),
             )
             if cursor.rowcount != 1:
@@ -747,7 +801,7 @@ def _record_question_answer_tool_result(
     }
     now = _now().isoformat()
     if task.intelligence_engine == "hierarchical_v3":
-        state = task.hierarchical_state or {}
+        state = task.hierarchical_state if isinstance(task.hierarchical_state, dict) else {}
         phase = state.get("phase") or {}
         receipt = {
             "evidence_ref": "question-answer:" + question.question_id,
@@ -763,14 +817,16 @@ def _record_question_answer_tool_result(
             receipts.append(receipt)
         if phase.get("phase_id"):
             history = task.metadata.setdefault("v3_phase_history", [])
-            source = next((item for item in reversed(history)
-                           if (item.get("phase") or {}).get("phase_id") == phase["phase_id"]), None)
-            if source is None:
-                # An answer can race the parked-phase history checkpoint.
-                source = {"phase": dict(phase), "record_kind": "question_answer_receipt",
-                          "evidence": {"entries": []}}
-                history.append(source)
-            entries = source.setdefault("evidence", {}).setdefault("entries", [])
+            source_phase = next((item for item in reversed(history)
+                                 if (item.get("phase") or {}).get("phase_id") == phase["phase_id"]), None)
+            if source_phase is None:
+                # Preserve the checkpoint's actual source scope even when the
+                # answer races the parked-phase history write. This is an
+                # evidence receipt, not an invented terminal phase outcome.
+                source_phase = {"phase": dict(phase), "record_kind": "question_answer_receipt",
+                                "evidence": {"entries": []}}
+                history.append(source_phase)
+            entries = source_phase.setdefault("evidence", {}).setdefault("entries", [])
             if not any(item.get("evidence_ref") == receipt["evidence_ref"] for item in entries):
                 entries.append(dict(receipt))
     for index in range(len(calls) - 1, -1, -1):

@@ -1,0 +1,103 @@
+{
+  "version": 2,
+  "synthetic": true,
+  "clock": "2026-10-18T12:00:00-06:00",
+  "timezone": "America/Mexico_City",
+  "cases": [
+    {
+      "id": "anniversary-recall",
+      "request": "Where did we go last month for our anniversary?",
+      "history": [
+        {
+          "id": "anniversary",
+          "at": "2026-09-12T20:00:00-06:00",
+          "content": "For our wedding celebration this evening, we had dinner at Casa del Lago in Chapultepec. We loved the lakeside table."
+        }
+      ],
+      "noise_after": 42,
+      "expected": {
+        "answer_contains": [
+          "Casa del Lago",
+          "Chapultepec"
+        ],
+        "necessary_sources": [
+          "anniversary"
+        ],
+        "outcome": "answered_from_history"
+      }
+    },
+    {
+      "id": "mother-medication-reminder",
+      "request": "Remind my mother of her medicines.",
+      "history": [
+        {
+          "id": "mother",
+          "at": "2026-10-01T10:00:00-06:00",
+          "content": "My mother is Elena, household member fixture-mother. She uses Telegram, registered as chat fixture-mother-chat."
+        },
+        {
+          "id": "medication",
+          "at": "2026-10-02T10:00:00-06:00",
+          "content": "Elena's current clinician-provided reminder instructions are for synthetic Medicine A: one prescribed tablet daily at 08:00 America/Mexico_City. Reminders should go directly to Elena on Telegram, starting tomorrow. Do not change these instructions."
+        }
+      ],
+      "noise_after": 42,
+      "expected": {
+        "necessary_sources": [
+          "mother",
+          "medication"
+        ],
+        "outcome": "verified_recipient_schedule",
+        "recipient": "fixture-mother",
+        "channel_target": "fixture-mother-chat",
+        "local_hour": 8,
+        "medicine": "Medicine A"
+      }
+    },
+    {
+      "id": "sensor-recovery",
+      "request": "What is the study temperature now? If the usual route fails, find another working way to read it.",
+      "history": [],
+      "noise_after": 0,
+      "sensor_mode": "primary_failed",
+      "expected": {
+        "outcome": "verified_fresh_read",
+        "temperature_c": 24,
+        "answer_contains": [
+          "24"
+        ],
+        "necessary_sources": []
+      }
+    },
+    {
+      "id": "sensor-learned-route",
+      "request": "Read the study temperature. If the usual route fails, find a working alternative. Then draft a reusable skill for future study-temperature checks, show me its complete name, description and instructions, and ask for my approval before installing it. The skill should prefer the verified working route on future checks instead of repeating the failed route, unless new evidence justifies trying that route again.",
+      "history": [],
+      "noise_after": 0,
+      "sensor_mode": "primary_failed",
+      "learn_and_repeat": true,
+      "approval": "I approve the complete skill draft you just showed. Install that exact draft.",
+      "repeat_request": "What is the study temperature now?",
+      "expected": {
+        "outcome": "verified_learned_route",
+        "temperature_c": 24,
+        "answer_contains": [
+          "24"
+        ],
+        "necessary_sources": []
+      }
+    },
+    {
+      "id": "sensor-visible-failure",
+      "request": "What is the study temperature now? Try the available alternatives and tell me clearly if you cannot get a fresh reading.",
+      "history": [],
+      "noise_after": 0,
+      "sensor_mode": "all_failed",
+      "expected": {
+        "outcome": "explicit_unresolved_failure",
+        "necessary_sources": []
+      }
+    }
+  ],
+  "revision_note": "Make v1 learning oracle explicit in the synthetic request: prefer the verified working route on future checks. Original v1 results remain unchanged."
+}

@@ -138,3 +138,11 @@ Alphonse needs installed standard skill packages and separate user-owned househo
 Skills are the foundational reusable unit. A named combination of skills (previously called a **Personality**) may be useful as a convenience, but does not need to be a separate core concept unless experience shows it is needed.
 
 Alphonse has an initial skill library, installation flow, and Desktop CRUD workspace, but does not yet have a complete standard-skills lifecycle or a fully implemented conversation and memory-ledger model. These concepts describe intended capabilities and direction.
+
+## TypeSafe integration guidance
+
+When designing, reviewing, debugging, or changing Jev/System One integration, use
+the installed TypeSafe skill at `~/.agents/skills/typesafe-ai/SKILL.md` and consult
+the relevant live TypeSafe documentation it references. Apply its state-design,
+atomic-question, probability-handling, and evaluation guidance alongside this
+project's deterministic authorization and effect-verification requirements.

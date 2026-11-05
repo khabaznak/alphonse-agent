@@ -1,0 +1,28 @@
+[
+  {
+    "trial_id": "current-state:smoke:legacy",
+    "case_id": "current-state",
+    "repetition": 1,
+    "warmup": false,
+    "arm": "legacy",
+    "flagged": true,
+    "reviewer_identity": null,
+    "reviewer_role": null,
+    "decision": "unassessed",
+    "evidence": "trials.jsonl#current-state:smoke:legacy",
+    "disagreements": []
+  },
+  {
+    "trial_id": "current-state:smoke:candidate",
+    "case_id": "current-state",
+    "repetition": 1,
+    "warmup": false,
+    "arm": "candidate",
+    "flagged": true,
+    "reviewer_identity": null,
+    "reviewer_role": null,
+    "decision": "unassessed",
+    "evidence": "trials.jsonl#current-state:smoke:candidate",
+    "disagreements": []
+  }
+]

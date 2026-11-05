@@ -7,6 +7,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from alphonse.agent_v2.care_widgets import CareRecords
+
 from alphonse.agent_v2.core.core import AlphonseCore
 from alphonse.agent_v2.core.core import CoreActivityEvent
 from alphonse.agent_v2.core.core import CoreUiEvent
@@ -60,7 +62,7 @@ from alphonse.agent_v2.skills import SkillStore
 from alphonse.agent_v2.memory_settings import SQLiteMemorySettingsStore
 from alphonse.agent_v2.core.memory import LedgerMemory
 from alphonse.agent_v2.core.memory.daily_ledger import DailyLedgerProjector
-from alphonse.agent_v2.core.tools.registry.native.memory import build_search_memory_tool_definition
+from alphonse.agent_v2.core.tools.registry.native.memory import build_search_memory_tool_definition, build_read_memory_source_tool_definition
 from alphonse.agent_v2.conversations import SQLiteConversationStore
 from alphonse.agent_v2.memory_sessions import SQLiteMemorySessionStore
 from alphonse.agent_v2.system_one import SQLiteSystemOneSettingsStore
@@ -133,6 +135,8 @@ class V2RuntimeHost:
     conversation_store: SQLiteConversationStore
     project_checks: ProjectCheckService | None = None
     integration_management: Any | None = None
+    # #6 installs the protected native adapter; skill selection grants no access.
+    care_records: CareRecords | None = None
     integration_runtimes: list[Any] = field(default_factory=list)
     active_project_id: str = ""
     ui_events: list[CoreUiEvent] = field(default_factory=list)
@@ -244,10 +248,46 @@ def build_runtime_host(
         timezone_provider=user_store.timezone,
         summarizer=_summarize_daily_conversation,
     ))
+    from alphonse.agent_v2.core.memory.knowledge import KnowledgeMemory, KnowledgeStore
+    from alphonse.agent_v2.core.memory.extraction import extraction_prompt
+
+    def _extract_knowledge(payload: dict[str, Any], owner: str, *, cancel_checker: Callable | None = None) -> Any:
+        from alphonse.agent_v2.core.inference import InferencePurpose, InferenceRequest
+        # Do not pay for extraction when bounded review is unavailable/disabled.
+        if core.system_one is None:
+            raise RuntimeError("knowledge_review_unavailable")
+        return core.inference.generate_json(InferenceRequest(
+            prompt=extraction_prompt(payload), purpose=InferencePurpose.MEMORY_EXTRACTION, user=owner,
+            cancel_checker=cancel_checker,
+        )).json_value
+
+    def _review_knowledge(payload: dict[str, Any], candidates: list[dict[str, Any]]) -> list[bool]:
+        provider = core.system_one
+        if provider is None:
+            raise RuntimeError("knowledge_review_unavailable")
+        return provider.review_memory_candidates(payload, candidates)
+
+    def _compare_knowledge(pairs: list[Any]) -> list[str]:
+        if core.system_one is None:
+            raise RuntimeError("knowledge_review_unavailable")
+        return core.system_one.compare_memory_claims(pairs)
+
+    def _select_knowledge_support(source: Any, existing: list[Any]) -> list[str]:
+        if core.system_one is None:
+            raise RuntimeError("knowledge_review_unavailable")
+        return core.system_one.select_memory_support(source, existing)
+
+    knowledge = KnowledgeMemory(
+        store=KnowledgeStore(conversation_store.db_path), conversations=conversation_store,
+        extractor=_extract_knowledge, reviewer=_review_knowledge,
+        schedule_resolver=lambda schedule_id, owner: schedule_store.get_task_for_owner(schedule_id, owner_user_id=owner),
+        comparison_reviewer=_compare_knowledge, support_selector=_select_knowledge_support,
+    )
     memory = LedgerMemory(
         users_root=user_store.users_root,
         settings_store=memory_settings_store,
         summarizer=_compact_memory,
+        knowledge=knowledge,
         project_root_provider=lambda project_id: (
             project.root_path if (project := project_store.get_project(project_id, requester_is_admin=True)) is not None else None
         ),
@@ -258,6 +298,8 @@ def build_runtime_host(
     register_tool = getattr(tools, "register", None)
     if callable(register_tool) and getattr(tools, "get_definition", lambda _name: None)("native.search_memory") is None:
         register_tool(build_search_memory_tool_definition())
+    if callable(register_tool) and getattr(tools, "get_definition", lambda _name: None)("native.read_memory_source") is None:
+        register_tool(build_read_memory_source_tool_definition())
     integration_registry = integration_registry or build_default_integration_registry()
     presence_projector = PresenceProjector()
     presence_projector.register("tui", TuiPresenceAdapter())
@@ -319,6 +361,7 @@ def build_runtime_host(
         skill_store=skill_store,
         artifact_resources=artifact_resources,
         skill_bindings=skill_bindings,
+        asset_store=asset_store,
     )
     runtime = V2RuntimeHost(
         project_checks=ProjectCheckService(project_store, skill_bindings),

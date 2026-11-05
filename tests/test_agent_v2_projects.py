@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 
 import pytest
 
 from alphonse.agent_v2.core.core import CoreLoopContext
 from alphonse.agent_v2.core.core import ToolExecutionContext
-from alphonse.agent_v2.core.intelligence.pdca.nodes.act_node import _render_acceptance_criteria_prompt
+from alphonse.agent_v2.core.intelligence.acceptance_planning import _render_acceptance_criteria_prompt
 from alphonse.agent_v2.core.intelligence.pdca.nodes.plan_node import _render_tool_call_plan_prompt
 from alphonse.agent_v2.core.intelligence.pdca.nodes.plan_node import plan_node
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
@@ -40,8 +41,6 @@ def test_project_store_creates_directory_and_config_file(tmp_path: Path) -> None
     assert root.is_dir()
     assert project.config_path == str(root / "project_config.json")
     assert not Path(project.context_path).exists()
-    with pytest.raises(ValueError, match="legacy_project_context_read_only"):
-        store.write_project_context(project.project_id, "retired", requester_user_id="alex")
     assert store.read_project_config(project.project_id, requester_user_id="alex")["scope"] == "# Context\nBuild carefully."
     assert updated.updated_at >= project.updated_at
 
@@ -87,7 +86,8 @@ def test_project_store_archives_restores_and_updates_metadata(tmp_path: Path) ->
     assert updated.name == "Renamed"
     assert updated.description == "Details"
     assert updated.visibility == "shared"
-    with pytest.raises(KeyError, match="project_not_found"):
+    store.add_member(project.project_id, "gaby")
+    with pytest.raises(PermissionError, match="project_owner_required"):
         store.update_project(project.project_id, name="No", description="", visibility="private", requester_user_id="gaby")
 
 
@@ -105,7 +105,7 @@ def test_tui_project_commands_are_intercepted_and_not_queued(tmp_path: Path) -> 
     assert indented.command == ""
 
 
-def test_tui_project_selection_does_not_implicitly_scope_conversations(tmp_path: Path) -> None:
+def test_tui_project_selection_keeps_ordinary_conversation_projectless(tmp_path: Path) -> None:
     runtime = build_tui_runtime(user="alex", project_store=ProjectStore(":memory:"))
     runtime.conversation_store.set_daily_ledger_projector(None)
     project = create_tui_project(
@@ -115,8 +115,11 @@ def test_tui_project_selection_does_not_implicitly_scope_conversations(tmp_path:
         root_path=str(tmp_path / "alpha"),
         visibility="private",
     )
+    with pytest.raises(ValueError, match="legacy_project_context_read_only"):
+        save_tui_project_context(runtime, "Use the alpha rules.")
     runtime.project_store.write_project_config(project.project_id, {"scope": "Use the alpha rules."}, requester_user_id="alex")
 
+    runtime.channel.conversation_store = None
     result = queue_tui_input(runtime, "List files")
 
     assert runtime.active_project_id == project.project_id
@@ -158,6 +161,7 @@ def test_prompt_render_paths_include_project_context(tmp_path: Path) -> None:
         user="alex",
         project_id=project.project_id,
         acceptance_criteria_md="1.- [ ] Docs exist",
+        metadata={"v3_context_selection": {"selected_context_ids": ["project:" + project.project_id]}},
     )
     context = CoreLoopContext(messages=InMemoryMessageQueue(), tools=build_native_tool_registry(), project_store=store)
 
@@ -190,9 +194,8 @@ def test_capd_prompts_keep_user_and_project_contexts_isolated(tmp_path: Path) ->
         user_context_provider=lambda user_id: f"{user_id.upper()}_USER_SENTINEL",
     )
 
-    alex_task = TaskState(goal="Respond", user="alex", project_id=alex_project.project_id, acceptance_criteria_md="1.- [ ] Reply")
-    gaby_task = TaskState(goal="Respond", user="gaby", project_id=gaby_project.project_id, acceptance_criteria_md="1.- [ ] Reply")
-    alex_task.metadata["v3_context_selection"] = {"selected_context_ids": [f"project:{alex_project.project_id}"]}
+    alex_task = TaskState(goal="Respond", user="alex", project_id=alex_project.project_id, acceptance_criteria_md="1.- [ ] Reply", metadata={"v3_context_selection": {"selected_context_ids": ["project:" + alex_project.project_id]}})
+    gaby_task = TaskState(goal="Respond", user="gaby", project_id=gaby_project.project_id, acceptance_criteria_md="1.- [ ] Reply", metadata={"v3_context_selection": {"selected_context_ids": ["project:" + gaby_project.project_id]}})
     plan_node(alex_task, context=context)
     gaby_task.metadata["v3_context_selection"] = {"selected_context_ids": [f"project:{gaby_project.project_id}"]}
     plan_node(gaby_task, context=context)
@@ -218,9 +221,8 @@ def test_capd_prompt_uses_the_project_attached_to_each_new_task(tmp_path: Path) 
     store.write_project_config(second.project_id, {"scope": "SECOND_PROJECT_SENTINEL"}, requester_user_id="alex")
     context = CoreLoopContext(messages=InMemoryMessageQueue(), tools=build_native_tool_registry(), project_store=store)
 
-    first_task = TaskState(goal="Respond", user="alex", project_id=first.project_id, acceptance_criteria_md="1.- [ ] Reply")
-    second_task = TaskState(goal="Respond", user="alex", project_id=second.project_id, acceptance_criteria_md="1.- [ ] Reply")
-    first_task.metadata["v3_context_selection"] = {"selected_context_ids": [f"project:{first.project_id}"]}
+    first_task = TaskState(goal="Respond", user="alex", project_id=first.project_id, acceptance_criteria_md="1.- [ ] Reply", metadata={"v3_context_selection": {"selected_context_ids": ["project:" + first.project_id]}})
+    second_task = TaskState(goal="Respond", user="alex", project_id=second.project_id, acceptance_criteria_md="1.- [ ] Reply", metadata={"v3_context_selection": {"selected_context_ids": ["project:" + second.project_id]}})
     plan_node(first_task, context=context)
     second_task.metadata["v3_context_selection"] = {"selected_context_ids": [f"project:{second.project_id}"]}
     plan_node(second_task, context=context)

@@ -1,6 +1,7 @@
 """Native tools package for Alphonse agent v2."""
 
 from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry
+from alphonse.agent_v2.core.tools.registry.native.memory import build_search_memory_tool_definition, build_read_memory_source_tool_definition
 from alphonse.agent_v2.core.tools.registry.native.ask_question import ASK_QUESTION_TOOL_ID
 from alphonse.agent_v2.core.tools.registry.native.ask_question import ASK_QUESTION_TOOL_NAME
 from alphonse.agent_v2.core.tools.registry.native.ask_question import build_ask_question_tool_definition
@@ -16,8 +17,6 @@ from alphonse.agent_v2.core.tools.registry.native.deliver_message import DELIVER
 from alphonse.agent_v2.core.tools.registry.native.deliver_message import build_deliver_message_tool_definition
 from alphonse.agent_v2.core.tools.registry.native.deliver_message import execute_deliver_message
 from alphonse.agent_v2.core.tools.registry.native.send_attachment import build_send_attachment_tool_definition
-from alphonse.agent_v2.core.tools.registry.native.media import ANALYZE_IMAGE_TOOL_ID
-from alphonse.agent_v2.core.tools.registry.native.media import build_analyze_image_tool_definition
 from alphonse.agent_v2.core.tools.registry.native.respond import RESPOND_TOOL_ID
 from alphonse.agent_v2.core.tools.registry.native.respond import RESPOND_TOOL_NAME
 from alphonse.agent_v2.core.tools.registry.native.respond import build_respond_tool_definition
@@ -32,6 +31,7 @@ from alphonse.agent_v2.core.tools.registry.native.scheduled_task_delivery import
 from alphonse.agent_v2.core.tools.registry.native.web import build_web_fetch_tool_definition
 from alphonse.agent_v2.core.tools.registry.native.web import build_web_search_tool_definition
 from alphonse.agent_v2.web_tools_settings import WebToolsSettings
+from alphonse.agent_v2.core.tools.registry.native.media import build_analyze_image_tool_definition
 from alphonse.agent_v2.media_tools_settings import MediaToolsSettings
 from alphonse.agent_v2.skills import SkillStore
 from alphonse.agent_v2.core.tools.registry.native.skill_read import build_skill_read_tool_definition
@@ -44,6 +44,8 @@ def build_native_tool_registry(web_tools_settings: WebToolsSettings | None = Non
     registry = InMemoryToolRegistry()
     registry.register(build_integration_manage_tool_definition(management_runtime))
     registry.register(build_respond_tool_definition())
+    registry.register(build_search_memory_tool_definition())
+    registry.register(build_read_memory_source_tool_definition())
     registry.register(build_bash_tool_definition())
     registry.register(build_deliver_message_tool_definition())
     registry.register(build_send_attachment_tool_definition(asset_store))
@@ -68,7 +70,6 @@ def build_native_tool_registry(web_tools_settings: WebToolsSettings | None = Non
 
 __all__ = [
     "ASK_QUESTION_TOOL_ID",
-    "ANALYZE_IMAGE_TOOL_ID",
     "ASK_QUESTION_TOOL_NAME",
     "BASH_TOOL_ID",
     "BASH_TOOL_NAME",

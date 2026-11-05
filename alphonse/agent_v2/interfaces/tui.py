@@ -1054,7 +1054,7 @@ def _build_textual_app_class() -> type[Any]:
             super().__init__(); self.settings = settings; self.save = save; self.verify = verify
 
         def compose(self) -> ComposeResult:
-            tts = dict(self.settings.get("tts") or {}); stt = dict(self.settings.get("stt") or {}); ocr = dict(self.settings.get("ocr") or {})
+            tts = dict(self.settings.get("tts") or {}); stt = dict(self.settings.get("stt") or {})
             with Vertical(id="project-dialog"):
                 yield Static("Local Media Tools", classes="dialog-title")
                 yield Static(f"TTS ready: {tts.get('available')} | macOS say available: {self.settings.get('say_available')}", id="tts-status")
@@ -1067,11 +1067,6 @@ def _build_textual_app_class() -> type[Any]:
                     yield Input(value=str(stt.get(key, "")), placeholder=key, id=f"stt-{key}")
                 yield Input(placeholder="Audio sample path", id="stt-sample")
                 yield Button("Save STT", id="save-stt", variant="primary"); yield Button("Verify STT", id="verify-stt")
-                yield Static(f"OCR ready: {ocr.get('available')}", id="ocr-status")
-                for key in ("enabled", "ollama_base_url", "model_id", "timeout_seconds"):
-                    yield Input(value=str(ocr.get(key, "")), placeholder=key, id=f"ocr-{key}")
-                yield Input(placeholder="Image sample path", id="ocr-sample")
-                yield Button("Save OCR", id="save-ocr", variant="primary"); yield Button("Verify OCR", id="verify-ocr")
                 yield Static("", id="media-tools-notice"); yield Button("Close", id="close-media-tools")
 
         def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -1080,11 +1075,10 @@ def _build_textual_app_class() -> type[Any]:
             kind = action.rsplit("-", 1)[-1]
             try:
                 if action.startswith("save-"):
-                    keys = {"tts": ("enabled", "model_id", "device_map", "dtype", "language", "speaker", "instruct", "attn_implementation", "local_files_only"), "stt": ("enabled", "executable_path", "model", "default_language"), "ocr": ("enabled", "ollama_base_url", "model_id", "timeout_seconds")}[kind]
+                    keys = {"tts": ("enabled", "model_id", "device_map", "dtype", "language", "speaker", "instruct", "attn_implementation", "local_files_only"), "stt": ("enabled", "executable_path", "model", "default_language")}[kind]
                     values: dict[str, Any] = {key: self.query_one(f"#{kind}-{key}", Input).value for key in keys}
                     for key in ("enabled", "local_files_only"):
                         if key in values: values[key] = str(values[key]).strip().lower() in {"1", "true", "yes", "on"}
-                    if kind == "ocr": values["timeout_seconds"] = float(values["timeout_seconds"])
                     self.settings = self.save(kind, values)
                     self.query_one("#media-tools-notice", Static).update(f"{kind.upper()} saved; verify it to enable readiness.")
                 else:
@@ -1737,6 +1731,34 @@ def _build_textual_app_class() -> type[Any]:
                 return
             self.dismiss(True)
 
+    class DecisionWorkLogScreen(ModalScreen[None]):
+        def __init__(self, manifests, expand):
+            super().__init__()
+            self.manifests = manifests
+            self.expand_source = expand
+
+        def compose(self):
+            from alphonse.agent_v2.core.context_manifests import manifest_summary
+            with Vertical(id="agent-config-editor-dialog"):
+                yield Static("Decision context · call-time manifests", classes="dialog-title")
+                yield TextArea(manifest_summary(self.manifests), read_only=True, id="decision-manifest-text")
+                yield Static("Source expansion reads current authorized content, not retained decision text.")
+                yield Input(placeholder="Decision ID", id="decision-id")
+                yield Input(placeholder="Source ID", id="decision-source")
+                yield Button("Read source", id="read-decision-source")
+                yield Button("Close", id="close-decision-log")
+
+        def on_button_pressed(self, event):
+            if event.button.id == "close-decision-log":
+                self.dismiss(None)
+            elif event.button.id == "read-decision-source":
+                try:
+                    result = self.expand_source(self.query_one("#decision-id", Input).value, self.query_one("#decision-source", Input).value)
+                    contents = "\n\n".join(item["content"] for item in result.get("source", {}).get("items", []))
+                    self.query_one("#decision-manifest-text", TextArea).load_text(contents or "Source unavailable or no longer authorized.")
+                except Exception:
+                    self.query_one("#decision-manifest-text", TextArea).load_text("Source unavailable or no longer authorized.")
+
     class AlphonseTuiApp(App[None]):
         CSS = """
         Screen {
@@ -1862,7 +1884,7 @@ def _build_textual_app_class() -> type[Any]:
         }
         """
 
-        BINDINGS = [("ctrl+c", "quit", "Quit")]
+        BINDINGS = [("ctrl+c", "quit", "Quit"), ("ctrl+w", "decision_work_log", "Decision context")]
 
         def __init__(self) -> None:
             super().__init__()
@@ -1870,6 +1892,7 @@ def _build_textual_app_class() -> type[Any]:
             inference_settings_store = SQLiteInferenceSettingsStore.default()
             agent_config_store = AgentConfigStore(V2UserStore.default().agent_config_root())
             project_session_store = SQLiteProjectSessionStore.default()
+            self.decision_work_log = {}
             self.daemon_client = V2DaemonClient()
             self.external_daemon = _daemon_is_available(self.daemon_client)
             self.daemon_connection_status = "connected" if self.external_daemon else "embedded"
@@ -2436,6 +2459,7 @@ def _build_textual_app_class() -> type[Any]:
                                 user=str(event.get("user") or ""),
                                 integration_id=str(event.get("integration_id") or ""),
                                 channel_target=str(event.get("channel_target") or ""),
+                                progress=dict(event.get("progress") or {}),
                             )
                         )
                     status = self.daemon_client.status()
@@ -2475,7 +2499,17 @@ def _build_textual_app_class() -> type[Any]:
             self._refresh_global_activity()
             self._refresh_status()
 
+        def action_decision_work_log(self):
+            manifests = [m for progress in self.decision_work_log.values() for m in progress.get("decision_context_manifests", [])]
+            def expand(decision_id, source_id):
+                task_id = next((task_id for task_id, progress in self.decision_work_log.items() if any(m["decision_id"] == decision_id for m in progress.get("decision_context_manifests", []))), "")
+                params = dict(actor_user_id=self.runtime.user, task_id=task_id, decision_id=decision_id, source_id=source_id)
+                return self.daemon_client.request("decision_context", **params) if self.external_daemon else self.daemon.decision_context(**params)
+            self.push_screen(DecisionWorkLogScreen(manifests, expand))
+
         def _append_activity_event(self, event: CoreActivityEvent) -> None:
+            if event.user == self.runtime.user and event.progress:
+                self.decision_work_log[event.task_id] = event.progress
             self.activity_hold_until = time.monotonic() + 0.8
             self.query_one("#activity", Static).update(format_global_activity_status(event, self.spinner_index))
             if self._is_tui_reply_event(event):

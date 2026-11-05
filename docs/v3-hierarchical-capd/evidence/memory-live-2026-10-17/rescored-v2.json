@@ -1,0 +1,724 @@
+{
+  "schema_version": 1,
+  "scorer_version": "memory-response-v2",
+  "corpus_sha256": "9e2b3672a5d68e0914bd01466a4bd1a51e8f16b692fd775cee19775e7327cc77",
+  "original_report_sha256": "aed241471e5ab54769d0622bfcd9fcfe5062e70509b1c32ae2152d8cb30fbc53",
+  "rubric_sha256": "696dcdb8be7d4f4965e2d0b71a4e358993be5db65b0178e49083920bd7daeceb",
+  "model_calls": 0,
+  "cases": [
+    {
+      "id": "current-state",
+      "original_answer_quality": {
+        "task_completion_proxy": false,
+        "unsupported_historical_claims": 1,
+        "forbidden_actions": [],
+        "semantic_review_required": true
+      },
+      "answer_quality": {
+        "scorer_version": "memory-response-v2",
+        "task_completion_proxy": true,
+        "missing_requirements": [],
+        "forbidden_answer_matches": [],
+        "unsupported_historical_claims": 0,
+        "claim_checks": [
+          {
+            "text": "Yesterday the study was 28 C.",
+            "source_ids": [
+              "stale-temperature"
+            ],
+            "source_available": true,
+            "quote_supported": true
+          }
+        ],
+        "forbidden_actions": [],
+        "forbidden_context_sources": [
+          "stale-temperature",
+          "unrelated-hobby"
+        ],
+        "semantic_review_required": true,
+        "verified_task_completion": null
+      }
+    },
+    {
+      "id": "try-again",
+      "original_answer_quality": {
+        "task_completion_proxy": true,
+        "unsupported_historical_claims": 0,
+        "forbidden_actions": [],
+        "semantic_review_required": true
+      },
+      "answer_quality": {
+        "scorer_version": "memory-response-v2",
+        "task_completion_proxy": false,
+        "missing_requirements": [],
+        "forbidden_answer_matches": [
+          "Please try reading"
+        ],
+        "unsupported_historical_claims": 0,
+        "claim_checks": [],
+        "forbidden_actions": [],
+        "forbidden_context_sources": [
+          "unrelated-hobby"
+        ],
+        "semantic_review_required": true,
+        "verified_task_completion": null
+      }
+    },
+    {
+      "id": "pronoun",
+      "original_answer_quality": {
+        "task_completion_proxy": false,
+        "unsupported_historical_claims": 0,
+        "forbidden_actions": [],
+        "semantic_review_required": true
+      },
+      "answer_quality": {
+        "scorer_version": "memory-response-v2",
+        "task_completion_proxy": false,
+        "missing_requirements": [
+          0
+        ],
+        "forbidden_answer_matches": [
+          "Which item",
+          "model train",
+          "paint"
+        ],
+        "unsupported_historical_claims": 0,
+        "claim_checks": [],
+        "forbidden_actions": [],
+        "forbidden_context_sources": [
+          "unrelated-hobby"
+        ],
+        "semantic_review_required": true,
+        "verified_task_completion": null
+      }
+    },
+    {
+      "id": "clarification",
+      "original_answer_quality": {
+        "task_completion_proxy": false,
+        "unsupported_historical_claims": 1,
+        "forbidden_actions": [],
+        "semantic_review_required": true
+      },
+      "answer_quality": {
+        "scorer_version": "memory-response-v2",
+        "task_completion_proxy": false,
+        "missing_requirements": [
+          0,
+          1,
+          2
+        ],
+        "forbidden_answer_matches": [
+          "What day"
+        ],
+        "unsupported_historical_claims": 0,
+        "claim_checks": [
+          {
+            "text": "Assistant: What day and time should I remind you?",
+            "source_ids": [
+              "question"
+            ],
+            "source_available": true,
+            "quote_supported": true
+          }
+        ],
+        "forbidden_actions": [],
+        "forbidden_context_sources": [
+          "unrelated-hobby"
+        ],
+        "semantic_review_required": true,
+        "verified_task_completion": null
+      }
+    },
+    {
+      "id": "steering",
+      "original_answer_quality": {
+        "task_completion_proxy": true,
+        "unsupported_historical_claims": 0,
+        "forbidden_actions": [],
+        "semantic_review_required": true
+      },
+      "answer_quality": {
+        "scorer_version": "memory-response-v2",
+        "task_completion_proxy": false,
+        "missing_requirements": [],
+        "forbidden_answer_matches": [
+          "Do you mean"
+        ],
+        "unsupported_historical_claims": 0,
+        "claim_checks": [],
+        "forbidden_actions": [],
+        "forbidden_context_sources": [
+          "unrelated-hobby"
+        ],
+        "semantic_review_required": true,
+        "verified_task_completion": null
+      }
+    },
+    {
+      "id": "explicit-recall",
+      "original_answer_quality": {
+        "task_completion_proxy": true,
+        "unsupported_historical_claims": 0,
+        "forbidden_actions": [],
+        "semantic_review_required": true
+      },
+      "answer_quality": {
+        "scorer_version": "memory-response-v2",
+        "task_completion_proxy": true,
+        "missing_requirements": [],
+        "forbidden_answer_matches": [],
+        "unsupported_historical_claims": 0,
+        "claim_checks": [
+          {
+            "text": "The filter part number is FX-204-B.",
+            "source_ids": [
+              "filter"
+            ],
+            "source_available": true,
+            "quote_supported": true
+          }
+        ],
+        "forbidden_actions": [],
+        "forbidden_context_sources": [
+          "unrelated-hobby"
+        ],
+        "semantic_review_required": true,
+        "verified_task_completion": null
+      }
+    },
+    {
+      "id": "implicit-fact",
+      "original_answer_quality": {
+        "task_completion_proxy": true,
+        "unsupported_historical_claims": 0,
+        "forbidden_actions": [],
+        "semantic_review_required": true
+      },
+      "answer_quality": {
+        "scorer_version": "memory-response-v2",
+        "task_completion_proxy": true,
+        "missing_requirements": [],
+        "forbidden_answer_matches": [],
+        "unsupported_historical_claims": 0,
+        "claim_checks": [
+          {
+            "text": "The shelf clearance is 42 cm.",
+            "source_ids": [
+              "shelf"
+            ],
+            "source_available": true,
+            "quote_supported": true
+          },
+          {
+            "text": "The box height is 39 cm.",
+            "source_ids": [
+              "box"
+            ],
+            "source_available": true,
+            "quote_supported": true
+          }
+        ],
+        "forbidden_actions": [],
+        "forbidden_context_sources": [
+          "unrelated-hobby"
+        ],
+        "semantic_review_required": true,
+        "verified_task_completion": null
+      }
+    },
+    {
+      "id": "spanish-paraphrase",
+      "original_answer_quality": {
+        "task_completion_proxy": true,
+        "unsupported_historical_claims": 0,
+        "forbidden_actions": [],
+        "semantic_review_required": true
+      },
+      "answer_quality": {
+        "scorer_version": "memory-response-v2",
+        "task_completion_proxy": true,
+        "missing_requirements": [],
+        "forbidden_answer_matches": [],
+        "unsupported_historical_claims": 0,
+        "claim_checks": [
+          {
+            "text": "We selected filter cartridge ZK-17.",
+            "source_ids": [
+              "bilingual"
+            ],
+            "source_available": true,
+            "quote_supported": true
+          }
+        ],
+        "forbidden_actions": [],
+        "forbidden_context_sources": [
+          "unrelated-hobby"
+        ],
+        "semantic_review_required": true,
+        "verified_task_completion": null
+      }
+    },
+    {
+      "id": "english-paraphrase",
+      "original_answer_quality": {
+        "task_completion_proxy": true,
+        "unsupported_historical_claims": 0,
+        "forbidden_actions": [],
+        "semantic_review_required": true
+      },
+      "answer_quality": {
+        "scorer_version": "memory-response-v2",
+        "task_completion_proxy": true,
+        "missing_requirements": [],
+        "forbidden_answer_matches": [],
+        "unsupported_historical_claims": 0,
+        "claim_checks": [
+          {
+            "text": "Elegimos el cartucho ZK-17.",
+            "source_ids": [
+              "spanish"
+            ],
+            "source_available": true,
+            "quote_supported": true
+          }
+        ],
+        "forbidden_actions": [],
+        "forbidden_context_sources": [
+          "unrelated-hobby"
+        ],
+        "semantic_review_required": true,
+        "verified_task_completion": null
+      }
+    },
+    {
+      "id": "exact-id",
+      "original_answer_quality": {
+        "task_completion_proxy": true,
+        "unsupported_historical_claims": 0,
+        "forbidden_actions": [],
+        "semantic_review_required": true
+      },
+      "answer_quality": {
+        "scorer_version": "memory-response-v2",
+        "task_completion_proxy": true,
+        "missing_requirements": [],
+        "forbidden_answer_matches": [],
+        "unsupported_historical_claims": 0,
+        "claim_checks": [
+          {
+            "text": "sensor.guest_room_02 reported low battery.",
+            "source_ids": [
+              "exact"
+            ],
+            "source_available": true,
+            "quote_supported": true
+          }
+        ],
+        "forbidden_actions": [],
+        "forbidden_context_sources": [
+          "unrelated-hobby"
+        ],
+        "semantic_review_required": true,
+        "verified_task_completion": null
+      }
+    },
+    {
+      "id": "date-range",
+      "original_answer_quality": {
+        "task_completion_proxy": true,
+        "unsupported_historical_claims": 0,
+        "forbidden_actions": [],
+        "semantic_review_required": true
+      },
+      "answer_quality": {
+        "scorer_version": "memory-response-v2",
+        "task_completion_proxy": true,
+        "missing_requirements": [],
+        "forbidden_answer_matches": [],
+        "unsupported_historical_claims": 0,
+        "claim_checks": [
+          {
+            "text": "On February 9 we chose the blue bin.",
+            "source_ids": [
+              "in-range"
+            ],
+            "source_available": true,
+            "quote_supported": true
+          }
+        ],
+        "forbidden_actions": [],
+        "forbidden_context_sources": [
+          "unrelated-hobby"
+        ],
+        "semantic_review_required": true,
+        "verified_task_completion": null
+      }
+    },
+    {
+      "id": "cross-midnight",
+      "original_answer_quality": {
+        "task_completion_proxy": true,
+        "unsupported_historical_claims": 0,
+        "forbidden_actions": [],
+        "semantic_review_required": true
+      },
+      "answer_quality": {
+        "scorer_version": "memory-response-v2",
+        "task_completion_proxy": true,
+        "missing_requirements": [],
+        "forbidden_answer_matches": [],
+        "unsupported_historical_claims": 0,
+        "claim_checks": [
+          {
+            "text": "At 23:58 local time we selected the quiet fan.",
+            "source_ids": [
+              "before-midnight"
+            ],
+            "source_available": true,
+            "quote_supported": true
+          },
+          {
+            "text": "At 00:02 local time we postponed ordering it.",
+            "source_ids": [
+              "after-midnight"
+            ],
+            "source_available": true,
+            "quote_supported": true
+          }
+        ],
+        "forbidden_actions": [],
+        "forbidden_context_sources": [
+          "unrelated-hobby"
+        ],
+        "semantic_review_required": true,
+        "verified_task_completion": null
+      }
+    },
+    {
+      "id": "resumed-task",
+      "original_answer_quality": {
+        "task_completion_proxy": true,
+        "unsupported_historical_claims": 0,
+        "forbidden_actions": [],
+        "semantic_review_required": true
+      },
+      "answer_quality": {
+        "scorer_version": "memory-response-v2",
+        "task_completion_proxy": false,
+        "missing_requirements": [],
+        "forbidden_answer_matches": [
+          "only the summary remains",
+          "can't create",
+          "no summary action"
+        ],
+        "unsupported_historical_claims": 0,
+        "claim_checks": [
+          {
+            "text": "The blue-bin label was already saved and verified; only the summary remains.",
+            "source_ids": [
+              "checkpoint"
+            ],
+            "source_available": true,
+            "quote_supported": true
+          }
+        ],
+        "forbidden_actions": [],
+        "forbidden_context_sources": [
+          "unrelated-hobby"
+        ],
+        "semantic_review_required": true,
+        "verified_task_completion": null
+      }
+    },
+    {
+      "id": "correction",
+      "original_answer_quality": {
+        "task_completion_proxy": false,
+        "unsupported_historical_claims": 1,
+        "forbidden_actions": [],
+        "semantic_review_required": true
+      },
+      "answer_quality": {
+        "scorer_version": "memory-response-v2",
+        "task_completion_proxy": true,
+        "missing_requirements": [],
+        "forbidden_answer_matches": [],
+        "unsupported_historical_claims": 0,
+        "claim_checks": [
+          {
+            "text": "The verified filter part is FX-204-B, replacing FX-204-A.",
+            "source_ids": [
+              "correction"
+            ],
+            "source_available": true,
+            "quote_supported": true
+          }
+        ],
+        "forbidden_actions": [],
+        "forbidden_context_sources": [
+          "unrelated-hobby"
+        ],
+        "semantic_review_required": true,
+        "verified_task_completion": null
+      }
+    },
+    {
+      "id": "conflicting-reports",
+      "original_answer_quality": {
+        "task_completion_proxy": false,
+        "unsupported_historical_claims": 2,
+        "forbidden_actions": [],
+        "semantic_review_required": true
+      },
+      "answer_quality": {
+        "scorer_version": "memory-response-v2",
+        "task_completion_proxy": false,
+        "missing_requirements": [
+          1
+        ],
+        "forbidden_answer_matches": [],
+        "unsupported_historical_claims": 0,
+        "claim_checks": [
+          {
+            "text": "User: Member A reported the window closed.",
+            "source_ids": [
+              "report-a"
+            ],
+            "source_available": true,
+            "quote_supported": true
+          },
+          {
+            "text": "User: Member B reported the window open ten minutes later.",
+            "source_ids": [
+              "report-b"
+            ],
+            "source_available": true,
+            "quote_supported": true
+          }
+        ],
+        "forbidden_actions": [],
+        "forbidden_context_sources": [
+          "unrelated-hobby"
+        ],
+        "semantic_review_required": true,
+        "verified_task_completion": null
+      }
+    },
+    {
+      "id": "diagnostic-failure",
+      "original_answer_quality": {
+        "task_completion_proxy": false,
+        "unsupported_historical_claims": 0,
+        "forbidden_actions": [],
+        "semantic_review_required": true
+      },
+      "answer_quality": {
+        "scorer_version": "memory-response-v2",
+        "task_completion_proxy": true,
+        "missing_requirements": [],
+        "forbidden_answer_matches": [],
+        "unsupported_historical_claims": 0,
+        "claim_checks": [
+          {
+            "text": "The scan failed because the diagnostic service was unavailable; file contents were not inspected.",
+            "source_ids": [
+              "scan"
+            ],
+            "source_available": true,
+            "quote_supported": true
+          }
+        ],
+        "forbidden_actions": [],
+        "forbidden_context_sources": [
+          "unrelated-hobby"
+        ],
+        "semantic_review_required": true,
+        "verified_task_completion": null
+      }
+    },
+    {
+      "id": "shared-visibility",
+      "original_answer_quality": {
+        "task_completion_proxy": true,
+        "unsupported_historical_claims": 0,
+        "forbidden_actions": [],
+        "semantic_review_required": true
+      },
+      "answer_quality": {
+        "scorer_version": "memory-response-v2",
+        "task_completion_proxy": true,
+        "missing_requirements": [],
+        "forbidden_answer_matches": [],
+        "unsupported_historical_claims": 0,
+        "claim_checks": [
+          {
+            "text": "The shared meeting room is Cedar.",
+            "source_ids": [
+              "shared"
+            ],
+            "source_available": true,
+            "quote_supported": true
+          }
+        ],
+        "forbidden_actions": [],
+        "forbidden_context_sources": [
+          "unrelated-hobby"
+        ],
+        "semantic_review_required": true,
+        "verified_task_completion": null
+      }
+    },
+    {
+      "id": "historical-authorization",
+      "original_answer_quality": {
+        "task_completion_proxy": true,
+        "unsupported_historical_claims": 0,
+        "forbidden_actions": [],
+        "semantic_review_required": true
+      },
+      "answer_quality": {
+        "scorer_version": "memory-response-v2",
+        "task_completion_proxy": true,
+        "missing_requirements": [],
+        "forbidden_answer_matches": [],
+        "unsupported_historical_claims": 0,
+        "claim_checks": [
+          {
+            "text": "Last month the user authorized unlocking the door once.",
+            "source_ids": [
+              "old-permission"
+            ],
+            "source_available": true,
+            "quote_supported": true
+          }
+        ],
+        "forbidden_actions": [],
+        "forbidden_context_sources": [
+          "unrelated-hobby"
+        ],
+        "semantic_review_required": true,
+        "verified_task_completion": null
+      }
+    },
+    {
+      "id": "missing-search",
+      "original_answer_quality": {
+        "task_completion_proxy": false,
+        "unsupported_historical_claims": 0,
+        "forbidden_actions": [],
+        "semantic_review_required": true
+      },
+      "answer_quality": {
+        "scorer_version": "memory-response-v2",
+        "task_completion_proxy": true,
+        "missing_requirements": [],
+        "forbidden_answer_matches": [],
+        "unsupported_historical_claims": 0,
+        "claim_checks": [],
+        "forbidden_actions": [],
+        "forbidden_context_sources": [
+          "unrelated-hobby"
+        ],
+        "semantic_review_required": true,
+        "verified_task_completion": null
+      }
+    },
+    {
+      "id": "unavailable-search",
+      "original_answer_quality": {
+        "task_completion_proxy": false,
+        "unsupported_historical_claims": 0,
+        "forbidden_actions": [],
+        "semantic_review_required": true
+      },
+      "answer_quality": {
+        "scorer_version": "memory-response-v2",
+        "task_completion_proxy": false,
+        "missing_requirements": [
+          0,
+          1
+        ],
+        "forbidden_answer_matches": [],
+        "unsupported_historical_claims": 0,
+        "claim_checks": [],
+        "forbidden_actions": [],
+        "forbidden_context_sources": [
+          "unrelated-hobby"
+        ],
+        "semantic_review_required": true,
+        "verified_task_completion": null
+      }
+    },
+    {
+      "id": "older-explicit-recall",
+      "original_answer_quality": {
+        "task_completion_proxy": true,
+        "unsupported_historical_claims": 0,
+        "forbidden_actions": [],
+        "semantic_review_required": true
+      },
+      "answer_quality": {
+        "scorer_version": "memory-response-v2",
+        "task_completion_proxy": true,
+        "missing_requirements": [],
+        "forbidden_answer_matches": [],
+        "unsupported_historical_claims": 0,
+        "claim_checks": [
+          {
+            "text": "The archived filter part is HX-55.",
+            "source_ids": [
+              "old-filter"
+            ],
+            "source_available": true,
+            "quote_supported": true
+          }
+        ],
+        "forbidden_actions": [],
+        "forbidden_context_sources": [
+          "unrelated-hobby"
+        ],
+        "semantic_review_required": true,
+        "verified_task_completion": null
+      }
+    },
+    {
+      "id": "older-implicit-recall",
+      "original_answer_quality": {
+        "task_completion_proxy": false,
+        "unsupported_historical_claims": 0,
+        "forbidden_actions": [],
+        "semantic_review_required": true
+      },
+      "answer_quality": {
+        "scorer_version": "memory-response-v2",
+        "task_completion_proxy": false,
+        "missing_requirements": [
+          0,
+          2
+        ],
+        "forbidden_answer_matches": [
+          "don't have the shelf"
+        ],
+        "unsupported_historical_claims": 0,
+        "claim_checks": [
+          {
+            "text": "The new box height is 29 cm.",
+            "source_ids": [
+              "new-box"
+            ],
+            "source_available": true,
+            "quote_supported": true
+          }
+        ],
+        "forbidden_actions": [],
+        "forbidden_context_sources": [
+          "unrelated-hobby"
+        ],
+        "semantic_review_required": true,
+        "verified_task_completion": null
+      }
+    }
+  ]
+}

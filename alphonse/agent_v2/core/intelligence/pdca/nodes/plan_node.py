@@ -186,6 +186,7 @@ def _call_tool_planning_inference(
                 project_id=task.project_id,
                 user=task.user,
                 task_id=task.task_id,
+                images=context.image_inputs(task),
                 tools=tools,
                 cancel_checker=context.is_cancelled if context.cancellation_checker is not None else None,
             )

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import deque
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -425,9 +426,76 @@ def test_phase_executor_uses_bounded_local_fallback() -> None:
 
     outcome = executor.run(TaskState(user="alex"), state, CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry, system_one=_accept_successful_actions()))
 
+    assert outcome.status == PhaseStatus.PHASE_COMPLETE
+    assert calls == ["broken", "fallback"]
+    assert [item.status for item in state.actions] == ["failed", "success"]
+
+
+def test_different_queries_without_semantic_progress_return_to_strategy():
+    calls = []
+    registry = InMemoryToolRegistry()
+    registry.register(_tool("native.search", lambda arguments: calls.append(arguments) or {"query": arguments["query"], "results": []}, read_only=True))
+    phase = PhasePlan("search", "Find the needed evidence", (PhaseSubgoal(
+        "recall", "Find a necessary source", "source", allowed_capabilities=("native.search",),
+        failure_policy=FailurePolicy.LOCAL_FALLBACK,
+    ),), authorized_capabilities=("native.search",))
+    state = new_tactical_state(phase)
+    state.revealed_tool_ids = ["native.search"]
+    from alphonse.agent_v2.system_one import SystemOneTacticalReview
+    jev = SimpleNamespace(evaluate_tactical_progress=lambda **kwargs: SystemOneTacticalReview(
+        False, 0.95, True, answers={"runtime_action_added_progress": 0.05, "runtime_declared_subgoal_complete": 0.05}))
+    executor = PhaseExecutor(action_selector=_selector([
+        {"tool_id": "native.search", "arguments": {"query": str(i)}} for i in range(4)]))
+    outcome = executor.run(TaskState(user="alex"), state, CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry, system_one=jev))
     assert outcome.status == PhaseStatus.BLOCKED
-    assert calls == ["broken"]
-    assert [item.status for item in state.actions] == ["failed"]
+    assert len(calls) == 3
+    assert "tactical_stage_no_new_progress" in outcome.blockers
+
+
+def test_local_read_only_fallback_stops_after_three_distinct_failures():
+    calls = []
+
+    def unavailable(arguments):
+        calls.append(arguments)
+        raise RuntimeError("unavailable")
+
+    registry = InMemoryToolRegistry()
+    registry.register(_tool("native.read", unavailable, read_only=True))
+    phase = PhasePlan("read", "Read evidence", (PhaseSubgoal(
+        "read", "Read evidence", "record", allowed_capabilities=("native.read",),
+        failure_policy=FailurePolicy.LOCAL_FALLBACK,
+    ),), authorized_capabilities=("native.read",))
+    state = new_tactical_state(phase)
+    state.revealed_tool_ids = ["native.read"]
+    executor = PhaseExecutor(action_selector=_selector([
+        {"tool_id": "native.read", "arguments": {"route": i}} for i in range(4)]))
+    outcome = executor.run(TaskState(user="alex"), state, CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry,
+        system_one=_accept_successful_actions()))
+    assert outcome.status == PhaseStatus.BLOCKED
+    assert len(calls) == 3
+
+
+def test_local_fallback_does_not_repeat_an_uncertain_external_mutation():
+    calls = []
+
+    def mutate(arguments):
+        calls.append(arguments)
+        raise RuntimeError("completion unknown")
+
+    registry = InMemoryToolRegistry()
+    registry.register(_tool("native.mutate", mutate, read_only=False))
+    phase = PhasePlan("write", "Update a device", (PhaseSubgoal(
+        "write", "Update a device", "record", allowed_capabilities=("native.mutate",),
+        allowed_side_effects=(SideEffectClass.EXTERNAL_REVERSIBLE,), failure_policy=FailurePolicy.LOCAL_FALLBACK,
+    ),), authorized_capabilities=("native.mutate",), mutation_scope=MutationScope(allow_external_effects=True))
+    state = new_tactical_state(phase)
+    state.revealed_tool_ids = ["native.mutate"]
+    executor = PhaseExecutor(action_selector=_selector([
+        {"tool_id": "native.mutate", "arguments": {"value": i}} for i in range(2)]))
+    outcome = executor.run(TaskState(user="alex"), state, CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry,
+        system_one=_accept_successful_actions()))
+    assert outcome.status == PhaseStatus.BLOCKED
+    assert len(calls) == 1
 
 
 def test_phase_executor_retries_same_read_only_action_when_jev_approves(monkeypatch) -> None:
@@ -625,6 +693,8 @@ def test_phase_executor_rejects_identical_action_after_jev_reports_no_progress()
         "confidence": 0.95,
         "retry_approved": False,
         "answers": {"temperature_returned": 0.05},
+        "context_complete": True,
+        "context_coverage": {},
     }
     assert state.evidence.entries[1]["semantic_duplicate_of"] == state.actions[0].action_id
 
@@ -674,3 +744,95 @@ def test_phase_executor_can_pivot_to_bash_after_incomplete_native_result() -> No
     assert outcome.status == PhaseStatus.PHASE_COMPLETE
     assert calls == ["native", "bash"]
     assert [entry["progress_review"]["complete"] for entry in state.evidence.entries] == [False, True]
+
+
+def test_tactical_vision_receives_images_and_completes_without_ocr_tool(tmp_path):
+    from alphonse.agent_v2.assets import AttachmentDescriptor, SQLiteAssetStore
+    from alphonse.agent_v2.core.inference import InferencePurpose, InferenceRouter, ModelProfile, StubInferenceProvider
+
+    assets = SQLiteAssetStore(':memory:', tmp_path / 'assets')
+    asset = assets.register_bytes(owner_user_id='alex', descriptor=AttachmentDescriptor('photo.png', 'image/png', 3), content=b'png', source='desktop')
+    task = TaskState(task_id='vision', user='alex', goal='Describe image', metadata={'attachments': [{'asset_id': asset.asset_id, 'mime_type': 'image/png'}]})
+    phase = PhasePlan(
+        phase_id='vision', objective='Describe image', authorized_capabilities=('attachment_analysis', 'native.respond'),
+        subgoals=(PhaseSubgoal('answer', 'Describe image', 'text', allowed_capabilities=('attachment_analysis', 'native.respond'), allowed_side_effects=(SideEffectClass.USER_RESPONSE,), completion=CompletionCondition('output_present', output_type='text')),),
+    )
+    registry = InMemoryToolRegistry()
+    registry.register(_tool('native.respond', lambda args: {'message': args['message']}, read_only=False))
+    provider = StubInferenceProvider(json_by_purpose={InferencePurpose.TACTICAL_ACTION: {
+        'tool_id': 'native.respond', 'arguments': {'message': 'A red bicycle.'},
+        'acceptance_questions': [{'question_id': 'answer', 'type': 'noul', 'instructions': 'Does the answer describe the supplied image?', 'criteria': {'true': 'The image is described.', 'false': 'No description.'}}],
+    }})
+    context = CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry, asset_store=assets,
+        inference=InferenceRouter(provider=provider, default_profile=ModelProfile('stub', 'selected', 'selected')), system_one=_accept_successful_actions())
+    state = new_tactical_state(phase)
+    state.revealed_tool_ids = ['native.respond']
+    outcome = PhaseExecutor().run(task, state, context)
+    assert outcome.status == PhaseStatus.PHASE_COMPLETE
+    assert provider.requests[0].images[0].content == b'png'
+    assert state.evidence.entries[0]['kind'] == 'inference_image_input'
+    assert state.evidence.entries[0]['status'] == 'provided'
+    assert state.evidence.entries[0]['asset_ids'] == [asset.asset_id]
+    assert [action.tool_id for action in state.actions] == ['native.respond']
+
+
+def test_image_subgoal_cannot_complete_from_text_only_injected_action():
+    task = TaskState(task_id='vision', user='alex', metadata={'attachments': [{'asset_id': 'missing', 'mime_type': 'image/png'}]})
+    phase = PhasePlan(phase_id='vision', objective='Describe image', authorized_capabilities=('attachment_analysis', 'native.respond'),
+        subgoals=(PhaseSubgoal('answer', 'Describe', 'text', allowed_capabilities=('attachment_analysis', 'native.respond'), allowed_side_effects=(SideEffectClass.USER_RESPONSE,), completion=CompletionCondition('output_present', output_type='text')),))
+    registry = InMemoryToolRegistry()
+    registry.register(_tool('native.respond', lambda _: {'message': 'unsupported claim'}, read_only=False))
+    state = new_tactical_state(phase)
+    state.revealed_tool_ids = ['native.respond']
+    context = CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry, system_one=_accept_successful_actions())
+    executor = PhaseExecutor(action_selector=lambda *_: {'tool_id': 'native.respond', 'arguments': {}})
+    outcome = executor.run(task, state, context)
+    assert outcome.status == PhaseStatus.BLOCKED
+    assert not state.completed_subgoal_ids
+    assert state.evidence.entries[0]['progress_review']['complete'] is False
+
+
+@pytest.mark.parametrize("tool_id, confident, probability, expected", [
+    ("native.respond", False, 0.65, True),
+    ("native.respond", True, 0.05, False),
+    ("native.read", False, 0.65, False),
+])
+def test_response_uncertainty_does_not_replace_operational_or_outer_verification(tool_id, confident, probability, expected):
+    from alphonse.agent_v2.core.intelligence.v3.contracts import TacticalAction
+    response = tool_id == "native.respond"
+    subgoal = PhaseSubgoal("work", "Report the supported place with remaining uncertainty" if response else "Read measurement",
+        "result", allowed_side_effects=(SideEffectClass.USER_RESPONSE if response else SideEffectClass.READ_ONLY,))
+    state = new_tactical_state(PhasePlan("phase", "Answer request", (subgoal,)))
+    action = TacticalAction("action", "work", tool_id, {}, status="success",
+        result={"message": "The note supports this place, but the exact occasion is uncertain."})
+    jev = SimpleNamespace(evaluate_tactical_progress=lambda **kwargs: SystemOneTacticalReview(
+        complete=False, confident=confident, confidence=probability,
+        answers={"runtime_declared_subgoal_complete": probability}))
+    result, _, _ = PhaseExecutor()._completion_review(TaskState(user="alex"), state, subgoal, action,
+        CoreLoopContext(messages=InMemoryMessageQueue(), system_one=jev))
+    assert result is expected
+
+
+def test_dc1_cross_channel_checkpoint_does_not_repeat_completed_mutation():
+    import json
+    calls = ['edit']  # The synthetic verified effect already happened before restart.
+    task = TaskState(user='alex', project_id='home', metadata={'channel': {'provider_key': 'telegram'}})
+    state = new_tactical_state(_phase())
+    state.status = PhaseStatus.RUNNING
+    state.completed_subgoal_ids = ['locate', 'update']
+    state.active_subgoal_id = 'verify'
+    state.bind_subgoal_output('locate', 'record_reference', {'path': 'mejoras_hogar/backlog.md'})
+    state.bind_subgoal_output('update', 'verified_mutation', {'verification': {'status': 'verified'}})
+    state.evidence.append({'evidence_ref': 'tactical-action:prior-edit', 'subgoal_id': 'update',
+                           'status': 'success', 'result': {'verification': {'status': 'verified'}}})
+    state.revealed_tool_ids = ['native.exact_text_edit', 'native.read']
+    task.hierarchical_state = state.to_dict()
+    task = TaskState.from_dict(json.loads(json.dumps(task.to_checkpoint_dict())))
+    restored = TacticalState.from_dict(task.hierarchical_state)
+    task.metadata['channel'] = {'provider_key': 'desktop'}
+    outcome = PhaseExecutor(action_selector=_selector([
+        {'tool_id': 'native.read', 'arguments': {'path': 'mejoras_hogar/backlog.md'}},
+    ])).run(task, restored, CoreLoopContext(messages=InMemoryMessageQueue(), tools=_registry(calls), system_one=_accept_successful_actions()))
+    assert outcome.status == PhaseStatus.PHASE_COMPLETE
+    assert calls == ['edit', 'read']
+    assert restored.evidence.entries[0]['evidence_ref'] == 'tactical-action:prior-edit'

@@ -272,7 +272,12 @@ def test_desktop_history_imports_legacy_ledger_only_once(monkeypatch) -> None:
     history = daemon.desktop_conversation_history(user="alex", project_id=project.project_id)
     repeated = daemon.desktop_conversation_history(user="alex", project_id=project.project_id)
 
-    assert [(item["role"], item["content"]) for item in history] == [("user", "Restore me"), ("assistant", "Restored.")]
+    # Unknown historical dates must not be represented as today's messages.
+    assert history == repeated == []
+    imported = runtime.conversation_store.list_owner(owner_user_id="alex")
+    assert [(item.role, item.content) for item in imported] == [("user", "Restore me"), ("assistant", "Restored.")]
+    assert all(item.created_at == item.observed_at == "" for item in imported)
+    assert all(item.provenance == "legacy_import" for item in imported)
     assert repeated == history
     assert reads == 1
 

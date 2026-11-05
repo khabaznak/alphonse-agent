@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from conftest import act_judgments
+
+import pytest
+
 from pathlib import Path
 
 from alphonse.agent_v2.core.core import CoreLoopContext, ImprovementPhase, ProcessingResult, StateSnapshot, ToolDescriptor, ToolKind
@@ -7,7 +11,7 @@ from alphonse.agent_v2.core.inference import InferencePurpose, InferenceResult, 
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.intelligence.v3 import CompletionCondition
 from alphonse.agent_v2.core.intelligence.v3 import EngineRoutingProcessor, HierarchicalCAPDProcessor
-from alphonse.agent_v2.core.intelligence.v3 import PhaseOutcome, PhasePlan, PhaseStatus, PhaseSubgoal
+from alphonse.agent_v2.core.intelligence.v3 import PhaseOutcome, PhasePlan, PhaseStatus, PhaseSubgoal, SideEffectClass
 from alphonse.agent_v2.core.intelligence.v3 import new_tactical_state
 from alphonse.agent_v2.core.intelligence.v3.processor import _deduplicated_history_evidence
 from alphonse.agent_v2.core.intelligence.v3 import processor as v3_processor_module
@@ -21,7 +25,6 @@ from alphonse.agent_v2.intelligence_engine_settings import HIERARCHICAL_V3, TACT
 from alphonse.agent_v2.intelligence_engine_settings import IntelligenceEngineSettings
 from alphonse.agent_v2.intelligence_engine_settings import SQLiteIntelligenceEngineSettingsStore
 from alphonse.agent_v2.system_one import SystemOneReviewResult
-from alphonse.agent_v2.system_one import SystemOneActRecommendation
 from alphonse.agent_v2.system_one import SystemOneTacticalReview
 from alphonse.agent_v2.system_one import SystemOneToolRegistrySelection
 
@@ -47,14 +50,8 @@ class _TestJev:
             str(item.get("question_id")): 0.99 for item in questions or []
         })
 
-    def recommend_act(self, *, state):
-        action = "complete" if state.get("check_verdict") == "success" else "continue"
-        return SystemOneActRecommendation(action, 0.99, True, f"Jev recommends {action}.", answers={
-            "continuation_is_worthwhile": 0.99,
-            "user_input_can_unblock": 0.1,
-            "closure_explanation_is_warranted": 0.99,
-        })
-
+    def judge_act(self, *, state):
+        return act_judgments()
 
 def test_engine_settings_default_to_v3_and_allow_v2_rollback(tmp_path: Path) -> None:
     store = SQLiteIntelligenceEngineSettingsStore(tmp_path / "settings.sqlite3")
@@ -127,6 +124,36 @@ def test_v3_phase_history_stores_only_current_phase_evidence() -> None:
     assert task.metadata["v3_phase_history"][0]["evidence"]["entries"] == [
         {"evidence_ref": "current", "phase_id": "current-phase", "status": "success"}
     ]
+
+
+def test_acknowledgement_variations_cannot_keep_an_unfulfilled_mission_running(monkeypatch):
+    from types import SimpleNamespace
+    from alphonse.agent_v2.core.intelligence.v3 import PhaseReviewStatus
+    processor = HierarchicalCAPDProcessor()
+    count = []
+
+    def new_state(task, context):
+        return new_tactical_state(PhasePlan("phase-" + str(len(count)), "Finish work",
+            (PhaseSubgoal("work", "Finish work", "result"),)))
+
+    def run(task, state, context):
+        count.append(1)
+        state.evidence.append({"evidence_ref": "reply:" + str(len(count)), "phase_id": state.phase.phase_id,
+            "tool_id": "native.respond", "status": "success", "result": {"message": "Acknowledged " + str(len(count))}})
+        return PhaseOutcome(state.phase.phase_id, PhaseStatus.PHASE_COMPLETE)
+
+    def review(task, state, outcome, context):
+        task.metadata["v3_route"] = "strategic_replan"
+        return SimpleNamespace(status=PhaseReviewStatus.PHASE_VERIFIED_TASK_COMPLETE), SimpleNamespace()
+
+    monkeypatch.setattr(processor, "_new_state", new_state)
+    processor.executor = SimpleNamespace(run=run)
+    processor.outer = SimpleNamespace(review_and_route=review)
+    task = TaskState(task_id="task", message_id="message", user="alex", goal="Complete a responsibility")
+    result = processor.process(task, CoreLoopContext(messages=InMemoryMessageQueue()))
+    assert result.status.value == "failed"
+    assert len(count) == 3
+    assert task.metadata["v3_no_progress_stop"]
 
 
 class _Processor:
@@ -341,19 +368,8 @@ def test_hierarchical_processor_plans_one_stage_and_jev_selects_respond_for_gree
                 model="jev-latest",
             )
 
-        def recommend_act(self, *, state):
-            action = "complete" if state.get("check_verdict") == "success" else "continue"
-            return SystemOneActRecommendation(action, 0.99, True, "Verified greeting.", answers={
-                "continuation_is_worthwhile": 0.99, "user_input_can_unblock": 0.1,
-                "closure_explanation_is_warranted": 0.99,
-            })
-
-        def recommend_act(self, *, state):
-            from alphonse.agent_v2.system_one import SystemOneActRecommendation
-            return SystemOneActRecommendation(
-                "complete", 0.99, True, "Acceptance is verified.",
-                answers={"continuation_is_worthwhile": 0.1, "user_input_can_unblock": 0.1, "closure_explanation_is_warranted": 0.9},
-            )
+        def judge_act(self, *, state):
+            return act_judgments()
 
     registry = InMemoryToolRegistry()
     registry.register(build_respond_tool_definition())
@@ -430,7 +446,7 @@ def test_every_v3_plan_pass_emits_a_plan_activity(monkeypatch) -> None:
     assert events[0].progress["route"] == "strategic_replan"
 
 
-def test_hierarchical_processor_fails_invalid_phase_after_bounded_correction() -> None:
+def test_hierarchical_processor_fails_invalid_phase_after_one_bounded_correction() -> None:
     provider = StubInferenceProvider(
         markdown_by_purpose={InferencePurpose.ACCEPTANCE_CRITERIA: "1.- [ ] The record is updated"},
         json_by_purpose={
@@ -464,7 +480,10 @@ def test_hierarchical_processor_fails_invalid_phase_after_bounded_correction() -
 
     assert result.status.value == "failed"
     assert result.error is not None and result.error.startswith("v3_task_failed:v3_phase_plan_invalid:")
-    assert len([item for item in provider.requests if item.purpose == InferencePurpose.PHASE_PLANNING]) == 2
+    planning = [item for item in provider.requests if item.purpose == InferencePurpose.PHASE_PLANNING]
+    assert len(planning) == 2
+    assert 'Plan validation feedback' in planning[1].prompt
+    assert all(item.purpose != InferencePurpose.TACTICAL_ACTION for item in provider.requests)
 
 
 def test_v3_phase_planner_receives_latest_user_tool_hint() -> None:
@@ -566,11 +585,12 @@ def test_v3_phase_planner_receives_project_context_and_durable_memory(tmp_path: 
         project_id=project.project_id,
         memory_context_md=(
             "# Durable Project Memory\n"
-            f"Primary journal path: {root / 'calisthenics_journal.md'}\n"
+            f"- [memory:journal; active] Primary journal path: {root / 'calisthenics_journal.md'}\n"
             "Never duplicate a same-date entry.\n"
-            + ("archived context " * 900)
-            + "\n# Recent Session Events\nLatest workout correction remains active."
+            + "\n- [memory:archive; active] " + ("archived context " * 900)
+            + "\n- [memory:correction; active] Latest workout correction remains active."
         ),
+        metadata={"v3_context_selection": {"selected_context_ids": ["project:" + project.project_id]}},
         recent_conversation_md='- alex: "I completed 5 sets of push-ups"',
     )
     task.metadata["v3_context_selection"] = {"selected_context_ids": [f"project:{project.project_id}"]}
@@ -600,17 +620,17 @@ def test_v3_phase_planner_receives_project_context_and_durable_memory(tmp_path: 
     )
 
     request = next(item for item in provider.requests if item.purpose == InferencePurpose.PHASE_PLANNING)
-    assert str(root) in request.prompt
+    assert "Project — Calisthenics" in request.prompt
     assert "Keep a dated workout journal." in request.prompt
     assert str(root / "calisthenics_journal.md") in request.prompt
     assert "Latest workout correction remains active." in request.prompt
-    assert "context truncated" in request.prompt
+    assert "memory omitted" in request.prompt
     assert 'I completed 5 sets of push-ups' in request.prompt
     assert "never mutation targets" in request.prompt
     assert "Do not ask the requester for a file location already present" in request.prompt
     assert state.phase.mutation_scope.allowed_paths == ()
-    assert "Keep a dated workout journal." in jev.project_context
-    assert "calisthenics_journal.md" in jev.durable_memory
+    assert jev.project_context == "" and jev.durable_memory == ""
+    assert state.phase.tool_curation_status == "deterministic"
     assert '"tool_id": "native.bash"' in request.prompt
 
 
@@ -774,12 +794,8 @@ def test_v3_known_journal_path_flows_from_memory_to_read_and_verified_edit(tmp_p
                 route_confident=True,
             )
 
-        def recommend_act(self, *, state):
-            action = "complete" if state.get("check_verdict") == "success" else "continue"
-            return SystemOneActRecommendation(action, 0.99, True, f"Jev recommends {action}.", answers={
-                "continuation_is_worthwhile": 0.99, "user_input_can_unblock": 0.1,
-                "closure_explanation_is_warranted": 0.99,
-            })
+        def judge_act(self, *, state):
+            return act_judgments()
 
     provider = SequencedProvider()
     inference = InferenceRouter(provider=provider, default_profile=ModelProfile("test", "test", "default"))
@@ -828,6 +844,7 @@ def test_v3_answered_question_replans_with_named_tool_instead_of_repeating_parke
             "Ask Alex for a source",
             "source",
             allowed_capabilities=("user_interaction",),
+            allowed_side_effects=(SideEffectClass.USER_RESPONSE,),
             completion=CompletionCondition("output_present", output_type="source"),
         ),),
         authorized_capabilities=("user_interaction",),
@@ -856,6 +873,13 @@ def test_v3_answered_question_replans_with_named_tool_instead_of_repeating_parke
         hierarchical_state=waiting_state.to_dict(),
         intelligence_engine=HIERARCHICAL_V3,
         intelligence_schema_version=3,
+    )
+    task.metadata.update(
+        question_interrupt={"status": "answered", "question_id": "question-1"},
+        v3_resumption_evidence=[{
+            "kind": "authenticated_question_answer", "task_id": task.task_id, "phase_id": "ask-source",
+            "result": {"question_id": "question-1"},
+        }],
     )
     task.set_acceptance_contract_from_markdown("1.- [ ] La temperatura del estudio se obtiene")
     seen_phase_ids: list[str] = []
@@ -943,3 +967,7 @@ def test_processor_continues_until_a_real_terminal_state(tmp_path: Path) -> None
     assert restored.status == "completed"
     assert restored.outcome == {"status": "success", "reason": "done"}
     assert phase_count == 10
+
+
+# Existing scripted providers delegate the shared interpretation call explicitly.
+pytestmark = pytest.mark.usefixtures("task_understanding_provider")

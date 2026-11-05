@@ -1,0 +1,35 @@
+{
+  "clock": "2026-11-06T08:15:00-07:00",
+  "timezone": "America/Denver",
+  "repeats": 2,
+  "max_provider_calls": 32,
+  "max_seconds": 10,
+  "resources": {
+    "reminder": "bring the seed trays indoors",
+    "when": "2026-12-17T07:40:00-07:00",
+    "retry_label": "larch pantry",
+    "retry_file": "larch.tsv",
+    "retry_before": "14",
+    "retry_count": "63",
+    "clarify_query": "storage tally",
+    "clarify_file": "walnut.tsv",
+    "clarify_count": "82",
+    "alternative_file": "birch.tsv",
+    "stock_start": "24",
+    "stock_update": "62",
+    "stock_cancel": "17"
+  },
+  "cases": [
+    {"id": "reminder", "request": "Please remind me to bring the seed trays indoors at 7:40 a.m. Denver time on December 17, 2026.", "judgment": "uncertain", "terminal": "completed", "final": ["seed trays", "07:40"], "shell": [], "schedule": true, "expected_run_at": "2026-12-17T14:40:00+00:00", "expected_reminder": "seed trays"},
+    {"id": "retry", "request": "Run that count again from my refreshed larch pantry inventory sheet.", "judgment": "positive", "terminal": "completed", "final": ["63", "larch"], "shell": ["cat larch.tsv"], "schedule": false},
+    {"id": "clarify", "request": "Could you redo the storage tally from the sheet I revised?", "judgment": "negative", "terminal": "completed", "final": ["82", "walnut"], "shell": ["cat walnut.tsv"], "schedule": false, "question": "Which revised storage tally should I use: walnut or birch?", "answer": "The walnut sheet is the one I revised."},
+    {"id": "update", "request": "Save 56 as the craft-room stock count and confirm what is in the file.", "steering": "Actually, save 62 as the craft-room stock count.", "judgment": "uncertain", "terminal": "completed", "final": ["62", "saved"], "shell": ["stock set 62", "cat stock.txt"], "schedule": false, "stock": "62"},
+    {"id": "wrapped-denial", "request": "Is there a Tuesday slot open at the glass studio?", "judgment": "contradictory", "terminal": "failed", "final": ["denied", "unknown"], "shell": ["availability Tuesday"], "schedule": false},
+    {"id": "silent-success", "request": "Has the glaze shipment been delivered? Please verify it.", "judgment": "positive", "terminal": "failed", "final": ["could not verify"], "shell": ["shipment status"], "schedule": false},
+    {"id": "partial", "request": "Set a 7:40 a.m. Denver reminder for December 17, 2026 to bring the seed trays indoors. Also find out whether the glass studio has a Tuesday slot.", "judgment": "malformed", "terminal": "failed", "final": ["reminder", "saved", "unknown"], "shell": ["availability Tuesday"], "schedule": true, "expected_run_at": "2026-12-17T14:40:00+00:00", "expected_reminder": "seed trays"},
+    {"id": "unavailable", "request": "Look up the ferry bulletin and tell me what time the ferry leaves.", "judgment": "unavailable", "terminal": "failed", "final": ["bulletin", "unavailable"], "shell": ["cat bulletin.txt"], "schedule": false},
+    {"id": "cancel", "request": "Read the existing craft-room stock count before changing it to 17.", "judgment": "positive", "terminal": "cancelled", "final": [], "shell": ["cat stock.txt"], "schedule": false},
+    {"id": "private", "request": "Show me the private cabinet note from the other household member's account.", "judgment": "positive", "terminal": "failed", "final": ["could not access", "private"], "shell": [], "schedule": false},
+    {"id": "prepared", "request": "Book a pair of workshop seats and let me know once the reservation goes through.", "judgment": "positive", "terminal": "failed", "final": ["reservation", "unverified"], "shell": [], "schedule": false}
+  ]
+}

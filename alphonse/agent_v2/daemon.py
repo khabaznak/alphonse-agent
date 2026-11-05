@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from alphonse.agent_v2.core.core import CoreUiEvent
+from alphonse.agent_v2.core.core import CoreUiEvent, CoreActivityEvent, ImprovementPhase, _task_progress_snapshot
 from alphonse.agent_v2.core.core import LoopStepStatus
 from alphonse.agent_v2.core.io import OutboundSelector
 from alphonse.agent_v2.core.io import channel_address_from_metadata
@@ -72,7 +72,7 @@ from alphonse.agent_v2.memory_sessions import SQLiteMemorySessionStore
 from alphonse.agent_v2.memory_sessions import MemorySessionBindingKey
 from alphonse.agent_v2.web_tools_settings import SQLiteWebToolsSettingsStore
 from alphonse.agent_v2.media_tools_settings import SQLiteMediaToolsSettingsStore
-from alphonse.agent_v2.core.tools.registry.native.media import verify_ocr, verify_stt, verify_stt_recording, verify_tts
+from alphonse.agent_v2.core.tools.registry.native.media import verify_stt, verify_stt_recording, verify_tts
 from alphonse.agent_v2.runtime import refresh_runtime_web_tools
 from alphonse.agent_v2.runtime import refresh_runtime_media_tools
 from alphonse.agent_v2.runtime import refresh_runtime_artifacts
@@ -204,6 +204,11 @@ class V2Daemon:
             project_check_handler=self.project_check_dispatcher,
             on_message_queued=lambda: None,
             on_direct_delivery=self._deliver_scheduled_reminder,
+            on_failure=lambda occurrence, error: self._notify_scheduled_task_failure({
+                "scheduled_task_id": occurrence.task.scheduled_task_id,
+                "occurrence_key": occurrence.occurrence_key,
+                "channel": dict(occurrence.task.origin_channel),
+            }, error=error),
             memory_session_resolver=lambda project_id, identity, owner: self.runtime.memory_session_store.ensure_system(project_id=project_id, identity=identity, created_by_user_id=owner).session_id if project_id else "",
         )
         self.event_dispatcher = EventDispatchWorker(
@@ -459,6 +464,22 @@ class V2Daemon:
         self._ensure_home_projects()
         self._migrate_blank_project_records()
         return user.to_dict()
+
+    def household_overview(self, *, actor_user_id: str, include_personal: bool = False) -> dict[str, Any]:
+        from alphonse.agent_v2.household import household_overview
+        return household_overview(self.runtime, actor=str(actor_user_id or "").strip(), include_personal=include_personal)
+
+    def work_items(self, *, actor_user_id: str, owner_user_id: str = "", view: str = "active", limit: int = 50, offset: int = 0) -> dict[str, Any]:
+        from alphonse.agent_v2.work_items import project_work_items
+        actor = str(actor_user_id or "").strip()
+        if not actor or self.runtime.user_store.get_user(actor) is None:
+            raise PermissionError("work_actor_required")
+        owner = str(owner_user_id or actor).strip()
+        if owner != actor and not self.runtime.user_store.is_admin(actor):
+            raise PermissionError("work_owner_forbidden")
+        if self.runtime.user_store.get_user(owner) is None:
+            raise KeyError("work_owner_not_found")
+        return project_work_items(self.runtime, actor=actor, owner=owner, view=view, limit=limit, offset=offset)
 
     def scheduled_tasks(
         self,
@@ -844,6 +865,8 @@ class V2Daemon:
         return self.list_skills_workspace(actor_user_id=actor_user_id)["skills"]
 
     def list_skills_workspace(self, *, actor_user_id: str) -> dict[str, Any]:
+        from alphonse.agent_v2.skill_appearances import resolve_appearance
+
         self._require_admin(actor_user_id)
         artifacts = self.runtime.artifact_store.list()
         return {
@@ -852,6 +875,7 @@ class V2Daemon:
                  "lifecycle": self.runtime.skill_store.management_status(item.skill_id),
                  "bindings": self.runtime.core.skill_bindings.management_status(actor_id=actor_user_id, skill_id=item.skill_id),
                  "files": self.runtime.skill_store.files(item.skill_id),
+                 "appearance": resolve_appearance(item), "appearance_configured": bool(item.appearance),
                  "artifacts": []}
                 for item in self.runtime.skill_store.list_skills()
             ],
@@ -860,6 +884,61 @@ class V2Daemon:
             "legacy_migration_required": any(
                 not self._legacy_migration_complete(item.artifact_id) for item in artifacts),
         }
+
+    def skill_appearance(self, *, actor_user_id: str, skill_id: str) -> dict[str, Any]:
+        from alphonse.agent_v2.skill_appearances import resolve_appearance
+
+        self._require_admin(actor_user_id)
+        record = self.runtime.skill_store.get(skill_id)
+        return {"appearance": resolve_appearance(record, include_resources=True) if record else None}
+
+    def set_skill_appearance(self, *, actor_user_id: str, skill_id: str, preset: str) -> dict[str, str]:
+        self._require_admin(actor_user_id)
+        self.runtime.skill_store.set_appearance(skill_id, preset)
+        return {"saved": skill_id}
+
+    def desktop_appearance_context(self, user: str) -> dict[str, Any]:
+        """Project only the current user's persisted skill decision, never task contents."""
+        from alphonse.agent_v2.skill_appearances import leading_skill, resolve_appearance
+
+        active = self.kill_switch.active()
+        if active is None or active.user_id != user or self.kill_switch.is_cancelled(active.message_id):
+            return {"task_id": "", "ready": False, "appearance": None}
+        task = self.runtime.question_store.load_task_checkpoint(active.task_id)
+        if task is None or task.user != user or task.status in {"completed", "failed", "cancelled", "waiting_user"}:
+            return {"task_id": active.task_id, "ready": False, "appearance": None}
+        selection = task.metadata.get("v3_skill_selection")
+        skill_id = leading_skill(selection)
+        try:
+            record = self.runtime.skill_store.get(skill_id) if skill_id else None
+            appearance = resolve_appearance(record) if record else None
+        except (KeyError, OSError, ValueError):
+            appearance = None
+        return {"task_id": active.task_id, "ready": isinstance(selection, dict), "appearance": appearance}
+
+    def desktop_widget_context(self, user: str, widget_ids: Any = None) -> dict[str, Any]:
+        from alphonse.agent_v2.widget_context import project_widgets
+
+        active = self.kill_switch.active()
+        task = None
+        if active and active.user_id == user and not self.kill_switch.is_cancelled(active.message_id):
+            candidate = self.runtime.question_store.load_task_checkpoint(active.task_id)
+            if candidate and candidate.user == user and candidate.status not in {"completed", "failed", "cancelled"}:
+                task = candidate
+        # A daemon-local lifetime is only a suggestion for new placements. Saved
+        # placement expiry is never extended by a poll/reconnect.
+        key = (user, task.task_id if task else "")
+        lifetime = getattr(self, "_widget_context_lifetime", None)
+        if lifetime is None or lifetime[0] != key:
+            lifetime = (key, int(time.time() * 1000) + 30 * 60 * 1000)
+            self._widget_context_lifetime = lifetime
+        expiry = lifetime[1]
+        try:
+            requested_ids = {item for item in widget_ids[:128] if isinstance(item, str)} if isinstance(widget_ids, list) else set()
+            widgets = project_widgets(self.runtime, user, task, expires_at=expiry, requested_ids=requested_ids)
+        except (OSError, ValueError, KeyError):
+            widgets = []
+        return {"version": 1, "member": user, "widgets": widgets}
 
     def attach_artifact_to_skill(self, *, actor_user_id: str, artifact_id: str, skill_id: str, instructions: str) -> dict[str, Any]:
         self._require_admin(actor_user_id)
@@ -1023,13 +1102,10 @@ class V2Daemon:
         settings = self.runtime.media_tools_settings_store.get()
         if kind == "tts": result = verify_tts(settings.tts, sample_text=sample or "Alphonse text-to-speech verification.")
         elif kind == "stt": result = verify_stt(settings.stt, sample_path=sample)
-        elif kind == "ocr": result = verify_ocr(settings.ocr, sample_path=sample)
         else: raise ValueError("media_tools_kind_invalid")
         exception = result.get("exception") if isinstance(result, dict) else {"message": "verification_failed"}
         output = result.get("output") if isinstance(result, dict) else {}
         preview = str((output or {}).get("text") or (output or {}).get("file_path") or "")
-        if kind == "ocr" and isinstance(output, dict) and isinstance(output.get("latency_ms"), (int, float)):
-            preview = f"Verified in {float(output['latency_ms']) / 1000:.1f}s: {preview}"
         error = str((exception or {}).get("message") or "") if isinstance(exception, dict) else ""
         details = (exception or {}).get("details") if isinstance(exception, dict) else {}
         detail_error = str((details or {}).get("error") or "") if isinstance(details, dict) else ""
@@ -1090,6 +1166,35 @@ class V2Daemon:
     def save_agent_config(self, file_name: str, content: str) -> dict[str, str]:
         return self.runtime.agent_config_store.save(file_name, content).to_dict()
 
+    def decision_context(self, *, actor_user_id: str, task_id: str, decision_id: str = "", source_id: str = "") -> dict[str, Any]:
+        """Read captured manifests; optional source expansion rechecks current visibility.
+
+        Source expansion is a current read, never a reconstruction of model input.
+        Unknown tasks, decisions and forbidden sources share the same response.
+        """
+        from copy import deepcopy
+        from alphonse.agent_v2.core.core import ToolExecutionContext
+        from alphonse.agent_v2.core.tools.registry.native.memory import execute_read_memory_source
+        self._require_admin(actor_user_id)
+        actor = str(actor_user_id).strip()
+        task = self.runtime.question_store.load_task_checkpoint(task_id)
+        missing = {"status": "not_found", "manifests": []}
+        if task is None or task.user != actor:
+            return missing
+        manifests = task.metadata.get("decision_context_manifests", [])
+        if not source_id:
+            return {"status": "found", "manifests": deepcopy(manifests), "legacy": not bool(manifests)}
+        decision = next((item for item in manifests if item["decision_id"] == decision_id), None)
+        sources = {record["source_id"] for projection in decision.get("projections", []) for record in projection.get("records", [])} if decision else set()
+        if decision:
+            sources.update(record["source_id"] for record in decision.get("sources", []))
+        if source_id not in sources:
+            return missing
+        result = execute_read_memory_source({"source_id": source_id, "neighbors": 0}, context=ToolExecutionContext(
+            task=task, messages=self.runtime.queue, memory=self.runtime.core.memory, conversation_store=self.runtime.conversation_store,
+        ))
+        return {"status": result["status"], "source": result, "expansion": "current_authorized_source; not retained decision text"}
+
     def pop_activity_events(self) -> list[dict[str, Any]]:
         """Legacy destructive-looking API backed by a shared event journal.
 
@@ -1141,7 +1246,7 @@ class V2Daemon:
         limit: int = 100,
     ) -> dict[str, Any]:
         """Collect Desktop activity and atomically lease its pending messages."""
-        normalized_user = self._admin_user_id(user)
+        normalized_user = self._question_actor(user)
         # Desktop polling is user scoped. Project IDs remain on tasks and events
         # but never constrain the main conversation or its pending surfaces.
         normalized_project = ""
@@ -1184,6 +1289,8 @@ class V2Daemon:
             event = self._record_question_conversation_event(question)
             questions.append({
                 **question.to_dict(),
+                "metadata": {},
+                "context": self._question_context(question, normalized_user),
                 "conversation_sequence": event.sequence if event is not None else self.runtime.conversation_store.sequence_for_source_message_id(
                     f"question:{question.question_id}"
                 ),
@@ -1222,6 +1329,8 @@ class V2Daemon:
             "server_capabilities": self._a2ui.server_capabilities(),
             "conversation_has_unseen_messages": self.runtime.conversation_store.user_has_unseen_messages(owner_user_id=normalized_user, local_date=day.isoformat(), start_utc=day_start.isoformat(), end_utc=day_end.isoformat()),
             "status": {"active_work": self.active_work(), "activity": self.activity_status(), "queue": self._inbound_queue_status()},
+            "mascot": self.desktop_appearance_context(normalized_user),
+            "widget_context": self.desktop_widget_context(normalized_user, capabilities.get("widgetIds")),
         }
 
     def acknowledge_desktop_delivery(self, *, client_id: str, outbox_message_id: str) -> bool:
@@ -1742,9 +1851,44 @@ class V2Daemon:
     def save_project_context(self, *, user: str, project_id: str, content: str) -> dict[str, str]:
         return self.runtime.project_store.write_project_context(project_id, content, requester_user_id=self._admin_user_id(user), requester_is_admin=True).to_dict()
 
+    def _question_context(self, question: Any, actor: str) -> dict[str, Any]:
+        # Only explicit question context crosses the respondent boundary. Never
+        # expose arbitrary task metadata, paths, executable instructions or data.
+        if question.respondent_user_id != actor:
+            raise PermissionError("question_respondent_required")
+        delivery = question.metadata.get("delivery") or {}
+        context = delivery.get("question_context") or {}
+        if not isinstance(context, dict):
+            return {}
+        artifacts = []
+        resources = self.runtime.core.artifact_resources
+        ids = context.get("artifact_ids")
+        for artifact_id in (ids[:8] if isinstance(ids, list) else []):
+            record = self.runtime.artifact_store.get(str(artifact_id))
+            if record is None or not resources.can_use(record, actor):
+                # Do not echo names or identifiers of inaccessible resources.
+                artifacts.append({"status": "unavailable"})
+                continue
+            detail = resources.describe(record, actor)
+            artifacts.append({"artifact_id": record.artifact_id, "name": record.name,
+                              "description": record.description, "status": detail["status"]})
+        return {"text": str(context.get("text") or "")[:4000], "artifacts": artifacts}
+
+    def _question_actor(self, user: str) -> str:
+        """Desktop is the local administrator channel; never rewrite a supplied actor."""
+        actor = str(user or "").strip()
+        admin = self.runtime.user_store.admin_user()
+        if not actor or (admin is not None and actor != admin.user_id):
+            raise PermissionError("question_respondent_required")
+        if admin is None and not self.runtime.user_store.is_ephemeral:
+            raise PermissionError("question_respondent_required")
+        return actor
+
     def answer_question(self, *, user: str, question_id: str, text: str = "", payload: dict[str, Any] | None = None) -> dict[str, Any]:
-        normalized_user = self._admin_user_id(user)
+        normalized_user = self._question_actor(user)
         question = self.runtime.question_store.get_question(question_id)
+        if question is not None and question.respondent_user_id != normalized_user:
+            raise PermissionError("question_respondent_required")
         if question is not None:
             self._record_question_conversation_event(question)
         if question is not None and question.kind == "datetime" and isinstance(payload, dict):
@@ -1810,8 +1954,12 @@ class V2Daemon:
             created_at=str(question.created_at or ""),
         )
 
-    def cancel_question(self, question_id: str) -> bool:
+    def cancel_question(self, question_id: str, *, user: str) -> bool:
+        actor = self._question_actor(user)
+        self.runtime.question_store.expire_questions()
         question = self.runtime.question_store.get_question(question_id)
+        if question is not None and question.respondent_user_id != actor:
+            raise PermissionError("question_respondent_required")
         cancelled = self.runtime.question_store.cancel_question(question_id)
         if cancelled:
             self.runtime.ui_events.append(
@@ -1835,7 +1983,8 @@ class V2Daemon:
     ) -> dict[str, Any]:
         """Perform a validated action from a server-owned A2UI surface."""
         client = str(client_id or "desktop").strip() or "desktop"
-        respondent = self._admin_user_id(user)
+        respondent = self._question_actor(user)
+        self.runtime.question_store.expire_questions()
         if ALPHONSE_DESKTOP_CATALOG_ID not in self._desktop_capabilities.get(client, set()):
             raise ValueError("a2ui_catalog_not_negotiated")
         values = dict(context or {})
@@ -1858,7 +2007,7 @@ class V2Daemon:
         if question is None or question.status != "pending" or question.respondent_user_id != respondent:
             raise ValueError("a2ui_question_not_available")
         if action == "cancel_question" and source == "cancel":
-            return {"cancelled": self.cancel_question(question_id)}
+            return {"cancelled": self.cancel_question(question_id, user=respondent)}
         if action != "answer_question":
             raise ValueError("a2ui_action_not_allowed")
         payload: dict[str, Any]
@@ -2068,11 +2217,7 @@ class V2Daemon:
         key = (client_id, user)
         known = self._desktop_progress_surfaces.setdefault(key, set())
         closing = self._desktop_progress_closures.pop(key, set())
-        rendered = [
-            {"event": _a2ui_custom(self._a2ui.task_progress_closed(task_id))}
-            for task_id in sorted(closing)
-        ]
-        known.difference_update(closing)
+        rendered = []
         for event in events:
             if event.get("user") != admin.user_id or event.get("integration_id") != "desktop":
                 continue
@@ -2080,8 +2225,16 @@ class V2Daemon:
             progress = event.get("progress") if isinstance(event.get("progress"), dict) else {}
             if not task_id or not progress or (project_id and str(progress.get("project_id") or "").strip() != project_id):
                 continue
+            progress = {**progress, "updated_at": str(event.get("occurred_at") or "")}
             rendered.extend({"event": _a2ui_custom(envelope)} for envelope in self._a2ui.task_progress(task_id, progress))
             known.add(task_id)
+            if str(progress.get("status") or "") in {"completed", "done", "failed", "cancelled", "abandoned"}:
+                closing.add(task_id)
+            else:
+                closing.discard(task_id)
+        # Closure follows the final update, even when both share a poll.
+        rendered.extend({"event": _a2ui_custom(self._a2ui.task_progress_closed(task_id))} for task_id in sorted(closing))
+        known.difference_update(closing)
         return rendered
 
     def _inbound_queue_status(self) -> dict[str, int]:
@@ -2089,7 +2242,7 @@ class V2Daemon:
         values = dict(counts) if isinstance(counts, dict) else {}
         ready = int(self.runtime.queue.size() or 0)
         processing = int(values.get("processing", 0) or 0)
-        return {"ready": ready, "processing": processing}
+        return {"ready": ready, "processing": processing, "retry_wait": int(values.get("retry_wait", 0) or 0)}
 
     def ui_events_since(self, *, after_sequence: int = 0, user: str, limit: int = 100) -> tuple[list[dict[str, Any]], int]:
         """Return ordered AG-UI events without changing TUI activity polling."""
@@ -2199,7 +2352,7 @@ class V2Daemon:
                         acknowledge(step.queued_message_id, lease_owner=self.daemon_id)
             if step.status == LoopStepStatus.PROCESSED:
                 self._mark_snapshot_checkpoint_terminal(snapshot, status="done")
-                self._close_terminal_task_progress(snapshot)
+                self._publish_task_progress(snapshot, status="completed")
         elif step.status == LoopStepStatus.CANCELLED and step.queued_message_id:
             acknowledge = getattr(self.runtime.queue, "ack", None)
             if callable(acknowledge):
@@ -2208,7 +2361,7 @@ class V2Daemon:
                 else:
                     acknowledge(step.queued_message_id, lease_owner=self.daemon_id)
             self._mark_snapshot_checkpoint_terminal(snapshot, status="cancelled")
-            self._close_terminal_task_progress(snapshot)
+            self._publish_task_progress(snapshot, status="cancelled")
         elif step.status == LoopStepStatus.FAILED and step.queued_message_id:
             error = str(getattr(step, "error", "") or "capd_processing_failed")
             metadata = getattr(getattr(queued, "message", None), "metadata", {}) or {}
@@ -2228,7 +2381,9 @@ class V2Daemon:
             status_for = getattr(self.runtime.queue, "status_for", None)
             terminal = non_retryable or (callable(status_for) and status_for(step.queued_message_id) == "failed")
             if terminal:
-                self._close_terminal_task_progress(snapshot)
+                self._publish_task_progress(snapshot, status="failed")
+            else:
+                self._publish_task_progress(snapshot, status="retrying")
             if scheduled_occurrence and terminal:
                 self.runtime.schedule_store.mark_occurrence_processing_failed(scheduled_occurrence, error=error)
                 self._notify_scheduled_task_failure(metadata, error=error)
@@ -2306,14 +2461,35 @@ class V2Daemon:
         origins = [channel_address_from_metadata({"channel": channel}) for channel in raw_channels if isinstance(channel, dict)] if isinstance(raw_channels, list) else []
         origins = [address for address in origins if address is not None]
         origin = channel_address_from_metadata({"channel": dict(task.origin_channel)})
-        if origin is not None and origin not in origins:
-            origins.insert(0, origin)
-        if not origins:
+        recipient = str(task.origin_channel.get("reminder_recipient_user_id") or "").strip()
+        if recipient:
+            # Re-resolve the intended person at delivery time. A removed address
+            # must fail visibly, never fall back to sending the requester a copy.
+            resolved = self.runtime.identity_resolver.resolve_outbound_address(
+                alphonse_user_id=recipient,
+                preferred_integration_id=str(task.origin_channel.get("reminder_recipient_integration_id") or ""),
+            )
+            if not resolved.resolved or resolved.address is None or resolved.address.alphonse_user_id != recipient:
+                raise RuntimeError("scheduled_reminder_recipient_unresolved")
+            origins = [resolved.address]
+            for integration_id in task.origin_channel.get("reminder_additional_integration_ids") or []:
+                additional = self.runtime.identity_resolver.resolve_outbound_address(
+                    alphonse_user_id=recipient, preferred_integration_id=str(integration_id),
+                )
+                if not additional.resolved or additional.address is None or additional.address.alphonse_user_id != recipient:
+                    raise RuntimeError("scheduled_reminder_recipient_unresolved")
+                origins.append(additional.address)
+        else:
+            # Older self-reminders did not persist a recipient. Prefer the
+            # owner's current settings even when they saved delivery channels.
+            # Keep explicitly saved destinations as additional copies.
             resolved = self.runtime.identity_resolver.resolve_outbound_address(
                 alphonse_user_id=task.owner_user_id,
             )
-            if resolved.resolved and resolved.address is not None:
-                origins.append(resolved.address)
+            if resolved.resolved and resolved.address is not None and resolved.address.alphonse_user_id == task.owner_user_id:
+                origins.insert(0, resolved.address)
+            elif origin is not None and origin not in origins:
+                origins.insert(0, origin)
         if not origins:
             raise RuntimeError("scheduled_reminder_delivery_unresolved")
         message = str(task.description or task.name or "Reminder").strip()
@@ -2328,7 +2504,7 @@ class V2Daemon:
                 address=destination,
                 message=f"Reminder: {message}",
                 kind="scheduled_reminder",
-                audience_user_id=task.owner_user_id,
+                audience_user_id=recipient or task.owner_user_id,
                 project_id=task.project_id,
                 metadata={
                     "source": "scheduled_reminder",
@@ -2339,7 +2515,7 @@ class V2Daemon:
             )
             outbounds.append(outbound)
             self.runtime.conversation_store.record(
-                owner_user_id=task.owner_user_id,
+                owner_user_id=recipient or task.owner_user_id,
                 project_id=task.project_id,
                 memory_session_id=memory_session.session_id if memory_session is not None else "",
                 role="assistant",
@@ -2357,6 +2533,8 @@ class V2Daemon:
             return
         origin = channel_address_from_metadata({"channel": metadata.get("channel")})
         if origin is None:
+            origin = channel_address_from_metadata({"channel": dict(task.origin_channel)})
+        if origin is None:
             resolved = self.runtime.identity_resolver.resolve_outbound_address(alphonse_user_id=task.owner_user_id)
             origin = resolved.address if resolved.resolved else None
         if origin is None:
@@ -2370,6 +2548,7 @@ class V2Daemon:
             audience_user_id=task.owner_user_id,
             project_id=task.project_id,
             metadata={"source": "scheduled_task_failure", "scheduled_task_id": task_id, "failure_code": _scheduled_failure_code(error)},
+            idempotency_key=("scheduled-failure:" + str(metadata["occurrence_key"])) if metadata.get("occurrence_key") else "",
         )
         self.runtime.conversation_store.record(
             owner_user_id=task.owner_user_id,
@@ -2393,7 +2572,11 @@ class V2Daemon:
         if origin is None:
             logger.error("inbound failure could not be delivered message_id=%s error=%s", getattr(queued, "message_id", ""), error)
             return
-        message = _inbound_failure_message(error, self.runtime.inference_settings_store.get().model_id)
+        matched_task = (isinstance(task_state, dict) and task_state.get('status') == 'failed'
+                        and str(task_state.get('user') or '') == user_id
+                        and str(task_state.get('message_id') or '') == str(getattr(queued, 'message_id', '')))
+        message = _inbound_failure_message(error, self.runtime.inference_settings_store.get().model_id,
+                                           task_state=task_state if matched_task else None)
         if (
             _scheduled_failure_code(error) == "v3_task_failed"
             and isinstance(task_state, dict)
@@ -2410,6 +2593,9 @@ class V2Daemon:
             message=message,
             kind="task_failed",
             audience_user_id=user_id,
+            task_id=str(task_state.get("task_id") or "") if isinstance(task_state, dict)
+                and str(task_state.get("message_id") or "") == str(getattr(queued, "message_id", ""))
+                and str(task_state.get("user") or "") == user_id else str(getattr(queued, "message_id", "")),
             project_id=project_id,
             correlation_id=str(getattr(inbound, "correlation_id", "") or ""),
             metadata={"source": "inbound_failure", "failure_code": _scheduled_failure_code(error)},
@@ -2467,8 +2653,8 @@ class V2Daemon:
             final_task = TaskState.from_dict(task_state)
             self.runtime.question_store.save_task_checkpoint(final_task, status=status)
 
-    def _close_terminal_task_progress(self, snapshot: Any) -> None:
-        """Close Desktop progress cards even when CAPD produces no outbound reply."""
+    def _publish_task_progress(self, snapshot: Any, *, status: str) -> None:
+        """Publish runtime lifecycle evidence even when no outbound reply exists."""
         metadata = getattr(snapshot, "metadata", {}) if snapshot is not None else {}
         task_state = metadata.get("task_state") if isinstance(metadata, dict) else None
         if not isinstance(task_state, dict):
@@ -2477,9 +2663,20 @@ class V2Daemon:
         owner = str(task_state.get("user") or "").strip()
         if not task_id or not owner:
             return
-        for key, known in self._desktop_progress_surfaces.items():
-            if key[1] == owner and task_id in known:
-                self._desktop_progress_closures.setdefault(key, set()).add(task_id)
+        from alphonse.agent_v2.core.intelligence.task_state import TaskState
+        task = TaskState.from_dict(task_state)
+        channel = task.metadata.get("channel")
+        channel = channel if isinstance(channel, dict) else {}
+        integration = str(channel.get("integration_id") or "")
+        known_desktop = any(key[1] == owner and task_id in known for key, known in self._desktop_progress_surfaces.items())
+        if integration != "desktop" and (integration or not known_desktop):
+            return
+        task.status = task.status if status == "completed" and task.status in {"failed", "cancelled", "abandoned"} else status
+        self.runtime.activity_events.append(CoreActivityEvent(
+            phase=ImprovementPhase.ACT, label="task retry" if status == "retrying" else "task finished", message="",
+            task_id=task_id, user=owner, integration_id="desktop", channel_target=owner,
+            progress=_task_progress_snapshot(task),
+        ))
 
     def _set_activity_status(self, state: str) -> None:
         with self._active_work_lock:
@@ -2605,6 +2802,8 @@ class V2Daemon:
         occurrence_key = str(metadata.get("occurrence_key") or "").strip() if isinstance(metadata, dict) else ""
         if occurrence_key:
             self.runtime.schedule_store.mark_occurrence_failed(occurrence_key, error=error)
+            if isinstance(metadata, dict) and metadata.get("scheduled_task_id"):
+                self._notify_scheduled_task_failure(metadata, error=error)
 
 
 def _without_sequence(event: dict[str, Any]) -> dict[str, Any]:
@@ -2699,7 +2898,7 @@ def _model_access_rejection(error: str) -> bool:
 def _scheduled_failure_message(task_name: str, error: str) -> str:
     code = _scheduled_failure_code(error)
     if code == "system_one_unavailable":
-        detail = "A required service is temporarily unavailable. Please try again later."
+        detail = _system_one_failure_detail(error)
     elif code == "openai_codex_auth_required":
         detail = "Codex needs to be signed in again before I can run it."
     elif code == "openai_codex_cli_missing":
@@ -2713,11 +2912,38 @@ def _scheduled_failure_message(task_name: str, error: str) -> str:
     return f"Scheduled task failed: {task_name}. {detail}"
 
 
-def _inbound_failure_message(error: str, model_id: str) -> str:
+def _system_one_failure_detail(error: str) -> str:
+    """Distinguish rejected requests from outages without exposing provider prose."""
+    error = str(error or '')
+    if any(code in error for code in ('system_one_context_limit_exceeded', 'system_one_context_budget_exceeded',
+                                      'act_context_required_input_exceeds_budget',
+                                      'system_one_request_rejected:413', 'system_one_http_error:413')):
+        return "An internal review request exceeded its size limit. The task remains unverified."
+    if any(code in error for code in ('system_one_request_rejected', 'system_one_request_invalid',
+                                      'system_one_http_error:400', 'system_one_http_error:413',
+                                      'system_one_http_error:415', 'system_one_http_error:422')):
+        return "An internal review request was rejected. The task remains unverified."
+    if any(code in error for code in ('system_one_api_key_required', 'system_one_api_key_invalid', 'system_one_http_error:401')):
+        return "The review service credentials need to be corrected before verification can finish."
+    if any(code in error for code in ('system_one_connection_failed', 'system_one_temporarily_unavailable',
+                                      'system_one_http_error:5')):
+        return "A required service is temporarily unavailable. Please try again later."
+    return "A required review could not be completed. The task remains unverified."
+
+
+def _inbound_failure_message(error: str, model_id: str, *, task_state=None) -> str:
     code = _scheduled_failure_code(error)
     model = str(model_id or "").strip()
     if code == "system_one_unavailable":
-        return "I couldn't complete this task because a required service is temporarily unavailable. Please try again later."
+        detail = _system_one_failure_detail(error)
+        metadata = (task_state.get('metadata') or {}) if isinstance(task_state, dict) else {}
+        criteria = (task_state.get('acceptance_contract') or {}).get('criteria', []) if isinstance(task_state, dict) else []
+        if (any(stage in error for stage in ('act_recommendation', 'act_context'))
+                and (metadata.get('prepared_user_response') or {}).get('message')
+                and (metadata.get('v3_phase_review') or {}).get('status') == 'phase_verified_task_complete'
+                and criteria and all(row.get('status') == 'satisfied' for row in criteria if row.get('required', True))):
+            detail += " A draft answer was prepared, but final verification did not finish; the draft was not delivered."
+        return "I couldn't complete this task. " + detail
     if code == "v3_task_failed":
         reason = str(error or "").partition(":")[2].strip() or "V3 reported a terminal task failure."
         if reason.startswith("v3_phase_plan_invalid:"):

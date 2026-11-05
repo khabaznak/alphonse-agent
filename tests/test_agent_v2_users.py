@@ -133,6 +133,7 @@ def test_non_admin_profile_projects_and_membership_are_isolated(tmp_path: Path) 
     assert Path(project.config_path).exists()
     assert not Path(project.context_path).exists()
     assert projects.get_project(project.project_id, requester_user_id=admin.user_id) is None
+    projects.update_project(project.project_id, name=project.name, description="", visibility="shared", requester_user_id=gaby.user_id)
     projects.add_member(project.project_id, admin.user_id)
     assert projects.get_project(project.project_id, requester_user_id=admin.user_id) is None
     projects.update_project(project.project_id, name="Health", description="", visibility="shared", requester_user_id=gaby.user_id)
