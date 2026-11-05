@@ -90,7 +90,7 @@ def test_failed_final_review_preserves_draft_and_successful_check_without_comple
     assert len(seen) == 1
     assert task.metadata['prepared_user_response'] == prepared
     assert task.metadata['v3_phase_review']['status'] == 'phase_verified_task_complete'
-    assert task.metadata['v3_strategic_decision']['action'] == 'replan'
+    assert task.metadata['v3_strategic_decision']['action'] == 'fail'
     assert 'system_one_context_limit_exceeded' in task.metadata['v3_strategic_decision']['reason']
     assert task.status != 'completed'
     assert task.outcome is None or task.outcome.get('status') != 'success'

@@ -75,15 +75,16 @@ def mission_review_state(task, state, *, request_sources=()):
 
     # Capture the reviewed scope for each phase. A requested or allowed target
     # helps correlate observations. Scope alone is never evidence of execution.
-    scopes = {state.phase.phase_id: list(state.phase.mutation_scope.allowed_paths)}
+    plans = {state.phase.phase_id: state.phase.to_dict()}
     for phase in task.metadata.get("v3_phase_history") or []:
         if not isinstance(phase, dict):
             continue
         plan = phase.get("phase") or {}
-        scopes.setdefault(plan.get("phase_id"), (plan.get("mutation_scope") or {}).get("allowed_paths") or [])
+        plans.setdefault(plan.get("phase_id"), plan)
 
     response_ref = 'tactical-action:' + str(prepared.get('tool_call_id') or '')
     rows = {}
+    declared_mutations = set()
     for entry in entries.values():
         ref = entry['evidence_ref']
         row = observation(entry, criterion_ids.get(ref, []))
@@ -93,7 +94,12 @@ def mission_review_state(task, state, *, request_sources=()):
         # Scope applies to the exact project-relative argument or absolute path.
         # A same-named file in another directory is not a scope match.
         target = row['operation'].get('target', {})
-        allowed = scopes.get(entry.get('phase_id') or state.phase.phase_id, [])
+        plan = plans.get(entry.get("phase_id") or state.phase.phase_id, {})
+        allowed = (plan.get("mutation_scope") or {}).get("allowed_paths", [])
+        declared_effects = next((subgoal.get("allowed_side_effects", []) for subgoal in plan.get("subgoals", [])
+                                 if subgoal.get("subgoal_id") == entry.get("subgoal_id")), [])
+        if any(effect not in {"read_only", "user_response"} for effect in declared_effects):
+            declared_mutations.add(ref)
         path = target.get('path')
         if path:
             cwd = (entry['result'].get('cwd') if isinstance(entry.get('result'), dict) else None)
@@ -116,6 +122,21 @@ def mission_review_state(task, state, *, request_sources=()):
     value['execution_evidence'] = [row for ref, row in rows.items() if ref in essential]
     coverage = value['context_coverage']
     coverage['budget_bytes'] = ACT_STATE_MAX_BYTES
+    read_back_mutations = {
+        verification.get("preceding_mutation_ref") for row in rows.values()
+        if (verification := row.get("verification"))
+        and verification.get("preceding_mutation_outcome") == "process_exited_zero"
+    }
+    coverage['unresolved_mutation_refs'] = [
+        ref for ref, row in rows.items()
+        if (row["operation"]["kind"] == "mutation"
+            or (row["operation"]["kind"] == "unknown" and ref in declared_mutations))
+        and row["operational_outcome"] in {"failed", "denied", "invocation_outcome_unavailable"}
+    ]
+    coverage['unverified_mutation_refs'] = [
+        ref for ref, row in rows.items()
+        if row["effect_status"] == "attempted_unverified" and ref not in read_back_mutations
+    ]
     coverage['unavailable_evidence_refs'] = [
         ref for ref, row in rows.items() if row['operational_outcome'] in {'denied', 'unavailable', 'invocation_outcome_unavailable'}
         or row['result_coverage']['status'] == 'unavailable'
@@ -154,6 +175,6 @@ def mission_review_state(task, state, *, request_sources=()):
         'evidence_refs': [
             row['evidence_ref'] for row in value['execution_evidence']],
         **{key: list(coverage[key]) for key in (
-            'omitted_result_refs', 'omitted_evidence_refs', 'unavailable_evidence_refs')},
+            'omitted_result_refs', 'omitted_evidence_refs', 'unavailable_evidence_refs', 'unresolved_mutation_refs', 'unverified_mutation_refs')},
     }
     return value

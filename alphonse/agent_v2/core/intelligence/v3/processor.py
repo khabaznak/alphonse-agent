@@ -8,7 +8,7 @@ import json
 
 from alphonse.agent_v2.core.core import ImprovementPhase, ProcessingResult, ProcessingStatus, StateSnapshot
 from alphonse.agent_v2.core.inference import InferencePurpose, InferenceRequest
-from alphonse.agent_v2.core.intelligence.v3.contracts import PhaseStatus, TacticalState, new_tactical_state
+from alphonse.agent_v2.core.intelligence.v3.contracts import PhaseOutcome, PhaseStatus, TacticalState, new_tactical_state
 from alphonse.agent_v2.core.intelligence.v3.executor import PhaseExecutor
 from alphonse.agent_v2.core.intelligence.v3.outer import V3OuterController
 from alphonse.agent_v2.core.intelligence.v3.planner import plan_phase
@@ -72,21 +72,24 @@ class HierarchicalCAPDProcessor:
                 if task.hierarchical_state:
                     state = TacticalState.from_dict(task.hierarchical_state)
                     if state.status == PhaseStatus.WAITING_USER:
-                        # The question store has already appended the user's answer
-                        # to the durable conversation before re-queueing this task.
-                        # Re-running the parked subgoal would merely ask the same
-                        # question again. Replan from the answer while retaining the
-                        # earlier phase evidence in v3_phase_history.
-                        _resume_inspection_from_answer(task, state)
-                        task.hierarchical_state = {}
+                        if not _resume_from_authenticated_answer(task, state):
+                            task.status = "waiting_user"
+                            self._persist(task, context)
+                            break
+                        self._append_history(task, state, PhaseOutcome(
+                            state.phase.phase_id, PhaseStatus.WAITING_USER, "Question answered.",
+                        ).to_dict())
                         state = self._new_state(task, context)
-                    elif state.status.value in {"planned", "running"}:
+                    elif state.status in {PhaseStatus.PLANNED, PhaseStatus.RUNNING}:
+                        pass
+                    elif state.status == PhaseStatus.PHASE_COMPLETE and not task.metadata.get("v3_phase_review"):
+                        # The executor checkpointed completed evidence before the outer review.
+                        # Resume at Check/Act instead of executing another phase.
                         pass
                     else:
                         state = self._new_state(task, context)
                 else:
                     state = self._new_state(task, context)
-                    self._persist(task, context)
             except (V3PhasePlanValidationError, SystemOneUnavailableError) as exc:
                 cancelled = context.is_cancelled()
                 task.status = "cancelled" if cancelled else "failed"
@@ -95,7 +98,11 @@ class HierarchicalCAPDProcessor:
                 self._persist(task, context)
                 break
             try:
-                outcome = self.executor.run(task, state, context)
+                outcome = (
+                    PhaseOutcome(state.phase.phase_id, PhaseStatus.PHASE_COMPLETE,
+                                 "Resumed completed phase with recorded evidence.")
+                    if state.status == PhaseStatus.PHASE_COMPLETE else self.executor.run(task, state, context)
+                )
                 evidence_before = _successful_evidence_signatures(task.metadata.get("v3_phase_history"))
                 satisfied_before = _satisfied_criterion_ids(task)
                 self._append_history(task, state, outcome.to_dict())
@@ -413,13 +420,20 @@ class HierarchicalCAPDProcessor:
             },
         )
         phase = plan_phase(task, context)
+        task.metadata.pop("v3_phase_review", None)
+        review = (task.metadata.get("act_directive") or {}).get("outcome_review") or {}
+        if review.get("evidence_version"):
+            task.metadata["v3_act_recovery_version"] = review["evidence_version"]
         prior = _deduplicated_history_evidence(task.metadata.get("v3_phase_history"))
         seen = {item.get("evidence_ref") for item in prior}
         for receipt in task.metadata.get("v3_resumption_evidence", []):
             if isinstance(receipt, dict) and receipt.get("evidence_ref") not in seen:
                 prior.append(dict(receipt))
                 seen.add(receipt.get("evidence_ref"))
-        return new_tactical_state(phase, cumulative_evidence=prior)
+        state = new_tactical_state(phase, cumulative_evidence=prior)
+        task.hierarchical_state = state.to_dict()
+        HierarchicalCAPDProcessor._persist(task, context)
+        return state
 
     @staticmethod
     def _append_history(task: "TaskState", state: TacticalState, outcome: dict) -> None:
@@ -533,6 +547,7 @@ class HierarchicalCAPDProcessor:
                     task.metadata.pop("v3_failure_response", None)
             if not task.metadata.get("v3_failure_response"):
                 plan_invalid = str((task.outcome or {}).get("reason") or "").startswith("v3_phase_plan_invalid:")
+                review_unresolved = (task.metadata.get("system_one_act_judgments") or {}).get("stop")
                 task.metadata["v3_failure_response"] = {
                     "source": "v3_failure_fallback",
                     "communication_reviewed": True,
@@ -540,6 +555,8 @@ class HierarchicalCAPDProcessor:
                                "The requested result remains unverified. This planning error does not establish "
                                "that the resource is missing or that access was denied. Any earlier completed work has been preserved."
                                if plan_invalid else
+                               "I couldn't verify the full result. I kept the work and evidence already recorded."
+                               if review_unresolved else
                                "I couldn't complete this task because a required step failed. "
                                "The requested result has not been fully verified. Any completed work has been preserved. "
                                "Review the failed action in the work log and ask me to retry once the blocker is resolved."),
@@ -587,24 +604,28 @@ class EngineRoutingProcessor:
         return (self.v3 if task.intelligence_engine == "hierarchical_v3" else self.v2).process(task, context)
 
 
-def _resume_inspection_from_answer(task: "TaskState", state: TacticalState) -> None:
-    directive = task.metadata.get("act_directive") or {}
-    if not directive.get("inspection_resolution"):
-        return
-    answered = any(
+def _resume_from_authenticated_answer(task: "TaskState", state: TacticalState) -> bool:
+    interrupt = task.metadata.get("question_interrupt") or {}
+    answered = interrupt.get("status") == "answered" and any(
         isinstance(receipt, dict) and receipt.get("kind") == "authenticated_question_answer"
         and receipt.get("task_id") == str(task.task_id or task.message_id or "")
         and receipt.get("phase_id") == state.phase.phase_id
+        and (receipt.get("result") or {}).get("question_id") == interrupt.get("question_id")
         for receipt in task.metadata.get("v3_resumption_evidence", [])
     )
     if answered:
-        # Only the question store's authenticated receipt for this parked phase
-        # releases the question directive. Historical text cannot reset it.
+        previous = (task.metadata.get("act_directive") or {}).get("outcome_review") or {}
         task.metadata["act_directive"] = {
-            "action": "replan", "rationale": "Use the authenticated answer with existing evidence to continue the original authorized request; do not repeat the answered question.",
+            "action": "replan",
+            "rationale": "Use the authenticated answer with existing evidence to continue the original authorized request; do not repeat the answered question.",
         }
+        if previous.get("verified_evidence_refs"):
+            task.metadata["act_directive"]["outcome_review"] = {
+                "verified_evidence_refs": previous["verified_evidence_refs"],
+            }
         task.metadata.pop("v3_inspection_resolution", None)
         task.metadata.pop("v3_update_inspection_actions", None)
+    return answered
 
 
 def _is_initial_human_task(task: "TaskState") -> bool:

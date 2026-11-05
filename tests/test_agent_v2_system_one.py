@@ -128,8 +128,10 @@ def test_jev_act_rejects_missing_malformed_and_out_of_range_judgments(bad_answer
         return {"answers": answers}
 
     provider = JevCriterionDecisionProvider(SystemOneSettings(api_key="fixture"), transport=transport)
-    with pytest.raises(SystemOneActAnswerError, match="effect_supported"):
+    with pytest.raises(SystemOneActAnswerError, match="effect_supported") as exc:
         provider.judge_act(state={})
+    assert exc.value.invalid_question_ids == ("effect_supported",)
+    assert exc.value.answers == {key: .99 for key in ACT_QUESTIONS if key != "effect_supported"}
 
 
 def test_jev_marks_midrange_evidence_ambiguous_for_system_two_fallback() -> None:
