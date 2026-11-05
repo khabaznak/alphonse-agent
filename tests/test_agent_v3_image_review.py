@@ -1,3 +1,5 @@
+
+import pytest
 from types import SimpleNamespace
 
 from alphonse.agent_v2.core.core import CoreLoopContext, ProcessingStatus
@@ -73,3 +75,7 @@ def test_distinct_successful_results_still_allow_multiphase_work(monkeypatch):
     task,calls,result=_run_replans(monkeypatch,distinct_results=True)
     assert len(calls)==6
     assert 'v3_no_progress_stop' not in task.metadata
+
+
+# Existing scripted providers delegate the shared interpretation call explicitly.
+pytestmark = pytest.mark.usefixtures("task_understanding_provider")

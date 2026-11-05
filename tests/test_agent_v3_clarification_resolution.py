@@ -166,3 +166,7 @@ def test_cached_assessment_cannot_render_or_execute_with_invalid_answer_referenc
     task.metadata['v3_retry_continuity']['answer_refs'] = ['question-answer:unavailable']
     rendered = retry_continuity_context(task, context)
     assert 'INV-17' not in rendered and retry_source_unresolved(task)
+
+
+# Existing scripted providers delegate the shared interpretation call explicitly.
+pytestmark = pytest.mark.usefixtures("task_understanding_provider")

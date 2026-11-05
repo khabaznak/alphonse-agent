@@ -258,3 +258,7 @@ def test_cancellation_after_rejected_plan_prevents_correction_and_remains_cancel
     assert task.status == 'cancelled'
     assert len(requests) == 1
     assert not task.hierarchical_state
+
+
+# Existing scripted providers delegate the shared interpretation call explicitly.
+pytestmark = pytest.mark.usefixtures("task_understanding_provider")

@@ -151,8 +151,10 @@ def test_real_admission_and_call_receipts_retain_provider_failure(tmp_path, cand
     case = next(c for c in CORPUS['cases'] if c['id'] == 'explicit-recall')
     row = run_trial(tmp_path, case, CORPUS, FailingProvider(), jev, candidate=candidate)
     assert row['task_status'] == 'failed'
-    assert row['decisions'] and row['jev_calls'] and row['model_calls']
-    assert any(d['purpose'] == 'admission' for d in row['decisions'])
+    assert row['decisions'] and row['model_calls']
+    # Interpretation failed before bounded admission: no Jev call is fabricated.
+    assert not row['jev_calls']
+    assert any(d['purpose'] == 'task_understanding' for d in row['decisions'])
     assert any(d['manifest']['status'] == 'failed' for d in row['decisions'])
     assert not row['delivery']['necessary_delivery_pass']
 

@@ -99,6 +99,27 @@ def begin_decision(*, purpose, sections, tools=(), images=(), projections=None, 
         "projections": projections,
         "raw_context_retained": False,
     }
+    if task.intelligence_engine == "hierarchical_v3":
+        # Bind to captured input inventories, never reconstruct from mutable task
+        # state after prompt composition or a concurrent steering arrival.
+        captured = next((p['task_understanding'] for p in projections
+                         if p.get('task_understanding') and any(
+                             r.get('status') == 'included' and r.get('source_id', '').startswith('task-understanding:')
+                             for r in p.get('records', []))), None)
+        def structured_meaning(value):
+            if isinstance(value, dict):
+                if isinstance(value.get('task_understanding'), dict):
+                    return value['task_understanding']
+                for child in value.values():
+                    found = structured_meaning(child)
+                    if found is not None:
+                        return found
+            return None
+        supplied = structured_meaning(sections)
+        if captured is None and supplied is not None:
+            from alphonse.agent_v2.core.intelligence.v3.task_understanding import input_receipt
+            captured = input_receipt(supplied)
+        manifest["task_understanding"] = ({**deepcopy(captured), 'consumed': True} if captured else {'consumed': False})
     task.metadata.setdefault("decision_context_manifests", []).append(manifest)
     _publish(manifest)
     return manifest

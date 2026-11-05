@@ -293,3 +293,7 @@ def test_fresh_read_can_verify_an_already_satisfied_idempotent_update_without_a_
         assert db.execute('SELECT updated_at FROM records WHERE id=1').fetchone()[0] == 'original timestamp'
     assert len(state.actions) == 1
     assert not task.metadata.get('v3_inspection_resolution')
+
+
+# Existing scripted providers delegate the shared interpretation call explicitly.
+pytestmark = pytest.mark.usefixtures("task_understanding_provider")

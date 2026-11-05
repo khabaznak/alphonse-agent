@@ -46,7 +46,7 @@ def test_negative_uncertain_and_positive_answers_have_explicit_routes(tmp_path, 
     assert state['selected_skills'][0]['package_directory'] == str(skill.directory)
     assert state['selected_skills'][0]['workflow'] == skill.instructions
     assert state['coverage']['resource_paths_are_not_resource_contents']
-    assert set(state) == {'schema_version', 'request', 'conversation', 'selected_skills', 'known_context', 'evidence', 'coverage', 'omissions'}
+    assert set(state) == {'schema_version', 'request', 'task_understanding', 'conversation', 'selected_skills', 'known_context', 'evidence', 'coverage', 'omissions'}
     assert 'plan_system_prompt' not in state and 'strategic_plan' not in state
 
 

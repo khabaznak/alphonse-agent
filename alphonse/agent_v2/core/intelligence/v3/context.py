@@ -27,8 +27,9 @@ _INVARIANT_GLOBAL_SECTIONS = {
 }
 
 
-def prepare_context_curation(task: "TaskState", context: "CoreLoopContext") -> tuple[str, list[dict[str, str]]]:
+def prepare_context_curation(task: "TaskState", context: "CoreLoopContext", *, include_understanding: bool = True) -> tuple[str, list[dict[str, str]]]:
     """Return always-included context and bounded optional context candidates."""
+    from .task_understanding import render
     sections: list[str] = []
     active_projects = _visible_active_projects(task, context)
     recent_text = _recent_conversation(task, context)
@@ -62,7 +63,7 @@ def prepare_context_curation(task: "TaskState", context: "CoreLoopContext") -> t
             sections.append(omitted(source("", "project:" + project_id, "project_guidance"), reason="unavailable"))
     rendered = join_context_sections(sections, 12000)
     overflow = [omitted(source(item['content'], item['id'], 'context_candidate')) for item in candidates[64:]]
-    return combined([rendered, *overflow], ''), candidates[:64]
+    return combined([*([render(task)] if include_understanding else []), rendered, *overflow]), candidates[:64]
 
 
 def conversation_context(
@@ -72,7 +73,7 @@ def conversation_context(
     selected_context_ids: list[str] | tuple[str, ...] = (),
 ) -> str:
     """Render invariant context plus the optional candidates selected at admission."""
-    invariant, candidates = prepare_context_curation(task, context)
+    invariant, candidates = prepare_context_curation(task, context, include_understanding=False)
     selected = set(str(item) for item in selected_context_ids)
     sections = [invariant] if invariant else []
     for candidate in candidates:
@@ -95,10 +96,15 @@ def task_context_for_decision(
 
     if enabled():
         return project(task, context, purpose=purpose, selected_context_ids=selected_context_ids)
+    from .task_understanding import render
+    understanding = render(task)
     sections = [active_task_continuity(task), retry_continuity_context(task, context),
                 conversation_context(task, context, selected_context_ids=selected_context_ids)]
     sections.extend(task_context_addenda(task))
-    result = join_context_sections(sections, 36000)
+    if len(understanding) > 36000:
+        from .projections import ContextBudgetExceeded
+        raise ContextBudgetExceeded('v3_required_task_understanding_exceeds_budget')
+    result = combined([understanding, join_context_sections(sections, max(0, 36000 - len(understanding) - 2))])
     if purpose == "curation":
         # Use the same access-filtered loader as System Two. Keep its bounded
         # resource/workflow block and source ranges intact, outside the shared
@@ -112,7 +118,7 @@ def task_context_for_decision(
             conversation_coverage(task),
             "Selected skill execution context (relevance only; never permission):\n" + guidance,
         ], purpose=purpose, max_chars=53000)
-    return ContextText(str(result), result.records, purpose=purpose, max_chars=36000)
+    return ContextText(str(result), result.records, **{**result.details, 'purpose': purpose, 'max_chars': 36000})
 
 
 def task_context_addenda(task: "TaskState") -> list[str]:

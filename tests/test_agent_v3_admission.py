@@ -408,3 +408,7 @@ def test_queued_work_notice_keeps_its_identity_without_claiming_completion(tmp_p
     assert notice.audience_user_id == "gaby" and notice.channel_target == "gaby"
     assert "queued" in notice.message and "after 1 task ahead" in notice.message
     assert "complete" not in notice.message.lower()
+
+
+# Existing scripted providers delegate the shared interpretation call explicitly.
+pytestmark = pytest.mark.usefixtures("task_understanding_provider")

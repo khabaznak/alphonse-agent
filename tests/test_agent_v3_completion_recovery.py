@@ -160,3 +160,7 @@ def test_failed_reasoning_review_is_unresolved_without_exposing_provider_body():
     assert task.metadata['v3_mission_resolution'] == {
         'status': 'unresolved', 'provider': 'system_two', 'exception_type': 'RuntimeError',
     }
+
+
+# Existing scripted providers delegate the shared interpretation call explicitly.
+pytestmark = pytest.mark.usefixtures("task_understanding_provider")

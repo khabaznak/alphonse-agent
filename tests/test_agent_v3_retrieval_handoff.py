@@ -219,3 +219,7 @@ def test_failed_scope_verification_does_not_get_a_retrieval_handoff():
     V3OuterController().review_and_route(task, state, outcome, CoreLoopContext(messages=InMemoryMessageQueue()))
     assert task.metadata['v3_phase_review']['status'] == 'verification_failed'
     assert 'v3_retrieval_handoffs' not in task.metadata
+
+
+# Existing scripted providers delegate the shared interpretation call explicitly.
+pytestmark = pytest.mark.usefixtures("task_understanding_provider")
