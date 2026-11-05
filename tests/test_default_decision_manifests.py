@@ -216,3 +216,6 @@ def test_default_memory_request_suffix_is_a_duplicate_not_a_partial_claim(defaul
     assert claim['status'] == 'included' and not claim['truncated']
     assert any(r['source_type'] == 'current_request' and r['status'] == 'omitted' and r['reason'] == 'duplicate' for r in text.records)
     assert 'Original whole claim.' in text and 'Large repeated request.' not in text
+
+
+pytestmark = pytest.mark.usefixtures("task_understanding_provider")

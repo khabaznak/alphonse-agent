@@ -34,6 +34,8 @@ class V3PhasePlanValidationError(ValueError):
 def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
     _ingest_relevant_messages(task, context)
     prepare_retry_continuity(task, context)
+    from .task_understanding import ensure
+    ensure(task, context)
     if context.inference is None:
         raise RuntimeError("v3_phase_planning_inference_unavailable")
     tools = ToolExposurePolicy().select_tools(

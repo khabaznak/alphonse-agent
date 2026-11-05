@@ -299,7 +299,8 @@ class PhaseExecutor:
         if isinstance(skill_selection, dict) and not projections_enabled():
             skill_selection["loaded_skill_ids"] = loaded_skill_ids
         if not projections_enabled():
-            skill_guidance = skill_guidance + retry_continuity_context(task, context)
+            from .task_understanding import render
+            skill_guidance = skill_guidance + retry_continuity_context(task, context) + render(task)
         resolution = (task.metadata.get("act_directive") or {}).get("inspection_resolution")
         if resolution:
             skill_guidance = skill_guidance + source(
@@ -395,9 +396,10 @@ class PhaseExecutor:
         deterministic = _condition_met(subgoal, action.result)
         if context.system_one is None or not hasattr(context.system_one, "evaluate_tactical_progress"):
             raise SystemOneUnavailableError("tactical_acceptance_unavailable")
+        from .task_understanding import render
         try:
             review = context.system_one.evaluate_tactical_progress(
-                goal=task.goal,
+                goal=render(task),
                 phase=state.phase.to_dict(),
                 subgoal={
                     "subgoal_id": subgoal.subgoal_id,

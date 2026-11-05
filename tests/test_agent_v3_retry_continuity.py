@@ -563,3 +563,7 @@ def test_uncertain_recall_does_not_allow_mixed_read_and_mutation_scope():
     subgoal = PhaseSubgoal('mixed', 'Inspect then write', 'record', allowed_capabilities=('local_shell',),
         allowed_side_effects=(SideEffectClass.READ_ONLY, SideEffectClass.PROJECT_MUTATION))
     assert not retry_allows_subgoal(subgoal)
+
+
+# Existing scripted providers delegate the shared interpretation call explicitly.
+pytestmark = pytest.mark.usefixtures("task_understanding_provider")

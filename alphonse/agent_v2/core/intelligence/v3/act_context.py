@@ -56,7 +56,9 @@ def mission_review_state(task, state, outcome, review, available_tool_ids, *, re
     messages = [{'speaker': row.get('speaker'), 'content': row.get('content')}
                 for row in task.conversation_records or [] if row.get('content') and row.get('content') != task.goal]
     prepared = task.metadata.get('prepared_user_response') or {}
+    from .task_understanding import snapshot
     value = {
+        "task_understanding": snapshot(task),
         'schema_version': 1, 'goal': task.goal, 'task_id': task.task_id,
         'check_verdict': ('success' if review.status.value == 'phase_verified_task_complete' else
                           'wip' if review.status.value == 'phase_verified_task_incomplete' else 'failure'),

@@ -494,7 +494,7 @@ def _review_acceptance_statuses(
                 contract=task.ensure_acceptance_contract(),
                 phase=state.phase.to_dict(),
                 evidence=state.evidence.to_dict(),
-                task_context=task_context,
+                task_context=task_context, task=task,
             )
         except Exception:
             system_one_result = None
@@ -551,7 +551,7 @@ def _review_acceptance_statuses(
                 contract=focused_contract,
                 phase=focused_phase,
                 evidence=state.evidence.to_dict(),
-                task_context=_task_context(task, context),
+                task_context=_task_context(task, context), task=task,
             )
         except Exception as exc:
             # A failed focused pass must not erase the original result or
@@ -655,7 +655,8 @@ def _system_two_acceptance_review(
 ) -> dict[str, Any]:
     if context.inference is None:
         raise SystemOneUnavailableError("acceptance_review_unavailable")
-    shared_context = _task_context(task, context) if projections_enabled() else ""
+    from .task_understanding import render
+    shared_context = _task_context(task, context) if projections_enabled() else render(task)
     review_contract = contract or task.ensure_acceptance_contract()
     valid_refs = _successful_evidence_refs(state)
     schema = {
@@ -730,7 +731,7 @@ def _task_context(task, context) -> str:
     return task_context_for_decision(task, context, selected_context_ids=selected_ids, purpose="review")
 
 
-def _evaluate_system_one_with_context(system_one, *, contract, phase, evidence, task_context):
+def _evaluate_system_one_with_context(system_one, *, contract, phase, evidence, task_context, task=None):
     evaluate = system_one.evaluate
     parameters = inspect.signature(evaluate).parameters.values()
     accepts_context = any(
@@ -740,6 +741,9 @@ def _evaluate_system_one_with_context(system_one, *, contract, phase, evidence, 
     kwargs = {"contract": contract, "phase": phase, "evidence": evidence}
     if accepts_context:
         kwargs["task_context"] = task_context
+    if task is not None and any(item.name == 'task_understanding' or item.kind == inspect.Parameter.VAR_KEYWORD for item in parameters):
+        from .task_understanding import snapshot
+        kwargs['task_understanding'] = snapshot(task)
     return evaluate(**kwargs)
 
 

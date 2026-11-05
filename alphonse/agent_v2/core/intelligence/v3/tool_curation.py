@@ -21,7 +21,8 @@ def request_tool_state(task, context) -> dict:
     caller to defer exclusion to System Two, rather than classify clipped data.
     Skill resources use the same ownership checks as execution guidance.
     """
-    state = {'schema_version': STATE_VERSION, 'request': {'text': task.goal},
+    from .task_understanding import snapshot
+    state = {'task_understanding': snapshot(task), 'schema_version': STATE_VERSION, 'request': {'text': task.goal},
              'conversation': [], 'selected_skills': [], 'known_context': [], 'evidence': [],
              'coverage': {'resource_paths_are_not_resource_contents': True}, 'omissions': []}
 

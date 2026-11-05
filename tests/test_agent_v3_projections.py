@@ -292,7 +292,8 @@ def test_dc1_required_integrity_and_failure_before_any_provider(setup, monkeypat
     text = project(task, context, purpose=purpose)
     manifest = task.metadata['v3_context_projections'][purpose]
     assert len(manifest['source_ids']) == len(set(manifest['source_ids']))
-    assert manifest['source_ids'].count('request:message') == 1
+    assert manifest['source_ids'].count('task-understanding:task:v0') == 1
+    assert manifest['task_understanding']['source_ids'].count('request:message') == 1
     for tail in ('CONTRACT_TAIL', 'STEERING_TAIL', 'CONSTRAINT_TAIL', 'POLICY_TAIL', 'SKILL_TAIL'):
         assert tail in text
     assert manifest['tokens'] == token_count(text) <= manifest['budget']
@@ -438,3 +439,7 @@ def test_dc1_recall_preservation_does_not_bypass_phase_policy(setup):
     phase = PhasePlan('reply-phase', 'Reply', (subgoal,), authorized_capabilities=('direct_response',))
     result = ToolRevealPolicy().reveal(task, new_tactical_state(phase), subgoal, context.tools.list())
     assert result.tools == ()
+
+
+# Existing scripted providers delegate the shared interpretation call explicitly.
+pytestmark = pytest.mark.usefixtures("task_understanding_provider")

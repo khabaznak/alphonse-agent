@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from pathlib import Path
 
 from alphonse.agent_v2.core.core import CoreLoopContext, ImprovementPhase, ProcessingResult, StateSnapshot, ToolDescriptor, ToolKind
@@ -977,3 +979,7 @@ def test_processor_continues_until_a_real_terminal_state(tmp_path: Path) -> None
     assert restored.status == "completed"
     assert restored.outcome == {"status": "success", "reason": "done"}
     assert phase_count == 10
+
+
+# Existing scripted providers delegate the shared interpretation call explicitly.
+pytestmark = pytest.mark.usefixtures("task_understanding_provider")

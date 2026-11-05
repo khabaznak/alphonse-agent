@@ -60,6 +60,9 @@ class HierarchicalCAPDProcessor:
         context.emit_ui_event("run_started", {"task": task.to_dict(), "engine": "hierarchical_v3"})
         task.intelligence_engine = "hierarchical_v3"
         task.intelligence_schema_version = 3
+        from .task_understanding import ensure
+        ensure(task, context)
+        self._persist(task, context)
         if self._admit_initial_human_task(task, context):
             self._persist(task, context)
             return self._result(task, context)
@@ -152,6 +155,8 @@ class HierarchicalCAPDProcessor:
         """Acknowledge a new human task once, or satisfy it with a direct reply."""
         if not _is_initial_human_task(task):
             return False
+        from .task_understanding import ensure
+        ensure(task, context)
         prepare_retry_continuity(task, context)
         existing = task.metadata.get("v3_admission")
         if isinstance(existing, dict) and existing.get("completed") is True:
@@ -340,17 +345,19 @@ class HierarchicalCAPDProcessor:
     def _deliver_early_acknowledgement(task: "TaskState", context: "CoreLoopContext") -> dict[str, object]:
         if context.inference is None:
             return {"status": "generation_unavailable"}
+        from .task_understanding import render
+        understanding = render(task)
         try:
             prompt = (
                     "Write one short, natural acknowledgement to the user before work begins. "
                     "Use the user's language and reflect the specific request so the acknowledgement feels attentive. "
                     "Do not answer the request, report results, claim completion, mention planning or internal systems, "
                     "or promise a particular outcome. Return only the user-facing acknowledgement.\n\n"
-                    f"User message: {task.goal}"
+                    f"User message: {task.goal}\n{understanding}"
             )
             result = context.inference.generate_markdown(InferenceRequest(
                 prompt=prompt,
-                context_manifests=prompt_receipt(prompt, [source('User message: ' + task.goal, 'request:' + str(task.message_id or task.task_id), 'current_request')], purpose='acknowledgement'),
+                context_manifests=prompt_receipt(prompt, [source('User message: ' + task.goal, 'request:' + str(task.message_id or task.task_id), 'current_request'), understanding], purpose='acknowledgement'),
                 purpose=InferencePurpose.FINAL_RESPONSE,
                 project_id=task.project_id,
                 user=task.user,
@@ -371,7 +378,7 @@ class HierarchicalCAPDProcessor:
         if not callable(review):
             return {"status": "review_unavailable"}
         try:
-            safe = review(message=task.goal, acknowledgement=message)
+            safe = review(message=understanding, acknowledgement=message)
         except Exception as exc:
             if context.is_cancelled():
                 raise

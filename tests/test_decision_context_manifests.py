@@ -39,7 +39,7 @@ def test_receipt_matches_call_not_later_state_and_never_retains_raw_context():
     assert manifest['decision_id'] == captured[0].metadata['decision_id']
     assert manifest['sections'][0]['tokens'] == len(captured[0].prompt.encode())
     assert manifest['projections'][0]['tokens'] == len(rendered.encode())
-    assert 'request:task' in manifest['projections'][0]['source_ids']
+    assert 'request:task' in manifest['projections'][0]['task_understanding']['source_ids']
     task.metadata['v3_context_projections']['planning']['source_ids'].clear()
     assert manifest['projections'][0]['source_ids']
     exported = json.dumps(manifest)
@@ -230,3 +230,6 @@ def test_saved_manifest_without_optional_source_reason_still_renders_work_log():
     assert manifest == saved  # Display compatibility must not rewrite stored evidence.
     manifest['sources'][0]['reason'] = 'clarification_answer'
     assert 'included · clarification_answer' in manifest_summary([manifest])
+
+
+pytestmark = pytest.mark.usefixtures("task_understanding_provider")

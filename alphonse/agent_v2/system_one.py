@@ -958,7 +958,7 @@ class JevCriterionDecisionProvider:
             primary_skill_ids=tuple(primary_skill_ids),
         )
 
-    def evaluate(self, *, contract: dict[str, Any], phase: dict[str, Any], evidence: dict[str, Any], task_context: str = "") -> SystemOneReviewResult:
+    def evaluate(self, *, contract: dict[str, Any], phase: dict[str, Any], evidence: dict[str, Any], task_context: str = "", task_understanding: dict[str, Any] | None = None) -> SystemOneReviewResult:
         criteria = [
             item for item in contract.get("criteria") or []
             if isinstance(item, dict) and item.get("superseded") is not True
@@ -998,6 +998,8 @@ class JevCriterionDecisionProvider:
             },
             "ordered_evidence_refs": [item["evidence_ref"] for item in entries],
         }
+        if task_understanding is not None:
+            state["task_understanding"] = task_understanding
         review_focus = phase.get("review_focus") if isinstance(phase.get("review_focus"), dict) else {}
         if review_focus:
             state["review_focus"] = dict(review_focus)

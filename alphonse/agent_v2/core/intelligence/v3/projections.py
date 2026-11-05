@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from copy import deepcopy
 import json
 import os
 import re
@@ -112,7 +113,9 @@ def project(task, context, *, purpose: str, selected_context_ids=()) -> str:
     recall = {}
     ids = []
     skills = ""
-    records = [Record("request:" + str(task.message_id or task.task_id), "Current request", task.goal, True),
+    from .task_understanding import render
+    meaning = render(task)
+    records = [Record(meaning.records[0]["source_id"], "Shared task understanding", str(meaning), True),
                Record("policy:recall", "Evidence rules", RECALL_GUIDANCE, True)]
     from alphonse.agent_v2.core.memory.retry_context import retry_continuity_records
     for part in retry_continuity_records(task, context):
@@ -235,6 +238,7 @@ def project(task, context, *, purpose: str, selected_context_ids=()) -> str:
             record["truncated"] = True
             hit = next(hit for hit in recall["results"] if hit["source_id"] == record["source_id"])
             record["source_range"] = {k: hit[k] for k in ("start_char", "end_char", "total_chars") if k in hit}
+    manifest["task_understanding"] = deepcopy(meaning.details["task_understanding"])
     manifest["purpose"] = purpose
     task.metadata.setdefault("v3_context_projections", {})[purpose] = manifest
     from alphonse.agent_v2.core.context_manifests import remember_projection
