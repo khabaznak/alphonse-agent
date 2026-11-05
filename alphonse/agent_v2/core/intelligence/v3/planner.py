@@ -146,6 +146,7 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
             if invalid_json:
                 raise ValueError("phase_plan_json_invalid")
             phase = PhasePlan.from_dict(rejected_plan)
+            _validate_question_plan(phase, act_directive)
             _validate_inspection_handoff(phase, act_directive)
             validate_handoff(phase, act_directive)
             if retry_source_unresolved(task):
@@ -156,7 +157,7 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
             # error, not an attempted or denied database operation. Let System
             # Two correct it once; never strip paths or relax validation here.
             scope_error = str(exc).startswith("mutation_scope_path_invalid:/")
-            handoff_error = str(exc).startswith("inspection_handoff_")
+            handoff_error = str(exc).startswith(("inspection_handoff_", "question_plan_"))
             retrieval_error = str(exc).startswith("retrieval_handoff_")
             unresolved_source = str(exc) == "inspection_handoff_requires_source_resolution_before_mutation"
             dependency_error = str(exc).startswith(("phase_subgoal_dependency_invalid:", "phase_subgoal_self_dependency:"))
@@ -184,6 +185,9 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
                 "The intended source is unresolved. Plan read_only evidence retrieval or a specific source question "
                 "before any mutation. Do not substitute an older source. A supported read-only response may proceed. "
                 if unresolved_source else
+                "A question needs a user_interaction capability and user_response side effect. "
+                "When Act requests information, plan one isolated question about the specific missing fact. "
+                if str(exc).startswith("question_plan_") else
                 "Inspection handoff requires the next phase to perform the requested authorized operation or ask "
                 "a concrete missing-information question. Do not start another read-only inspection phase. If the "
                 "handoff route requires_user_input, plan exactly one user_interaction subgoal, using native.ask_question "
@@ -229,6 +233,17 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
         task.sync_acceptance_criteria_view()
         task.append_update("Plan established the mission acceptance contract alongside the strategic phase.")
     return _curate_phase_tools(task, phase, available_tools, context)
+
+
+def _validate_question_plan(phase: PhasePlan, directive: dict) -> None:
+    questions = [item for item in phase.subgoals if Capability.USER_INTERACTION.value in item.allowed_capabilities]
+    if any(SideEffectClass.USER_RESPONSE not in item.allowed_side_effects for item in questions):
+        raise ValueError("question_plan_requires_user_response_effect")
+    if (directive.get("outcome_review") or {}).get("next_step") == "ask_user":
+        if (len(phase.subgoals) != 1 or not questions
+                or set(questions[0].allowed_capabilities) != {Capability.USER_INTERACTION.value}
+                or set(questions[0].allowed_side_effects) != {SideEffectClass.USER_RESPONSE}):
+            raise ValueError("question_plan_requires_isolated_user_interaction")
 
 
 def _validate_inspection_handoff(phase: PhasePlan, directive: dict) -> None:
@@ -336,8 +351,10 @@ def _strategic_plan_instructions() -> str:
         "When an existing artifact does not yield the requested results, use the owning skill and any relevant additional expertise to diagnose, repair and verify its implementation in registered storage within the authorized task scope. Preserve its stable artifact ID and useful data; keep the skill's operating instructions and catalog metadata accurate if its interface or execution requirements change. "
         "When registering an artifact, attach its definition and operating instructions to an existing installed skill; "
         "do not treat catalog metadata as a substitute for skill expertise. For a requested correction to an existing artifact registration, use native.artifact_metadata_update for the mutation; editing a README or program is not a substitute. Do not edit catalog databases with Bash. Verify the intended location before updating resource metadata. "
-        "If Act requires closure, plan exactly one isolated user_response subgoal; if Act requests input, plan an ask-question "
-        "subgoal. When an attached image is needed to answer or fulfill the request, authorize attachment_analysis in the "
+        "If Act requires closure, plan exactly one isolated user_response subgoal. For native.ask_question, use "
+        "user_interaction capability and user_response side effect. When outcome_review specifies ask_user, plan "
+        "one isolated question about its remaining_work. For recovery, address only outcome_review.remaining_work and "
+        "reuse the listed verified evidence without repeating those operations. When an attached image is needed to answer or fulfill the request, authorize attachment_analysis in the "
         "relevant subgoal. Images are supplied directly to the selected inference model; follow selected skill guidance for interpretation and extraction. Do not plan a separate OCR tool call or an image-only tool subgoal. Combine visual reasoning with the action that uses it, including a user response. "
         "An attachment_analysis subgoal requires verified image inputs to its tactical inference call before completion. "
         "Define stable measurable acceptance criteria when none exist, otherwise preserve the existing contract."

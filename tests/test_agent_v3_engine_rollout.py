@@ -11,7 +11,7 @@ from alphonse.agent_v2.core.inference import InferencePurpose, InferenceResult, 
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.intelligence.v3 import CompletionCondition
 from alphonse.agent_v2.core.intelligence.v3 import EngineRoutingProcessor, HierarchicalCAPDProcessor
-from alphonse.agent_v2.core.intelligence.v3 import PhaseOutcome, PhasePlan, PhaseStatus, PhaseSubgoal
+from alphonse.agent_v2.core.intelligence.v3 import PhaseOutcome, PhasePlan, PhaseStatus, PhaseSubgoal, SideEffectClass
 from alphonse.agent_v2.core.intelligence.v3 import new_tactical_state
 from alphonse.agent_v2.core.intelligence.v3.processor import _deduplicated_history_evidence
 from alphonse.agent_v2.core.intelligence.v3 import processor as v3_processor_module
@@ -843,6 +843,7 @@ def test_v3_answered_question_replans_with_named_tool_instead_of_repeating_parke
             "Ask Alex for a source",
             "source",
             allowed_capabilities=("user_interaction",),
+            allowed_side_effects=(SideEffectClass.USER_RESPONSE,),
             completion=CompletionCondition("output_present", output_type="source"),
         ),),
         authorized_capabilities=("user_interaction",),
@@ -871,6 +872,13 @@ def test_v3_answered_question_replans_with_named_tool_instead_of_repeating_parke
         hierarchical_state=waiting_state.to_dict(),
         intelligence_engine=HIERARCHICAL_V3,
         intelligence_schema_version=3,
+    )
+    task.metadata.update(
+        question_interrupt={"status": "answered", "question_id": "question-1"},
+        v3_resumption_evidence=[{
+            "kind": "authenticated_question_answer", "task_id": task.task_id, "phase_id": "ask-source",
+            "result": {"question_id": "question-1"},
+        }],
     )
     task.set_acceptance_contract_from_markdown("1.- [ ] La temperatura del estudio se obtiene")
     seen_phase_ids: list[str] = []

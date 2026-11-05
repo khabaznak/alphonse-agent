@@ -428,6 +428,11 @@ def valid_act_probability(value: Any) -> bool:
 class SystemOneActAnswerError(ValueError):
     """The provider returned a missing or malformed Act judgment."""
 
+    def __init__(self, message, *, answers=None, invalid_question_ids=()):
+        super().__init__(message)
+        self.answers = dict(answers or {})
+        self.invalid_question_ids = tuple(invalid_question_ids)
+
 
 @dataclass(frozen=True)
 class SystemOneActJudgments:
@@ -1219,12 +1224,19 @@ class JevCriterionDecisionProvider:
         ]
         response = self._evaluate(purpose="act_judgments", state=state, questions=ACT_QUESTIONS, omissions=omissions)
         answers = {}
+        invalid = []
         for question_id in ACT_QUESTIONS:
             answer = response["answers"].get(question_id)
             if (not isinstance(answer, dict) or answer.get("type") != "noul"
                     or not valid_act_probability(answer.get("noul"))):
-                raise SystemOneActAnswerError(f"system_one_act_answer_invalid:{question_id}")
-            answers[question_id] = float(answer["noul"])
+                invalid.append(question_id)
+            else:
+                answers[question_id] = float(answer["noul"])
+        if invalid:
+            raise SystemOneActAnswerError(
+                "system_one_act_answer_invalid:" + ",".join(invalid),
+                answers=answers, invalid_question_ids=invalid,
+            )
         return SystemOneActJudgments(
             answers=answers, yes_threshold=self.settings.yes_threshold, no_threshold=self.settings.no_threshold,
             model=str(response.get("model") or self.settings.model), usage=dict(response.get("usage") or {}),

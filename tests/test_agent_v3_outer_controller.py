@@ -131,7 +131,12 @@ def test_mission_guard_catches_unfulfilled_effects_with_or_without_followup(auth
     if authenticated_followup:
         task.metadata["v3_resumption_evidence"] = [{"kind": "authenticated_question_answer", "result": {"answer": True}}]
     state = _completed_state()
-    context, _ = _context()
+    context, provider = _context()
+    provider.json_by_purpose[InferencePurpose.STRATEGIC_ACT] = {
+        "next_step": "recover", "reason": "The acknowledgement does not establish the effect.",
+        "remaining_work": "Persist the requested completion status and verify it.",
+        "evidence_refs": [],
+    }
 
     class MissionUnmet(_SystemOne):
         def judge_act(self, *, state):
@@ -330,10 +335,10 @@ def test_system_one_check_and_act_can_conservatively_withhold_completion() -> No
     )
 
     assert review.status == PhaseReviewStatus.PHASE_VERIFIED_TASK_COMPLETE
-    assert decision.action == StrategicAction.REPLAN
-    assert task.metadata["v3_route"] == "strategic_replan"
+    assert decision.action == StrategicAction.FAIL
+    assert task.metadata["v3_route"] == "end"
     assert task.metadata["system_one_review"]["status"] == "used"
-    assert provider.requests == []
+    assert [item.purpose for item in provider.requests] == [InferencePurpose.STRATEGIC_ACT]
 
 
 def test_ambiguous_acceptance_criterion_is_focused_rereviewed_before_act() -> None:
@@ -405,7 +410,7 @@ def test_completed_incomplete_phase_hands_the_review_to_plan() -> None:
     assert task.metadata["act_directive"]["phase_review"]["status"] == review.status.value
 
 
-def test_system_one_failure_falls_back_to_existing_phase_review() -> None:
+def test_system_one_act_unavailable_preserves_successful_check() -> None:
     task = _task()
     context, provider = _context()
     context.system_one = _SystemOne(error=RuntimeError("unavailable"))
@@ -415,8 +420,8 @@ def test_system_one_failure_falls_back_to_existing_phase_review() -> None:
     )
 
     assert review.status == PhaseReviewStatus.PHASE_VERIFIED_TASK_COMPLETE
-    assert decision.action == StrategicAction.REPLAN
-    assert task.metadata["v3_route"] == "strategic_replan"
+    assert decision.action == StrategicAction.FAIL
+    assert task.metadata["v3_route"] == "end"
     assert task.metadata["system_one_act_judgments"]["status"] == "unavailable"
     assert task.metadata["system_one_review"]["status"] == "fallback"
     assert [item.purpose for item in provider.requests] == [InferencePurpose.PHASE_REVIEW]
@@ -471,11 +476,11 @@ def test_system_one_confident_updates_survive_partial_ambiguity_and_response_is_
     )
 
     assert review.status == PhaseReviewStatus.PHASE_VERIFIED_TASK_COMPLETE
-    assert decision.action == StrategicAction.REPLAN
-    assert task.metadata["v3_route"] == "strategic_replan"
+    assert decision.action == StrategicAction.FAIL
+    assert task.metadata["v3_route"] == "end"
     assert task.metadata["system_one_review"]["status"] == "partial_fallback"
     assert task.metadata["prepared_user_response"]["tool_call_id"] == "respond-once"
-    assert [item.purpose for item in provider.requests] == [InferencePurpose.PHASE_REVIEW]
+    assert [item.purpose for item in provider.requests] == [InferencePurpose.PHASE_REVIEW, InferencePurpose.STRATEGIC_ACT]
     assert "The response contains a routine" not in provider.requests[0].prompt
     assert "The response contains safety guidance" in provider.requests[0].prompt
 
@@ -633,7 +638,7 @@ def test_reply_only_evidence_cannot_complete_persisted_effect_but_can_answer_fac
         'criterion_id': 'ac-1', 'status': 'satisfied', 'evidence_refs': ['response:1'],
     },), ()))
     _, decision = V3OuterController().review_and_route(task, state, PhaseOutcome('reply', PhaseStatus.PHASE_COMPLETE), context)
-    assert decision.action == (StrategicAction.REPLAN if requires_effect else StrategicAction.COMPLETE)
+    assert decision.action == (StrategicAction.FAIL if requires_effect else StrategicAction.COMPLETE)
 
 
 @pytest.mark.parametrize('probability', [None, float('nan'), float('inf'), -1, 2])
@@ -652,15 +657,23 @@ def test_invalid_required_mission_judgment_withholds_completion(probability):
     },), ()))
     _, decision = V3OuterController().review_and_route(task, _completed_state(),
         PhaseOutcome('solar', PhaseStatus.PHASE_COMPLETE), context)
-    assert decision.action == StrategicAction.REPLAN
-    assert task.status != 'completed'
+    assert decision.action == StrategicAction.FAIL
+    assert task.status == 'failed'
+    assessment = task.metadata['system_one_act_judgments']
+    assert assessment['invalid_question_ids'] == ['effect_supported']
+    assert assessment['answers']['reply_grounded'] == .99
+    assert 'effect_supported' not in assessment['answers']
 
 
-def test_mission_disagreement_after_prepared_report_requires_action_or_specific_question():
-    from alphonse.agent_v2.core.intelligence.v3.planner import _validate_inspection_handoff
+def test_mission_disagreement_after_prepared_report_names_the_missing_operation():
     task = _task()
     task.metadata['prepared_user_response'] = {'message': 'The existing record has been verified.'}
-    context, _ = _context()
+    context, provider = _context()
+    provider.json_by_purpose[InferencePurpose.STRATEGIC_ACT] = {
+        'next_step': 'recover', 'reason': 'The observation only established the previous state.',
+        'remaining_work': 'Mark the solar project complete in backlog.md and verify the updated status.',
+        'evidence_refs': ['tactical-action:edit'],
+    }
 
     class Unresolved(_SystemOne):
         def judge_act(self, **kwargs):
@@ -672,11 +685,6 @@ def test_mission_disagreement_after_prepared_report_requires_action_or_specific_
     _, decision = V3OuterController().review_and_route(task, _completed_state(),
         PhaseOutcome('solar', PhaseStatus.PHASE_COMPLETE), context)
     assert decision.action == StrategicAction.REPLAN
-    directive = task.metadata['act_directive']
-    assert directive['inspection_resolution']['route'] == 'decision_required'
-    report = PhasePlan('repeat-report', 'Repeat report', (PhaseSubgoal(
-        'report', 'Repeat report', 'response', allowed_capabilities=('user_response',),
-        allowed_side_effects=(SideEffectClass.USER_RESPONSE,),
-    ),), authorized_capabilities=('user_response',))
-    with pytest.raises(ValueError, match='inspection_handoff_requires_action_or_question'):
-        _validate_inspection_handoff(report, directive)
+    assert task.metadata['act_directive']['outcome_review']['remaining_work'] == (
+        'Mark the solar project complete in backlog.md and verify the updated status.'
+    )

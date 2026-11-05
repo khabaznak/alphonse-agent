@@ -208,6 +208,9 @@ class SQLiteQuestionStore:
         )
 
         task.status = "waiting_user"
+        if task.intelligence_engine == "hierarchical_v3" and task.hierarchical_state.get("status") == "running":
+            # The answer may arrive during delivery, before the executor returns.
+            task.hierarchical_state = {**task.hierarchical_state, "status": "waiting_user"}
         task.metadata["pending_question_id"] = interrupt.question_id
         task.metadata["question_interrupt"] = interrupt.to_dict()
         task.append_update(f"Task parked waiting for answer to question {interrupt.question_id}.")
@@ -320,26 +323,30 @@ class SQLiteQuestionStore:
         ).fetchone()
         version = int(existing["version"]) + 1 if existing is not None else 1
         created_at = str(existing["created_at"]) if existing is not None else now
-        conn.execute(
+        checkpoint_status = str(status or task.status or "running")
+        # A stale parked writer must not overwrite the queued checkpoint created by an answer.
+        cursor = conn.execute(
             """
             INSERT OR REPLACE INTO v2_task_checkpoints (
               task_id, task_state_json, status, owner_id, project_id, correlation_id,
               version, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
+              WHERE NOT EXISTS (SELECT 1 FROM v2_questions WHERE question_id = ? AND status = 'answered')
             """,
             (
                 task_id,
                 json.dumps(task.to_checkpoint_dict(), sort_keys=True),
-                str(status or task.status or "running"),
+                checkpoint_status,
                 str(task.user or ""),
                 task.project_id,
                 task.correlation_id,
                 version,
                 created_at,
                 now,
+                task.metadata.get("pending_question_id") if checkpoint_status == "waiting_user" else None,
             ),
         )
-        return version
+        return version if cursor.rowcount else version - 1
 
     def list_work_checkpoints(self, *, owner_id: str, view: str = "active", limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
         """Bounded owner-scoped reads; status is independent of serialized state."""

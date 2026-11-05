@@ -91,6 +91,17 @@ class PhaseExecutor:
                 state.transition(PhaseStatus.BLOCKED)
                 self._checkpoint(task, state, context)
                 return self._outcome(state, str(exc), blockers=(str(exc),))
+            recovery = (task.metadata.get("act_directive") or {}).get("outcome_review") or {}
+            verified_refs = set(recovery.get("verified_evidence_refs") or ())
+            if any(
+                entry.get("evidence_ref") in verified_refs and entry.get("tool_id") == action.tool_id
+                and (entry.get("arguments") or {}) == action.arguments
+                for entry in state.evidence.entries
+            ):
+                blocker = "act_recovery_repeats_verified_work"
+                state.transition(PhaseStatus.BLOCKED)
+                self._checkpoint(task, state, context)
+                return self._outcome(state, blocker, blockers=(blocker,))
             retry_count = 0
             retry_interrupted = False
             while True:
@@ -148,6 +159,10 @@ class PhaseExecutor:
                         "acceptance_questions": [dict(item) for item in completed.acceptance_questions],
                     }
                 )
+                if completed.status == "waiting":
+                    state.transition(PhaseStatus.WAITING_USER)
+                    self._checkpoint(task, state, context)
+                    return self._outcome(state, "A tactical action requires user input.")
                 self._checkpoint(task, state, context)
                 completion_met, retry_approved, progress_review = self._completion_review(
                     task, state, subgoal, completed, context
@@ -232,10 +247,6 @@ class PhaseExecutor:
                 if interruption is not None:
                     self._checkpoint(task, state, context)
                     return interruption
-            if completed.status == "waiting":
-                state.transition(PhaseStatus.WAITING_USER)
-                self._checkpoint(task, state, context)
-                return self._outcome(state, "A tactical action requires user input.")
             if completed.status != "success":
                 failure = self._handle_failure(state, subgoal, completed)
                 self._checkpoint(task, state, context)
@@ -309,7 +320,16 @@ class PhaseExecutor:
         if not projections_enabled():
             from .task_understanding import render
             skill_guidance = skill_guidance + retry_continuity_context(task, context) + render(task)
-        resolution = (task.metadata.get("act_directive") or {}).get("inspection_resolution")
+        directive = task.metadata.get("act_directive") or {}
+        recovery = directive.get("outcome_review") or {}
+        if recovery.get("remaining_work"):
+            skill_guidance = skill_guidance + source(
+                "\nOutcome recovery: " + json.dumps(recovery, ensure_ascii=False)
+                + "\nAddress the specific remaining work within the authorized phase. Preserve the verified work. "
+                "For a question, ask for the specific missing fact and choose the answer form that fits it.",
+                'task:' + str(task.task_id) + ':outcome_recovery', 'outcome_recovery',
+            )
+        resolution = directive.get("inspection_resolution")
         if resolution:
             skill_guidance = skill_guidance + source(
                 "\nInspection handoff: " + json.dumps(resolution, ensure_ascii=False)

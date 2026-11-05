@@ -146,12 +146,12 @@ def test_inspection_handoff_commits_and_reads_back_or_parks_with_specific_questi
         assert final.status == PhaseStatus.WAITING_USER
         assert 'start_date' in resumed.evidence.entries[-1]['result']['question_interrupt']['message']
         assert not task.acceptance_criteria_all_complete()
-        from alphonse.agent_v2.core.intelligence.v3.processor import _resume_inspection_from_answer
+        from alphonse.agent_v2.core.intelligence.v3.processor import _resume_from_authenticated_answer
         interrupt = resumed.evidence.entries[-1]['result']['question_interrupt']
         answered = questions.route_answer(respondent_user_id='fixture-owner', question_id=interrupt['question_id'], text='2026-10-31')
         assert answered.handled and answered.resumed_task is not None
         continuation = answered.resumed_task
-        _resume_inspection_from_answer(continuation, resumed)
+        _resume_from_authenticated_answer(continuation, resumed)
         assert not continuation.metadata['act_directive'].get('inspection_resolution')
         assert continuation.metadata['act_directive']['action'] == 'replan'
         assert not continuation.acceptance_criteria_all_complete()
@@ -241,17 +241,19 @@ def test_inspection_handoff_gets_its_decision_phase_before_no_progress_stop(monk
     ('authenticated_question_answer', 'question', 'other-task'),
 ])
 def test_historical_or_unrelated_answers_cannot_release_question_handoff(receipt_kind, receipt_phase, receipt_task):
-    from alphonse.agent_v2.core.intelligence.v3.processor import _resume_inspection_from_answer
+    from alphonse.agent_v2.core.intelligence.v3.processor import _resume_from_authenticated_answer
     phase = PhasePlan('question', 'Ask for missing details', (PhaseSubgoal('question', 'Ask for start_date', 'question'),))
     state = new_tactical_state(phase)
     state.status = PhaseStatus.WAITING_USER
     task = TaskState(task_id='fixture-task', metadata={
         'act_directive': {'action': 'ask_user', 'inspection_resolution': {'route': 'requires_user_input'}},
-        'v3_resumption_evidence': [{'kind': receipt_kind, 'phase_id': receipt_phase, 'task_id': receipt_task}],
+        'question_interrupt': {'status': 'answered', 'question_id': 'q1'},
+        'v3_resumption_evidence': [{'kind': receipt_kind, 'phase_id': receipt_phase, 'task_id': receipt_task,
+                                    'result': {'question_id': 'q1'}}],
         'v3_update_inspection_actions': MAX_UPDATE_INSPECTION_ACTIONS,
     })
     before = deepcopy(task.metadata)
-    _resume_inspection_from_answer(task, state)
+    assert not _resume_from_authenticated_answer(task, state)
     assert task.metadata == before
 
 

@@ -335,26 +335,22 @@ def link_readbacks(rows):
             row["verification"]["effect_ref"] = write["effect_ref"]
 
 
-def has_requested_effect_evidence(review_state):
+def requested_effect_evidence_refs(review_state):
     """Require a resource-specific receipt cited by Check. Act judges exact fulfillment."""
+    refs = set()
     for row in review_state["execution_evidence"]:
         verification = row.get("verification")
         if not row["criterion_ids"]:
             continue
-        if row.get("effect_receipt"):
-            return True
-        if not verification:
+        if row.get("effect_receipt") or (verification and verification["source"] != "direct_read"):
+            refs.add(row["evidence_ref"])
             continue
-        if verification["source"] != "direct_read":
-            return True
-        if verification.get("preceding_mutation_outcome") in {"denied", "failed", "rejected"}:
+        if not verification or verification.get("preceding_mutation_omitted"):
             continue
-        if row.get("target_in_planned_scope"):
-            return True
-        if (verification.get("preceding_mutation_outcome") == "process_exited_zero"
-                and not verification.get("preceding_mutation_omitted")):
-            return True
-    return False
+        preceding = verification.get("preceding_mutation_outcome")
+        if preceding == "process_exited_zero" or (preceding is None and row.get("target_in_planned_scope")):
+            refs.add(row["evidence_ref"])
+    return refs
 
 
 def has_unusable_criterion_support(review_state):
@@ -370,3 +366,7 @@ def has_unusable_criterion_support(review_state):
         for criterion_id in row["criterion_ids"]:
             supporting[criterion_id] = supporting.get(criterion_id, False) or usable
     return any(not usable for usable in supporting.values())
+
+
+def has_requested_effect_evidence(review_state):
+    return bool(requested_effect_evidence_refs(review_state))
