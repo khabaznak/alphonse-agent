@@ -254,8 +254,20 @@ def _assess_act(task, state, context):
             from alphonse.agent_v2.core.memory.retry_context import retry_continuity_records
             records = retry_continuity_records(task, context)
             if (task.metadata.get("v3_retry_continuity") or {}).get("access_status") != "available":
+                task.metadata["v3_act_context"] = {
+                    "schema_version": 3, "status": "blocked",
+                    "reason": "act_context_required_evidence_unavailable",
+                    "unavailable_request_source_ids": [
+                        entry["source_id"] for record in records for entry in record.records
+                        if entry["status"] == "omitted"
+                    ],
+                }
                 raise SystemOneUnavailableError("act_context_required_evidence_unavailable")
-            request_sources = [str(record) for record in records[1:]]
+            request_sources = [
+                {"source_id": record.records[0]["source_id"], "source_type": record.records[0]["source_type"],
+                 "content": str(record)}
+                for record in records[1:]
+            ]
         input_state = mission_review_state(task, state, request_sources=request_sources)
         judge = getattr(context.system_one, "judge_act", None)
         if not callable(judge):
@@ -292,6 +304,8 @@ def _assess_act(task, state, context):
 
 
 def _act_policy(task, input_state, judgments, context):
+    from .act_evidence import has_requested_effect_evidence, has_unusable_criterion_support
+
     def band(key):
         probability = judgments.answers[key]
         if probability >= judgments.yes_threshold:
@@ -309,13 +323,16 @@ def _act_policy(task, input_state, judgments, context):
 
     if requested == "uncertain":
         return assessment("uncertain", "The requested external effect could not be determined from the current task.")
+    if has_unusable_criterion_support(input_state):
+        return assessment("unsupported", "A required criterion relies on unavailable or unusable execution evidence.",
+                          unresolved_effect=requested == "yes")
     if requested == "yes":
         support, conflict = bands["effect_supported"], bands["effect_contradicted"]
         if conflict == "yes":
             return assessment("contradictory", "Recorded observations conflict with the requested effect.", unresolved_effect=True)
-        if not any(row.get("observation_kind") == "operational_result"
-                   for row in input_state["execution_evidence"]):
-            return assessment("unsupported", "No substantive successful operational observation supports the requested effect.", unresolved_effect=True)
+        if not has_requested_effect_evidence(input_state):
+            return assessment("unsupported", "No resource-specific effect receipt or read-back supports the requested effect.",
+                              unresolved_effect=True)
         if support == "no":
             return assessment("unsupported", "Recorded results do not establish the requested effect.", unresolved_effect=True)
         if support == "uncertain" or conflict == "uncertain":

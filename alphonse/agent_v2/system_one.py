@@ -388,7 +388,7 @@ ACT_QUESTIONS = {
     },
     "effect_supported": {
         "type": "noul",
-        "instructions": "Do the substantive operational results in `execution_evidence` verify the effect requested in `task_understanding`?",
+        "instructions": "Do the resource-specific receipts or read-back in `execution_evidence` establish the effect requested in `task_understanding`?",
         "criteria": {
             "true": "Results verify the requested effect. Fresh read-back of the exact desired values and provenance suffices for an idempotent request.",
             "false": "Results show only an attempt, a bare process exit, an error, unrelated data, an omitted observation, or a reply. A request for a new event needs evidence of that event.",
@@ -519,14 +519,21 @@ class JevCriterionDecisionProvider:
         sources = []
         if isinstance(state, dict):
             for key, kind in (("context_candidates", "context_candidate"), ("skill_candidates", "skill_candidate"), ("candidates", "recall_candidate"),
-                              ("selected_skills", "skill_guidance"), ("conversation", "conversation"), ("evidence", "task_evidence"), ("execution_evidence", "execution_evidence")):
+                              ("selected_skills", "skill_guidance"), ("conversation", "conversation"), ("evidence", "task_evidence"), ("execution_evidence", "execution_evidence"), ("request_sources", "request_source")):
                 candidates = state.get(key, []) or []
                 if isinstance(candidates, dict):
                     sources.extend({'source_id': str(identity), 'source_type': kind, 'reason': 'selection_candidate'} for identity in candidates)
                     continue
                 for candidate in candidates:
                     if isinstance(candidate, dict) and (identity := candidate.get("source_id") or candidate.get("id") or candidate.get("skill_id") or candidate.get("evidence_ref")):
-                        sources.append({"source_id": str(identity), "source_type": kind, "reason": "selection_candidate"})
+                        item = {"source_id": str(identity), "source_type": kind, "reason": "selection_candidate"}
+                        if key == "request_sources":
+                            item.update(source_type=candidate.get("source_type", kind), reason="mission_review")
+                        if key == "execution_evidence":
+                            result_coverage = candidate.get("result_coverage") or {}
+                            item.update(reason="mission_review", result_status=result_coverage.get("status"),
+                                        limitations=list(result_coverage.get("limitations") or []))
+                        sources.append(item)
             for key, kind in (("acceptance_criteria", "acceptance_criterion"), ("verified_evidence", "verified_evidence")):
                 values = state.get(key)
                 for identity in values if isinstance(values, dict) else ():
@@ -1199,12 +1206,15 @@ class JevCriterionDecisionProvider:
     def judge_act(self, *, state: dict[str, Any]) -> SystemOneActJudgments:
         """Judge independent facts about the request and its observed results."""
         started = monotonic()
-        coverage = state.get("context_coverage", {})
+        coverage = state.get('context_coverage', {})
         omissions = [
-            {"source_id": ref, "source_type": "execution_evidence", "status": "omitted",
-             "reason": "over_budget", "selection_reason": kind, "tokens": 0, "truncated": False}
-            for field, kind in (("omitted_result_refs", "optional_act_result"),
-                                ("omitted_evidence_refs", "optional_act_observation"))
+            {'source_id': ref, 'source_type': 'execution_evidence', 'status': status,
+             'reason': reason, 'selection_reason': field, 'tokens': 0, 'truncated': False}
+            for field, status, reason in (
+                ('omitted_result_refs', 'omitted', 'over_budget'),
+                ('omitted_evidence_refs', 'omitted', 'over_budget'),
+                ('unavailable_evidence_refs', 'unavailable', 'observation_unavailable'),
+            )
             for ref in coverage.get(field, [])
         ]
         response = self._evaluate(purpose="act_judgments", state=state, questions=ACT_QUESTIONS, omissions=omissions)

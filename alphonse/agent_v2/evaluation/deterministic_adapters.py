@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from dataclasses import dataclass, field
@@ -389,10 +390,14 @@ class _ReplayJev:
             str(item.get("evidence_ref")) for item in entries
             if isinstance(item, dict) and item.get("status") == "success" and item.get("evidence_ref")
         ]
+        effect_refs = [str(item["evidence_ref"]) for item in entries
+                       if item.get("status") == "success" and item.get("evidence_ref")
+                       and item.get("tool_id") in self.effect_tools]
+        support = effect_refs or successful[-1:]
         updates = tuple({
             "criterion_id": str(item.get("id") or ""),
             "status": "satisfied",
-            "evidence_refs": successful[-1:],
+            "evidence_refs": support,
             "reason": "Deterministic replay evidence",
         } for item in contract.get("criteria") or [] if isinstance(item, dict) and successful)
         return SystemOneReviewResult(updates, (), model="replay-jev")
@@ -464,8 +469,12 @@ def _edit_fixture(root: Path, arguments: dict[str, Any]) -> dict[str, Any]:
     content = path.read_text(encoding="utf-8")
     if old not in content:
         raise ValueError("fixture_edit_anchor_missing")
-    path.write_text(content.replace(old, new, 1), encoding="utf-8")
-    return {"affected_paths": [relative], "verification": {"status": "verified"}}
+    updated = content.replace(old, new, 1)
+    path.write_text(updated, encoding="utf-8")
+    digest = hashlib.sha256(updated.encode()).hexdigest()
+    read_back = hashlib.sha256(path.read_bytes()).hexdigest()
+    return {"affected_paths": [relative], "after_sha256": digest,
+            "verification": {"status": "verified", "post_write_sha256": read_back}}
 
 
 def _read_fixture(root: Path, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -640,7 +649,10 @@ def _scenario(case_id: str) -> _Scenario:
                 _Action(
                     "native.scheduled_task", "scheduling",
                     {"name": "Subir yogurt a mi suegra", "schedule_kind": "once", "local_time": "09:00", "day": "today"},
-                    role="schedule", read_only=False, result={"scheduled_task_id": "fixture-reminder", "run_at": "today 09:00"},
+                    role="schedule", read_only=False, result={
+                        "scheduled_task_id": "fixture-reminder", "run_at": "today 09:00",
+                        "verification": {"status": "verified", "source": "schedule_store_readback"},
+                    },
                     side_effect="external_reversible",
                 ),
             ),

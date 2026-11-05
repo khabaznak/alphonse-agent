@@ -2,11 +2,12 @@
 from __future__ import annotations
 
 import json
-from copy import deepcopy
+from pathlib import PurePosixPath
 
 from alphonse.agent_v2.system_one import SystemOneUnavailableError
 
-from .task_understanding import snapshot
+from .act_evidence import link_readbacks, observation
+from .task_understanding import input_receipt, snapshot
 
 # Conservative UTF-8 byte budgets leave room for questions/provider framing below
 # Jev's per-question context limit without assuming a chars-per-token ratio.
@@ -25,10 +26,11 @@ def mission_review_state(task, state, *, request_sources=()):
     Oversized required input stops review explicitly, rather than manufacturing a
     positive judgment from a partial source or increasing the model context limit.
     """
-    def stop(reason, value=None):
-        task.metadata['v3_act_context'] = {'schema_version': 2, 'status': 'blocked',
+    def stop(reason, value=None, *, unavailable_refs=()):
+        task.metadata['v3_act_context'] = {'schema_version': 3, 'status': 'blocked',
             'reason': reason, 'budget_bytes': ACT_STATE_MAX_BYTES,
-            'state_bytes': _size(value) if value is not None else None}
+            'state_bytes': _size(value) if value is not None else None,
+            'unavailable_evidence_refs': list(unavailable_refs)}
         raise SystemOneUnavailableError(reason)
 
     contract = task.ensure_acceptance_contract()
@@ -38,25 +40,30 @@ def mission_review_state(task, state, *, request_sources=()):
     for entry in state.evidence.entries:
         if isinstance(entry, dict) and entry.get('evidence_ref'):
             entries[entry['evidence_ref']] = entry
-    ordered = list(entries.values())
-    positions = {ref: index for index, ref in enumerate(entries)}
+    for action in state.actions:
+        ref = f"tactical-action:{action.action_id}"
+        if action.status in {"planned", "running"} and ref not in entries:
+            entries[ref] = {**action.to_dict(), "evidence_ref": ref, "phase_id": state.phase.phase_id}
     essential = set()
     missing = []
+    criterion_ids = {}
     for row in criteria:
         if row.get('status') != 'satisfied' or row.get('required', True) is False or row.get('verification') == 'system':
             continue
-        refs = set(row.get('evidence_refs') or [])
+        refs = dict.fromkeys(row.get('evidence_refs') or [])
         for ref in refs:
             if ref in entries and entries[ref].get('status') == 'success':
                 essential.add(ref)
+                criterion_ids.setdefault(ref, []).append(row['id'])
             else:
                 missing.append(ref)
     if missing:
-        stop('act_context_required_evidence_unavailable')
+        stop('act_context_required_evidence_unavailable', unavailable_refs=missing)
     prepared = task.metadata.get('prepared_user_response') or {}
+    understanding = snapshot(task)
     value = {
-        'schema_version': 2,
-        'task_understanding': snapshot(task),
+        'schema_version': 3,
+        'task_understanding': understanding,
         'request_sources': list(request_sources),
         'required_criteria': [{key: row[key] for key in ('id', 'statement', 'evidence_refs') if key in row}
                               for row in criteria if row.get('required', True)],
@@ -66,67 +73,87 @@ def mission_review_state(task, state, *, request_sources=()):
         'context_coverage': {'omitted_result_refs': [], 'omitted_evidence_refs': [], 'evidence_is_not_permission': True},
     }
 
-    # Keep the prepared reply in one place while preserving its evidence identity.
-    response_action = str(prepared.get('tool_call_id') or '')
-    prepared_ref = f'tactical-action:{response_action}' if response_action and prepared.get('message') else None
+    # Capture the reviewed scope for each phase. A requested or allowed target
+    # helps correlate observations. Scope alone is never evidence of execution.
+    scopes = {state.phase.phase_id: list(state.phase.mutation_scope.allowed_paths)}
+    for phase in task.metadata.get("v3_phase_history") or []:
+        if not isinstance(phase, dict):
+            continue
+        plan = phase.get("phase") or {}
+        scopes.setdefault(plan.get("phase_id"), (plan.get("mutation_scope") or {}).get("allowed_paths") or [])
 
-    def observation(entry, include_result):
-        row = {key: deepcopy(entry[key]) for key in ('evidence_ref', 'phase_id', 'subgoal_id', 'tool_id', 'status', 'error') if key in entry}
-        if entry.get('tool_id') in {'native.respond', 'native.ask_question'}:
-            row['observation_kind'] = 'conversation'
-        elif include_result and _has_operational_result(entry):
-            row['observation_kind'] = 'operational_result'
-        else:
-            row['observation_kind'] = 'attempt'
-        if include_result and entry.get('tool_id') == 'native.respond' and row['evidence_ref'] == prepared_ref:
+    response_ref = 'tactical-action:' + str(prepared.get('tool_call_id') or '')
+    rows = {}
+    for entry in entries.values():
+        ref = entry['evidence_ref']
+        row = observation(entry, criterion_ids.get(ref, []))
+        if entry.get('tool_id') == 'native.respond' and prepared.get('message') and ref == response_ref:
+            row.pop('result', None)
             row['result_reference'] = 'prepared_response.message'
-        elif include_result and 'result' in entry:
-            row['result'] = deepcopy(entry['result'])
-        return row
+        # Scope applies to the exact project-relative argument or absolute path.
+        # A same-named file in another directory is not a scope match.
+        target = row['operation'].get('target', {})
+        allowed = scopes.get(entry.get('phase_id') or state.phase.phase_id, [])
+        path = target.get('path')
+        if path:
+            cwd = (entry['result'].get('cwd') if isinstance(entry.get('result'), dict) else None)
+            raw_cwd = (entry.get('arguments') or {}).get('cwd')
+            if path in allowed or (isinstance(cwd, str)
+                                   and raw_cwd == cwd and any(
+                                       not PurePosixPath(p).is_absolute() and '..' not in PurePosixPath(p).parts
+                                       and str(PurePosixPath(cwd, p)) == path for p in allowed)):
+                row['target_in_planned_scope'] = True
+        elif target.get('kind') == 'project_path' and target.get('id') in allowed:
+            row['target_in_planned_scope'] = True
+        rows[ref] = row
+    link_readbacks(rows.values())
 
-    value['execution_evidence'] = [
-        observation(entry, True) for entry in ordered if entry['evidence_ref'] in essential
+    # A cited read-back and its linked invocation form one required unit.
+    for ref in tuple(essential):
+        verification = rows[ref].get('verification') or {}
+        if linked := verification.get('preceding_mutation_ref'):
+            essential.add(linked)
+    value['execution_evidence'] = [row for ref, row in rows.items() if ref in essential]
+    coverage = value['context_coverage']
+    coverage['budget_bytes'] = ACT_STATE_MAX_BYTES
+    coverage['unavailable_evidence_refs'] = [
+        ref for ref, row in rows.items() if row['operational_outcome'] in {'denied', 'unavailable', 'invocation_outcome_unavailable'}
+        or row['result_coverage']['status'] == 'unavailable'
     ]
     if _size(value) > ACT_STATE_MAX_BYTES:
         stop('act_context_required_input_exceeds_budget', value)
-    # Whole optional observations only. A missing excerpt is never evidence that
-    # the tool failed, the record is absent or a requested effect occurred.
-    for entry in reversed(ordered):
-        if entry['evidence_ref'] in essential:
+    included = set(essential)
+    for ref, row in reversed(list(rows.items())):
+        if ref in essential:
             continue
-        row = observation(entry, True)
         value['execution_evidence'].append(row)
-        if _size(value) > ACT_STATE_MAX_BYTES - 2000:
+        if _size(value) <= ACT_STATE_MAX_BYTES - 2000:
+            included.add(ref)
+            continue
+        value['execution_evidence'].pop()
+        coverage['omitted_result_refs'].append(ref)
+        shell = observation(entries[ref], [], include_result=False)
+        value['execution_evidence'].append(shell)
+        if _size(value) <= ACT_STATE_MAX_BYTES - 2000:
+            rows[ref] = shell
+            included.add(ref)
+        else:
             value['execution_evidence'].pop()
-            row = observation(entry, False)
-            row['result_omitted'] = True
-            value['execution_evidence'].append(row)
-            value['context_coverage']['omitted_result_refs'].append(entry['evidence_ref'])
-            if _size(value) > ACT_STATE_MAX_BYTES - 2000:
-                value['execution_evidence'].pop()
-                value['context_coverage']['omitted_evidence_refs'].append(entry['evidence_ref'])
+            coverage['omitted_result_refs'].pop()
+            coverage['omitted_evidence_refs'].append(ref)
+    value['execution_evidence'] = [row for ref, row in rows.items() if ref in included]
+    for row in value['execution_evidence']:
+        if (verification := row.get('verification')) and verification.get('preceding_mutation_ref') not in included:
+            if verification.get('preceding_mutation_ref'):
+                verification['preceding_mutation_omitted'] = True
     if _size(value) > ACT_STATE_MAX_BYTES:
         stop('act_context_required_input_exceeds_budget', value)
-    # Prioritize linked evidence and recent optional results for budget selection.
-    # Present selected observations in ledger order for conflict and read-back review.
-    value['execution_evidence'].sort(key=lambda row: positions[row['evidence_ref']])
     task.metadata['v3_act_context'] = {
-        'schema_version': 2, 'status': 'ready', 'state_bytes': _size(value), 'budget_bytes': ACT_STATE_MAX_BYTES,
-        'evidence_refs': [row['evidence_ref'] for row in value['execution_evidence']],
-        'omitted_result_refs': list(value['context_coverage']['omitted_result_refs']),
-        'omitted_evidence_refs': list(value['context_coverage']['omitted_evidence_refs']),
+        'schema_version': 3, 'status': 'ready', 'state_bytes': _size(value), 'budget_bytes': ACT_STATE_MAX_BYTES,
+        'task_understanding': input_receipt(understanding),
+        'evidence_refs': [
+            row['evidence_ref'] for row in value['execution_evidence']],
+        **{key: list(coverage[key]) for key in (
+            'omitted_result_refs', 'omitted_evidence_refs', 'unavailable_evidence_refs')},
     }
     return value
-
-
-def _has_operational_result(entry):
-    if entry.get('status') != 'success':
-        return False
-    result = entry.get('result')
-    if not isinstance(result, dict):
-        return isinstance(result, (str, list)) and bool(result)
-    if 'exit_code' in result:
-        stdout = result.get('stdout')
-        return result['exit_code'] == 0 and not result.get('timed_out') and isinstance(stdout, str) and bool(stdout.strip())
-    metadata = {'status', 'success', 'ok', 'duration_ms', 'command', 'arguments'}
-    return any(key not in metadata and value not in (None, '', [], {}) for key, value in result.items())

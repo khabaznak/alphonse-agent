@@ -176,6 +176,13 @@ pytestmark = pytest.mark.usefixtures("task_understanding_provider")
 ])
 def test_effect_judgments_have_explicit_routing(requested, support, conflict, status):
     task, state, context, requests, _ = completed_lookup()
+    if requested > .2:
+        task.goal = 'Schedule a reminder for Friday at 09:00'
+        task.metadata['prepared_user_response']['message'] = 'The Friday 09:00 reminder is scheduled.'
+        state.evidence.entries[0].update(tool_id='native.scheduled_task', result={
+            'scheduled_task_id': 'fixture-reminder', 'next_run_at': '2026-11-06T09:00:00Z',
+            'verification': {'status': 'verified', 'source': 'schedule_store_readback'},
+        })
     context.system_one.judge_act = lambda **_: act_judgments(
         effect_requested=requested, effect_supported=support, effect_contradicted=conflict,
     )
@@ -206,7 +213,7 @@ def test_process_status_and_prepared_reply_cannot_substitute_for_an_effect(resul
     )
     assert decision.action == StrategicAction.REPLAN
     assert task.metadata['system_one_act_judgments']['status'] == 'unsupported'
-    assert task.metadata['act_directive']['outcome_review']['reason'].startswith('No substantive')
+    assert 'unusable execution evidence' in task.metadata['act_directive']['outcome_review']['reason']
     assert not requests
 
 

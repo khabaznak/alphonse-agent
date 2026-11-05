@@ -215,10 +215,30 @@ reply is included once, separate from operational evidence, and marked as pendin
 delivery. Action argument logs, bound-output copies, and broad household or skill
 prompt blocks are excluded.
 
-All observations supporting satisfied required semantic criteria are included in
-full, once per evidence ID. Optional observations can be omitted whole, or
-represented by an attempt record with its result explicitly omitted. Omissions
-cannot establish presence, absence, denial, failure, or a successful effect.
+Observations cited by satisfied required semantic criteria are included once per
+evidence ID. The projection also keeps a cited read-back and its linked write
+together. Each observation carries its invocation and task-understanding
+provenance when available, its operation and target, the operational outcome, and
+the effect or read-back state. Legacy checkpoints keep their original evidence
+IDs and mark their provenance as checkpoint evidence.
+
+Native read-back receipts retain the resource identity and verification source.
+Typed commit receipts identify the committed operation and resource. An outbox
+receipt establishes that a message was queued. Bash retains a bounded operation description for supported literal file and
+SQLite commands. Complex commands are opaque, with a digest and applicable
+artifact ID. Exit zero describes the shell process. A confirmed effect needs
+resource-specific read-back and semantic support for the current requested
+outcome. For example, use a separate `cat` of the written file or a
+`sqlite3 -readonly` query selecting the intended record's fields. A fresh read
+can support an idempotent request when it establishes the desired state for the
+scoped resource. A fresh read alone cannot establish that a new event occurred.
+Explicit HTTP or access failures remain visible even when a wrapper exits zero.
+
+The current prepared response is referenced instead of repeated in its tool
+result. Plans, listed capabilities and prepared language carry no effect status.
+The projection withholds raw Bash commands, error messages and known credential
+fields. Optional observations or results may be omitted whole. Source clipping,
+unavailable evidence and budget omissions are recorded separately.
 `v3_act_context` records size and coverage. The state is limited to 24,000 UTF-8
 bytes and the shared Jev request preflight enforces its per-question and batch
 budgets. Missing or oversized required content makes review unavailable. No

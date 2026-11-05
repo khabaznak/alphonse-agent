@@ -28,6 +28,7 @@ from alphonse.agent_v2.core.tools.registry.native.bash import BASH_TOOL_ID
 from alphonse.agent_v2.core.tools.registry.native.respond import RESPOND_TOOL_ID
 from alphonse.agent_v2.system_one import SystemOneUnavailableError, system_one_error_code
 from alphonse.agent_v2.core.intelligence.v3.response_state import work_evidence_refs
+from alphonse.agent_v2.core.intelligence.v3.task_understanding import receipt as task_understanding_receipt
 from alphonse.agent_v2.core.tools.registry import ToolExposurePolicy
 from alphonse.agent_v2.core.memory.retry_context import retry_continuity_context, retry_source_unresolved, retry_allows_subgoal
 
@@ -112,6 +113,7 @@ class PhaseExecutor:
                         "retry_attempt": retry_count,
                     },
                 )
+                understanding = task_understanding_receipt(task)
                 outcome = ToolInvocationService(context=context, task=task).invoke(
                     action.tool_id, action.arguments, call_id=action.action_id
                 )
@@ -129,6 +131,12 @@ class PhaseExecutor:
                 state.evidence.append(
                     {
                         "evidence_ref": f"tactical-action:{completed.action_id}",
+                        "invocation": {
+                            "call_id": outcome["call_id"],
+                            "read_only": next((tool.read_only for tool in tools if tool.tool_id == completed.tool_id), False),
+                            "task_understanding": understanding,
+                        },
+                        "error_code": (outcome.get("error") or {}).get("code"),
                         "phase_id": state.phase.phase_id,
                         "subgoal_id": subgoal.subgoal_id,
                         "tool_id": completed.tool_id,
