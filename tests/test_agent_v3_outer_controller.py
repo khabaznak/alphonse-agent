@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from conftest import act_judgments
+
 import pytest
 
 from alphonse.agent_v2.core.core import CoreLoopContext
@@ -17,7 +19,7 @@ from alphonse.agent_v2.core.intelligence.v3 import SideEffectClass
 from alphonse.agent_v2.core.intelligence.v3 import V3OuterController
 from alphonse.agent_v2.core.intelligence.v3 import new_tactical_state
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
-from alphonse.agent_v2.system_one import SystemOneActRecommendation, SystemOneReviewResult
+from alphonse.agent_v2.system_one import SystemOneReviewResult
 
 
 def _phase():
@@ -132,12 +134,9 @@ def test_mission_guard_catches_unfulfilled_effects_with_or_without_followup(auth
     context, _ = _context()
 
     class MissionUnmet(_SystemOne):
-        def recommend_act(self, *, state):
-            assert "available_tool_ids" in state
-            return SystemOneActRecommendation("complete", 0.99, True, "Contract satisfied", answers={
-                "mission_outcome_is_fulfilled": 0.05, "continuation_is_worthwhile": 0.99,
-                "user_input_can_unblock": 0.05, "closure_explanation_is_warranted": 0.9,
-            })
+        def judge_act(self, *, state):
+            assert "task_understanding" in state
+            return act_judgments(effect_requested=.99, effect_supported=.05)
 
     context.system_one = MissionUnmet(SystemOneReviewResult(({
         "criterion_id": "ac-1", "status": "satisfied", "evidence_refs": ["tactical-action:edit"],
@@ -185,24 +184,13 @@ def test_repeated_completed_phases_without_acceptance_progress_keep_routing() ->
     assert "v3_consecutive_no_progress_phases" not in task.metadata
 
 
-def test_continue_choice_with_uncertain_continuation_replans_instead_of_failing() -> None:
+def test_incomplete_phase_continues_to_system_two_without_act_judgments() -> None:
     class Jev:
         def evaluate(self, **_values):
             return SystemOneReviewResult(updates=(), ambiguous_criterion_ids=("ac-1",))
 
-        def recommend_act(self, *, state):
-            assert state["check_verdict"] == "wip"
-            return SystemOneActRecommendation(
-                "continue",
-                0.91,
-                True,
-                "More authorized work under the current strategy is likely to make useful progress.",
-                answers={
-                    "continuation_is_worthwhile": 0.72,
-                    "user_input_can_unblock": 0.1,
-                    "closure_explanation_is_warranted": 0.75,
-                },
-            )
+        def judge_act(self, *, state):
+            pytest.fail("An incomplete phase must go to Plan without Act judgments")
 
     task = _task()
     context = CoreLoopContext(messages=InMemoryMessageQueue(), system_one=Jev())
@@ -214,10 +202,10 @@ def test_continue_choice_with_uncertain_continuation_replans_instead_of_failing(
         context,
     )
 
-    assert decision.action == StrategicAction.REPLAN
+    assert decision.action == StrategicAction.CONTINUE
     assert task.status != "failed"
-    assert task.metadata["v3_route"] == "strategic_replan"
-    assert "returning to Plan" in decision.reason
+    assert task.metadata["v3_route"] == "plan_next_phase"
+    assert decision.reason == _review.reason
     assert "More authorized work" not in decision.reason
 
 
@@ -323,22 +311,10 @@ class _SystemOne:
             raise self.error
         return self.result
 
-    def recommend_act(self, *, state):
+    def judge_act(self, *, state):
         if self.error or self.result is None:
             raise RuntimeError("unavailable")
-        action = self.result.recommended_route or (
-            "complete" if state.get("check_verdict") == "success" else "continue"
-        )
-        return SystemOneActRecommendation(
-            action=action,
-            confidence=self.result.route_confidence,
-            confident=self.result.route_confident,
-            rationale=f"Test recommendation: {action}.",
-            answers={"continuation_is_worthwhile": 0.99 if action == "continue" else 0.1,
-                     "user_input_can_unblock": 0.99 if action == "ask_user" else 0.1,
-                     "closure_explanation_is_warranted": 0.1},
-        )
-
+        return act_judgments(effect_requested=.99, effect_supported=.01 if self.result.recommended_route == "replan" else .99)
 
 def test_system_one_check_and_act_can_conservatively_withhold_completion() -> None:
     task = _task()
@@ -385,16 +361,8 @@ def test_ambiguous_acceptance_criterion_is_focused_rereviewed_before_act() -> No
                 ambiguous_criterion_ids=(),
             )
 
-        def recommend_act(self, **_values):
-            return SystemOneActRecommendation(
-                action="complete", confidence=0.99, confident=True,
-                rationale="All criteria have supporting evidence.",
-                answers={
-                    "continuation_is_worthwhile": 0.1,
-                    "user_input_can_unblock": 0.1,
-                    "closure_explanation_is_warranted": 0.9,
-                },
-            )
+        def judge_act(self, **_values):
+            return act_judgments(effect_requested=.99)
 
     system_one = _AmbiguousThenResolvedSystemOne()
     context.system_one = system_one
@@ -411,29 +379,21 @@ def test_ambiguous_acceptance_criterion_is_focused_rereviewed_before_act() -> No
     assert task.metadata["system_one_review"]["status"] == "focused_rereview_resolved"
 
 
-def test_fail_explain_recommendation_does_not_close_a_completed_incomplete_phase() -> None:
+def test_completed_incomplete_phase_hands_the_review_to_plan() -> None:
     task = _task()
     context, _ = _context(satisfy=False)
 
-    class _FailExplainSystemOne(_SystemOne):
+    class _IncompleteSystemOne(_SystemOne):
         def evaluate(self, **_values):
             return SystemOneReviewResult(
                 updates=(), ambiguous_criterion_ids=(),
                 recommended_route="continue", route_confidence=0.5, route_confident=False,
             )
 
-        def recommend_act(self, **_values):
-            return SystemOneActRecommendation(
-                action="fail_explain", confidence=0.94, confident=True,
-                rationale="Continue fuse was low after a prerequisite phase.",
-                answers={
-                    "continuation_is_worthwhile": 0.2,
-                    "user_input_can_unblock": 0.1,
-                    "closure_explanation_is_warranted": 0.95,
-                },
-            )
+        def judge_act(self, **_values):
+            pytest.fail("An incomplete phase must go to Plan without Act judgments")
 
-    context.system_one = _FailExplainSystemOne()
+    context.system_one = _IncompleteSystemOne()
 
     review, decision = V3OuterController().review_and_route(
         task, _completed_state(), PhaseOutcome("solar", PhaseStatus.PHASE_COMPLETE), context,
@@ -442,7 +402,7 @@ def test_fail_explain_recommendation_does_not_close_a_completed_incomplete_phase
     assert review.status == PhaseReviewStatus.PHASE_VERIFIED_TASK_INCOMPLETE
     assert decision.action == StrategicAction.CONTINUE
     assert task.metadata["v3_route"] == "plan_next_phase"
-    assert "act_directive" not in task.metadata
+    assert task.metadata["act_directive"]["phase_review"]["status"] == review.status.value
 
 
 def test_system_one_failure_falls_back_to_existing_phase_review() -> None:
@@ -455,8 +415,9 @@ def test_system_one_failure_falls_back_to_existing_phase_review() -> None:
     )
 
     assert review.status == PhaseReviewStatus.PHASE_VERIFIED_TASK_COMPLETE
-    assert decision.action == StrategicAction.CONTINUE
-    assert task.metadata["v3_route"] == "plan_next_phase"
+    assert decision.action == StrategicAction.REPLAN
+    assert task.metadata["v3_route"] == "strategic_replan"
+    assert task.metadata["system_one_act_judgments"]["status"] == "unavailable"
     assert task.metadata["system_one_review"]["status"] == "fallback"
     assert [item.purpose for item in provider.requests] == [InferencePurpose.PHASE_REVIEW]
 
@@ -624,10 +585,11 @@ def test_dc1_cancellation_cannot_be_overridden_by_closure_or_act(closure_only):
         task.metadata['act_directive'] = {'closure_only': True, 'terminal_outcome': 'success'}
         task.metadata['prepared_user_response'] = {'message': 'Synthetic reply'}
     else:
-        def recommend_act(**kwargs):
+        def judge_act(**kwargs):
             cancelled['value'] = True
-            return SystemOneActRecommendation('complete', 1.0, True, 'Synthetic late cancellation')
-        context.system_one = SimpleNamespace(recommend_act=recommend_act)
+            return act_judgments(effect_requested=.99)
+
+        context.system_one = SimpleNamespace(judge_act=judge_act)
     review, decision = V3OuterController().review_and_route(task, state, PhaseOutcome(state.phase.phase_id, PhaseStatus.PHASE_COMPLETE), context)
     assert review.status == PhaseReviewStatus.CANCELLED
     assert task.status == 'cancelled'
@@ -663,10 +625,8 @@ def test_reply_only_evidence_cannot_complete_persisted_effect_but_can_answer_fac
                            'status': 'success', 'result': {'message': 'Here is the qualified answer.'}})
 
     class PositiveJev(_SystemOne):
-        def recommend_act(self, **kwargs):
-            return SystemOneActRecommendation('complete', .99, True, 'All criteria satisfied', answers={
-                'mission_outcome_is_fulfilled': .99, 'mission_requires_persisted_effect': .99 if requires_effect else .01,
-            })
+        def judge_act(self, **kwargs):
+            return act_judgments(effect_requested=.99 if requires_effect else .01)
 
     context, _ = _context()
     context.system_one = PositiveJev(SystemOneReviewResult(({
@@ -683,12 +643,9 @@ def test_invalid_required_mission_judgment_withholds_completion(probability):
     context, _ = _context()
 
     class InvalidJev(_SystemOne):
-        requires_mission_outcome_review = True
 
-        def recommend_act(self, **kwargs):
-            return SystemOneActRecommendation('complete', .99, True, 'Complete', answers={
-                'mission_outcome_is_fulfilled': probability,
-            })
+        def judge_act(self, **kwargs):
+            return act_judgments(effect_supported=probability)
 
     context.system_one = InvalidJev(SystemOneReviewResult(({
         'criterion_id': 'ac-1', 'status': 'satisfied', 'evidence_refs': ['tactical-action:edit'],
@@ -706,10 +663,8 @@ def test_mission_disagreement_after_prepared_report_requires_action_or_specific_
     context, _ = _context()
 
     class Unresolved(_SystemOne):
-        def recommend_act(self, **kwargs):
-            return SystemOneActRecommendation('complete', .99, True, 'Complete', answers={
-                'mission_outcome_is_fulfilled': .66, 'mission_requires_persisted_effect': .54,
-            })
+        def judge_act(self, **kwargs):
+            return act_judgments(effect_requested=.99, effect_supported=.01)
 
     context.system_one = Unresolved(SystemOneReviewResult(({
         'criterion_id': 'ac-1', 'status': 'satisfied', 'evidence_refs': ['tactical-action:edit'],

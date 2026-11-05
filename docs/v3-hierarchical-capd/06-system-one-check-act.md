@@ -105,28 +105,6 @@ report.
 
 ## Check boundary
 
-An Act fulfillment Noul between the configured no and yes thresholds is unresolved,
-not evidence that requested work remains undone. When Check has verified completion
-and Act confidently recommends completion, resolve that middle-band disagreement
-through one focused System Two review of the same bounded mission state. The
-review must cite successful evidence, assess the prepared answer before delivery,
-and identify concrete remaining work if it withholds completion. Keep Jev's raw
-probabilities unchanged. Missing effect evidence, invalid responses, cancellation
-and deterministic verification failures cannot be overridden. Clear negative
-judgments retain the existing recovery route. Read-only answer tasks must not be
-forced into mutation-or-question handoffs merely because fulfillment was uncertain.
-
-The 2026-11-03 version-lookup incident exposed this distinction: the shell check
-and prepared answer succeeded, Check verified the criteria, and Act selected
-complete at 0.99. A fulfillment Noul of 0.79 was nevertheless treated as unfinished
-work against a 0.80 cutoff. The unnecessary replan then hit malformed JSON whose
-nested subgoal was incorrectly accepted as the outer plan. Regression fixtures
-cover the completion cascade, fail-closed reasoning, cancellation, and bounded
-plan correction. Live synthetic checks with the configured reasoning model
-accepted a supported fictional version answer and rejected a contradictory one.
-The original household checkpoint was inspected locally; it was not submitted as
-a live evaluation payload.
-
 For each still-pending acceptance criterion and each bounded successful evidence
 entry, Alphonse sends one Noul question asking whether that exact evidence directly
 demonstrates the criterion. A high-probability answer may attach only the evidence
@@ -139,35 +117,56 @@ files, memory ledgers, or chain-of-thought.
 
 ## Act boundary
 
-The same Jev request asks a Choice question among `complete`, `continue`, `replan`,
-`ask_user`, `fail_explain`, and `fail`. The result is deliberately asymmetric:
+After Check supports every required acceptance criterion, Act asks Jev five
+independent Noul questions about the shared task and recorded observations. They
+classify whether the user requested an external effect, whether recorded results
+support that effect, whether current observations contradict it, whether the
+prepared reply addresses the requested deliverable, and whether its factual
+claims have support. Check retains separate questions for each pending criterion
+and the specific evidence offered for it. Act checks the actual current request
+even when Plan's criteria were too narrow. The model receives no strategic choices,
+capability list, or continuation prognosis.
 
-- It may conservatively withhold an otherwise verified completion and route to
-  strategic replanning.
-- It may turn deterministic continuation of an incomplete task into replanning.
-- It cannot create completion, failure, or a user question.
-- It cannot override cancellation, waiting, blocked-phase handling, mutation scope,
-  or verification failures.
+Apply the configured Noul yes and no thresholds (defaults 0.80 and 0.20,
+inclusive). Keep the middle band unresolved. The policy below is ordered. An
+earlier applicable row takes precedence over all later rows.
 
-This keeps Jev useful as a fast judgment layer without making a probabilistic answer
-the authority for irreversible or terminal state transitions.
+| Condition | Runtime transition |
+| --- | --- |
+| Cancelled, parked for an authenticated answer, blocked, or failed deterministic verification | Skip Act judgments. Cancel, park, or hand the phase status and evidence to the existing bounded recovery path. |
+| Check still has unmet criteria | Skip Act judgments. System Two plans the next phase from the unmet criteria and cumulative evidence. |
+| Act is configured and a probability is missing, malformed, or invalid | Withhold success. Record the invalid review and hand the current phase and evidence to System Two. |
+| Act is configured and the provider or required source is unavailable | Withhold success. Record the safe diagnostic, preserve any draft, and hand the current phase and evidence to System Two. |
+| Effect request is uncertain | Withhold success and hand the unresolved request to System Two. |
+| Effect requested and a contradiction is positive | Withhold success, even with positive support. System Two sees the contradictory observations in phase history. |
+| Effect requested and support is negative or there is no substantive successful operational result | Withhold success. A draft, attempt, or bare process status supplies no effect evidence. |
+| Effect requested and support or contradiction is uncertain | Withhold success and hand the evidence gap to System Two. |
+| No effect requested | Ignore both effect-evidence answers and evaluate the reply. |
+| Earlier effect checks passed or no effect is requested, and no reply is prepared | Plan a response-only phase and review it before completion. |
+| Either reply judgment is negative | Withhold success and return the unsupported reply to System Two. |
+| A reply judgment is uncertain, with a clearly reply-only request and no negative reply judgment | Allow one evidence-bound System Two review with no tools. Completion requires a valid positive resolution that cites a supplied substantive observation. Negative, invalid, or unavailable resolution returns to planning. |
+| A reply judgment is uncertain for an effect request | Withhold success and return to planning. |
+| Applicable effect checks pass and both reply judgments are positive | Complete only after the existing acceptance, response freshness, scope, verification, and cancellation checks pass. |
 
-The Act recommendation also includes a bounded `mission_outcome_is_fulfilled`
-Noul judgment against resumed authenticated follow-up answers. For those resumed
-tasks, completion requires both verified acceptance evidence and this follow-up
-check; approval acknowledgment alone cannot complete an approved installation.
-The same judgment now checks the original requested outcome for ordinary tasks as
-well, preventing generated acknowledgment-only criteria from replacing a requested
-persisted effect. A parallel Noul classifies whether the request requires a
-persisted mutation; when it does, response/question evidence alone cannot grant
-completion, even with a positive semantic judgment. Operational evidence is
-necessary, never sufficient: successful persisted effects still require semantic
-verification and existing deterministic scope/status checks. A supported factual
-answer may state uncertainty and finish. Missing, non-finite or out-of-range mission
-probabilities cannot grant closure. Failure of the required production mission
-review cannot fall back to acceptance-only success.
-Prepared acknowledgments are excluded from substantive outer progress, so changing
-their wording cannot keep an unfulfilled task running indefinitely.
+When System One is intentionally disabled, the existing System Two acceptance
+review supplies Check's verdict. A configured provider's failure cannot use that
+path to bypass Act. Legacy V2 Act routes from its Check verdict and runtime
+limits, with a bounded Plan phase for closure where needed.
+
+The handoff includes the phase status, blockers, evidence references, and any
+unresolved judgment bands. System Two gets phase history and the shared task
+understanding to plan verification, authorized remaining work, or a concrete
+question. Terminal failure explanation uses the task understanding and observed
+results. Existing deterministic controls enforce cancellation, authorization,
+prerequisites, evidence validity, and progress limits. Preparing new wording does
+not count as operational progress.
+
+The payload and probability handling follow TypeSafe's [Noul](https://docs.typesafe.ai/primitives/noul),
+[structured state](https://docs.typesafe.ai/concepts/state), and
+[System One API](https://docs.typesafe.ai/api/system-one) documentation. The
+existing probability thresholds are retained. Offline tests cover the wire
+contract, invalid responses, conflicting evidence, the uncertainty path, and
+effect and cancellation guards.
 
 ## Shared Jev request boundary and tactical review
 
@@ -207,11 +206,16 @@ limits by occurring at an earlier or later decision stage.
 
 ## Bounded final mission review
 
-`act_context.mission_review_state` supplies a dedicated structured review, not the
-full tactical checkpoint. Its required fields are the goal, current-task messages,
-authenticated follow-ups, revalidated originating sources when needed, user
-constraints, acceptance definitions/status, compact subgoal/completion facts,
-phase outcome, and prepared response. Observations cited by satisfied required semantic criteria are included once per
+`act_context.mission_review_state` uses the versioned task understanding and its
+source-linked request and steering in either context mode. Revalidated retry
+sources and user constraints remain separate. Required acceptance definitions
+retain their evidence references. The judgment view distinguishes attempts,
+substantive operational results, and conversational actions. The current prepared
+reply is included once, separate from operational evidence, and marked as pending
+delivery. Action argument logs, bound-output copies, and broad household or skill
+prompt blocks are excluded.
+
+Observations cited by satisfied required semantic criteria are included once per
 evidence ID. The projection also keeps a cited read-back and its linked write
 together. Each observation carries its invocation and task-understanding
 provenance when available, its operation and target, the operational outcome, and
@@ -219,7 +223,8 @@ the effect or read-back state. Legacy checkpoints keep their original evidence
 IDs and mark their provenance as checkpoint evidence.
 
 Native read-back receipts retain the resource identity and verification source.
-Bash retains a bounded operation description for supported literal file and
+Typed commit receipts identify the committed operation and resource. An outbox
+receipt establishes that a message was queued. Bash retains a bounded operation description for supported literal file and
 SQLite commands. Complex commands are opaque, with a digest and applicable
 artifact ID. Exit zero describes the shell process. A confirmed effect needs
 resource-specific read-back and semantic support for the current requested
@@ -234,19 +239,15 @@ result. Plans, listed capabilities and prepared language carry no effect status.
 The projection withholds raw Bash commands, error messages and known credential
 fields. Optional observations or results may be omitted whole. Source clipping,
 unavailable evidence and budget omissions are recorded separately.
+`v3_act_context` records size and coverage. The state is limited to 24,000 UTF-8
+bytes and the shared Jev request preflight enforces its per-question and batch
+budgets. Missing or oversized required content makes review unavailable. No
+long-context override is needed.
 
-State is limited to 24,000 UTF-8 bytes; the provider additionally checks the state
-plus its actual questions against a 28,000-byte request budget. These conservative
-bounds leave framing headroom under normal Jev context limits. Required content
-that cannot fit or is unavailable stops with an explicit local error; it is never
-silently clipped and does not trigger a long-context override. `v3_act_context`
-records size, support refs and coverage, without storing a second raw payload.
-The required mission check and deterministic effect/cancellation guards remain.
-A service or request failure cannot promote a prepared draft to completed work.
-
-Check's latest verdict is persisted before Act. If Act fails, the work log retains
-that verdict, the actual failed routing decision, and an end route, rather than an
-older blocked phase. Prepared answers remain in their checkpoint, undelivered.
+`system_one_act_judgments` records raw probabilities, their bands, provider usage
+and disposition, or a safe diagnostic for a failed review. The strategic route
+is recorded separately. The previous Act confidence setting remains readable for
+older settings clients and no longer participates in routing.
 
 ## Configuration and failure behavior
 
@@ -274,7 +275,7 @@ persistent HTTP requests.
 - Exact evidence-reference mapping is tested.
 - Ambiguous evidence is tested to fall back.
 - Provider failure is tested to fall back.
-- Act is tested to withhold completion but never manufacture success.
+- Act tests verify the evidence gates, the System Two handoff, and cancellation.
 - IPC access is administrator-only and API-key masking is tested.
 - New tasks use V3 by default in the owner-operated installation; V2 remains a manual
   rollback option.

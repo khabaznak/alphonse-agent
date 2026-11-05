@@ -40,12 +40,12 @@ def test_large_checkpoint_duplicates_do_not_enter_final_review_and_essential_sou
     state.evidence.append({'evidence_ref': 'schema', 'status': 'success', 'tool_id': 'native.bash',
         'arguments': {'command': 'DO_NOT_SEND_COMMAND'}, 'result': {'stdout': payload}})
     original = copy.deepcopy(state.to_dict())
-    projected = mission_review_state(task, state, outcome, review, ['native.bash'])
+    projected = mission_review_state(task, state)
     rendered = json.dumps(projected, ensure_ascii=False)
     assert len(rendered.encode()) <= ACT_STATE_MAX_BYTES
     assert 'complete_tool_execution_log' not in projected and 'task_context' not in projected
     assert 'DO_NOT_SEND_COMMAND' not in rendered and payload not in rendered
-    assert projected['goal'] == task.goal
+    assert projected['task_understanding']['inputs'][0]['content'] == task.goal
     observations = {row['evidence_ref']: row for row in projected['execution_evidence']}
     assert observations['tactical-action:read']['result'] == state.evidence.entries[0]['result']
     assert observations['tactical-action:reply']['result_reference'] == 'prepared_response.message'
@@ -62,16 +62,16 @@ def test_required_context_is_never_silently_truncated(field):
     elif field == 'prepared': task.metadata['prepared_user_response']['message'] = huge
     elif field == 'evidence': state.evidence.entries[0]['result']['stdout'] = huge
     elif field == 'constraints': task.metadata['user_constraints'] = {'must': huge}
-    else: task.metadata['v3_resumption_evidence'] = [{'evidence_ref': 'answer', 'result': {'answer': huge}}]
+    else: task.append_conversation_message(task.user, huge)
     with pytest.raises(SystemOneUnavailableError, match='act_context_required_input_exceeds_budget'):
-        mission_review_state(task, state, outcome, review, [])
+        mission_review_state(task, state)
 
 
 def test_unavailable_supporting_evidence_cannot_be_replaced_by_the_prepared_reply():
     task, state, outcome, review = fixture()
     state.evidence.entries[0]['status'] = 'failed'
     with pytest.raises(SystemOneUnavailableError, match='act_context_required_evidence_unavailable'):
-        mission_review_state(task, state, outcome, review, [])
+        mission_review_state(task, state)
 
 
 def test_failed_final_review_preserves_draft_and_successful_check_without_completing_task():
@@ -83,15 +83,14 @@ def test_failed_final_review_preserves_draft_and_successful_check_without_comple
         seen.append(state)
         assert len(json.dumps(state).encode()) < ACT_STATE_MAX_BYTES
         raise SystemOneRequestError(400, 'max_tokens_exceeded')
-    jev = SimpleNamespace(requires_mission_outcome_review=True, recommend_act=recommend,
+    jev = SimpleNamespace(judge_act=recommend,
         evaluate=lambda **kwargs: SystemOneReviewResult(updates=(), ambiguous_criterion_ids=()))
     context = CoreLoopContext(messages=InMemoryMessageQueue(), system_one=jev)
-    with pytest.raises(SystemOneUnavailableError, match='system_one_context_limit_exceeded'):
-        V3OuterController().review_and_route(task, state, outcome, context)
+    V3OuterController().review_and_route(task, state, outcome, context)
     assert len(seen) == 1
     assert task.metadata['prepared_user_response'] == prepared
     assert task.metadata['v3_phase_review']['status'] == 'phase_verified_task_complete'
-    assert task.metadata['v3_strategic_decision']['action'] == 'fail'
+    assert task.metadata['v3_strategic_decision']['action'] == 'replan'
     assert 'system_one_context_limit_exceeded' in task.metadata['v3_strategic_decision']['reason']
     assert task.status != 'completed'
     assert task.outcome is None or task.outcome.get('status') != 'success'
@@ -102,13 +101,27 @@ def test_all_supporting_observations_are_preserved_when_a_criterion_uses_multipl
     state.evidence.append({'evidence_ref': 'tactical-action:write', 'status': 'success', 'tool_id': 'native.bash',
         'result': {'exit_code': 0, 'stdout': 'COMMITTED fixture record'}})
     task.acceptance_contract['criteria'][0]['evidence_refs'].append('tactical-action:write')
-    projected = mission_review_state(task, state, outcome, review, [])
+    projected = mission_review_state(task, state)
     rows = {row['evidence_ref']: row for row in projected['execution_evidence']}
     assert rows['tactical-action:read']['result'] == state.evidence.entries[0]['result']
     assert rows['tactical-action:write']['result'] == state.evidence.entries[-1]['result']
     state.evidence.entries[-1]['result']['stdout'] = 'ESSENTIAL ' * ACT_STATE_MAX_BYTES
     with pytest.raises(SystemOneUnavailableError, match='required_input_exceeds_budget'):
-        mission_review_state(task, state, outcome, review, [])
+        mission_review_state(task, state)
+
+
+def test_review_preserves_order_and_separates_attempts_from_observations():
+    task, state, _, _ = fixture()
+    state.evidence.entries.insert(0, {'evidence_ref': 'early', 'status': 'failed', 'tool_id': 'native.bash',
+        'error': 'No record was available', 'result': {'exit_code': 1, 'stdout': ''}})
+    state.evidence.append({'evidence_ref': 'later', 'status': 'success', 'tool_id': 'native.bash',
+        'result': {'exit_code': 0, 'stdout': 'Corrected record'}})
+
+    observations = mission_review_state(task, state)['execution_evidence']
+    assert [(row['evidence_ref'], row['observation_kind']) for row in observations] == [
+        ('early', 'attempt'), ('tactical-action:read', 'operational_result'),
+        ('tactical-action:reply', 'conversation'), ('later', 'operational_result'),
+    ]
 
 
 def _shell_receipt(ref, command, *, stdout='', stderr='', exit_code=0, cwd='/fixture', status='success'):
@@ -120,7 +133,7 @@ def _shell_receipt(ref, command, *, stdout='', stderr='', exit_code=0, cwd='/fix
 
 
 def _projected_rows(task, state, outcome, review):
-    projection = mission_review_state(task, state, outcome, review, ['native.bash', 'native.scheduled_task'])
+    projection = mission_review_state(task, state)
     return projection, {row['evidence_ref']: row for row in projection['execution_evidence']}
 
 
@@ -143,7 +156,7 @@ def test_same_process_result_distinguishes_inspection_and_attempted_mutation_wit
 
 @pytest.mark.parametrize('same_target', [True, False])
 def test_fresh_readback_links_resource_effect_and_criterion_through_checkpoint_replay(same_target):
-    from alphonse.agent_v2.core.intelligence.v3.act_evidence import has_persisted_outcome_evidence
+    from alphonse.agent_v2.core.intelligence.v3.act_evidence import has_requested_effect_evidence
     from alphonse.agent_v2.core.intelligence.v3.contracts import TacticalState
     from alphonse.agent_v2.core.intelligence.v3.task_understanding import snapshot
 
@@ -160,7 +173,7 @@ def test_fresh_readback_links_resource_effect_and_criterion_through_checkpoint_r
     first, rows = _projected_rows(task, state, outcome, review)
     assert rows['readback']['criterion_ids'] == ['ac-1']
     assert rows['readback']['verification']['readback_ref'] == 'readback'
-    assert has_persisted_outcome_evidence(first) is same_target
+    assert has_requested_effect_evidence(first) is same_target
     assert rows['readback']['verification'].get('preceding_mutation_ref') == ('write' if same_target else None)
     assert rows['readback']['verification'].get('effect_ref') == ('write:effect' if same_target else None)
     assert rows['write']['provenance']['task_understanding']['input_digest'] == first['task_understanding']['input_digest']
@@ -177,7 +190,7 @@ def test_caught_http_error_in_a_real_exit_zero_shell_cannot_fulfill_lookup(http_
 
     from alphonse.agent_v2.core.intelligence.v3.outer import StrategicAction
     from alphonse.agent_v2.core.tools.registry.native.bash import execute_bash
-    from alphonse.agent_v2.system_one import SystemOneActRecommendation
+    from conftest import act_judgments
 
     task, state, outcome, review = fixture()
     script = (
@@ -193,10 +206,9 @@ def test_caught_http_error_in_a_real_exit_zero_shell_cannot_fulfill_lookup(http_
 
     def recommend(*, state):
         seen.extend(state['execution_evidence'])
-        return SystemOneActRecommendation('complete', .99, True, 'Fixture positive judgment',
-                                          answers={'mission_outcome_is_fulfilled': .99})
+        return act_judgments()
 
-    jev = SimpleNamespace(requires_mission_outcome_review=True, recommend_act=recommend,
+    jev = SimpleNamespace(judge_act=recommend,
                           evaluate=lambda **_: SystemOneReviewResult((), ()))
     _, decision = V3OuterController().review_and_route(
         task, state, outcome, CoreLoopContext(messages=InMemoryMessageQueue(), system_one=jev)
@@ -238,7 +250,7 @@ def test_cited_readback_requires_its_linked_write_atomically():
     state.evidence.append(_shell_receipt('write', "printf 'reviewed' > archive.txt", stderr='X' * ACT_STATE_MAX_BYTES))
     state.evidence.append(_shell_receipt('readback', 'cat archive.txt', stdout='reviewed'))
     with pytest.raises(SystemOneUnavailableError, match='act_context_required_input_exceeds_budget'):
-        mission_review_state(task, state, outcome, review, [])
+        mission_review_state(task, state)
     assert task.metadata['v3_act_context']['state_bytes'] > ACT_STATE_MAX_BYTES
 
 
@@ -261,17 +273,38 @@ def test_context_manifest_reports_source_clipping_access_failure_and_budget_omis
 
     def transport(_url, _key, payload, _timeout):
         return {'answers': {
-            key: {'type': 'choice', 'choice': 'complete', 'probabilities': {'complete': .99}}
-            if key == 'recommended_action' else {'type': 'noul', 'noul': .99}
-            for key in payload['questions']
+            key: {'type': 'noul', 'noul': .99} for key in payload['questions']
         }}
 
     provider = JevCriterionDecisionProvider(SystemOneSettings(api_key='fixture'), transport=transport)
     with manifest_scope(task, CoreLoopContext(messages=InMemoryMessageQueue())):
-        provider.recommend_act(state=projected)
+        provider.judge_act(state=projected)
     manifest = task.metadata['decision_context_manifests'][-1]
     assert ('large', 'omitted') in {(row['source_id'], row['status']) for row in manifest['omissions']}
     assert ('unavailable', 'unavailable') in {(row['source_id'], row['status']) for row in manifest['omissions']}
     assert next(row for row in manifest['sources'] if row['source_id'] == 'producer_clip')['limitations'] == ['source_truncated']
     assert manifest['task_understanding']['input_digest'] == projected['task_understanding']['input_digest']
     assert 'prefix' not in json.dumps(manifest)
+
+
+def test_queued_delivery_receipt_records_the_committed_action_and_recipient():
+    from alphonse.agent_v2.core.intelligence.v3.act_evidence import has_requested_effect_evidence
+
+    task, state, outcome, review = fixture()
+    task.goal = 'Send the schedule to the fixture recipient'
+    task.acceptance_contract['criteria'][0]['evidence_refs'] = ['queued']
+    state.evidence.append({
+        'evidence_ref': 'queued', 'tool_id': 'native.deliver_message', 'status': 'success',
+        'arguments': {'message': 'The schedule is ready.'},
+        'result': {'status': 'queued', 'outbox_message_id': 'outbox-1', 'recipient_user_id': 'recipient-1'},
+    })
+    projected, rows = _projected_rows(task, state, outcome, review)
+    row = rows['queued']
+    assert row['effect_status'] == 'committed_receipt'
+    assert row['effect_receipt'] == {
+        'source': 'outbox_enqueue', 'target': {'kind': 'recipient', 'id': 'recipient-1'},
+    }
+    assert row['submitted_content'] == {'message': 'The schedule is ready.'}
+    assert row['result']['status'] == 'queued'
+    assert 'verification' not in row
+    assert has_requested_effect_evidence(projected)

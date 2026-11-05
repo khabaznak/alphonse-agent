@@ -1,4 +1,5 @@
 """Inspection resolves to an authorized effect or a concrete question, never success by acknowledgment."""
+from conftest import act_judgments
 from copy import deepcopy
 import shlex
 import sqlite3
@@ -255,7 +256,7 @@ def test_historical_or_unrelated_answers_cannot_release_question_handoff(receipt
 
 
 def test_fresh_read_can_verify_an_already_satisfied_idempotent_update_without_a_write(tmp_path):
-    from alphonse.agent_v2.system_one import SystemOneActRecommendation, SystemOneReviewResult
+    from alphonse.agent_v2.system_one import SystemOneReviewResult
     database = tmp_path / 'records.sqlite'
     with sqlite3.connect(database) as db:
         db.execute('CREATE TABLE records(id INTEGER PRIMARY KEY, value TEXT, updated_at TEXT)')
@@ -277,10 +278,8 @@ def test_fresh_read_can_verify_an_already_satisfied_idempotent_update_without_a_
             return SystemOneReviewResult(({'criterion_id': 'ac-1', 'status': 'satisfied',
                 'evidence_refs': [entry['evidence_ref']]},), ())
 
-        def recommend_act(self, **kwargs):
-            return SystemOneActRecommendation('complete', .99, True, 'Exact requested state freshly verified', answers={
-                'mission_outcome_is_fulfilled': .99, 'mission_requires_persisted_effect': .99,
-            })
+        def judge_act(self, **kwargs):
+            return act_judgments(effect_requested=.99)
 
     context = CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry(), system_one=Jev())
     read = "sqlite3 -readonly records.sqlite 'SELECT id,value FROM records WHERE id=1'"

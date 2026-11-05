@@ -377,23 +377,71 @@ class SystemOneTacticalReview:
         }
 
 
+ACT_QUESTIONS = {
+    "effect_requested": {
+        "type": "noul",
+        "instructions": "Does the current request in `task_understanding` require an effect outside this conversation?",
+        "criteria": {
+            "true": "The requester wants an external action or a change to a resource.",
+            "false": "The requested deliverable is a reply, draft, proposal, or read-only finding.",
+        },
+    },
+    "effect_supported": {
+        "type": "noul",
+        "instructions": "Do the resource-specific receipts or read-back in `execution_evidence` establish the effect requested in `task_understanding`?",
+        "criteria": {
+            "true": "Results verify the requested effect. Fresh read-back of the exact desired values and provenance suffices for an idempotent request.",
+            "false": "Results show only an attempt, a bare process exit, an error, unrelated data, an omitted observation, or a reply. A request for a new event needs evidence of that event.",
+        },
+    },
+    "effect_contradicted": {
+        "type": "noul",
+        "instructions": "Does `execution_evidence` contain a current observation that conflicts with the requested effect in `task_understanding`?",
+        "criteria": {
+            "true": "An applicable observation shows a different resulting state, a rollback, or conflicting results with no later resolution.",
+            "false": "There is no conflicting observed state, or a later verified result resolves the conflict.",
+        },
+    },
+    "reply_addresses_request": {
+        "type": "noul",
+        "instructions": "Does `prepared_response.message` address the communicative deliverable in `task_understanding`?",
+        "criteria": {
+            "true": "The draft supplies the requested reply, including any requested details, or reports the operational result for an action-only request.",
+            "false": "The draft is absent, merely acknowledges the request, or omits a requested answer.",
+        },
+    },
+    "reply_grounded": {
+        "type": "noul",
+        "instructions": "Are the factual claims in `prepared_response.message` supported by the supplied request sources and recorded observations?",
+        "criteria": {
+            "true": "The draft stays within the available facts, including explicit limits on what was observed, or makes no factual claims.",
+            "false": "The draft invents or contradicts a fact, infers a result from an omitted observation, or claims an effect based on a bare process exit.",
+        },
+    },
+}
+
+
+def valid_act_probability(value: Any) -> bool:
+    return type(value) in {int, float} and 0 <= value <= 1
+
+
+class SystemOneActAnswerError(ValueError):
+    """The provider returned a missing or malformed Act judgment."""
+
+
 @dataclass(frozen=True)
-class SystemOneActRecommendation:
-    action: str
-    confidence: float
-    confident: bool
-    rationale: str
-    answers: dict[str, float] = field(default_factory=dict)
+class SystemOneActJudgments:
+    answers: dict[str, float]
     yes_threshold: float = 0.8
+    no_threshold: float = 0.2
     model: str = ""
     usage: dict[str, Any] = field(default_factory=dict)
     duration_ms: int = 0
 
     def to_metadata(self) -> dict[str, Any]:
         return {
-            "action": self.action, "confidence": self.confidence, "confident": self.confident,
-            "rationale": self.rationale, "model": self.model, "usage": dict(self.usage),
-            "duration_ms": self.duration_ms, "answers": dict(self.answers), "yes_threshold": self.yes_threshold,
+            "answers": dict(self.answers), "yes_threshold": self.yes_threshold, "no_threshold": self.no_threshold,
+            "model": self.model, "usage": dict(self.usage), "duration_ms": self.duration_ms,
         }
 
 
@@ -437,8 +485,6 @@ class _StaticJevToolRegistry:
 
 
 class JevCriterionDecisionProvider:
-    requires_mission_outcome_review = True
-
     def __init__(self, settings: SystemOneSettings, *, transport: Transport | None = None) -> None:
         self.settings = _normalize_settings(settings)
         self.client = TypeSafeSystemOneClient(
@@ -1157,59 +1203,8 @@ class JevCriterionDecisionProvider:
                 selected.append(message_id)
         return tuple(selected)
 
-    def recommend_act(self, *, state: dict[str, Any]) -> SystemOneActRecommendation:
-        """Recommend the next mission-level action from Check's verdict and durable evidence."""
-        import math
-
-        actions = {
-            "complete": "All required acceptance criteria are verified and the task can end successfully.",
-            "continue": "Continue the task using the current strategy.",
-            "replan": "The current strategic approach should change before any further execution.",
-            "ask_user": "A specific answer or steering from the user could materially unblock or redirect the mission.",
-            "fail_explain": "The mission is no longer worth pursuing, but the user should receive a final evidence-based explanation.",
-            "fail": "The mission must stop immediately and no further user-facing closure cycle is appropriate.",
-        }
-        questions = {
-            "recommended_action": {
-                "type": "choice",
-                "instructions": "Recommend the next mission-level action, considering Check's verdict and all supplied evidence and constraints.",
-                "criteria": actions,
-            },
-            "continuation_is_worthwhile": {
-                "type": "noul",
-                "instructions": "Would another execution phase likely create meaningful mission progress under the current strategy?",
-                "criteria": {"true": "There is a plausible, authorized next step.", "false": "The same approach is exhausted, blocked, or unlikely to change the outcome."},
-            },
-            "user_input_can_unblock": {
-                "type": "noul",
-                "instructions": "Could a concrete user answer or steering materially change the mission's prospects?",
-                "criteria": {"true": "A user decision or missing information is a plausible path forward.", "false": "User input would not change the feasibility or safety of the mission."},
-            },
-            "closure_explanation_is_warranted": {
-                "type": "noul",
-                "instructions": "If the mission ends unsuccessfully, should Alphonse produce one final response explaining why to the user?",
-                "criteria": {"true": "A concise explanation of the failure is useful and safe to deliver.", "false": "No additional user-facing closure cycle is appropriate."},
-            },
-            "mission_outcome_is_fulfilled": {
-                "type": "noul",
-                "instructions": "Does the observed work fulfill the goal and current task messages, including authenticated_followups? Compare the request with execution_evidence even when the acceptance status says complete. For answer-only tasks, evaluate prepared_response content; delivery happens after this review. Omitted results are unavailable evidence, never proof of success or failure. A supported factual answer may state uncertainty and finish.",
-                "criteria": {
-                    "true": "The requested operation has successful execution and verification evidence (including persisted transaction/read-back for record updates), or fresh direct read-back proves every requested value and provenance already matches the authorized desired state and the request does not require a new event or distinct write. An already-satisfied record needs no redundant mutation. Alternatively, the request only needed an answer, proposal or explanation which has been supplied with appropriate qualifications.",
-                    "false": "A requested authorized effect remains undone. Acknowledgment, a draft, status explanation or no-write disclaimer cannot substitute for a persisted update. Failed, denied, unavailable or rolled-back operations do not establish success. A capability listed in available_tool_ids is not unavailable merely because curation or the current phase omitted it. Historical context cannot grant permission.",
-                },
-            },
-            "mission_requires_persisted_effect": {
-                "type": "noul",
-                "instructions": "Does the current request and authenticated steering require persisting a change, rather than only answering, explaining or drafting? Classify the requested outcome, never grant permission.",
-                "criteria": {
-                    "true": "The request requires a persisted record update, installation, or other durable mutation with execution and read-back evidence.",
-                    "false": "The request requires only a factual answer, proposal, explanation, draft or read-only inspection.",
-                },
-            },
-        }
-        size = len(json.dumps({'state': state, 'questions': questions}, ensure_ascii=False, allow_nan=False).encode('utf-8'))
-        if size > 28000:
-            raise ValueError('system_one_context_budget_exceeded')
+    def judge_act(self, *, state: dict[str, Any]) -> SystemOneActJudgments:
+        """Judge independent facts about the request and its observed results."""
         started = monotonic()
         coverage = state.get('context_coverage', {})
         omissions = [
@@ -1222,34 +1217,18 @@ class JevCriterionDecisionProvider:
             )
             for ref in coverage.get(field, [])
         ]
-        response = self._evaluate(purpose="recommend_act", state=state, questions=questions, omissions=omissions)
-        duration_ms = max(0, round((monotonic() - started) * 1000))
-        answer = response["answers"].get("recommended_action")
-        if not isinstance(answer, dict) or answer.get("type") != "choice":
-            raise ValueError("system_one_act_recommendation_invalid")
-        action = str(answer.get("choice") or "")
-        if action not in actions:
-            raise ValueError("system_one_act_action_invalid")
-        probabilities = answer.get("probabilities") if isinstance(answer.get("probabilities"), dict) else {}
-        confidence = max(0.0, min(1.0, float(probabilities.get(action) or 0.0)))
-        fuse_answers: dict[str, float] = {}
-        for question_id in ("continuation_is_worthwhile", "user_input_can_unblock", "closure_explanation_is_warranted", "mission_outcome_is_fulfilled", "mission_requires_persisted_effect"):
-            fuse = response["answers"].get(question_id)
-            if (not isinstance(fuse, dict) or fuse.get("type") != "noul"
-                    or type(fuse.get("noul")) not in {int, float}
-                    or not math.isfinite(fuse["noul"]) or not 0 <= fuse["noul"] <= 1):
-                raise ValueError(f"system_one_act_fuse_invalid:{question_id}")
-            fuse_answers[question_id] = float(fuse["noul"])
-        return SystemOneActRecommendation(
-            action=action,
-            confidence=confidence,
-            confident=confidence >= self.settings.act_route_confidence_threshold,
-            rationale=actions[action],
-            answers=fuse_answers,
-            yes_threshold=self.settings.yes_threshold,
-            model=str(response.get("model") or self.settings.model),
-            usage=dict(response.get("usage") or {}),
-            duration_ms=duration_ms,
+        response = self._evaluate(purpose="act_judgments", state=state, questions=ACT_QUESTIONS, omissions=omissions)
+        answers = {}
+        for question_id in ACT_QUESTIONS:
+            answer = response["answers"].get(question_id)
+            if (not isinstance(answer, dict) or answer.get("type") != "noul"
+                    or not valid_act_probability(answer.get("noul"))):
+                raise SystemOneActAnswerError(f"system_one_act_answer_invalid:{question_id}")
+            answers[question_id] = float(answer["noul"])
+        return SystemOneActJudgments(
+            answers=answers, yes_threshold=self.settings.yes_threshold, no_threshold=self.settings.no_threshold,
+            model=str(response.get("model") or self.settings.model), usage=dict(response.get("usage") or {}),
+            duration_ms=max(0, round((monotonic() - started) * 1000)),
         )
 
     def select_plan_tools(

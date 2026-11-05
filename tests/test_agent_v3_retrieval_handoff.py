@@ -1,4 +1,5 @@
 """Synthetic retrieval stalls reach a verified qualified answer or a parked question."""
+from conftest import act_judgments
 from copy import deepcopy
 from types import SimpleNamespace
 
@@ -18,7 +19,7 @@ from alphonse.agent_v2.core.questions import SQLiteQuestionStore
 from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry, ToolDefinition
 from alphonse.agent_v2.core.tools.registry.native.respond import build_respond_tool_definition
 from alphonse.agent_v2.core.tools.registry.native.ask_question import build_ask_question_tool_definition
-from alphonse.agent_v2.system_one import SystemOneTacticalReview, SystemOneReviewResult, SystemOneActRecommendation
+from alphonse.agent_v2.system_one import SystemOneTacticalReview, SystemOneReviewResult
 
 
 def read_stage(identity):
@@ -131,9 +132,9 @@ def test_actual_processor_exits_stalled_retrieval_through_normal_answer_review(t
             refs = [row['evidence_ref'] for row in evidence['entries'] if row.get('status') == 'success']
             return SystemOneReviewResult(({'criterion_id': 'ac-1', 'status': 'satisfied' if verified else 'pending',
                 'evidence_refs': refs},), ())
-        def recommend_act(self, **kwargs):
-            return SystemOneActRecommendation('complete' if verified else 'fail', .99, True, 'Fixture review',
-                answers={'mission_outcome_is_fulfilled': .99 if verified else .01, 'closure_explanation_is_warranted': .01})
+        def judge_act(self, **kwargs):
+            return act_judgments(reply_addresses_request=.99 if verified else .01)
+
         def review_task_failure(self, **kwargs): return False
     class Inference:
         def generate_json(self, request):

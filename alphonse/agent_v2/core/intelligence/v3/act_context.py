@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-from collections import Counter
 from pathlib import PurePosixPath
 
 from alphonse.agent_v2.system_one import SystemOneUnavailableError
@@ -19,7 +18,7 @@ def _size(value):
     return len(json.dumps(value, ensure_ascii=False, sort_keys=True, default=str, allow_nan=False).encode('utf-8'))
 
 
-def mission_review_state(task, state, outcome, review, available_tool_ids, *, request_sources=()):
+def mission_review_state(task, state, *, request_sources=()):
     """Keep the request, steering and supporting observations complete and unique.
 
     Keep every observation referenced by a satisfied semantic criterion; other
@@ -28,7 +27,7 @@ def mission_review_state(task, state, outcome, review, available_tool_ids, *, re
     positive judgment from a partial source or increasing the model context limit.
     """
     def stop(reason, value=None, *, unavailable_refs=()):
-        task.metadata['v3_act_context'] = {'schema_version': 2, 'status': 'blocked',
+        task.metadata['v3_act_context'] = {'schema_version': 3, 'status': 'blocked',
             'reason': reason, 'budget_bytes': ACT_STATE_MAX_BYTES,
             'state_bytes': _size(value) if value is not None else None,
             'unavailable_evidence_refs': list(unavailable_refs)}
@@ -45,7 +44,6 @@ def mission_review_state(task, state, outcome, review, available_tool_ids, *, re
         ref = f"tactical-action:{action.action_id}"
         if action.status in {"planned", "running"} and ref not in entries:
             entries[ref] = {**action.to_dict(), "evidence_ref": ref, "phase_id": state.phase.phase_id}
-    ordered = list(entries.values())
     essential = set()
     missing = []
     criterion_ids = {}
@@ -61,30 +59,17 @@ def mission_review_state(task, state, outcome, review, available_tool_ids, *, re
                 missing.append(ref)
     if missing:
         stop('act_context_required_evidence_unavailable', unavailable_refs=missing)
-    followups = [{key: entry[key] for key in ('evidence_ref', 'kind', 'result') if key in entry}
-                 for entry in task.metadata.get('v3_resumption_evidence') or []]
-    messages = [{'speaker': row.get('speaker'), 'content': row.get('content')}
-                for row in task.conversation_records or [] if row.get('content') and row.get('content') != task.goal]
     prepared = task.metadata.get('prepared_user_response') or {}
     understanding = snapshot(task)
     value = {
-        "task_understanding": understanding,
-        'schema_version': 2, 'goal': task.goal, 'task_id': task.task_id,
-        'check_verdict': ('success' if review.status.value == 'phase_verified_task_complete' else
-                          'wip' if review.status.value == 'phase_verified_task_incomplete' else 'failure'),
-        'check_reason': review.reason, 'acceptance_contract': {'criteria': criteria},
-        'strategic_plan': {'objective': state.phase.objective, 'subgoals': [
-            {'subgoal_id': subgoal.subgoal_id, 'objective': subgoal.objective,
-             'depends_on': list(subgoal.depends_on),
-             'completion': {'kind': subgoal.completion.kind, 'field': subgoal.completion.field,
-                            'expected': subgoal.completion.expected, 'output_type': subgoal.completion.output_type},
-             'allowed_side_effects': [effect.value for effect in subgoal.allowed_side_effects]}
-            for subgoal in state.phase.subgoals]},
-        'phase_outcome': outcome.to_dict(), 'completed_subgoal_ids': list(state.completed_subgoal_ids),
-        'authenticated_followups': followups, 'request_sources': list(request_sources),
-        'current_task_messages': messages, 'user_constraints': task.metadata.get('user_constraints', {}),
+        'schema_version': 3,
+        'task_understanding': understanding,
+        'request_sources': list(request_sources),
+        'required_criteria': [{key: row[key] for key in ('id', 'statement', 'evidence_refs') if key in row}
+                              for row in criteria if row.get('required', True)],
+        'user_constraints': task.metadata.get('user_constraints', {}),
         'prepared_response': {'message': prepared.get('message', ''), 'delivery_status': 'pending_final_review'},
-        'execution_evidence': [], 'execution_summary': dict(Counter(str(entry.get('status') or 'unknown') for entry in ordered)),
+        'execution_evidence': [],
         'context_coverage': {'omitted_result_refs': [], 'omitted_evidence_refs': [], 'evidence_is_not_permission': True},
     }
 
@@ -99,7 +84,7 @@ def mission_review_state(task, state, outcome, review, available_tool_ids, *, re
 
     response_ref = 'tactical-action:' + str(prepared.get('tool_call_id') or '')
     rows = {}
-    for entry in ordered:
+    for entry in entries.values():
         ref = entry['evidence_ref']
         row = observation(entry, criterion_ids.get(ref, []))
         if entry.get('tool_id') == 'native.respond' and prepared.get('message') and ref == response_ref:
@@ -128,7 +113,6 @@ def mission_review_state(task, state, outcome, review, available_tool_ids, *, re
         verification = rows[ref].get('verification') or {}
         if linked := verification.get('preceding_mutation_ref'):
             essential.add(linked)
-    value['available_tool_ids'] = list(available_tool_ids)
     value['execution_evidence'] = [row for ref, row in rows.items() if ref in essential]
     coverage = value['context_coverage']
     coverage['budget_bytes'] = ACT_STATE_MAX_BYTES
@@ -165,7 +149,7 @@ def mission_review_state(task, state, outcome, review, available_tool_ids, *, re
     if _size(value) > ACT_STATE_MAX_BYTES:
         stop('act_context_required_input_exceeds_budget', value)
     task.metadata['v3_act_context'] = {
-        'schema_version': 2, 'status': 'ready', 'state_bytes': _size(value), 'budget_bytes': ACT_STATE_MAX_BYTES,
+        'schema_version': 3, 'status': 'ready', 'state_bytes': _size(value), 'budget_bytes': ACT_STATE_MAX_BYTES,
         'task_understanding': input_receipt(understanding),
         'evidence_refs': [
             row['evidence_ref'] for row in value['execution_evidence']],

@@ -14,6 +14,8 @@ _NATIVE_READBACK = {
     "native.skill_install": "skill_store_readback",
     "native.scheduled_task": "schedule_store_readback",
 }
+_OUTBOX_TOOLS = {"native.deliver_message", "native.send_attachment"}
+_ARTIFACT_TOOLS = {"native.skill_artifact_register", "native.artifact_metadata_update"}
 # A deliberately narrow shell grammar. Quoted literals may contain SQL or data,
 # while expansions, chained commands, and shell operators remain opaque.
 _WORD = r'''(?:'[^\r\n']*'|"[^\r\n"`$\\]*"|[a-zA-Z0-9_./:=+-])+'''
@@ -106,8 +108,14 @@ def _shell_operation(arguments, result):
 
 
 def _native_target(tool_id, arguments, result):
-    if tool_id == "native.scheduled_task":
-        kind, identity = "schedule", result.get("scheduled_task_id")
+    if tool_id in {"native.scheduled_task", "native.scheduled_task_delivery"}:
+        kind, identity = "schedule", result.get("scheduled_task_id") or arguments.get("scheduled_task_id")
+    elif tool_id in _OUTBOX_TOOLS:
+        kind, identity = "recipient", result.get("recipient_user_id") or arguments.get("recipient")
+    elif tool_id in _ARTIFACT_TOOLS:
+        kind = "artifact"
+        record = result.get("artifact")
+        identity = record.get("artifact_id") if isinstance(record, dict) else arguments.get("artifact_id")
     elif tool_id == "native.skill_install":
         kind = "skill"
         skill = result.get("skill")
@@ -134,6 +142,18 @@ def _native_verified(tool_id, result, target):
                 and digest == verification.get("post_write_sha256"))
     return (tool_id in _NATIVE_READBACK and verification.get("source") == _NATIVE_READBACK[tool_id]
             and (tool_id != "native.skill_install" or isinstance(result.get("skill"), dict)))
+
+
+def _native_commit(tool_id, result, operation):
+    if operation["kind"] != "mutation" or not operation.get("target"):
+        return None
+    if tool_id in _OUTBOX_TOOLS and result.get("status") == "queued" and result.get("outbox_message_id") and result.get("recipient_user_id"):
+        return "outbox_enqueue"
+    if tool_id in _ARTIFACT_TOOLS and isinstance(result.get("artifact"), dict) and result["artifact"].get("artifact_id"):
+        return "artifact_catalog_commit"
+    if tool_id == "native.scheduled_task_delivery" and result.get("status") == "updated" and result.get("scheduled_task_id"):
+        return "schedule_store_commit"
+    return None
 
 
 def _output_status(value, *, inspect_stdout=False):
@@ -190,8 +210,11 @@ def observation(entry, criterion_ids, *, include_result=True):
     operation = {"kind": _NON_EFFECT.get(tool_id, "unknown")}
     if tool_id == "native.bash":
         operation = _shell_operation(arguments, fields)
-    elif tool_id in _NATIVE_READBACK or tool_id == "native.read_project_file":
-        operation = {"kind": "mutation" if tool_id in _NATIVE_READBACK else "inspection"}
+    elif tool_id in _NATIVE_READBACK or tool_id in _OUTBOX_TOOLS or tool_id in _ARTIFACT_TOOLS or tool_id in {
+        "native.read_project_file", "native.scheduled_task_delivery",
+    }:
+        inspection = tool_id == "native.read_project_file" or arguments.get("operation") == "list"
+        operation = {"kind": "inspection" if inspection else "mutation"}
         if target := _native_target(tool_id, arguments, fields):
             operation["target"] = target
     elif (entry.get("invocation") or {}).get("read_only") is True and tool_id not in _NON_EFFECT:
@@ -204,11 +227,14 @@ def observation(entry, criterion_ids, *, include_result=True):
     failure, http_status = _output_status(
         fields, inspect_stdout=tool_id == "native.bash" and operation["kind"] == "unknown",
     )
+    native_delivery_failed = tool_id in _OUTBOX_TOOLS and fields.get("status") in {
+        "recipient_not_found", "recipient_ambiguous", "recipient_unreachable", "delivery_failed",
+    }
     if denied or failure == "denied":
         outcome = "denied"
     elif status == "rejected":
         outcome = "rejected"
-    elif failure or status == "failed" or fields.get("timed_out") is True or (
+    elif failure or native_delivery_failed or status == "failed" or fields.get("timed_out") is True or (
         tool_id == "native.bash" and type(fields.get("exit_code")) is int and fields["exit_code"] != 0
     ):
         outcome = "failed"
@@ -234,13 +260,29 @@ def observation(entry, criterion_ids, *, include_result=True):
     elif tool_id == "native.bash":
         availability = "available" if any(str(fields.get(key) or "").strip() for key in ("stdout", "stderr")) else "empty"
     else:
-        availability = "available" if result or result is False or type(result) is int else "empty"
+        if isinstance(result, dict):
+            metadata = {"status", "success", "ok", "duration_ms", "command", "arguments"}
+            substantive = any(key not in metadata and item not in (None, "", [], {}) for key, item in rendered.items())
+        else:
+            substantive = bool(result) or type(result) in {bool, int, float}
+        availability = "available" if substantive else "empty"
     row["result_coverage"] = {"status": availability if include_result else "omitted",
                               "limitations": sorted(coverage)}
     if include_result and result is not None:
         row["result"] = rendered
+        if tool_id in {"native.scheduled_task", "native.scheduled_task_delivery"}:
+            channels = fields.get("delivery_channels")
+            if isinstance(channels, list):
+                row["delivery_provider_keys"] = sorted({
+                    channel["provider_key"] for channel in channels if isinstance(channel, dict)
+                    and isinstance(channel.get("provider_key"), str)
+                })
 
     observed = include_result and availability == "available" and "source_truncated" not in coverage
+    row["observation_kind"] = (
+        "conversation" if tool_id in _NON_EFFECT else
+        "operational_result" if observed and outcome in {"returned", "process_exited_zero"} else "attempt"
+    )
     if operation["kind"] in _NON_EFFECT.values() or outcome == "rejected":
         effect_status = "none"
     elif outcome == "invocation_outcome_unavailable":
@@ -251,6 +293,13 @@ def observation(entry, criterion_ids, *, include_result=True):
         effect_status = "verified_existing_state" if fields.get("created") is False else "verified_persisted_effect"
         row["verification"] = {"source": _NATIVE_READBACK[tool_id], "readback_ref": ref,
                                "target": deepcopy(operation["target"])}
+    elif observed and outcome == "returned" and (commit := _native_commit(tool_id, fields, operation)):
+        effect_status = "committed_receipt"
+        row["effect_receipt"] = {"source": commit, "target": deepcopy(operation["target"])}
+        if commit == "outbox_enqueue":
+            row["submitted_content"] = {
+                key: arguments[key] for key in ("message", "asset_id") if isinstance(arguments.get(key), str)
+            }
     elif operation["kind"] == "inspection":
         effect_status = "none"
         if (observed and operation.get("target") and
@@ -286,11 +335,15 @@ def link_readbacks(rows):
             row["verification"]["effect_ref"] = write["effect_ref"]
 
 
-def has_persisted_outcome_evidence(review_state):
-    """An actual read-back must support an active criterion. Act judges exact fulfillment."""
+def has_requested_effect_evidence(review_state):
+    """Require a resource-specific receipt cited by Check. Act judges exact fulfillment."""
     for row in review_state["execution_evidence"]:
         verification = row.get("verification")
-        if not verification or not row["criterion_ids"]:
+        if not row["criterion_ids"]:
+            continue
+        if row.get("effect_receipt"):
+            return True
+        if not verification:
             continue
         if verification["source"] != "direct_read":
             return True

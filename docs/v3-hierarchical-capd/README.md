@@ -71,7 +71,9 @@ success.
 - Steering and cancellation are checked between tactical actions.
 - Local recovery remains within the phase objective; material strategy changes return
   to outer Act.
-- Overall completion requires phase-level evidence and a final outer Check.
+- Overall completion requires phase-level evidence and a final outer Check. Act
+  uses focused outcome judgments to gate completion and sends unresolved work to
+  System Two with the observed evidence and blockers.
 - The final user response is produced only after task completion is verified.
 
 ## Delivery stages

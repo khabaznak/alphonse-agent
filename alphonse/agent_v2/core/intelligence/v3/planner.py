@@ -84,6 +84,9 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
         f"Prepared user response already exists: {'yes' if isinstance(prepared_response, dict) else 'no'}\n"
         f"Act directive (authoritative resilience instruction): {directive_context}\n"
         + (retrieval_instructions + "\n" if act_directive.get("retrieval_resolution") else "") +
+        "For unresolved work, use the phase review, blockers, and evidence history to plan recovery or ask a specific question. "
+        "Use existing verified results. Check the current state before retrying an operation with possible partial effects. "
+        "Preserve the authorized scope and prerequisites. "
         "If Act requires a final response/closure, plan exactly one user_response subgoal that uses the user-response capability, "
         "and do no further mission work in that phase. If Act requests user input, plan an ask-question subgoal. "
         f"Existing acceptance contract (preserve its definitions unless new user steering requires a justified revision): {contract_context}\n"
