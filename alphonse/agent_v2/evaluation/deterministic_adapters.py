@@ -218,7 +218,7 @@ def _run(
         messages=queue,
         tools=registry,
         inference=router,
-        system_one=_ReplayJev(scenario),
+        system_one=_ReplayJev({action.tool_id for action in scenario.actions if not action.read_only}),
         telemetry_sink=telemetry_sink,
         ui_event_sink=lambda event: ui_events.append({"event_type": event.event_type, "payload": dict(event.payload)}),
     )
@@ -379,8 +379,8 @@ def _phase_plan(scenario: _Scenario) -> PhasePlan:
 class _ReplayJev:
     """Deterministic Jev stand-in for offline V2/V3 evaluation runs."""
 
-    def __init__(self, scenario: _Scenario) -> None:
-        self.effect_tools = {action.tool_id for action in scenario.actions if not action.read_only}
+    def __init__(self, effect_tools: set[str] | None = None) -> None:
+        self.effect_tools = effect_tools or set()
 
     def evaluate(self, *, contract, phase, evidence):
         _ = phase
