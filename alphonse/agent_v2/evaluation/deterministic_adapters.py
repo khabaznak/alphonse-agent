@@ -16,7 +16,7 @@ from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.intelligence.v3 import HierarchicalCAPDProcessor
 from alphonse.agent_v2.core.intelligence.v3.contracts import PhaseStatus, TacticalAction, new_tactical_state
 from alphonse.agent_v2.core.intelligence.v3.contracts import PhasePlan
-from alphonse.agent_v2.system_one import SystemOneActRecommendation, SystemOneReviewResult
+from alphonse.agent_v2.system_one import SystemOneActJudgments, SystemOneReviewResult
 from alphonse.agent_v2.core.messages import CommunicationChannel, InMemoryMessageQueue
 from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry, ToolDefinition
 from alphonse.agent_v2.evaluation.replay import EngineTrace, EvaluationCase
@@ -218,7 +218,7 @@ def _run(
         messages=queue,
         tools=registry,
         inference=router,
-        system_one=_ReplayJev(),
+        system_one=_ReplayJev(scenario),
         telemetry_sink=telemetry_sink,
         ui_event_sink=lambda event: ui_events.append({"event_type": event.event_type, "payload": dict(event.payload)}),
     )
@@ -379,6 +379,9 @@ def _phase_plan(scenario: _Scenario) -> PhasePlan:
 class _ReplayJev:
     """Deterministic Jev stand-in for offline V2/V3 evaluation runs."""
 
+    def __init__(self, scenario: _Scenario) -> None:
+        self.effect_tools = {action.tool_id for action in scenario.actions if not action.read_only}
+
     def evaluate(self, *, contract, phase, evidence):
         _ = phase
         entries = evidence.get("entries") if isinstance(evidence, dict) else []
@@ -407,17 +410,15 @@ class _ReplayJev:
     def triage_plan_messages(self, *, candidates, **_values):
         return tuple(str(item.get("message_id")) for item in candidates if isinstance(item, dict))
 
-    def recommend_act(self, *, state):
-        verdict = str(state.get("check_verdict") or "wip")
-        action = "complete" if verdict in {"success", "mission_success"} else "continue" if verdict == "wip" else "fail_explain"
-        return SystemOneActRecommendation(
-            action=action, confidence=0.99, confident=True, rationale=f"Replay Jev recommends {action}.",
-            answers={
-                "continuation_is_worthwhile": 0.99,
-                "user_input_can_unblock": 0.1,
-                "closure_explanation_is_warranted": 0.99,
-            }, model="replay-jev",
-        )
+    def judge_act(self, *, state):
+        observed = any(row.get("tool_id") in self.effect_tools and row.get("observation_kind") == "operational_result"
+                       for row in state["execution_evidence"])
+        return SystemOneActJudgments(answers={
+            "effect_requested": 0.99 if self.effect_tools else 0.01,
+            "effect_supported": 0.99 if observed else 0.01,
+            "effect_contradicted": 0.01,
+            "reply_addresses_request": 0.99, "reply_grounded": 0.99,
+        }, model="replay-jev")
 
     def evaluate_tactical_progress(self, *, questions=None, **_values):
         from alphonse.agent_v2.system_one import SystemOneTacticalReview

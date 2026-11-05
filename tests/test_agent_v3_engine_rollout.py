@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from conftest import act_judgments
+
 import pytest
 
 from pathlib import Path
@@ -23,7 +25,6 @@ from alphonse.agent_v2.intelligence_engine_settings import HIERARCHICAL_V3, TACT
 from alphonse.agent_v2.intelligence_engine_settings import IntelligenceEngineSettings
 from alphonse.agent_v2.intelligence_engine_settings import SQLiteIntelligenceEngineSettingsStore
 from alphonse.agent_v2.system_one import SystemOneReviewResult
-from alphonse.agent_v2.system_one import SystemOneActRecommendation
 from alphonse.agent_v2.system_one import SystemOneTacticalReview
 from alphonse.agent_v2.system_one import SystemOneToolRegistrySelection
 
@@ -49,14 +50,8 @@ class _TestJev:
             str(item.get("question_id")): 0.99 for item in questions or []
         })
 
-    def recommend_act(self, *, state):
-        action = "complete" if state.get("check_verdict") == "success" else "continue"
-        return SystemOneActRecommendation(action, 0.99, True, f"Jev recommends {action}.", answers={
-            "continuation_is_worthwhile": 0.99,
-            "user_input_can_unblock": 0.1,
-            "closure_explanation_is_warranted": 0.99,
-        })
-
+    def judge_act(self, *, state):
+        return act_judgments()
 
 def test_engine_settings_default_to_v3_and_allow_v2_rollback(tmp_path: Path) -> None:
     store = SQLiteIntelligenceEngineSettingsStore(tmp_path / "settings.sqlite3")
@@ -149,7 +144,6 @@ def test_acknowledgement_variations_cannot_keep_an_unfulfilled_mission_running(m
 
     def review(task, state, outcome, context):
         task.metadata["v3_route"] = "strategic_replan"
-        task.metadata["system_one_act_recommendation"] = {"answers": {"mission_outcome_is_fulfilled": 0.05}}
         return SimpleNamespace(status=PhaseReviewStatus.PHASE_VERIFIED_TASK_COMPLETE), SimpleNamespace()
 
     monkeypatch.setattr(processor, "_new_state", new_state)
@@ -374,19 +368,8 @@ def test_hierarchical_processor_plans_one_stage_and_jev_selects_respond_for_gree
                 model="jev-latest",
             )
 
-        def recommend_act(self, *, state):
-            action = "complete" if state.get("check_verdict") == "success" else "continue"
-            return SystemOneActRecommendation(action, 0.99, True, "Verified greeting.", answers={
-                "continuation_is_worthwhile": 0.99, "user_input_can_unblock": 0.1,
-                "closure_explanation_is_warranted": 0.99,
-            })
-
-        def recommend_act(self, *, state):
-            from alphonse.agent_v2.system_one import SystemOneActRecommendation
-            return SystemOneActRecommendation(
-                "complete", 0.99, True, "Acceptance is verified.",
-                answers={"continuation_is_worthwhile": 0.1, "user_input_can_unblock": 0.1, "closure_explanation_is_warranted": 0.9},
-            )
+        def judge_act(self, *, state):
+            return act_judgments()
 
     registry = InMemoryToolRegistry()
     registry.register(build_respond_tool_definition())
@@ -810,12 +793,8 @@ def test_v3_known_journal_path_flows_from_memory_to_read_and_verified_edit(tmp_p
                 route_confident=True,
             )
 
-        def recommend_act(self, *, state):
-            action = "complete" if state.get("check_verdict") == "success" else "continue"
-            return SystemOneActRecommendation(action, 0.99, True, f"Jev recommends {action}.", answers={
-                "continuation_is_worthwhile": 0.99, "user_input_can_unblock": 0.1,
-                "closure_explanation_is_warranted": 0.99,
-            })
+        def judge_act(self, *, state):
+            return act_judgments()
 
     provider = SequencedProvider()
     inference = InferenceRouter(provider=provider, default_profile=ModelProfile("test", "test", "default"))

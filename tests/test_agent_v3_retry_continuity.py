@@ -1,4 +1,5 @@
 """Synthetic approved-payload retries: no household records or live providers."""
+from conftest import act_judgments
 from copy import deepcopy
 import json
 from pathlib import Path
@@ -26,7 +27,7 @@ from alphonse.agent_v2.core.tools.registry.native.bash import build_bash_tool_de
 from alphonse.agent_v2.core.tools.registry.native.respond import build_respond_tool_definition
 from alphonse.agent_v2.system_one import (
     JevCriterionDecisionProvider, SystemOneSettings, SystemOneToolRegistrySelection,
-    SystemOneTacticalReview, SystemOneReviewResult, SystemOneActRecommendation,
+    SystemOneTacticalReview, SystemOneReviewResult,
 )
 
 
@@ -84,11 +85,8 @@ class ContinuityJev:
         return SystemOneReviewResult(tuple({'criterion_id': c['id'], 'status': 'satisfied', 'evidence_refs': [verified[-1]['evidence_ref']]}
                                           for c in kwargs['contract']['criteria']) if verified else (), ())
 
-    def recommend_act(self, **kwargs):
-        return SystemOneActRecommendation('complete', .99, True, 'Exact requested payload persisted and read back', answers={
-            'mission_outcome_is_fulfilled': .99, 'mission_requires_persisted_effect': .99,
-        })
-
+    def judge_act(self, **kwargs):
+        return act_judgments(effect_requested=.99)
 
 def retry_task():
     task = TaskState(task_id='latest-retry', message_id='latest-retry', user='fixture-owner',

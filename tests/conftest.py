@@ -3,7 +3,16 @@ from types import SimpleNamespace
 
 import pytest
 
-from alphonse.agent_v2.system_one import SystemOneActRecommendation, SystemOneReviewResult
+from alphonse.agent_v2.system_one import SystemOneActJudgments, SystemOneReviewResult
+
+
+def act_judgments(*, effect_requested=.01, effect_supported=.99, effect_contradicted=.01,
+                  reply_addresses_request=.99, reply_grounded=.99):
+    return SystemOneActJudgments({
+        'effect_requested': effect_requested, 'effect_supported': effect_supported,
+        'effect_contradicted': effect_contradicted, 'reply_addresses_request': reply_addresses_request,
+        'reply_grounded': reply_grounded,
+    })
 
 
 @pytest.fixture
@@ -18,11 +27,7 @@ def v2_decisions():
                 'evidence_refs': refs if satisfy else [],
                 'reason': 'Synthetic evidence judgment',
             } for criterion in contract['criteria']), ambiguous_criterion_ids=())
-        def recommend_act(*, state):
-            complete = all(c['status'] == 'satisfied' for c in state['acceptance_contract']['criteria'])
-            return SystemOneActRecommendation('complete' if complete else 'continue', 1.0, True,
-                                             'Synthetic route', answers={'continuation_is_worthwhile': 1.0})
-        return SimpleNamespace(evaluate=evaluate, recommend_act=recommend_act)
+        return SimpleNamespace(evaluate=evaluate)
     return build
 
 
