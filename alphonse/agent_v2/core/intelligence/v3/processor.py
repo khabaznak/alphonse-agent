@@ -149,7 +149,7 @@ class HierarchicalCAPDProcessor:
                 (task.metadata.get("act_directive", {}).get("retrieval_resolution") or {}).get("phase_id")
                 == state.phase.phase_id
                 and review_status == "phase_blocked"
-                and "tactical_stage_no_new_progress" in set(outcome.blockers)
+                and bool({"tactical_stage_no_new_progress", "tactical_progress_uncertain"} & set(outcome.blockers))
             )
             if not inspection_handoff and not retrieval_handoff and (review_status in {
                 "phase_blocked", "verification_failed", "phase_verified_task_incomplete",

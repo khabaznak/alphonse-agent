@@ -442,6 +442,19 @@ def test_intermediate_action_questions_cannot_complete_the_declared_subgoal():
     assert result.answers["runtime_declared_subgoal_complete"] == 0.05
 
 
+@pytest.mark.parametrize("stage_probability,expected_confidence,confident", [(.05, .95, True), (.5, .5, False), (.95, .95, True)])
+def test_tactical_confidence_reports_weakest_individual_judgment(stage_probability, expected_confidence, confident):
+    def transport(url, api_key, payload, timeout):
+        return {"answers": {key: {"type": "noul", "noul": stage_probability if key == "runtime_declared_subgoal_complete" else .95}
+                            for key in payload["questions"]}}
+    provider = JevCriterionDecisionProvider(SystemOneSettings(enabled=True, api_key="fixture"), transport=transport)
+    result = provider.evaluate_tactical_progress(goal="Find source", phase={}, subgoal={}, action={"status": "success"})
+    assert result.confidence == pytest.approx(expected_confidence)
+    assert result.confident is confident
+    assert result.to_metadata()["confidence_kind"] == "minimum_individual_noul_certainty"
+    assert result.complete is (stage_probability == .95)
+
+
 @pytest.mark.parametrize("invalid", [float("nan"), float("inf"), True, -0.1, 1.1])
 def test_malformed_tactical_probabilities_cannot_manufacture_completion(invalid):
     def transport(url, api_key, payload, timeout):

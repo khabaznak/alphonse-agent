@@ -335,6 +335,7 @@ class SystemOneToolRegistrySelection:
 
 @dataclass(frozen=True)
 class SystemOneTacticalReview:
+    """Tactical judgments; confidence is the weakest individual Noul certainty, not a joint probability."""
     complete: bool
     confidence: float
     confident: bool
@@ -350,6 +351,7 @@ class SystemOneTacticalReview:
         return {
             "complete": self.complete,
             "confidence": self.confidence,
+            "confidence_kind": "minimum_individual_noul_certainty",
             "confident": self.confident,
             "model": self.model,
             "usage": dict(self.usage),
@@ -1362,7 +1364,10 @@ class JevCriterionDecisionProvider:
             probability >= self.settings.yes_threshold or probability <= self.settings.no_threshold
             for probability in acceptance_answers.values()
         )
-        confidence = min(acceptance_answers.values()) if complete else min(1.0 - value for value in acceptance_answers.values())
+        # Diagnostic only: the weakest individual yes/no judgment's certainty,
+        # not a joint probability or a confidence supplied by Jev. Mixed yes/no
+        # answers must not make a strong yes look like low certainty.
+        confidence = min(max(value, 1.0 - value) for value in acceptance_answers.values())
         fuse_ids = {item["question_id"] for item in _TACTICAL_RETRY_FUSE_QUESTIONS}
         retry_approved = all(
             answers.get(question_id, 0.0) >= self.settings.yes_threshold

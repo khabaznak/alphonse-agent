@@ -44,6 +44,7 @@ if TYPE_CHECKING:
 ActionSelector = Callable[[TacticalState, PhaseSubgoal, tuple["ToolDescriptor", ...]], dict[str, Any] | None]
 TACTICAL_RETRY_BASE_SECONDS = 1.0
 MAX_UPDATE_INSPECTION_ACTIONS = 6
+MAX_UNCERTAIN_PROGRESS_ACTIONS = 6
 
 
 class PhaseExecutor:
@@ -206,6 +207,7 @@ class PhaseExecutor:
                     "complete": completion_met,
                     "confident": bool(progress_review.get("confident")),
                     "confidence": progress_review.get("confidence"),
+                    "confidence_kind": progress_review.get("confidence_kind"),
                     "retry_approved": retry_approved,
                     "context_complete": progress_review.get("context_complete", True),
                     "context_coverage": progress_review.get("context_coverage", {}),
@@ -238,13 +240,23 @@ class PhaseExecutor:
                         state.transition(PhaseStatus.BLOCKED)
                         self._checkpoint(task, state, context)
                         return self._outcome(state, "Inspection must now resolve into the authorized operation or a specific missing-information question; do not restart inspection.", blockers=(blocker,))
-                progress_threshold = float(getattr(getattr(context.system_one, "settings", None), "yes_threshold", 0.8))
-                if not completion_met and _consecutive_no_progress(state, subgoal.subgoal_id, progress_threshold) >= 3:
+                settings = getattr(context.system_one, "settings", None)
+                yes_threshold = float(getattr(settings, "yes_threshold", 0.8))
+                no_threshold = float(getattr(settings, "no_threshold", 0.2))
+                if not completion_met and _consecutive_no_progress(state, subgoal.subgoal_id, no_threshold) >= 3:
                     blocker = "tactical_stage_no_new_progress"
                     state.evidence.entries[-1]["no_progress_blocker"] = blocker
                     state.transition(PhaseStatus.BLOCKED)
                     self._checkpoint(task, state, context)
                     return self._outcome(state, "Repeated attempts added no useful evidence; a different strategy is required.", blockers=(blocker,))
+                if not completion_met and _consecutive_uncertain_progress(
+                    state, subgoal.subgoal_id, no_threshold, yes_threshold
+                ) >= MAX_UNCERTAIN_PROGRESS_ACTIONS:
+                    blocker = "tactical_progress_uncertain"
+                    state.evidence.entries[-1]["no_progress_blocker"] = blocker
+                    state.transition(PhaseStatus.BLOCKED)
+                    self._checkpoint(task, state, context)
+                    return self._outcome(state, "Progress remained uncertain after repeated attempts; review the evidence and choose a different strategy.", blockers=(blocker,))
                 repeated_evidence = (
                     _matching_prior_incomplete_result(state, completed)
                     if not completion_met and (completed.status == "success" or (completed.status == "failed" and not retry_approved))
@@ -818,13 +830,32 @@ def _is_update_inspection(state: TacticalState, subgoal: PhaseSubgoal, answers: 
     )
 
 
-def _consecutive_no_progress(state: TacticalState, subgoal_id: str, threshold: float = 0.8) -> int:
+def _consecutive_no_progress(state: TacticalState, subgoal_id: str, threshold: float = 0.2) -> int:
+    import math
+    count = 0
+    for entry in reversed(state.evidence.entries):
+        if entry.get("phase_id") != state.phase.phase_id or entry.get("subgoal_id") != subgoal_id:
+            continue
+        review = entry.get("progress_review") or {}
+        coverage = review.get("context_coverage") or {}
+        if (review.get("context_complete") is False or coverage.get("omitted_prior_count", 0)
+                or coverage.get("omitted_prior_result_count", 0) or coverage.get("omitted_prior_refs")):
+            break
+        answer = (review.get("answers") or {}).get("runtime_action_added_progress")
+        if type(answer) not in {int, float} or not math.isfinite(answer) or not 0 <= answer <= threshold:
+            break
+        count += 1
+    return count
+
+
+def _consecutive_uncertain_progress(state: TacticalState, subgoal_id: str, no_threshold: float, yes_threshold: float) -> int:
+    import math
     count = 0
     for entry in reversed(state.evidence.entries):
         if entry.get("phase_id") != state.phase.phase_id or entry.get("subgoal_id") != subgoal_id:
             continue
         answer = (entry.get("progress_review") or {}).get("answers", {}).get("runtime_action_added_progress")
-        if not isinstance(answer, (int, float)) or answer >= threshold:
+        if type(answer) not in {int, float} or not math.isfinite(answer) or not no_threshold < answer < yes_threshold:
             break
         count += 1
     return count

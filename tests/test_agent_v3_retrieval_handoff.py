@@ -107,7 +107,8 @@ def test_resolution_plan_rejects_retrieval_loops_and_effects(bad):
 
 @pytest.mark.parametrize('remaining', [False, True])
 @pytest.mark.parametrize('question,verified', [(False, True), (True, False), (False, False)])
-def test_actual_processor_exits_stalled_retrieval_through_normal_answer_review(tmp_path, remaining, question, verified):
+@pytest.mark.parametrize('progress_probability', [.1, .65])
+def test_actual_processor_exits_stalled_retrieval_through_normal_answer_review(tmp_path, remaining, question, verified, progress_probability):
     task = TaskState(task_id='fixture-task', message_id='fixture-message', user='fixture', goal='What is scheduled today?',
         metadata={'v3_admission': {'completed': True, 'route': 'task'}, 'v3_no_progress_phase_count': 2})
     task.set_acceptance_contract_from_markdown('1.- [ ] Explain the dated schedule, preserve gaps, or ask for the specific missing source')
@@ -125,7 +126,7 @@ def test_actual_processor_exits_stalled_retrieval_through_normal_answer_review(t
             read = action['tool_id'] == 'native.search_memory'
             return SystemOneTacticalReview(not read, .99, True, answers={
                 'runtime_declared_subgoal_complete': .72 if read else .99,
-                'runtime_action_added_progress': .65 if read else .99,
+                'runtime_action_added_progress': progress_probability if read else .99,
             })
         def evaluate(self, *, evidence, **kwargs):
             assert any(row.get('tool_id') == 'native.respond' for row in evidence['entries'])
@@ -173,7 +174,8 @@ def test_actual_processor_exits_stalled_retrieval_through_normal_answer_review(t
     context = CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry, inference=Inference(), system_one=Jev(),
                               question_store=SQLiteQuestionStore(db_path=tmp_path / 'questions.sqlite'))
     result = HierarchicalCAPDProcessor().process(task, context)
-    assert len(reads) == (6 if remaining else 3), (task.outcome, task.metadata.get('v3_terminal_error_type'), task.updates_md)
+    per_stage = 3 if progress_probability == .1 else 6
+    assert len(reads) == (2 if remaining else 1) * per_stage, (task.outcome, task.metadata.get('v3_terminal_error_type'), task.updates_md)
     assert len(plans) == (3 if remaining else 2)
     assert task.status == ('waiting_user' if question else 'completed' if verified else 'failed')
     assert not task.metadata.get('v3_no_progress_stop')

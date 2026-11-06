@@ -452,6 +452,64 @@ def test_different_queries_without_semantic_progress_return_to_strategy():
     assert "tactical_stage_no_new_progress" in outcome.blockers
 
 
+def test_uncertain_progress_does_not_stop_a_stage_that_can_complete():
+    calls = []
+    registry = InMemoryToolRegistry()
+    registry.register(_tool("native.search", lambda arguments: calls.append(arguments) or {"result": arguments["query"]}, read_only=True))
+    phase = PhasePlan("search", "Find evidence", (PhaseSubgoal(
+        "recall", "Find the source", "source", allowed_capabilities=("native.search",),
+    ),), authorized_capabilities=("native.search",))
+    state = new_tactical_state(phase)
+    state.revealed_tool_ids = ["native.search"]
+    from alphonse.agent_v2.system_one import SystemOneTacticalReview
+    values = iter((.76, .74, .68, .95))
+    def review(**kwargs):
+        probability = next(values)
+        return SystemOneTacticalReview(probability == .95, .9, True, answers={
+            "runtime_action_added_progress": probability,
+            "runtime_declared_subgoal_complete": .95 if probability == .95 else .1,
+        })
+    executor = PhaseExecutor(action_selector=_selector([
+        {"tool_id": "native.search", "arguments": {"query": str(i)}} for i in range(4)]))
+    outcome = executor.run(TaskState(user="alex"), state, CoreLoopContext(
+        messages=InMemoryMessageQueue(), tools=registry, system_one=SimpleNamespace(evaluate_tactical_progress=review)))
+    assert outcome.status == PhaseStatus.PHASE_COMPLETE
+    assert len(calls) == 4
+
+
+def test_repeated_uncertain_progress_has_a_distinct_bounded_handoff():
+    calls = []
+    registry = InMemoryToolRegistry()
+    registry.register(_tool("native.search", lambda arguments: calls.append(arguments) or {"result": arguments["query"]}, read_only=True))
+    phase = PhasePlan("search", "Find evidence", (PhaseSubgoal(
+        "recall", "Find the source", "source", allowed_capabilities=("native.search",),
+    ),), authorized_capabilities=("native.search",))
+    state = new_tactical_state(phase)
+    state.revealed_tool_ids = ["native.search"]
+    from alphonse.agent_v2.system_one import SystemOneTacticalReview
+    jev = SimpleNamespace(evaluate_tactical_progress=lambda **kwargs: SystemOneTacticalReview(
+        False, .6, False, answers={"runtime_action_added_progress": .6, "runtime_declared_subgoal_complete": .1}))
+    executor = PhaseExecutor(action_selector=_selector([
+        {"tool_id": "native.search", "arguments": {"query": str(i)}} for i in range(7)]))
+    outcome = executor.run(TaskState(user="alex"), state, CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry, system_one=jev))
+    assert outcome.blockers == ("tactical_progress_uncertain",)
+    assert len(calls) == 6
+    assert not state.completed_subgoal_ids
+
+
+def test_no_progress_counter_requires_confident_negative_with_complete_history():
+    from alphonse.agent_v2.core.intelligence.v3.executor import _consecutive_no_progress
+    phase = PhasePlan("phase", "Read", (PhaseSubgoal("stage", "Read", "output"),))
+    state = new_tactical_state(phase)
+    for probability in (.19, .2, .1):
+        state.evidence.append({"phase_id": "phase", "subgoal_id": "stage", "progress_review": {
+            "context_complete": True, "answers": {"runtime_action_added_progress": probability}}})
+    assert _consecutive_no_progress(state, "stage", .2) == 3
+    assert _consecutive_no_progress(state, "stage", .1) == 1
+    state.evidence.entries[-1]["progress_review"]["context_coverage"] = {"omitted_prior_result_count": 1}
+    assert _consecutive_no_progress(state, "stage", .2) == 0
+
+
 def test_local_read_only_fallback_stops_after_three_distinct_failures():
     calls = []
 
@@ -691,6 +749,7 @@ def test_phase_executor_rejects_identical_action_after_jev_reports_no_progress()
         "complete": False,
         "confident": True,
         "confidence": 0.95,
+        "confidence_kind": "minimum_individual_noul_certainty",
         "retry_approved": False,
         "answers": {"temperature_returned": 0.05},
         "context_complete": True,

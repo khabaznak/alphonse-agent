@@ -46,8 +46,13 @@ still checks its factual support and the requested outcome. Preparing a qualifie
 answer and verifying an external operation are different completion questions.
 
 The same parallel request asks whether the latest action added meaningful new
-evidence. Three consecutive attempts without demonstrated progress return to outer
-strategy, including differently worded empty searches. A read-only stage declaring
+evidence. Three consecutive confidently negative judgments with complete comparison
+context return to outer strategy. Uncertain judgments do not count as negatives;
+six consecutive uncertain judgments use a distinct bounded recovery handoff. A
+read-only retrieval stall can still proceed to bounded synthesis or clarification.
+The tactical review's `confidence` field is a labeled diagnostic of the weakest
+individual Noul certainty, not Jev-supplied confidence or a joint probability;
+the individual probabilities and decision thresholds remain available. A read-only stage declaring
 `local_fallback` can try a bounded alternative locally; unknown partial mutations
 still require outer recovery. These judgments neither execute tools nor alter the
 requested mission outcomes. See the [household pilot](16-household-delegation.md).
