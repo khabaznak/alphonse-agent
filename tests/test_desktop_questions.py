@@ -199,3 +199,49 @@ def test_question_cannot_resurrect_terminal_checkpoint(desktop):
     assert not result["handled"] and daemon.runtime.queue.size() == 0
     with store._connect() as conn:
         assert conn.execute("SELECT status FROM v2_task_checkpoints WHERE task_id=?", (q.task_id,)).fetchone()[0] == "cancelled"
+
+
+def test_question_delivery_and_history_share_identity_and_occurrence_time(desktop):
+    from alphonse.agent_v2.core.io.channels import ChannelAddress
+
+    daemon, store, owner, _, request = desktop
+    question = store.create_question(task=TaskState(task_id="fixture", user=owner, goal="Fixture"), question="Fixture?")
+    delivery = daemon.runtime.outbox.enqueue(
+        address=ChannelAddress("desktop", "tui", owner, alphonse_user_id=owner),
+        message=question.message, kind="question", question_id=question.question_id,
+    )
+    # Simulate a legacy outbound entry as well as the backfilled question.
+    daemon.runtime.conversation_store.record(owner_user_id=owner, role="assistant", content=question.message,
+        source="desktop", source_message_id=f"outbound:{delivery.outbox_message_id}", created_at=delivery.created_at)
+    result = poll(request, owner)
+    item = next(item for item in result["deliveries"] if item["outbox_message_id"] == delivery.outbox_message_id)
+    pending = result["questions"][0]
+    history = request("desktop_conversation_history", user=owner)["messages"]
+    assert len([item for item in history if item["content"] == question.message]) == 1
+    recorded = next(item for item in history if item["id"] == f"question:{question.question_id}")
+    assert item["conversation_id"] == recorded["id"]
+    assert item["conversation_sequence"] == pending["conversation_sequence"] == recorded["sequence"]
+    assert item["conversation_created_at"] == pending["created_at"]
+    assert recorded["created_at"] == pending["created_at"]
+    assert request("desktop_ack_delivery", client_id="fixture", outbox_message_id=delivery.outbox_message_id)["acknowledged"]
+    assert not poll(request, owner)["deliveries"]
+    assert request("desktop_conversation_history", user=owner)["messages"] == history
+    reopened = V2Daemon(daemon.runtime)
+    assert reopened.desktop_conversation_history(user=owner) == history
+
+
+def test_delayed_question_delivery_stays_on_question_day(desktop):
+    from alphonse.agent_v2.core.io.channels import ChannelAddress
+
+    daemon, store, owner, _, _ = desktop
+    question = store.create_question(task=TaskState(task_id="day-boundary", user=owner, goal="Fixture"), question="A dated question?")
+    with store._connect() as conn:
+        conn.execute("UPDATE v2_questions SET created_at=? WHERE question_id=?", ("2026-10-28T12:00:00+00:00", question.question_id))
+    delivery = daemon.runtime.outbox.enqueue(address=ChannelAddress("desktop", "tui", owner, alphonse_user_id=owner),
+        message=question.message, kind="question", question_id=question.question_id)
+    daemon.runtime.conversation_store.record(owner_user_id=owner, role="assistant", content=question.message,
+        source="desktop", source_message_id=f"outbound:{delivery.outbox_message_id}", created_at="2026-10-29T12:00:00+00:00")
+    first = daemon.desktop_conversation_history(user=owner, local_date="2026-10-28")
+    second = daemon.desktop_conversation_history(user=owner, local_date="2026-10-29")
+    assert [item["id"] for item in first] == [f"question:{question.question_id}"]
+    assert second == []

@@ -23,8 +23,8 @@ describe("mergeFreshConversationHistory", () => {
     ];
 
     expect(mergeFreshConversationHistory(fresh, pending)).toEqual([
-      ...fresh,
       pending[0],
+      ...fresh,
     ]);
   });
 
@@ -37,10 +37,10 @@ describe("mergeFreshConversationHistory", () => {
     ];
 
     expect(orderConversationMessages(messages).map((message) => message.id)).toEqual([
-      "welcome",
       "user-1",
       "user-2",
       "assistant-1",
+      "welcome",
     ]);
   });
 
@@ -69,4 +69,17 @@ describe("mergeFreshConversationHistory", () => {
 
     expect(mergeFreshConversationHistory([historical], [live])).toEqual([historical]);
   });
+});
+
+it("orders late unsequenced deliveries chronologically and deterministically", () => {
+  const messages: ChatMessage[] = [
+    { id: "answer", role: "user", content: "Answer", sequence: 2, created_at: "2026-11-06T01:51:00Z" },
+    { id: "later", role: "assistant", content: "Later", sequence: 3, created_at: "2026-11-06T01:53:00Z" },
+    { id: "question:q", role: "assistant", content: "Question", created_at: "2026-11-06T01:47:00Z" },
+    { id: "invalid", role: "assistant", content: "Unknown", created_at: "invalid" },
+  ];
+  const history = mergeFreshConversationHistory(messages.slice(0, 2), messages.slice(2));
+  expect(history.map((message) => message.id)).toEqual(["question:q", "answer", "later", "invalid"]);
+  expect(orderConversationMessages([...history].reverse())).toEqual(history);
+  expect(mergeFreshConversationHistory(history, [messages[2]])).toEqual(history);
 });

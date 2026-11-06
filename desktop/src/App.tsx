@@ -4,7 +4,7 @@ import { Agenda } from "./Agenda";
 import { SkillMascot, SkillAppearanceSettings } from "./SkillMascot";
 import { BASE_CONTEXT, type AppearanceContext, type SkillAppearance } from "./skillAppearances";
 import { HouseholdWorkspace } from "./HouseholdWorkspace";
-import { QuestionCard } from "./QuestionCard";
+import { ConversationTimelineMessage } from "./ConversationTimelineMessage";
 import { WorkOverview } from "./WorkOverview";
 import { TaskProgressBubble } from "./TaskProgressBubble";
 import { AtHandDrawer, useAtHand } from "./AtHandDrawer";
@@ -26,7 +26,6 @@ import { desktopDiagnosticBehavior, type DesktopDiagnosticMode } from "./diagnos
 import { createDesktopNotifier, DESKTOP_NOTIFICATION_PREFERENCES_KEY, notificationForCompletion, notificationForQuestion, readDesktopNotificationPreferences, type DesktopNotificationPreferences } from "./desktopNotifications";
 import { readDismissedScheduledSurfaces, rememberDismissedScheduledSurface, withoutDismissedSurfaces, withoutSurface } from "./dismissedSurfaces";
 import { avatarState, avatarStateLabel, capdActivityLabel, type Workspace, SETTINGS_SECTIONS } from "./layoutState";
-import { ConversationMessage, MemoizedConversationMessage } from "./ConversationMessage";
 import { reconcileQuestionSurfaces, reuseQuestions, withoutTaskProgressSurfaces } from "./pollState";
 import { appendQueueSample, type QueueSample } from "./queueHistory";
 import { appendPdcaActivity, type PdcaSample } from "./pdcaHistory";
@@ -44,7 +43,7 @@ type PollResponse = {
   next_sequence: number;
   ui_events?: Array<{ sequence?: number; event: { type: string; name?: string; value?: unknown } }>;
   next_ui_sequence?: number;
-  deliveries: Array<{ outbox_message_id: string; message: string; task_id?: string; project_id: string; created_at: string; conversation_sequence: number }>;
+  deliveries: Array<{ outbox_message_id: string; message: string; task_id?: string; project_id: string; created_at: string; conversation_sequence: number; conversation_id?: string; conversation_created_at?: string }>;
   questions: Question[];
   conversation_has_unseen_messages?: boolean;
   status: { active_work: Record<string, string>; activity: { state?: string }; queue?: { ready?: number; processing?: number; retry_wait?: number } };
@@ -138,6 +137,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   drawerIdsRef.current = drawer.widgets.filter((widget) => widget.kind === "skill").map((widget) => widget.id);
   const atHandOpen = Boolean(user && drawer.open);
   const [questionsMember, setQuestionsMember] = useState("");
+  const questionFocusRef = useRef("");
   const [workspaceRequired, setWorkspaceRequired] = useState(false);
   const [error, setError] = useState("");
   const [surfaces, setSurfaces] = useState<Record<string, import("./a2ui").A2uiSurface>>({});
@@ -294,10 +294,10 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
           desktopNotifications,
         );
         const completedMessage: ChatMessage = {
-          id: delivery.outbox_message_id,
+          id: delivery.conversation_id || delivery.outbox_message_id,
           role: "assistant",
           content: delivery.message,
-          created_at: delivery.created_at,
+          created_at: delivery.conversation_created_at || delivery.created_at,
           project_id: delivery.project_id,
           sequence: delivery.conversation_sequence,
         };
@@ -563,21 +563,35 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const questionTaskIds = new Set(questions.map((question) => question.task_id));
   const timelineNodes: ReactNode[] = useMemo(() => buildConversationTimeline(
       messages,
-      progressTaskIds.filter((taskId) => !questionTaskIds.has(taskId)),
+      progressTaskIds,
       {},
       {},
       Object.keys(archivedProgress),
+      Object.fromEntries(progressTaskIds.map((taskId) => {
+        const data = (archivedProgress[taskId] || surfaces[`task-progress:${taskId}`])?.dataModel || {};
+        return [taskId, { created_at: String(data.request_created_at || data.first_activity_at || ""), sequence: Number(data.request_sequence || 0) }];
+      })),
     ).map((item) => {
       if (item.kind === "message") {
-        if (questions.some((question) => item.message.id === `question:${question.question_id}`)) return null;
-        const Bubble = diagnosticBehavior.memoizesMessages ? MemoizedConversationMessage : ConversationMessage;
-        const bubble = <Bubble key={item.key} message={item.message} timezone={timezone} projectName={contextProjects.find((projectItem) => projectItem.project_id === item.message.project_id)?.name || ""} renderMarkdown={!diagnosticBehavior.plainTextMessages} />;
-        return bubble;
+        return <ConversationTimelineMessage key={item.key} message={item.message} questions={questions} user={user} timezone={timezone} onDone={poll} projectName={contextProjects.find((projectItem) => projectItem.project_id === item.message.project_id)?.name || ""} memoize={diagnosticBehavior.memoizesMessages} renderMarkdown={!diagnosticBehavior.plainTextMessages} />;
       }
       const archivedSurface = archivedProgress[item.taskId];
       const surface = archivedSurface || surfaces[`task-progress:${item.taskId}`];
       return surface ? <TaskProgressBubble key={item.key} surface={surface} archived={Boolean(archivedSurface)} connected={connected} timezone={timezone} /> : null;
     }), [archivedProgress, clientId, connected, contextProjects, diagnosticBehavior.memoizesMessages, diagnosticBehavior.plainTextMessages, messages, poll, progressTaskIds, questionTaskIds, questions, surfaces, timelineRenderVersion, timezone, user]);
+
+  useEffect(() => {
+    if (workspace !== "conversation" || !questionFocusRef.current) return;
+    const frame = window.requestAnimationFrame(() => {
+      const target = Array.from(document.querySelectorAll<HTMLElement>("[data-question-id]"))
+        .find((element) => element.dataset.questionId === questionFocusRef.current);
+      if (!target) return; // A different day may still be loading.
+      questionFocusRef.current = "";
+      target.scrollIntoView({ block: "center" });
+      target.querySelector<HTMLElement>("input, textarea, button")?.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [timelineNodes, workspace]);
 
   return (
     <main className={`app-shell desktop-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${atHandOpen ? "at-hand-open" : ""}`}>
@@ -624,7 +638,6 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
         {error && <div className="error" role="alert">{error}</div>}
         <div className="timeline" ref={timelineRef} aria-live="polite">
           {timelineNodes}
-          {questions.length > 0 && <section className="pending-questions" aria-label="Pending questions"><h2>Questions for you</h2>{questions.map((question) => <QuestionCard key={`${user}:${question.question_id}`} question={question} user={user} timezone={timezone} onDone={poll} />)}</section>}
         </div>
         <section className="input-dock">
           {activeSurface && (
@@ -641,11 +654,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
         {visited.has("projects") && <section className="workspace-panel" tabIndex={-1} aria-label="Projects and tasks workspace" hidden={workspace !== "projects"}><ProjectsWorkspace active={workspace === "projects"} user={user} initialTaskId={workTaskForView} initialProjectId={projectForView.id} selectionRequest={projectForView.request} onAgenda={(id) => { setScheduledTaskForView(id); navigate("agenda"); }} onConversation={(day) => { setConversationDay(day); navigate("conversation"); }} onQuestions={() => navigate("attention")} onClose={() => navigate("conversation")} /></section>}
         {visited.has("household") && <section className="workspace-panel" tabIndex={-1} aria-label="Household workspace" hidden={workspace !== "household"}><HouseholdWorkspace key={user} user={user} active={workspace === "household"} connected={connected} isAdmin={isAdmin} onProject={(id) => { setProjectForView((current) => ({ id, request: current.request + 1 })); navigate("projects"); }} onAgenda={(id) => { setScheduledTaskForView(id); navigate("agenda"); }} onConversation={(day) => { setConversationDay(day); navigate("conversation"); }} onQuestions={() => navigate("attention")} onMembers={() => { setSettingsTab("members"); navigate("settings"); }} /></section>}
         {visited.has("agenda") && <section className="workspace-panel" tabIndex={-1} aria-label="Agenda workspace" hidden={workspace !== "agenda"}><AgendaWorkspace key={user} selectionRequest={scheduleViewRequest} member={user} timezone={timezone} active={workspace === "agenda"} initialTaskId={scheduledTaskForView} onProjects={() => navigate("projects")} onConversation={() => navigate("conversation")} /></section>}
-        {visited.has("attention") && <section className="workspace-panel attention-workspace" tabIndex={-1} aria-label="Needs your attention workspace" hidden={workspace !== "attention"}><h1>Needs your attention</h1>{questions.length ? questions.map((question) => <article className="card" key={question.question_id}><p>{question.message}</p><button onClick={() => { navigate("conversation"); window.requestAnimationFrame(() => {
-              const target = Array.from(document.querySelectorAll<HTMLElement>("[data-question-id]")).find((element) => element.dataset.questionId === question.question_id);
-              (target?.querySelector<HTMLElement>(".message") || target)?.scrollIntoView({ block: "center" });
-              target?.querySelector<HTMLElement>("input, textarea, button")?.focus({ preventScroll: true });
-            }); }}>View in conversation</button></article>) : <p>No pending questions.</p>}</section>}
+        {visited.has("attention") && <section className="workspace-panel attention-workspace" tabIndex={-1} aria-label="Needs your attention workspace" hidden={workspace !== "attention"}><h1>Needs your attention</h1>{questions.length ? questions.map((question) => <article className="card" key={question.question_id}><p>{question.message}</p><button onClick={() => { questionFocusRef.current = question.question_id; const day = messageLocalDay(question.created_at, timezone); if (day) setConversationDay(day); navigate("conversation"); }}>View in conversation</button></article>) : <p>No pending questions.</p>}</section>}
       {visited.has("settings") && <section className="workspace-panel" tabIndex={-1} aria-label="Settings workspace" hidden={workspace !== "settings"}><SettingsWorkspace isAdmin={isAdmin} user={user} initialTab={settingsTab} workspaceRequired={workspaceRequired} enterToSend={enterToSend} desktopStyle={desktopStyle} desktopNotifications={desktopNotifications} onDesktopStyleChange={changeDesktopStyle} onDesktopNotificationsChange={setDesktopNotifications} onEnterToSendChange={setEnterToSend} onTimezoneChange={setTimezone} onWorkspaceConfigured={() => setWorkspaceRequired(false)} onTestDesktopNotification={() => void desktopNotifierRef.current.notify({ id: `test:${Date.now()}`, title: "Alphonse test alert", body: "Desktop notifications are ready." }, { ...desktopNotifications, onlyWhenUnfocused: false })} onClose={() => { navigate(returnWorkspace); }} /></section>}
       </div>
       <AtHandDrawer activityMember={activityMember} queueSamples={queueHistory} pdcaSamples={pdcaHistory} state={{ ...drawer, open: atHandOpen }} act={changeDrawer} member={user} connected={connected} questionCount={questions.length} questionsMember={questionsMember} onAttention={() => navigate("attention")} onAgenda={(id) => { setScheduleViewRequest((value) => value + 1); setScheduledTaskForView(id || ""); navigate("agenda"); }} toggleRef={drawerToggleRef} saveFailed={drawerSaveFailed} widgetContext={widgetContext} timezone={timezone} onItem={(artifactId, itemId, family) => { setWidgetItem({ member: user, artifactId, itemId, family }); navigate(["appointments", "reminders"].includes(family) ? "agenda" : "projects"); }} onWork={(id, taskId) => { setWorkTaskForView(taskId || ""); setProjectForView((current) => ({ id: taskId ? "" : id, request: current.request + 1 })); navigate("projects"); }} onRequest={(draft) => { setPrompt((current) => appendWidgetDraft(current, draft)); setConversationDay(localDay(timezone)); navigate("conversation"); window.requestAnimationFrame(() => textareaRef.current?.focus()); }} />

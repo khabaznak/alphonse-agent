@@ -50,10 +50,21 @@ it("keeps an older task log with its request when a receipt and acknowledgement 
 
 it("places an archived task from a previous day before today's receipt conversation", () => {
   const items = buildConversationTimeline([
-    { id: "receipt", role: "user", content: "Dinner receipt" },
-    { id: "ack", role: "assistant", content: "I will read the receipt" },
-  ], ["yesterday-repair", "receipt"], {}, {}, ["yesterday-repair"]);
+    { id: "receipt", role: "user", content: "Dinner receipt", created_at: "2026-01-02T10:00:00Z" },
+    { id: "ack", role: "assistant", content: "I will read the receipt", created_at: "2026-01-02T10:01:00Z" },
+  ], ["yesterday-repair", "receipt"], {}, {}, ["yesterday-repair"], { "yesterday-repair": { created_at: "2026-01-01T00:00:00Z" } });
   expect(items.map((item) => item.key)).toEqual([
     "task:yesterday-repair", "message:receipt", "task:receipt", "message:ack",
+  ]);
+});
+
+it("places unanchored active and archived logs by request time", () => {
+  const messages: ChatMessage[] = [
+    { id: "one", role: "user", content: "One", created_at: "2026-01-02T10:00:00Z" },
+    { id: "two", role: "assistant", content: "Two", created_at: "2026-01-02T12:00:00Z" },
+  ];
+  const metadata = { earlier: { created_at: "2026-01-01T23:00:00Z" }, between: { created_at: "2026-01-02T11:00:00Z" } };
+  expect(buildConversationTimeline(messages, ["between", "earlier"], {}, {}, ["earlier"], metadata).map((item) => item.key)).toEqual([
+    "task:earlier", "message:one", "task:between", "message:two",
   ]);
 });

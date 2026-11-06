@@ -43,3 +43,11 @@ describe("task progress lifecycle", () => {
     expect(result.archived.old.components.step_0.text).toContain("failed");
   });
 });
+
+it("keeps the first activity time when an unanchored task updates across polls", () => {
+  const update = (updated_at: string) => envelope({ updateDataModel: { surfaceId: old.surfaceId, path: "/", value: { status: "running", updated_at } } });
+  const first = projectTaskProgress({}, {}, [create("old"), update("2026-01-01T23:00:00Z")], false);
+  const second = projectTaskProgress(first.surfaces, first.archived, [create("old"), update("2026-01-02T01:00:00Z")], false);
+  expect(second.surfaces[old.surfaceId].dataModel.first_activity_at).toBe("2026-01-01T23:00:00Z");
+  expect(second.surfaces[old.surfaceId].dataModel.updated_at).toBe("2026-01-02T01:00:00Z");
+});

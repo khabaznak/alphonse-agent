@@ -210,6 +210,8 @@ class A2UiAdapter:
                 "owner_user_id": str(progress.get("owner_user_id") or ""),
                 "status": str(progress.get("status") or "running"),
                 "updated_at": str(progress.get("updated_at") or ""),
+                "request_created_at": str(progress.get("request_created_at") or ""),
+                "request_sequence": int(progress.get("request_sequence") or 0),
                 "tool_id": str(progress.get("tool_id") or ""),
                 "tool_name": str(progress.get("tool_name") or ""),
                 "tool_status": tool_status,
