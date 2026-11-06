@@ -53,6 +53,18 @@ class KillSwitchCoordinator:
                 self._cancelled_message_ids.discard(self._active.message_id)
                 self._active = None
 
+    def finish_handoff(self, message_id: str, *, release: Any, cancel: Any) -> tuple[bool, bool]:
+        """Serialize cancellation with the final queue handoff."""
+        with self._lock:
+            if self._active is None or self._active.message_id != message_id:
+                return False, False
+            cancelled = message_id in self._cancelled_message_ids
+            completed = bool(cancel() if cancelled else release())
+            if completed:
+                self._cancelled_message_ids.discard(message_id)
+                self._active = None
+            return cancelled, completed
+
     def active(self) -> ActiveTask | None:
         with self._lock:
             return self._active

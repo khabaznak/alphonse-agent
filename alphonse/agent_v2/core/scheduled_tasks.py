@@ -31,6 +31,9 @@ ExecutionStatus = Literal[
     "delivered",
     "failed",
     "delivery_failed",
+    "unconfirmed",
+    "cancelled",
+    "completed",
 ]
 
 
@@ -495,6 +498,33 @@ class ScheduledTaskStore:
             ).fetchall()
         return [_execution_from_row(row) for row in rows]
 
+    def matches_queued_occurrence(self, *, occurrence_key: str, scheduled_task_id: str, message_id: str, owner_user_id: str, allow_terminal: bool = False) -> bool:
+        """Authenticate an automation envelope against its durable occurrence."""
+        if not all((occurrence_key, scheduled_task_id, message_id, owner_user_id)):
+            return False
+        with self._connect() as conn:
+            row = conn.execute(
+                """SELECT e.status, e.queued_message_id FROM v2_scheduled_task_executions e
+                   JOIN v2_scheduled_tasks t ON t.scheduled_task_id=e.scheduled_task_id
+                   WHERE e.occurrence_key=? AND e.scheduled_task_id=? AND t.owner_user_id=?""",
+                (occurrence_key, scheduled_task_id, owner_user_id),
+            ).fetchone()
+        if row is None:
+            return False
+        allowed = {"enqueued", "processing", "response_pending", "unconfirmed"}
+        if allow_terminal:
+            allowed.update({"failed", "delivery_failed", "delivered"})
+        return ((row["status"] in allowed and str(row["queued_message_id"] or "") == message_id) or
+                (row["status"] == "claimed" and message_id == f"scheduled:{occurrence_key}"))
+
+    def occurrence_belongs_to_schedule(self, *, occurrence_key: str, scheduled_task_id: str) -> bool:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT status FROM v2_scheduled_task_executions WHERE occurrence_key=? AND scheduled_task_id=?",
+                (occurrence_key, scheduled_task_id),
+            ).fetchone()
+        return row is not None and row["status"] not in {"cancelled", "failed", "delivery_failed"}
+
     def claim_due_occurrences(
         self,
         *,
@@ -549,7 +579,7 @@ class ScheduledTaskStore:
                     ).fetchone()
                 status = str(existing["status"] or "")
                 expired = str(existing["lease_expires_at"] or "") <= now_text
-                if status in {"delivered", "failed", "delivery_failed", "enqueued", "response_pending"}:
+                if status in {"delivered", "completed", "failed", "delivery_failed", "unconfirmed", "cancelled", "enqueued", "response_pending"}:
                     continue
                 if status == "claimed" and not expired and str(existing["lease_owner"] or "") != owner:
                     continue
@@ -740,29 +770,92 @@ class ScheduledTaskStore:
         )
 
     def mark_occurrence_delivered(self, occurrence_key: str, *, response_outbox_id: str = "") -> bool:
-        updated = self._update_occurrence(
-            occurrence_key,
-            status="delivered",
-            response_outbox_id=response_outbox_id,
-            lease_owner="",
-            lease_expires_at="",
-        )
-        if updated:
-            self._finalize_one_time_occurrence(occurrence_key, failed=False)
-        return updated
+        return self._finish_occurrence(occurrence_key, status="delivered", response_outbox_id=response_outbox_id)
+
+    def mark_occurrence_completed_without_delivery(self, occurrence_key: str) -> bool:
+        return self._finish_occurrence(occurrence_key, status="completed")
 
     def mark_occurrence_processing_failed(self, occurrence_key: str, *, error: str) -> bool:
-        updated = self._update_occurrence(
-            occurrence_key,
-            status="failed",
-            last_error=error,
-            error=error,
-            lease_owner="",
-            lease_expires_at="",
-        )
-        if updated:
-            self._finalize_one_time_occurrence(occurrence_key, failed=True, error=error)
-        return updated
+        return self._finish_occurrence(occurrence_key, status="failed", error=error)
+
+    def reconcile_terminal_checkpoints(self) -> int:
+        """Repair failed or cancelled occurrences after inbound work is no longer runnable.
+
+        The daemon calls this only when queues, checkpoints and schedules share
+        the same durable database. Correlated answer deliveries are considered
+        active work for the original task as well as the original queue row.
+        """
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            rows = conn.execute(
+                """SELECT e.occurrence_key, c.task_state_json
+                   , c.status AS checkpoint_status FROM v2_scheduled_task_executions e
+                   JOIN v2_task_checkpoints c ON c.task_id=e.queued_message_id
+                   WHERE e.status IN ('enqueued', 'processing', 'response_pending', 'unconfirmed') AND c.status IN ('failed', 'cancelled')
+                     AND NOT EXISTS (
+                       SELECT 1 FROM v2_inbound_messages q
+                       WHERE q.status IN ('pending','processing','retry_wait')
+                         AND (q.message_id=e.queued_message_id OR
+                           (json_valid(q.metadata_json) AND
+                            json_extract(q.metadata_json, '$.task_state.task_id')=c.task_id))
+                     )"""
+            ).fetchall()
+            repaired: list[tuple[str, str]] = []
+            for row in rows:
+                try:
+                    state = json.loads(str(row["task_state_json"]))
+                except (ValueError, TypeError):
+                    continue
+                outcome = state.get("outcome") if isinstance(state, dict) else None
+                reason = str(outcome.get("reason") or "checkpoint_failed") if isinstance(outcome, dict) else "checkpoint_failed"
+                occurrence = str(row["occurrence_key"])
+                status = ("cancelled" if row["checkpoint_status"] == "cancelled" else
+                          "unconfirmed" if reason == "scheduled_delivery_outcome_unavailable" else "failed")
+                if self._update_occurrence(
+                    occurrence, connection=conn, from_statuses=("enqueued", "processing", "response_pending", "unconfirmed"), status=status,
+                    last_error=reason if status != "cancelled" else "", error=reason if status != "cancelled" else "", lease_owner="", lease_expires_at="",
+                ):
+                    repaired.append((occurrence, reason))
+                    if status != "unconfirmed":
+                        conn.execute(
+                            """UPDATE v2_scheduled_tasks SET status=?, next_run_at=NULL, updated_at=?
+                               WHERE scheduled_task_id=(SELECT scheduled_task_id FROM v2_scheduled_task_executions WHERE occurrence_key=?)
+                                 AND status='active' AND json_extract(schedule_json, '$.kind')='once'""",
+                            (status, _now_iso(), occurrence),
+                        )
+        return len(repaired)
+
+    def completed_unreconciled_occurrences(self) -> list[str]:
+        """Find completed checkpoints whose original or answer delivery is no longer running."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT e.occurrence_key FROM v2_scheduled_task_executions e
+                   JOIN v2_task_checkpoints c ON c.task_id=e.queued_message_id
+                   WHERE e.status IN ('enqueued','processing') AND c.status='done'
+                     AND NOT EXISTS (
+                       SELECT 1 FROM v2_inbound_messages q
+                       WHERE q.status IN ('pending','processing','retry_wait')
+                         AND (q.message_id=e.queued_message_id OR
+                           (json_valid(q.metadata_json) AND json_extract(q.metadata_json, '$.task_state.task_id')=c.task_id))
+                     )"""
+            ).fetchall()
+        return [str(row["occurrence_key"]) for row in rows]
+
+    def cancelled_parked_questions(self) -> list[dict[str, str]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT e.occurrence_key, c.task_id,
+                          json_extract(c.task_state_json, '$.metadata.pending_question_id') AS question_id
+                   FROM v2_scheduled_task_executions e
+                   JOIN v2_scheduled_tasks s ON s.scheduled_task_id=e.scheduled_task_id
+                   JOIN v2_task_checkpoints c ON c.task_id=e.queued_message_id AND c.owner_id=s.owner_user_id
+                   WHERE s.status='cancelled' AND c.status='waiting_user'
+                     AND json_valid(c.task_state_json)
+                     AND json_extract(c.task_state_json, '$.metadata.occurrence_key')=e.occurrence_key
+                     AND json_extract(c.task_state_json, '$.metadata.scheduled_task_id')=s.scheduled_task_id"""
+            ).fetchall()
+        return [{"occurrence_key": str(row["occurrence_key"]), "task_id": str(row["task_id"]),
+                 "question_id": str(row["question_id"] or "")} for row in rows if row["question_id"]]
 
     def mark_occurrence_processing(self, occurrence_key: str) -> bool:
         return self._update_occurrence(
@@ -790,34 +883,66 @@ class ScheduledTaskStore:
             connection=connection,
         )
 
-    def mark_occurrence_failed(self, occurrence_key: str, *, error: str) -> bool:
-        updated = self._update_occurrence(
+    def mark_occurrence_delivery_unconfirmed(self, occurrence_key: str, *, response_outbox_id: str) -> bool:
+        """Retain a nonterminal occurrence when the provider outcome is unknown."""
+        return self._update_occurrence(
             occurrence_key,
-            status="delivery_failed",
-            last_error=error,
-            error=error,
-            lease_owner="",
-            lease_expires_at="",
+            from_statuses=("claimed", "enqueued", "processing", "response_pending"),
+            status="unconfirmed", response_outbox_id=response_outbox_id,
+            last_error="delivery_unconfirmed", error="delivery_unconfirmed",
+            lease_owner="", lease_expires_at="",
         )
-        if updated:
-            self._finalize_one_time_occurrence(occurrence_key, failed=True, error=error)
-        return updated
 
-    def _finalize_one_time_occurrence(self, occurrence_key: str, *, failed: bool, error: str = "") -> None:
+    def mark_question_delivery_confirmed(self, occurrence_key: str, *, response_outbox_id: str) -> bool:
+        """Clear uncertainty only for the question whose receipt was confirmed."""
         with self._connect() as conn:
-            row = conn.execute(
-                "SELECT scheduled_task_id FROM v2_scheduled_task_executions WHERE occurrence_key=?",
-                (str(occurrence_key or "").strip(),),
-            ).fetchone()
-        if row is None:
-            return
-        task = self.get_task(str(row["scheduled_task_id"] or ""))
-        if task is None or str(task.schedule.get("kind") or "") != "once":
-            return
-        if failed:
-            self.mark_failed(task.scheduled_task_id, error=error)
-        else:
-            self.complete_task(task.scheduled_task_id)
+            cursor = conn.execute(
+                """UPDATE v2_scheduled_task_executions
+                   SET status='processing', response_outbox_id='', error='', last_error='', updated_at=?
+                   WHERE occurrence_key=? AND status='unconfirmed' AND response_outbox_id=?""",
+                (_now_iso(), occurrence_key, response_outbox_id),
+            )
+            return cursor.rowcount == 1
+
+    def mark_occurrence_cancelled(self, occurrence_key: str) -> bool:
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            updated = self._update_occurrence(
+                occurrence_key, connection=conn, from_statuses=("claimed", "enqueued", "processing", "response_pending", "unconfirmed"), status="cancelled",
+                last_error="", error="", lease_owner="", lease_expires_at="",
+            )
+            if updated:
+                conn.execute(
+                    """UPDATE v2_scheduled_tasks SET status='cancelled', next_run_at=NULL, updated_at=?
+                       WHERE scheduled_task_id=(SELECT scheduled_task_id FROM v2_scheduled_task_executions WHERE occurrence_key=?)
+                         AND status='active' AND json_extract(schedule_json, '$.kind')='once'""",
+                    (_now_iso(), occurrence_key),
+                )
+            return updated
+
+    def mark_occurrence_failed(self, occurrence_key: str, *, error: str) -> bool:
+        return self._finish_occurrence(occurrence_key, status="delivery_failed", error=error)
+
+    def _finish_occurrence(self, occurrence_key: str, *, status: str, error: str = "", response_outbox_id: str = "") -> bool:
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            values = {"status": status, "last_error": error, "error": error, "lease_owner": "", "lease_expires_at": ""}
+            if response_outbox_id:
+                values["response_outbox_id"] = response_outbox_id
+            updated = self._update_occurrence(
+                occurrence_key, connection=conn,
+                from_statuses=("claimed", "enqueued", "processing", "response_pending", "unconfirmed"), **values,
+            )
+            if updated:
+                now = _now_iso()
+                conn.execute(
+                    """UPDATE v2_scheduled_tasks SET status=?, next_run_at=NULL, updated_at=?,
+                         last_run_at=CASE WHEN ? IN ('delivered', 'completed') THEN ? ELSE last_run_at END
+                       WHERE scheduled_task_id=(SELECT scheduled_task_id FROM v2_scheduled_task_executions WHERE occurrence_key=?)
+                         AND status='active' AND json_extract(schedule_json, '$.kind')='once'""",
+                    ("completed" if status in {"delivered", "completed"} else "failed", now, status, now, occurrence_key),
+                )
+            return updated
 
     def _update_occurrence(
         self,
@@ -987,7 +1112,7 @@ class ScheduledTaskStore:
                   last_error TEXT NOT NULL DEFAULT '',
                   created_at TEXT NOT NULL DEFAULT '',
                   updated_at TEXT NOT NULL DEFAULT '',
-                  CHECK (status IN ('pending', 'claimed', 'enqueued', 'processing', 'response_pending', 'retry_wait', 'delivered', 'failed', 'delivery_failed'))
+                  CHECK (status IN ('pending', 'claimed', 'enqueued', 'processing', 'response_pending', 'retry_wait', 'delivered', 'failed', 'delivery_failed', 'unconfirmed', 'cancelled', 'completed'))
                 ) STRICT;
 
                 CREATE INDEX IF NOT EXISTS idx_v2_scheduled_task_executions_task
@@ -1059,6 +1184,7 @@ class ScheduledTaskStore:
                 execution_columns.add("project_id")
             if "project_id" not in execution_columns:
                 conn.execute("ALTER TABLE v2_scheduled_task_executions ADD COLUMN project_id TEXT NOT NULL DEFAULT ''")
+            _migrate_execution_status_check(conn)
             conn.execute(
                 """
                 UPDATE v2_scheduled_task_executions
@@ -1079,6 +1205,24 @@ class ScheduledTaskStore:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_v2_scheduled_task_executions_project ON v2_scheduled_task_executions(project_id,started_at)"
             )
+
+
+def _migrate_execution_status_check(conn: sqlite3.Connection) -> None:
+    row = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='v2_scheduled_task_executions'").fetchone()
+    sql = str(row[0] or "") if row else ""
+    if all(value in sql for value in ("'unconfirmed'", "'cancelled'", "'completed'")):
+        return
+    if "'delivery_failed'" not in sql:
+        raise RuntimeError("scheduled_execution_schema_unrecognized")
+    missing = [value for value in ("unconfirmed", "cancelled", "completed") if f"'{value}'" not in sql]
+    new_sql = sql.replace("'delivery_failed'", "'delivery_failed'" + "".join(f", '{value}'" for value in missing), 1)
+    conn.execute("SAVEPOINT scheduled_execution_status_migration")
+    conn.execute("ALTER TABLE v2_scheduled_task_executions RENAME TO v2_scheduled_task_executions_status_legacy")
+    conn.execute(new_sql)
+    conn.execute("INSERT INTO v2_scheduled_task_executions SELECT * FROM v2_scheduled_task_executions_status_legacy")
+    conn.execute("DROP TABLE v2_scheduled_task_executions_status_legacy")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_v2_scheduled_task_executions_task ON v2_scheduled_task_executions (scheduled_task_id, started_at)")
+    conn.execute("RELEASE scheduled_execution_status_migration")
 
 
 class ScheduledTaskRunner:
@@ -1112,6 +1256,7 @@ class ScheduledTaskRunner:
                     "scheduled_task_id": task.scheduled_task_id,
                     "project_id": task.project_id,
                     "scheduled_run_id": run_id,
+                    "occurrence_key": f"{task.scheduled_task_id}:{run_id}",
                     "delivery_mode": task.delivery_mode,
                     "channel": dict(task.origin_channel),
                 },
@@ -1376,7 +1521,7 @@ def _normalize_execution_status(value: object) -> ExecutionStatus:
         rendered = "failed"
     if rendered not in {
         "pending", "claimed", "enqueued", "processing", "response_pending",
-        "retry_wait", "delivered", "failed", "delivery_failed",
+        "retry_wait", "delivered", "failed", "delivery_failed", "unconfirmed", "cancelled", "completed",
     }:
         raise ValueError(f"invalid_scheduled_task_execution_status: {value}")
     return rendered  # type: ignore[return-value]

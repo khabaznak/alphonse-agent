@@ -211,6 +211,23 @@ def test_actual_daemon_scheduler_wires_terminal_failure_notification(tmp_path):
     assert notifications[0].channel_target == "fixture-admin-chat"
 
 
+def test_recipient_revoked_after_enqueue_is_not_sent(tmp_path):
+    from datetime import datetime
+    from alphonse.agent_v2.core.io import OutboundSelector
+
+    fixture = make_fixture(tmp_path, "mother-medication-reminder")
+    result = schedule_for_mother(fixture)
+    scheduled = fixture.schedules.get_task(result["scheduled_task_id"])
+    daemon = fixture_daemon(fixture)
+    daemon.scheduler.run_once(now=datetime.fromisoformat(scheduled.next_run_at))
+    reminder = next(item for item in daemon.runtime.outbox.list(OutboundSelector(status=None)) if item.kind == "scheduled_reminder")
+    fixture.users.update_user("fixture-mother", is_active=False)
+
+    assert daemon.runtime.outbox.claim_next(OutboundSelector(integration_id=reminder.integration_id)) is None
+    assert daemon.runtime.outbox.get(reminder.outbox_message_id).status == "failed"
+    assert fixture.schedules.list_executions(scheduled_task_id=scheduled.scheduled_task_id)[0].status == "delivery_failed"
+
+
 def test_terminal_telegram_failure_notifies_requester_once(tmp_path):
     from datetime import datetime
     fixture = make_fixture(tmp_path, "mother-medication-reminder")

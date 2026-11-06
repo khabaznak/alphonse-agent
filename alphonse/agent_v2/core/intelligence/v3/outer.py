@@ -512,7 +512,7 @@ def _review_acceptance_statuses(
                 system_one,
                 contract=task.ensure_acceptance_contract(),
                 phase=state.phase.to_dict(),
-                evidence=state.evidence.to_dict(),
+                evidence=_check_evidence(task, state, context),
                 task_context=task_context, task=task,
             )
         except Exception:
@@ -569,7 +569,7 @@ def _review_acceptance_statuses(
                 context.system_one,
                 contract=focused_contract,
                 phase=focused_phase,
-                evidence=state.evidence.to_dict(),
+                evidence=_check_evidence(task, state, context),
                 task_context=_task_context(task, context), task=task,
             )
         except Exception as exc:
@@ -665,6 +665,11 @@ def _review_acceptance_statuses(
     })
 
 
+def _check_evidence(task, state, context):
+    from .delivery_evidence import evidence_with_delivery_receipts
+    return evidence_with_delivery_receipts(task, state, context)
+
+
 def _system_two_acceptance_review(
     task: "TaskState",
     state: TacticalState,
@@ -678,6 +683,7 @@ def _system_two_acceptance_review(
     shared_context = _task_context(task, context) if projections_enabled() or task.metadata.get("event") else render(task)
     from .context_manifests import event_input_metadata
     review_contract = contract or task.ensure_acceptance_contract()
+    review_evidence = _check_evidence(task, state, context)
     valid_refs = _successful_evidence_refs(state)
     schema = {
         "type": "object", "additionalProperties": False, "required": ["updates"],
@@ -708,13 +714,13 @@ def _system_two_acceptance_review(
             f"Response JSON Schema: {json.dumps(schema, ensure_ascii=False)}\n"
             f"Acceptance contract: {json.dumps(review_contract, ensure_ascii=False)}\n"
             f"Phase: {json.dumps(state.phase.to_dict(), ensure_ascii=False)}\n"
-            f"Verified evidence: {json.dumps(state.evidence.to_dict(), ensure_ascii=False)}"
+            f"Verified evidence: {json.dumps(review_evidence, ensure_ascii=False)}"
     )
     review_parts = [
         shared_context,
         source('Acceptance contract: ' + json.dumps(review_contract, ensure_ascii=False), 'task:' + str(task.task_id) + ':contract', 'acceptance_contract'),
         source('Phase: ' + json.dumps(state.phase.to_dict(), ensure_ascii=False), 'phase:' + state.phase.phase_id, 'strategic_plan'),
-        source('Verified evidence: ' + json.dumps(state.evidence.to_dict(), ensure_ascii=False), 'phase:' + state.phase.phase_id + ':evidence', 'execution_evidence'),
+        source('Verified evidence: ' + json.dumps(review_evidence, ensure_ascii=False), 'phase:' + state.phase.phase_id + ':evidence', 'execution_evidence'),
         source('Valid evidence references: ' + json.dumps(valid_refs, ensure_ascii=False), 'phase:' + state.phase.phase_id + ':valid_refs', 'verification_filter'),
     ]
     request = InferenceRequest(

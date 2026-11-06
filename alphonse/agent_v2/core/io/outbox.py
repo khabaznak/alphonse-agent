@@ -100,6 +100,7 @@ class SQLiteOutboundStore:
     def __init__(self, db_path: str | Path = ":memory:") -> None:
         self.db_path = str(db_path)
         self.finding_delivery_guard: Callable[[OutboundMessage], bool] | None = None
+        self.scheduled_delivery_guard: Callable[[OutboundMessage], bool] | None = None
         self._memory_connection: sqlite3.Connection | None = None
         if self.db_path == ":memory:":
             self._memory_connection = sqlite3.connect(":memory:", check_same_thread=False)
@@ -211,8 +212,36 @@ class SQLiteOutboundStore:
     def list_pending(self, selector: OutboundSelector | None = None, *, limit: int = 100) -> list[OutboundMessage]:
         return self.list(selector or OutboundSelector(), limit=limit)
 
+    def list_unconfirmed_scheduled(self) -> list[OutboundMessage]:
+        """Return all ambiguous scheduled sends for restart reconciliation."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT * FROM v2_outbox WHERE status='unconfirmed'
+                   AND json_valid(metadata_json)
+                   AND COALESCE(json_extract(metadata_json, '$.occurrence_key'), '') != ''"""
+            ).fetchall()
+        return [_message_from_row(row) for row in rows]
+
+    def list_confirmed_scheduled_evidence(self) -> list[OutboundMessage]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT * FROM v2_outbox WHERE status='delivered' AND json_valid(metadata_json)
+                   AND json_extract(metadata_json, '$.scheduled_delivery_evidence')=1"""
+            ).fetchall()
+        return [_message_from_row(row) for row in rows]
+
+    def list_for_occurrence(self, occurrence_key: str) -> list[OutboundMessage]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT * FROM v2_outbox WHERE json_valid(metadata_json)
+                   AND json_extract(metadata_json, '$.occurrence_key') = ?
+                   AND COALESCE(json_extract(metadata_json, '$.scheduled_question'), 0) != 1""",
+                (occurrence_key,),
+            ).fetchall()
+        return [_message_from_row(row) for row in rows]
+
     def status_counts(self) -> dict[str, int]:
-        counts = {"pending": 0, "claimed": 0, "retry_wait": 0, "delivered": 0, "failed": 0}
+        counts = {"pending": 0, "claimed": 0, "retry_wait": 0, "delivered": 0, "failed": 0, "unconfirmed": 0}
         with self._connect() as conn:
             rows = conn.execute("SELECT status, COUNT(*) AS count FROM v2_outbox GROUP BY status").fetchall()
         for row in rows:
@@ -228,6 +257,18 @@ class SQLiteOutboundStore:
                 (str(outbox_message_id or "").strip(),),
             ).fetchone()
         return _message_from_row(row) if row is not None else None
+
+    def mark_scheduled_unconfirmed(self, outbox_message_id: str, *, task_id: str, occurrence_key: str, recipient_user_id: str) -> bool:
+        with self._connect() as conn:
+            return conn.execute(
+                """UPDATE v2_outbox SET status='unconfirmed', next_attempt_at='', lease_owner='', lease_expires_at='',
+                   metadata_json=json_set(metadata_json, '$.delivery_state', 'unconfirmed', '$.unconfirmed_lease_owner', lease_owner),
+                   last_error='scheduled_delivery_wait_expired', updated_at=?
+                   WHERE outbox_message_id=? AND task_id=? AND audience_user_id=?
+                     AND status IN ('pending','claimed','retry_wait') AND json_valid(metadata_json)
+                     AND json_extract(metadata_json, '$.occurrence_key')=?""",
+                (_now_iso(), outbox_message_id, task_id, recipient_user_id, occurrence_key),
+            ).rowcount == 1
 
     def list(self, selector: OutboundSelector | None = None, *, limit: int = 100) -> list[OutboundMessage]:
         where, values = _selector_where(selector)
@@ -255,7 +296,21 @@ class SQLiteOutboundStore:
         # without the authoritative finding service fails closed.
         for _ in range(100):
             message = self._claim_next_unchecked(selector, lease_owner=lease_owner, lease_seconds=lease_seconds)
-            if message is None or message.kind != 'finding':
+            if message is None:
+                return message
+            if message.metadata.get("scheduled_task_id") and message.metadata.get("occurrence_key"):
+                try:
+                    allowed_schedule = self.scheduled_delivery_guard is not None and self.scheduled_delivery_guard(message)
+                except Exception:
+                    allowed_schedule = False
+                if not allowed_schedule:
+                    with self._connect() as conn:
+                        conn.execute("""UPDATE v2_outbox SET status='failed',
+                            metadata_json=json_set(metadata_json, '$.delivery_state', 'cancelled_or_unavailable'),
+                            last_error='scheduled_delivery_not_authorized', lease_owner='', lease_expires_at=''
+                            WHERE outbox_message_id=? AND status='claimed'""", (message.outbox_message_id,))
+                    continue
+            if message.kind != 'finding':
                 return message
             try:
                 allowed = self.finding_delivery_guard is not None and self.finding_delivery_guard(message)
@@ -347,13 +402,16 @@ class SQLiteOutboundStore:
                 UPDATE v2_outbox
                 SET status = 'delivered',
                     metadata_json = CASE WHEN kind='finding'
-                        THEN json_set(metadata_json, '$.finding_delivery_state', 'delivered') ELSE metadata_json END,
+                        THEN json_set(metadata_json, '$.finding_delivery_state', 'delivered')
+                        WHEN json_valid(metadata_json) AND COALESCE(json_extract(metadata_json, '$.occurrence_key'), '') != ''
+                        THEN json_set(metadata_json, '$.delivery_state', 'confirmed') ELSE metadata_json END,
                     provider_message_id = ?,
                     delivered_at = ?,
                     updated_at = ?,
                     lease_owner = '',
                     lease_expires_at = '',
-                    next_attempt_at = ''
+                    next_attempt_at = '',
+                    last_error = ''
                 WHERE outbox_message_id = ?
                 """,
                 (
@@ -395,7 +453,13 @@ class SQLiteOutboundStore:
                 metadata["finding_delivery_state"] = "ambiguous"
                 metadata["last_error"] = "finding_send_outcome_unknown"
                 normalized_error = "finding_send_outcome_unknown"
-            terminal = is_finding or attempts >= max_attempts
+            # Once dispatch began, a provider exception can follow a successful
+            # send. A scheduled message needs explicit reconciliation, not an
+            # automatic resend that may duplicate the reminder.
+            scheduled = bool(metadata.get("occurrence_key"))
+            if scheduled:
+                metadata["delivery_state"] = "unconfirmed"
+            terminal = is_finding or scheduled or attempts >= max_attempts
             cursor = conn.execute(
                 """
                 UPDATE v2_outbox
@@ -409,7 +473,7 @@ class SQLiteOutboundStore:
                 WHERE outbox_message_id = ?
                 """,
                 (
-                    "failed" if terminal else "retry_wait",
+                    "unconfirmed" if scheduled else "failed" if terminal else "retry_wait",
                     json.dumps(metadata, sort_keys=True),
                     _now_iso(),
                     "" if terminal else next_attempt_at,
@@ -431,9 +495,13 @@ class SQLiteOutboundStore:
             cursor = connection.execute(
                 """
                 UPDATE v2_outbox
-                SET status = CASE WHEN kind='finding' THEN 'failed' ELSE 'pending' END,
+                SET status = CASE WHEN kind='finding' THEN 'failed'
+                    WHEN json_valid(metadata_json) AND COALESCE(json_extract(metadata_json, '$.occurrence_key'), '') != ''
+                    THEN 'unconfirmed' ELSE 'pending' END,
                     metadata_json = CASE WHEN kind='finding'
-                      THEN json_set(metadata_json, '$.finding_delivery_state', 'ambiguous') ELSE metadata_json END,
+                      THEN json_set(metadata_json, '$.finding_delivery_state', 'ambiguous')
+                      WHEN json_valid(metadata_json) AND COALESCE(json_extract(metadata_json, '$.occurrence_key'), '') != ''
+                      THEN json_set(metadata_json, '$.delivery_state', 'unconfirmed', '$.unconfirmed_lease_owner', lease_owner) ELSE metadata_json END,
                     lease_owner = '',
                     lease_expires_at = '',
                     claimed_at = '',
@@ -488,7 +556,7 @@ class SQLiteOutboundStore:
                   next_attempt_at TEXT NOT NULL DEFAULT '',
                   last_error TEXT NOT NULL DEFAULT '',
                   max_attempts INTEGER NOT NULL DEFAULT 5,
-                  CHECK (status IN ('pending', 'claimed', 'retry_wait', 'delivered', 'failed'))
+                  CHECK (status IN ('pending', 'claimed', 'retry_wait', 'delivered', 'failed', 'unconfirmed'))
                 ) STRICT;
 
                 CREATE INDEX IF NOT EXISTS idx_v2_outbox_consumer
@@ -521,6 +589,17 @@ class SQLiteOutboundStore:
                 """
             )
             _migrate_status_check(conn)
+            # Older versions automatically retried expired/failed sends. Once
+            # an attempt has begun, migration cannot prove the provider did
+            # not accept it, so do not resume those automatic retries.
+            conn.execute(
+                """UPDATE v2_outbox SET status='unconfirmed', next_attempt_at='',
+                   metadata_json=json_set(metadata_json, '$.delivery_state', 'unconfirmed'),
+                   last_error='scheduled_delivery_outcome_unknown'
+                   WHERE status IN ('pending','retry_wait') AND attempt_count>0
+                     AND json_valid(metadata_json)
+                     AND COALESCE(json_extract(metadata_json, '$.occurrence_key'), '') != ''"""
+            )
             conn.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_v2_outbox_project
@@ -541,6 +620,30 @@ def build_outbox_delivery_sink(
 
     def _sink(event: dict[str, Any]) -> dict[str, Any]:
         event_type = str(event.get("event_type") or "").strip()
+        if event_type == "communication.resolve_recipient":
+            if communication_router is None:
+                return {"status": "unavailable"}
+            recipient = communication_router._resolve_user(str(event.get("recipient") or "").strip())
+            if not recipient or recipient == "ambiguous":
+                return {"status": "unavailable"}
+            return {"status": "resolved", "recipient_user_id": recipient}
+        if event_type in {"communication.delivery_status", "communication.delivery_timeout"}:
+            task = event.get("task") if isinstance(event.get("task"), dict) else {}
+            metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+            outbound = outbox.get(str(event.get("outbox_message_id") or ""))
+            if (outbound is None or not task.get("task_id") or outbound.task_id != task.get("task_id")
+                    or not metadata.get("occurrence_key")
+                    or outbound.metadata.get("occurrence_key") != metadata.get("occurrence_key")
+                    or outbound.audience_user_id != event.get("recipient_user_id")):
+                return {"status": "unavailable"}
+            if event_type == "communication.delivery_timeout":
+                outbox.mark_scheduled_unconfirmed(
+                    outbound.outbox_message_id, task_id=str(task["task_id"]),
+                    occurrence_key=str(metadata["occurrence_key"]), recipient_user_id=outbound.audience_user_id,
+                )
+                outbound = outbox.get(outbound.outbox_message_id)
+            return {"status": outbound.status, "outbox_message_id": outbound.outbox_message_id,
+                    "provider_message_id": outbound.provider_message_id, "recipient_read": "unknown"}
         if event_type == "task.acknowledge":
             task = event.get("task") if isinstance(event.get("task"), dict) else {}
             task_metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
@@ -583,6 +686,9 @@ def build_outbox_delivery_sink(
             if communication_router is None:
                 return {"status": "delivery_unavailable"}
             task = event.get("task") if isinstance(event.get("task"), dict) else {}
+            task_metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+            tactical = task.get("hierarchical_state") if isinstance(task.get("hierarchical_state"), dict) else {}
+            phase = tactical.get("phase") if isinstance(tactical.get("phase"), dict) else {}
             origin_raw = event.get("origin") if isinstance(event.get("origin"), dict) else {}
             origin = ChannelAddress(**origin_raw) if origin_raw else channel_address_from_metadata(task.get("metadata") if isinstance(task.get("metadata"), dict) else {})
             if origin is None:
@@ -594,12 +700,21 @@ def build_outbox_delivery_sink(
                 message=str(event.get("message") or "").strip(),
                 expects_reply=bool(event.get("expects_reply")),
                 asset_ids=list(event.get("asset_ids") or []),
+                task_id=str(task.get("task_id") or ""),
+                occurrence_key=str(task_metadata.get("occurrence_key") or ""),
+                scheduled_task_id=str(task_metadata.get("scheduled_task_id") or ""),
+                phase_id=str(phase.get("phase_id") or ""),
+                subgoal_id=str(tactical.get("active_subgoal_id") or ""),
             )
         if event_type != "question.deliver":
             return {"ignored": True}
         question = event.get("question") if isinstance(event.get("question"), dict) else {}
         task = event.get("task") if isinstance(event.get("task"), dict) else {}
         task_metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+        scheduled_question = ({"scheduled_task_id": str(task_metadata.get("scheduled_task_id") or ""),
+                               "occurrence_key": str(task_metadata.get("occurrence_key") or ""),
+                               "scheduled_question": True}
+                              if task_metadata.get("source") == "scheduled_task" else {})
         origin = channel_address_from_metadata(task_metadata)
         respondent = str(question.get("respondent_user_id") or task.get("user") or "").strip()
         resolved = resolver.resolve_outbound_address(alphonse_user_id=respondent, fallback_address=origin)
@@ -618,6 +733,7 @@ def build_outbox_delivery_sink(
                     question_id=str(question.get("question_id") or "").strip(),
                     project_id=str(question.get("project_id") or task.get("project_id") or "").strip(),
                     metadata={
+                        **scheduled_question,
                         "reason": resolved.reason,
                         "respondent_user_id": respondent,
                         "question": dict(question),
@@ -646,6 +762,7 @@ def build_outbox_delivery_sink(
             question_id=str(question.get("question_id") or "").strip(),
             project_id=str(question.get("project_id") or task.get("project_id") or "").strip(),
             metadata={
+                **scheduled_question,
                 "question": dict(question),
                 "origin_channel": origin.to_dict() if origin is not None else {},
                 "respondent_channel": resolved.address.to_dict(),
@@ -925,10 +1042,10 @@ def _migrate_status_check(conn: sqlite3.Connection) -> None:
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'v2_outbox'"
     ).fetchone()
     sql = str(row["sql"] or "") if row is not None else ""
-    if "retry_wait" in sql:
+    if "unconfirmed" in sql:
         return
     conn.execute("ALTER TABLE v2_outbox RENAME TO v2_outbox_legacy")
-    conn.executescript(
+    conn.execute(
         """
         CREATE TABLE v2_outbox (
           outbox_message_id TEXT PRIMARY KEY,
@@ -956,7 +1073,7 @@ def _migrate_status_check(conn: sqlite3.Connection) -> None:
           next_attempt_at TEXT NOT NULL DEFAULT '',
           last_error TEXT NOT NULL DEFAULT '',
           max_attempts INTEGER NOT NULL DEFAULT 5,
-          CHECK (status IN ('pending', 'claimed', 'retry_wait', 'delivered', 'failed'))
+          CHECK (status IN ('pending', 'claimed', 'retry_wait', 'delivered', 'failed', 'unconfirmed'))
         ) STRICT;
         """
     )
@@ -972,7 +1089,7 @@ def _migrate_status_check(conn: sqlite3.Connection) -> None:
         SELECT
           outbox_message_id, integration_id, provider_key, channel_target, message,
           kind, audience_user_id, correlation_id,
-          CASE WHEN status IN ('pending', 'claimed', 'delivered', 'failed') THEN status ELSE 'pending' END,
+          CASE WHEN status IN ('pending', 'claimed', 'retry_wait', 'delivered', 'failed', 'unconfirmed') THEN status ELSE 'pending' END,
           provider_message_id, reply_to_provider_message_id, task_id, question_id,
           project_id, metadata_json, claimed_at, delivered_at, created_at, updated_at,
           attempt_count, lease_owner, lease_expires_at, next_attempt_at, last_error, max_attempts
@@ -980,15 +1097,8 @@ def _migrate_status_check(conn: sqlite3.Connection) -> None:
         """
     )
     conn.execute("DROP TABLE v2_outbox_legacy")
-    conn.executescript(
-        """
-        CREATE INDEX IF NOT EXISTS idx_v2_outbox_consumer
-          ON v2_outbox (integration_id, channel_target, status, created_at);
-
-        CREATE INDEX IF NOT EXISTS idx_v2_outbox_question
-          ON v2_outbox (question_id, status);
-        """
-    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_v2_outbox_consumer ON v2_outbox (integration_id, channel_target, status, created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_v2_outbox_question ON v2_outbox (question_id, status)")
 
 
 def _default_outbox_db_path() -> str:

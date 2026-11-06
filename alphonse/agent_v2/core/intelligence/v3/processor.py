@@ -5,11 +5,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 import inspect
 import json
+from datetime import datetime, timezone
 
 from alphonse.agent_v2.core.core import ImprovementPhase, ProcessingResult, ProcessingStatus, StateSnapshot
 from alphonse.agent_v2.core.inference import InferencePurpose, InferenceRequest
 from alphonse.agent_v2.core.intelligence.v3.contracts import PhaseOutcome, PhaseStatus, TacticalState, new_tactical_state
 from alphonse.agent_v2.core.intelligence.v3.executor import PhaseExecutor
+from alphonse.agent_v2.core.intelligence.v3.executor import ScheduledHandoff
 from alphonse.agent_v2.core.intelligence.v3.outer import V3OuterController
 from alphonse.agent_v2.core.intelligence.v3.planner import plan_phase
 from alphonse.agent_v2.core.intelligence.v3.planner import V3PhasePlanValidationError
@@ -37,6 +39,7 @@ if TYPE_CHECKING:
 
 
 _MAX_CONSECUTIVE_NO_PROGRESS_PHASES = 3
+_SCHEDULED_DELIVERY_WAIT_SECONDS = 300
 
 
 class HierarchicalCAPDProcessor:
@@ -48,6 +51,12 @@ class HierarchicalCAPDProcessor:
     def process(self, task: "TaskState", context: "CoreLoopContext") -> ProcessingResult:
         try:
             return self._process(task, context)
+        except ScheduledHandoff:
+            return ProcessingResult(
+                snapshot=StateSnapshot(phase=ImprovementPhase.DO, task_owner=task.user, current_work=task.goal,
+                                       metadata={"engine": "hierarchical_v3", "task_state": task.to_dict()}),
+                status=ProcessingStatus.YIELDED,
+            )
         except Exception as exc:
             # Provider/transport errors can occur at admission, planning or
             # action composition. Persist an honest terminal state and retain
@@ -63,6 +72,9 @@ class HierarchicalCAPDProcessor:
         context.emit_ui_event("run_started", {"task": task.to_dict(), "engine": "hierarchical_v3"})
         task.intelligence_engine = "hierarchical_v3"
         task.intelligence_schema_version = 3
+        waiting = task.metadata.get("v3_scheduled_delivery_wait")
+        if isinstance(waiting, dict) and not _await_scheduled_delivery(task, context, waiting):
+            return self._result(task, context)
         from .task_understanding import ensure
         ensure(task, context)
         self._persist(task, context)
@@ -113,10 +125,43 @@ class HierarchicalCAPDProcessor:
                                  "Resumed completed phase with recorded evidence.")
                     if state.status == PhaseStatus.PHASE_COMPLETE else self.executor.run(task, state, context)
                 )
+                if outcome.status == PhaseStatus.PHASE_COMPLETE and task.metadata.get("source") == "scheduled_task":
+                    from .delivery_evidence import delivery_receipt
+                    for entry in state.evidence.entries:
+                        receipt = delivery_receipt(task, entry, context) if isinstance(entry, dict) else None
+                        if isinstance(receipt, dict) and receipt.get("status") in {"pending", "claimed", "retry_wait", "unconfirmed", "failed"}:
+                            result = entry.get("result") or {}
+                            waiting = {"outbox_message_id": result.get("outbox_message_id"),
+                                       "recipient_user_id": result.get("recipient_user_id")}
+                            if not _await_scheduled_delivery(task, context, waiting):
+                                return self._result(task, context)
                 evidence_before = _successful_evidence_signatures(task.metadata.get("v3_phase_history"))
                 refs_before = _successful_evidence_refs(task.metadata.get("v3_phase_history"))
                 satisfied_before = _satisfied_criterion_ids(task)
                 self._append_history(task, state, outcome.to_dict())
+                if task.status == "failed" and "scheduled_delivery_outcome_unavailable" in outcome.blockers:
+                    self._persist(task, context)
+                    break
+                if "scheduled_delivery_repetition_unresolved" in outcome.blockers:
+                    task.status = "failed"
+                    task.outcome = {"status": "failure", "reason": "scheduled_delivery_repetition_unresolved"}
+                    task.metadata["v3_failure_response"] = {
+                        "source": "scheduled_delivery_recovery", "communication_reviewed": True,
+                        "message": "A previous message to this recipient was queued or delivered. I stopped because I couldn't rule out a repeat; please check before retrying.",
+                    }
+                    task.metadata["v3_route"] = "end"
+                    self._persist(task, context)
+                    break
+                if "scheduled_delivery_outcome_unavailable" in outcome.blockers:
+                    task.status = "failed"
+                    task.outcome = {"status": "failure", "reason": "scheduled_delivery_outcome_unavailable"}
+                    task.metadata["v3_failure_response"] = {
+                        "source": "scheduled_delivery_recovery", "communication_reviewed": True,
+                        "message": "I could not confirm whether the scheduled message was delivered. Please check before retrying.",
+                    }
+                    task.metadata["v3_route"] = "end"
+                    self._persist(task, context)
+                    break
                 if outcome.reason.startswith(("tactical_planning_error_repeated:", "tactical_correction_exhausted:")):
                     task.status = "failed"
                     task.outcome = {"status": "failure", "reason": outcome.reason}
@@ -642,6 +687,56 @@ class EngineRoutingProcessor:
 
     def process(self, task: "TaskState", context: "CoreLoopContext") -> ProcessingResult:
         return (self.v3 if task.intelligence_engine == "hierarchical_v3" else self.v2).process(task, context)
+
+
+def _await_scheduled_delivery(task: "TaskState", context: "CoreLoopContext", waiting: dict) -> bool:
+    """Yield the processor until a task-owned outbox receipt becomes terminal."""
+    message_id = str(waiting.get("outbox_message_id") or "")
+    recipient = str(waiting.get("recipient_user_id") or "")
+    started_text = str(waiting.get("started_at") or "")
+    try:
+        started = datetime.fromisoformat(started_text) if started_text else datetime.now(timezone.utc)
+        if started.tzinfo is None:
+            raise ValueError("missing timezone")
+    except ValueError:
+        started = datetime.min.replace(tzinfo=timezone.utc)
+    for _ in range(2):
+        try:
+            expired = (datetime.now(timezone.utc) - started.astimezone(timezone.utc)).total_seconds() >= _SCHEDULED_DELIVERY_WAIT_SECONDS
+            receipt = context.delivery_sink({"event_type": "communication.delivery_timeout" if expired else "communication.delivery_status", "task": task.to_dict(),
+                                             "outbox_message_id": message_id, "recipient_user_id": recipient}) if callable(context.delivery_sink) else {}
+        except Exception:
+            receipt = {}
+        status = str(receipt.get("status") or "unavailable") if isinstance(receipt, dict) else "unavailable"
+        if status == "delivered":
+            task.metadata.pop("v3_scheduled_delivery_wait", None)
+            return True
+        if status in {"pending", "claimed", "retry_wait"}:
+            if expired:
+                status = "unavailable"
+                break
+            task.metadata["v3_scheduled_delivery_wait"] = {"outbox_message_id": message_id, "recipient_user_id": recipient,
+                                                            "started_at": started.isoformat()}
+            stage = getattr(context.messages, "stage_delivery_wait", None)
+            if (context.scheduled_handoff_enabled and callable(stage) and context.question_store is not None
+                    and stage(task, context.question_store, message_id, recipient)):
+                raise ScheduledHandoff()
+            continue  # The provider may have completed while the wait was being staged.
+        break
+    task.metadata.pop("v3_scheduled_delivery_wait", None)
+    if message_id:
+        task.metadata["v3_unconfirmed_delivery_outbox_id"] = message_id
+    task.status = "failed"
+    reason = "scheduled_delivery_failed" if status == "failed" else "scheduled_delivery_outcome_unavailable"
+    task.outcome = {"status": "failure", "reason": reason}
+    task.metadata["v3_failure_response"] = {
+        "source": "scheduled_delivery_recovery", "communication_reviewed": True,
+        "message": ("I could not deliver the scheduled message." if status == "failed" else
+                    "I could not confirm whether the scheduled message was delivered. Please check before retrying."),
+    }
+    task.metadata["v3_route"] = "end"
+    HierarchicalCAPDProcessor._persist(task, context)
+    return False
 
 
 def _resume_from_authenticated_answer(task: "TaskState", state: TacticalState) -> bool:

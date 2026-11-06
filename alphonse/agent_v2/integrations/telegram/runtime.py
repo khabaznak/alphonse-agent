@@ -379,7 +379,7 @@ class TelegramIntegrationRuntime:
                 error = f"{type(exc).__name__}: {exc}"
                 self.outbox.mark_failed(outbound.outbox_message_id, error=error)
                 updated = self.outbox.get(outbound.outbox_message_id)
-                if self._on_outbox_failed is not None and updated is not None and updated.status == "failed":
+                if self._on_outbox_failed is not None and updated is not None and updated.status in {"failed", "unconfirmed"}:
                     self._safe_delivery_callback(self._on_outbox_failed, outbound, error)
                 self._stats = _replace_stats(self._stats, outbox_failed=self._stats.outbox_failed + 1)
                 continue

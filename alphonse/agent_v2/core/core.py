@@ -56,6 +56,7 @@ class ProcessingStatus(str, Enum):
     """Outcome states returned by the intelligence processor."""
 
     COMPLETED = "completed"
+    YIELDED = "yielded"
     PARKED = "parked"
     WAITING = "waiting"
     FAILED = "failed"
@@ -69,6 +70,7 @@ class LoopStepStatus(str, Enum):
     BUSY = "busy"
     EMPTY = "empty"
     PROCESSED = "processed"
+    YIELDED = "yielded"
     PARKED = "parked"
     WAITING = "waiting"
     FAILED = "failed"
@@ -240,6 +242,7 @@ class CoreLoopContext:
     event_store: Any | None = None
     asset_store: Any | None = None
     consumed_message_ids: list[str] = field(default_factory=list)
+    scheduled_handoff_enabled: bool = False
 
     def image_inputs(self, task: TaskState) -> tuple[InferenceImage, ...]:
         """Resolve authorized images for a substantive System Two call."""
@@ -532,6 +535,7 @@ class AlphonseCore:
     prompts: SystemPromptLoader
     state: InternalState
     memory: Memory
+    scheduled_handoff_enabled: bool = False
     conversation_store: Any | None = None
     inference: InferenceRouter | None = None
     activity_sink: Callable[[CoreActivityEvent], None] | None = None
@@ -598,7 +602,24 @@ class AlphonseCore:
 
         queued_engine = str(queued.message.metadata.get("intelligence_engine") or "").strip()
         task = None
-        if queued_engine == "hierarchical_v3" and self.question_store is not None:
+        handoff_task_id = getattr(self.messages, "handoff_task_id", lambda *_: "")(queued.message_id, queued.message.user)
+        if handoff_task_id:
+            task = self.question_store.load_task_checkpoint(handoff_task_id) if self.question_store is not None else None
+            question_id = str(queued.message.metadata.get("answered_question_id") or "")
+            question = self.question_store.get_question(question_id) if self.question_store is not None and question_id else None
+            authorized_sender = bool(task is not None and (task.user == queued.message.user or (
+                question is not None and question.status == "answered" and question.task_id == task.task_id
+                and question.respondent_user_id == queued.message.user
+            )))
+            if task is None or not authorized_sender or task.message_id != queued.message_id:
+                snapshot = StateSnapshot(current_work="", metadata={"status": "failed", "reason": "scheduled_handoff_checkpoint_unavailable"})
+                self.state.update(snapshot)
+                return LoopStepResult(
+                    status=LoopStepStatus.FAILED, state_before=state_before,
+                    state_after=self._transition(PROCESSOR_FAILED), queued_message_id=queued.message_id,
+                    error="scheduled_handoff_checkpoint_unavailable",
+                )
+        elif queued_engine == "hierarchical_v3" and self.question_store is not None:
             task = self.question_store.load_task_checkpoint(queued.message_id)
         if task is None:
             task = TaskState.from_queued_message(queued)
@@ -609,7 +630,7 @@ class AlphonseCore:
             and isinstance(raw_task_state, dict)
             and bool(str(task.task_id or "").strip())
         )
-        if queued_engine == "hierarchical_v3" and not is_correlated_resume:
+        if queued_engine == "hierarchical_v3" and not is_correlated_resume and not handoff_task_id:
             # A queue delivery may be retried, but it is still the same V3 task.
             # Using the durable message id prevents a retry from silently creating
             # a new acceptance contract and a different execution history.
@@ -618,6 +639,25 @@ class AlphonseCore:
             task.task_id = str(uuid4())
         if self.active_task_callback is not None:
             self.active_task_callback(queued, task)
+
+        def _task_is_cancelled() -> bool:
+            if self.cancellation_checker and self.cancellation_checker(queued.message_id):
+                return True
+            metadata = task.metadata if isinstance(task.metadata, dict) else {}
+            if metadata.get("source") != "scheduled_task" or self.schedule_store is None:
+                return False
+            schedule_id = str(metadata.get("scheduled_task_id") or "")
+            occurrence_key = str(metadata.get("occurrence_key") or "")
+            matches = getattr(self.schedule_store, "matches_queued_occurrence", None)
+            candidates = {str(task.task_id or ""), str(task.message_id or "")}
+            if not callable(matches) or not any(matches(
+                occurrence_key=occurrence_key, scheduled_task_id=schedule_id,
+                message_id=identity, owner_user_id=str(task.user or ""),
+                allow_terminal=bool(metadata.get("v3_scheduled_delivery_wait")),
+            ) for identity in candidates if identity):
+                return True
+            scheduled = self.schedule_store.get_task(schedule_id)
+            return scheduled is None or scheduled.status == "cancelled"
 
         def _task_activity_sink(event: CoreActivityEvent) -> None:
             if self.activity_sink is None:
@@ -660,8 +700,11 @@ class AlphonseCore:
                 conversation_store=self.conversation_store,
                 identity_resolver=self.identity_resolver,
                 program_runner=self.program_runner,
-                cancellation_checker=(lambda: bool(self.cancellation_checker and self.cancellation_checker(queued.message_id))),
+                cancellation_checker=_task_is_cancelled,
+                scheduled_handoff_enabled=self.scheduled_handoff_enabled,
             )
+            if context.is_cancelled():
+                raise RuntimeError("scheduled_task_cancelled")
             start_memory = getattr(self.memory, "start_task", None)
             memory_options = {"cancel_checker": context.is_cancelled} if getattr(self.memory, "supports_knowledge_cancellation", False) else {}
             if callable(start_memory):
@@ -670,14 +713,14 @@ class AlphonseCore:
             task.conversation_history_md = conversation_transcript(task, self.conversation_store)
             result = self.intelligence.process(task, context)
             finish_memory = getattr(self.memory, "finish_task", None)
-            if callable(finish_memory):
+            if callable(finish_memory) and result.status != ProcessingStatus.YIELDED:
                 serialized_task = result.snapshot.metadata.get("task_state") if isinstance(result.snapshot.metadata, dict) else None
                 finished_task = TaskState.from_dict(serialized_task) if isinstance(serialized_task, dict) else task
                 finish_memory(finished_task, **memory_options)
             if result.status not in {ProcessingStatus.FAILED, ProcessingStatus.CANCELLED}:
                 context.acknowledge_consumed_messages()
         except Exception as exc:
-            cancelled = bool(self.cancellation_checker and self.cancellation_checker(queued.message_id))
+            cancelled = _task_is_cancelled()
             if cancelled:
                 task.status = "cancelled"
                 task.outcome = {"status": "cancelled", "reason": "Execution was cancelled by the kill switch."}
@@ -735,7 +778,7 @@ class AlphonseCore:
 
 
 def _signal_for_processing_status(status: ProcessingStatus) -> str:
-    if status == ProcessingStatus.COMPLETED:
+    if status in {ProcessingStatus.COMPLETED, ProcessingStatus.YIELDED}:
         return PROCESSOR_COMPLETED
     if status == ProcessingStatus.PARKED:
         return PROCESSOR_COMPLETED
@@ -747,6 +790,8 @@ def _signal_for_processing_status(status: ProcessingStatus) -> str:
 
 
 def _loop_status_for_processing_status(status: ProcessingStatus) -> LoopStepStatus:
+    if status == ProcessingStatus.YIELDED:
+        return LoopStepStatus.YIELDED
     if status == ProcessingStatus.COMPLETED:
         return LoopStepStatus.PROCESSED
     if status == ProcessingStatus.PARKED:

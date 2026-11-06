@@ -58,6 +58,29 @@ def test_deliver_to_user_uses_recipient_address_and_relays_explicit_reply(tmp_pa
     assert reply.message == "Gabriela Villasana Rodríguez replied: Thank you Steve!"
 
 
+def test_scheduled_communication_retries_reuse_outbox_and_thread(tmp_path: Path) -> None:
+    router, outbox, admin, gaby = _router(tmp_path)
+    origin = ChannelAddress("desktop", "tui", admin.user_id, admin.user_id, admin.user_id)
+    request = dict(sender_user_id=admin.user_id, origin=origin, recipient_reference="Gaby", message="Synthetic reminder",
+                   task_id="task-1", occurrence_key="occurrence-1", scheduled_task_id="schedule-1",
+                   phase_id="phase-1", subgoal_id="send-1")
+    first = router.deliver(**request)
+    second = router.deliver(**request)
+    assert first == second
+    assert len(outbox.list(OutboundSelector(status=None))) == 1
+    outbound = outbox.get(first["outbox_message_id"])
+    assert outbound.task_id == "task-1"
+    assert outbound.metadata["occurrence_key"] == "occurrence-1"
+    assert outbound.audience_user_id == gaby.user_id
+    outbox.mark_delivered(first["outbox_message_id"], provider_message_id="fixture-provider")
+    delivered = router.deliver(**request)
+    assert delivered["status"] == "delivered"
+    assert delivered["outbox_message_id"] == first["outbox_message_id"]
+    request["subgoal_id"] = "send-2"
+    third = router.deliver(**request)
+    assert third["outbox_message_id"] != first["outbox_message_id"]
+
+
 def test_plain_reply_requires_exactly_one_open_thread_and_unknown_recipient_is_safe(tmp_path: Path) -> None:
     router, outbox, admin, gaby = _router(tmp_path)
     origin = ChannelAddress("desktop", "tui", admin.user_id, admin.user_id, admin.user_id)

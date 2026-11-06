@@ -1066,6 +1066,31 @@ class JevCriterionDecisionProvider:
             usage=usage, duration_ms=duration_ms,
         )
 
+    def scheduled_delivery_similarity(self, *, goal: str, draft: str, prior_messages: list[str]) -> list[float]:
+        """Judge whether each earlier message conveys the same reminder as the draft."""
+        if not prior_messages or len(prior_messages) > 16:
+            raise ValueError("scheduled_delivery_comparison_invalid")
+        state = {"goal": goal, "draft": draft, "prior_messages": prior_messages}
+        if len(json.dumps(state, ensure_ascii=False).encode()) > 40000:
+            raise ValueError("scheduled_delivery_comparison_too_large")
+        questions = {f"same_{index}": {
+            "type": "noul",
+            "instructions": f"Does `draft` convey the same practical reminder as `prior_messages[{index}]`?",
+            "criteria": {
+                "true": "The recipient would receive the same reminder information from either message, even if the wording differs.",
+                "false": "The draft provides materially different reminder information or requests a different action.",
+            },
+        } for index in range(len(prior_messages))}
+        response = self._evaluate(purpose="scheduled_delivery_similarity", state=state, questions=questions)
+        values = []
+        for key in questions:
+            answer = response["answers"].get(key)
+            probability = answer.get("noul") if isinstance(answer, dict) and answer.get("type") == "noul" else None
+            if type(probability) not in {int, float} or not math.isfinite(probability) or not 0 <= probability <= 1:
+                raise ValueError("scheduled_delivery_comparison_invalid")
+            values.append(float(probability))
+        return values
+
     def triage_plan_messages(self, *, task: dict[str, Any], candidates: list[dict[str, Any]]) -> tuple[str, ...]:
         """Return queued message IDs Jev judges relevant to the active task."""
         if not candidates:
