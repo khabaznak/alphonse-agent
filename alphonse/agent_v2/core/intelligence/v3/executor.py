@@ -674,7 +674,11 @@ def _steering_is_pending(task: "TaskState", context: "CoreLoopContext") -> bool:
             continue
         message = pending.message
         metadata = message.metadata if isinstance(message.metadata, dict) else {}
-        disposition = str(metadata.get("routing_disposition") or "")
+        # Automation messages are separate tasks, never amendments to the
+        # active task. Match planner intake so they cannot cause a review loop.
+        if metadata.get("source") in {"scheduled_task", "event_automation"}:
+            continue
+        disposition = str(metadata.get("routing_disposition") or "pdca_task")
         if (
             disposition in {"steering", "pdca_task"}
             and message.user == task.user

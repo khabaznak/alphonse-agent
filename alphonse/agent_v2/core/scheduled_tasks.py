@@ -715,6 +715,7 @@ class ScheduledTaskStore:
         return self._update_occurrence(
             occurrence_key,
             worker_id=worker_id,
+            from_statuses=("claimed",),
             status="enqueued",
             queued_message_id=message_id,
             lease_expires_at="",
@@ -766,6 +767,7 @@ class ScheduledTaskStore:
     def mark_occurrence_processing(self, occurrence_key: str) -> bool:
         return self._update_occurrence(
             occurrence_key,
+            from_statuses=("enqueued", "processing"),
             status="processing",
             lease_owner="",
             lease_expires_at="",
@@ -780,6 +782,7 @@ class ScheduledTaskStore:
     ) -> bool:
         return self._update_occurrence(
             occurrence_key,
+            from_statuses=("enqueued", "processing", "response_pending"),
             status="response_pending",
             response_outbox_id=str(response_outbox_id or "").strip(),
             lease_owner="",
@@ -822,6 +825,7 @@ class ScheduledTaskStore:
         *,
         worker_id: str = "",
         connection: sqlite3.Connection | None = None,
+        from_statuses: tuple[str, ...] = (),
         **values: Any,
     ) -> bool:
         allowed = {
@@ -836,6 +840,9 @@ class ScheduledTaskStore:
         if worker_id:
             where += " AND lease_owner = ?"
             params.append(str(worker_id).strip())
+        if from_statuses:
+            where += " AND status IN (" + ", ".join("?" for _ in from_statuses) + ")"
+            params.extend(from_statuses)
         if connection is not None:
             cursor = connection.execute(
                 f"UPDATE v2_scheduled_task_executions SET {assignments} WHERE {where}",
