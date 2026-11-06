@@ -47,6 +47,10 @@ MAX_UPDATE_INSPECTION_ACTIONS = 6
 MAX_UNCERTAIN_PROGRESS_ACTIONS = 6
 
 
+class ScheduledHandoff(Exception):
+    """A durable checkpoint is ready for the daemon to yield its queue lease."""
+
+
 class PhaseExecutor:
     """Run tactical actions until a phase reaches a real outcome."""
 
@@ -64,14 +68,37 @@ class PhaseExecutor:
                 message=state.phase.objective,
                 progress={"phase_id": state.phase.phase_id, "subgoal_id": state.active_subgoal_id},
             )
+        if task.metadata.get("source") == "scheduled_task" and state.status == PhaseStatus.RUNNING:
+            recorded = {str(item.get("evidence_ref") or "") for item in state.evidence.entries}
+            uncertain = next((action for action in state.actions
+                              if action.tool_id in {"native.deliver_message", "native.send_attachment"}
+                              and action.status in {"planned", "running"}
+                              and f"tactical-action:{action.action_id}" not in recorded), None)
+            if uncertain is not None:
+                # A crash can occur after provider dispatch but before the
+                # result checkpoint. Never send again on that ambiguity.
+                task.metadata["v3_unconfirmed_delivery_action_id"] = uncertain.action_id
+                state.transition(PhaseStatus.BLOCKED)
+                self._checkpoint(task, state, context)
+                return self._outcome(state, "The scheduled delivery outcome is unconfirmed.",
+                                     blockers=("scheduled_delivery_outcome_unavailable",))
         while state.status == PhaseStatus.RUNNING:
             interruption = self._interruption(task, state, context)
             if interruption is not None:
                 self._checkpoint(task, state, context)
                 return interruption
+            stage_handoff = getattr(context.messages, "stage_scheduled_handoff", None)
+            if (context.scheduled_handoff_enabled and callable(stage_handoff) and context.question_store is not None and context.schedule_store is not None
+                    and stage_handoff(task, context.question_store, context.schedule_store)):
+                raise ScheduledHandoff()
             subgoal = self._active_subgoal(state)
             tools = self._revealed_tools(task, state, subgoal, context)
-            selected = self._select_action(task, state, subgoal, tools, context)
+            retry = task.metadata.pop("v3_tactical_delivery_retry", None)
+            selected = (retry.get("action") if isinstance(retry, dict)
+                        and retry.get("phase_id") == state.phase.phase_id
+                        and retry.get("subgoal_id") == subgoal.subgoal_id else None)
+            if not isinstance(selected, dict):
+                selected = self._select_action(task, state, subgoal, tools, context)
             interruption = self._interruption(task, state, context)
             if interruption is not None:
                 self._checkpoint(task, state, context)
@@ -112,6 +139,11 @@ class PhaseExecutor:
                 self._checkpoint(task, state, context)
                 reason = ("tactical_planning_error_repeated:" if repeated else "tactical_correction_exhausted:") + error
                 return self._outcome(state, reason, blockers=(reason,))
+            if _scheduled_delivery_may_repeat(task, state, action, context):
+                state.transition(PhaseStatus.BLOCKED)
+                self._checkpoint(task, state, context)
+                return self._outcome(state, "A similar scheduled message may already have been sent.",
+                                     blockers=("scheduled_delivery_repetition_unresolved",))
             recovery = (task.metadata.get("act_directive") or {}).get("outcome_review") or {}
             verified_refs = set(recovery.get("verified_evidence_refs") or ())
             if any(
@@ -191,6 +223,32 @@ class PhaseExecutor:
                         "acceptance_questions": [dict(item) for item in completed.acceptance_questions],
                     }
                 )
+                if task.metadata.get("source") == "scheduled_task" and completed.status == "success":
+                    from .delivery_evidence import delivery_receipt
+                    receipt = delivery_receipt(task, state.evidence.entries[-1], context)
+                    if isinstance(receipt, dict) and receipt.get("status") in {"pending", "claimed", "retry_wait", "unconfirmed", "failed"}:
+                        result = completed.result if isinstance(completed.result, dict) else {}
+                        task.metadata["v3_tactical_delivery_retry"] = {
+                            "phase_id": state.phase.phase_id, "subgoal_id": subgoal.subgoal_id,
+                            "action": {"tool_id": completed.tool_id, "arguments": completed.arguments,
+                                       "acceptance_questions": list(completed.acceptance_questions)},
+                        }
+                        self._checkpoint(task, state, context)
+                        from .processor import _await_scheduled_delivery
+                        if not _await_scheduled_delivery(task, context, {
+                            "outbox_message_id": result.get("outbox_message_id"),
+                            "recipient_user_id": result.get("recipient_user_id"),
+                        }):
+                            state.transition(PhaseStatus.BLOCKED)
+                            self._checkpoint(task, state, context)
+                            return self._outcome(state, "Scheduled delivery could not be confirmed.",
+                                                 blockers=("scheduled_delivery_outcome_unavailable",))
+                        task.metadata.pop("v3_tactical_delivery_retry", None)
+                        # The provider completed during staging; preserve the
+                        # original result while attaching the verified receipt.
+                        refreshed = delivery_receipt(task, state.evidence.entries[-1], context)
+                        if refreshed is not None:
+                            state.evidence.entries[-1]["result"] = {**result, "delivery_receipt": refreshed}
                 interruption = self._interruption(task, state, context)
                 if interruption is not None:
                     self._checkpoint(task, state, context)
@@ -686,7 +744,11 @@ def _steering_is_pending(task: "TaskState", context: "CoreLoopContext") -> bool:
             continue
         message = pending.message
         metadata = message.metadata if isinstance(message.metadata, dict) else {}
-        disposition = str(metadata.get("routing_disposition") or "")
+        # Automation messages are separate tasks, never amendments to the
+        # active task. Match planner intake so they cannot cause a review loop.
+        if metadata.get("source") in {"scheduled_task", "event_automation"}:
+            continue
+        disposition = str(metadata.get("routing_disposition") or "pdca_task")
         if (
             disposition in {"steering", "pdca_task"}
             and message.user == task.user
@@ -699,6 +761,49 @@ def _steering_is_pending(task: "TaskState", context: "CoreLoopContext") -> bool:
             if question is not None and question.status == "answered" and question.task_id == task.task_id and question.respondent_user_id == message.user:
                 return True
     return False
+
+
+def _scheduled_delivery_may_repeat(task: "TaskState", state: TacticalState, action: TacticalAction, context: "CoreLoopContext") -> bool:
+    """Stop on a likely or unresolved semantic repeat; relevance never authorizes a send."""
+    if task.metadata.get("source") != "scheduled_task" or action.tool_id != "native.deliver_message":
+        return False
+    prior = [entry for entry in state.evidence.entries
+             if entry.get("tool_id") == "native.deliver_message" and entry.get("status") == "success"
+             and isinstance(entry.get("result"), dict) and entry["result"].get("outbox_message_id")
+             and isinstance(entry.get("arguments"), dict) and isinstance(entry["arguments"].get("message"), str)]
+    if not prior:
+        return False
+    if not callable(context.delivery_sink):
+        return True
+    try:
+        resolved = context.delivery_sink({"event_type": "communication.resolve_recipient", "recipient": action.arguments.get("recipient")})
+        recipient = resolved.get("recipient_user_id") if isinstance(resolved, dict) and resolved.get("status") == "resolved" else None
+    except Exception:
+        return True
+    if not recipient:
+        return True
+    matching = [entry for entry in prior if entry["result"].get("recipient_user_id") == recipient]
+    if not matching:
+        return False
+    draft = str(action.arguments.get("message") or "")
+    # A byte-identical retry in the same subgoal has a deterministic outbox key.
+    matching = [entry for entry in matching if not (
+        entry.get("phase_id") == state.phase.phase_id and entry.get("subgoal_id") == action.subgoal_id
+        and entry["arguments"].get("message") == draft
+    )]
+    if not matching:
+        return False
+    review = getattr(context.system_one, "scheduled_delivery_similarity", None)
+    if not callable(review):
+        return True
+    try:
+        probabilities = review(goal=task.goal, draft=draft, prior_messages=[entry["arguments"]["message"] for entry in matching])
+        threshold = float(getattr(getattr(context.system_one, "settings", None), "no_threshold", 0.2))
+        return (len(probabilities) != len(matching) or any(
+            type(value) not in {int, float} or not 0 <= value <= threshold for value in probabilities
+        ))
+    except Exception:
+        return True
 
 
 def _tactical_prompt(

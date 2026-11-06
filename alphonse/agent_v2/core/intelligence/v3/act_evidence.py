@@ -187,7 +187,7 @@ def _native_commit(tool_id, result, operation):
     if (tool_id == "native.skill_maintain" and result.get("published") is True and result.get("exit_code") == 0
             and isinstance(result.get("revision"), str) and re.fullmatch(r"[a-f0-9]{64}", result["revision"])):
         return "skill_publication_commit"
-    if tool_id in _OUTBOX_TOOLS and result.get("status") == "queued" and result.get("outbox_message_id") and result.get("recipient_user_id"):
+    if tool_id in _OUTBOX_TOOLS and result.get("status") in {"queued", "delivered"} and result.get("outbox_message_id") and result.get("recipient_user_id"):
         return "outbox_enqueue"
     if tool_id in _ARTIFACT_TOOLS and isinstance(result.get("artifact"), dict) and result["artifact"].get("artifact_id"):
         return "artifact_catalog_commit"
@@ -332,6 +332,8 @@ def observation(entry, criterion_ids, *, include_result=True, task_id='', actor_
         outcome = "denied"
     elif status == "rejected":
         outcome = "rejected"
+    elif tool_id in _OUTBOX_TOOLS and fields.get("status") == "delivery_unconfirmed":
+        outcome = "invocation_outcome_unavailable"
     elif failure or native_delivery_failed or memory_read_failed or status == "failed" or fields.get("timed_out") is True or (
         tool_id in {"native.bash", "native.skill_maintain"} and type(fields.get("exit_code")) is int and fields["exit_code"] != 0
     ):

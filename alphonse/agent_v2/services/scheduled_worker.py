@@ -116,6 +116,10 @@ class ScheduledTaskWorker:
 
     def _dispatch(self, occurrence: ScheduledOccurrence, now: datetime) -> dict[str, Any]:
         try:
+            current_task = self.store.get_task(occurrence.task.scheduled_task_id)
+            if current_task is None or current_task.status == "cancelled":
+                self.store.mark_occurrence_cancelled(occurrence.occurrence_key)
+                return {"occurrence_key": occurrence.occurrence_key, "status": "cancelled"}
             if occurrence.task.job_kind != "prompt":
                 if occurrence.task.job_kind != "project_check" or occurrence.task.job_version != 1:
                     self.store.mark_occurrence_failed(occurrence.occurrence_key, error="unsupported_job_version")
@@ -148,7 +152,7 @@ class ScheduledTaskWorker:
                     "scheduled_task_id": occurrence.task.scheduled_task_id,
                     "project_id": occurrence.task.project_id,
                     "occurrence_key": occurrence.occurrence_key,
-                    "status": "delivered",
+                    "status": "response_pending",
                     "response_outbox_id": outbox_message_id,
                 }
             metadata: dict[str, Any] = {

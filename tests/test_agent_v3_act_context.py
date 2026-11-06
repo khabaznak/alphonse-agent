@@ -311,6 +311,45 @@ def test_queued_delivery_receipt_records_the_committed_action_and_recipient():
     assert has_requested_effect_evidence(projected)
 
 
+def test_scheduled_delivery_review_uses_matching_outbox_provider_evidence():
+    from alphonse.agent_v2.core.io.channels import ChannelAddress
+    from alphonse.agent_v2.core.io.outbox import SQLiteOutboundStore, build_outbox_delivery_sink
+
+    task, state, _, _ = fixture()
+    task.metadata.update(source="scheduled_task", occurrence_key="occurrence-1")
+    outbox = SQLiteOutboundStore()
+    outbound = outbox.enqueue(
+        address=ChannelAddress(integration_id="fixture", provider_key="fixture", channel_target="target"),
+        message="Synthetic reminder", task_id=task.task_id, audience_user_id="recipient-1",
+        metadata={"occurrence_key": "occurrence-1", "scheduled_delivery_evidence": True},
+    )
+    state.evidence.append({
+        "evidence_ref": "delivery", "tool_id": "native.deliver_message", "status": "success",
+        "arguments": {"message": "Synthetic reminder"},
+        "result": {"status": "queued", "outbox_message_id": outbound.outbox_message_id, "recipient_user_id": "recipient-1"},
+    })
+    context = CoreLoopContext(messages=InMemoryMessageQueue(), delivery_sink=build_outbox_delivery_sink(outbox=outbox))
+    first = mission_review_state(task, state, context=context)
+    assert next(row for row in first["execution_evidence"] if row["evidence_ref"] == "delivery")["delivery_receipt"]["status"] == "pending"
+
+    outbox.mark_delivered(outbound.outbox_message_id, provider_message_id="fixture-provider-id")
+    second = mission_review_state(task, state, context=context)
+    receipt = next(row for row in second["execution_evidence"] if row["evidence_ref"] == "delivery")["delivery_receipt"]
+    assert receipt["status"] == "delivered"
+    assert receipt["provider_message_id"] == "fixture-provider-id"
+    assert receipt["recipient_read"] == "unknown"
+    from alphonse.agent_v2.core.intelligence.v3.outer import _check_evidence
+    from alphonse.agent_v2.system_one import _bounded_evidence
+    check = _check_evidence(task, state, context)
+    check_row = next(row for row in _bounded_evidence(check["entries"]) if row["evidence_ref"] == "delivery")
+    assert 'fixture-provider-id' in check_row["summary"]
+    assert 'recipient_read' in check_row["summary"]
+    assert "delivery_receipt" not in state.evidence.entries[-1]["result"]
+    task.metadata["occurrence_key"] = "different-occurrence"
+    third = mission_review_state(task, state, context=context)
+    assert next(row for row in third["execution_evidence"] if row["evidence_ref"] == "delivery")["delivery_receipt"] == {"status": "unavailable"}
+
+
 def test_opaque_skill_write_and_self_reported_readback_are_not_authoritative():
     from alphonse.agent_v2.core.intelligence.v3.act_evidence import has_requested_effect_evidence
 

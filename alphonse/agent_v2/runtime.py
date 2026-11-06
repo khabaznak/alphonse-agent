@@ -218,6 +218,45 @@ def build_runtime_host(
     # Legacy rows remain solely for migration/provenance and privacy guards.
     schedule_store = schedule_store or ScheduledTaskStore()
     outbox = outbox or SQLiteOutboundStore()
+    def _scheduled_delivery_allowed(message: Any) -> bool:
+        metadata = message.metadata
+        scheduled = schedule_store.get_task(str(metadata.get("scheduled_task_id") or ""))
+        if scheduled is None:
+            return False
+        if scheduled.status == "cancelled":
+            schedule_store.mark_occurrence_cancelled(str(metadata.get("occurrence_key") or ""))
+            return False
+        if (scheduled.status not in {"active", "paused", "completed"}
+                or not schedule_store.occurrence_belongs_to_schedule(
+                    occurrence_key=str(metadata.get("occurrence_key") or ""),
+                    scheduled_task_id=scheduled.scheduled_task_id,
+                )):
+            return False
+        if metadata.get("scheduled_question"):
+            question = question_store.get_question(message.question_id) if message.question_id else None
+            if question is None or question.status != "pending":
+                if question is not None and question.status in {"cancelled", "expired"}:
+                    schedule_store.mark_occurrence_cancelled(str(metadata.get("occurrence_key") or ""))
+                return False
+        recipient = str(scheduled.origin_channel.get("reminder_recipient_user_id") or "").strip()
+        if metadata.get("scheduled_delivery_evidence") or metadata.get("scheduled_question"):
+            recipient = str(message.audience_user_id or "")
+        if recipient:
+            if recipient != message.audience_user_id:
+                schedule_store.mark_occurrence_failed(str(metadata.get("occurrence_key") or ""), error="scheduled_delivery_recipient_changed")
+                return False
+            resolved = communication_router.resolver.resolve_outbound_address(
+                alphonse_user_id=recipient, preferred_integration_id=message.integration_id,
+            )
+            address = resolved.address if resolved.resolved else None
+            permitted = bool(address is not None and address.alphonse_user_id == recipient and
+                             (address.integration_id, address.provider_key, address.channel_target) ==
+                             (message.integration_id, message.provider_key, message.channel_target))
+            if not permitted:
+                schedule_store.mark_occurrence_failed(str(metadata.get("occurrence_key") or ""), error="scheduled_delivery_recipient_unavailable")
+            return permitted
+        return True
+    outbox.scheduled_delivery_guard = _scheduled_delivery_allowed
     integration_store = integration_store or SQLiteIntegrationStore()
     skill_bindings = SkillBindings(integration_store, user_store, skill_store)
     artifact_resources.bindings = skill_bindings

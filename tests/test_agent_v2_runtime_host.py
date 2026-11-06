@@ -102,9 +102,61 @@ def test_scheduled_worker_delivers_plain_reminders_without_queueing_pdca() -> No
 
     outcomes = worker.run_once(now=now)
 
-    assert outcomes[0]["status"] == "delivered"
+    assert outcomes[0]["status"] == "response_pending"
     assert runtime.queue.size() == 0
     assert store.list_executions(scheduled_task_id=task.scheduled_task_id)[0].status == "response_pending"
+
+
+def test_scheduled_dispatch_does_not_overwrite_early_delivery_callback() -> None:
+    store = ScheduledTaskStore(":memory:")
+    now = datetime(2026, 7, 10, 12, 30, tzinfo=timezone.utc)
+    task = store.create_task(
+        owner_user_id="u-alex", project_id="home", name="Reminder", prompt="Reminder",
+        schedule_kind="once", run_at=(now - timedelta(seconds=1)).isoformat(),
+        timezone_name="UTC", delivery_mode="direct", now=now - timedelta(minutes=1),
+    )
+    runtime = build_runtime_host(schedule_store=store)
+
+    def deliver(occurrence):
+        assert store.mark_occurrence_delivered(occurrence.occurrence_key, response_outbox_id="outbox-1")
+        return "outbox-1"
+
+    worker = ScheduledTaskWorker(store=store, messages=runtime.queue, on_direct_delivery=deliver)
+    worker.run_once(now=now)
+
+    execution = store.list_executions(scheduled_task_id=task.scheduled_task_id)[0]
+    assert execution.status == "delivered"
+    assert execution.response_outbox_id == "outbox-1"
+    assert not store.mark_occurrence_processing(execution.occurrence_key)
+    assert store.list_executions(scheduled_task_id=task.scheduled_task_id)[0].status == "delivered"
+
+
+def test_scheduled_answer_provenance_requires_matching_authenticated_checkpoint() -> None:
+    from types import SimpleNamespace
+
+    runtime = build_runtime_host()
+    daemon = V2Daemon(runtime)
+    question = SimpleNamespace(status="answered", task_id="task-1", respondent_user_id="alex")
+    checkpoint = SimpleNamespace(user="alex", metadata={"source": "scheduled_task", "occurrence_key": "occ-1", "scheduled_task_id": "schedule-1"})
+    runtime.question_store.get_question = lambda question_id: question if question_id == "question-1" else None
+    runtime.question_store.load_task_checkpoint = lambda task_id: checkpoint if task_id == "task-1" else None
+    runtime.schedule_store.matches_queued_occurrence = lambda **kwargs: kwargs == {
+        "occurrence_key": "occ-1", "scheduled_task_id": "schedule-1", "message_id": "task-1", "owner_user_id": "alex",
+    }
+    message = SimpleNamespace(user="alex", metadata={
+        "routing_disposition": "correlated_response", "answered_question_id": "question-1",
+    })
+    queued = SimpleNamespace(message=message)
+    snapshot = SimpleNamespace(metadata={"task_state": {
+        "task_id": "task-1", "metadata": {"occurrence_key": "occ-1"},
+    }})
+
+    assert daemon._scheduled_metadata_for_step(queued, snapshot) == checkpoint.metadata
+    message.user = "other"
+    assert daemon._scheduled_metadata_for_step(queued, snapshot) == {}
+    message.user = "alex"
+    snapshot.metadata["task_state"]["metadata"]["occurrence_key"] = "occ-2"
+    assert daemon._scheduled_metadata_for_step(queued, snapshot) == {}
 
 
 def test_scheduled_occurrence_is_claimed_by_one_worker_only() -> None:
@@ -205,11 +257,159 @@ def test_daemon_marks_scheduled_occurrence_delivered_after_outbox_delivery() -> 
     )
 
     daemon._on_outbox_delivered(outbound)
+    assert store.list_executions(scheduled_task_id=task.scheduled_task_id)[0].status == "claimed"
+    runtime.outbox.mark_delivered(outbound.outbox_message_id, provider_message_id="provider-1")
+    daemon._on_outbox_delivered(outbound)
 
     executions = store.list_executions(scheduled_task_id=task.scheduled_task_id)
     assert executions[0].status == "delivered"
     assert executions[0].response_outbox_id == outbound.outbox_message_id
     assert store.get_task(task.scheduled_task_id).status == "completed"
+
+
+def test_desktop_ack_reconciles_scheduled_occurrence() -> None:
+    from alphonse.agent_v2.core.io.outbox import OutboundSelector
+
+    store = ScheduledTaskStore(":memory:")
+    runtime = build_runtime_host(schedule_store=store)
+    daemon = V2Daemon(runtime)
+    now = datetime(2026, 7, 10, 12, 30, tzinfo=timezone.utc)
+    task = store.create_task(
+        owner_user_id="u-alex", project_id="home", name="Reminder", prompt="Reminder",
+        schedule_kind="once", run_at=(now - timedelta(seconds=1)).isoformat(),
+        timezone_name="UTC", now=now - timedelta(minutes=1),
+    )
+    occurrence = store.claim_due_occurrences(worker_id="worker-1", now=now)[0]
+    outbound = runtime.outbox.enqueue(
+        address=ChannelAddress(integration_id="desktop", provider_key="desktop", channel_target="u-alex", alphonse_user_id="u-alex"),
+        message="Reminder", metadata={"occurrence_key": occurrence.occurrence_key},
+    )
+    runtime.outbox.claim_next(OutboundSelector(integration_id="desktop"), lease_owner="desktop:client-1")
+
+    assert not daemon.acknowledge_desktop_delivery(client_id="other", outbox_message_id=outbound.outbox_message_id)
+    assert store.list_executions(scheduled_task_id=task.scheduled_task_id)[0].status == "claimed"
+    with runtime.outbox._connect() as conn:
+        conn.execute("UPDATE v2_outbox SET lease_expires_at=? WHERE outbox_message_id=?", ("2000-01-01T00:00:00+00:00", outbound.outbox_message_id))
+    daemon._reconcile_unconfirmed_scheduled_deliveries()
+    assert runtime.outbox.get(outbound.outbox_message_id).status == "unconfirmed"
+    assert not daemon.acknowledge_desktop_delivery(client_id="other", outbox_message_id=outbound.outbox_message_id)
+    assert daemon.acknowledge_desktop_delivery(client_id="client-1", outbox_message_id=outbound.outbox_message_id)
+    assert store.list_executions(scheduled_task_id=task.scheduled_task_id)[0].status == "delivered"
+
+
+def test_ambiguous_provider_result_is_not_recorded_as_delivery_failure() -> None:
+    from alphonse.agent_v2.core.io.outbox import OutboundSelector
+
+    store = ScheduledTaskStore(":memory:")
+    runtime = build_runtime_host(schedule_store=store)
+    daemon = V2Daemon(runtime)
+    now = datetime(2026, 7, 10, 12, 30, tzinfo=timezone.utc)
+    task = store.create_task(
+        owner_user_id="u-alex", project_id="home", name="Reminder", prompt="Reminder",
+        schedule_kind="once", run_at=(now - timedelta(seconds=1)).isoformat(),
+        timezone_name="UTC", now=now - timedelta(minutes=1),
+    )
+    occurrence = store.claim_due_occurrences(worker_id="worker-1", now=now)[0]
+    store.mark_occurrence_enqueued(occurrence.occurrence_key, worker_id="worker-1", message_id="fixture")
+    outbound = runtime.outbox.enqueue(
+        address=ChannelAddress(integration_id="telegram", provider_key="telegram", channel_target="fixture"),
+        message="Synthetic reminder", metadata={"occurrence_key": occurrence.occurrence_key},
+    )
+    runtime.outbox.claim_next(OutboundSelector(integration_id="telegram"))
+    runtime.outbox.mark_failed(outbound.outbox_message_id, error="synthetic timeout")
+    daemon._on_outbox_failed(outbound, "synthetic timeout")
+
+    execution = store.list_executions(scheduled_task_id=task.scheduled_task_id)[0]
+    assert execution.status == "unconfirmed"
+    assert execution.last_error == "delivery_unconfirmed"
+    assert execution.response_outbox_id == outbound.outbox_message_id
+    assert store.get_task(task.scheduled_task_id).status == "active"
+
+
+def test_restart_reconciles_expired_scheduled_delivery_lease() -> None:
+    from alphonse.agent_v2.core.io.outbox import OutboundSelector
+
+    store = ScheduledTaskStore(":memory:")
+    runtime = build_runtime_host(schedule_store=store)
+    now = datetime(2026, 7, 10, 12, 30, tzinfo=timezone.utc)
+    task = store.create_task(
+        owner_user_id="u-alex", project_id="home", name="Reminder", prompt="Reminder",
+        schedule_kind="once", run_at=(now - timedelta(seconds=1)).isoformat(),
+        timezone_name="UTC", now=now - timedelta(minutes=1),
+    )
+    occurrence = store.claim_due_occurrences(worker_id="worker-1", now=now)[0]
+    store.mark_occurrence_enqueued(occurrence.occurrence_key, worker_id="worker-1", message_id="fixture")
+    outbound = runtime.outbox.enqueue(
+        address=ChannelAddress(integration_id="telegram", provider_key="telegram", channel_target="fixture"),
+        message="Synthetic reminder", metadata={"occurrence_key": occurrence.occurrence_key},
+    )
+    runtime.outbox.claim_next(OutboundSelector(integration_id="telegram"))
+    with runtime.outbox._connect() as conn:
+        conn.execute("UPDATE v2_outbox SET lease_expires_at=? WHERE outbox_message_id=?", ("2000-01-01T00:00:00+00:00", outbound.outbox_message_id))
+
+    V2Daemon(runtime)._reconcile_unconfirmed_scheduled_deliveries()
+
+    assert runtime.outbox.get(outbound.outbox_message_id).status == "unconfirmed"
+    execution = store.list_executions(scheduled_task_id=task.scheduled_task_id)[0]
+    assert execution.status == "unconfirmed"
+    assert execution.last_error == "delivery_unconfirmed"
+
+
+def test_occurrence_waits_for_every_scheduled_destination() -> None:
+    store = ScheduledTaskStore(":memory:")
+    runtime = build_runtime_host(schedule_store=store)
+    daemon = V2Daemon(runtime)
+    now = datetime(2026, 7, 10, 12, 30, tzinfo=timezone.utc)
+    task = store.create_task(
+        owner_user_id="u-alex", project_id="home", name="Reminder", prompt="Reminder",
+        schedule_kind="once", run_at=(now - timedelta(seconds=1)).isoformat(),
+        timezone_name="UTC", now=now - timedelta(minutes=1),
+    )
+    occurrence = store.claim_due_occurrences(worker_id="worker-1", now=now)[0]
+    def delivery(target):
+        return runtime.outbox.enqueue(
+            address=ChannelAddress(integration_id="fixture", provider_key="fixture", channel_target=target),
+            message="Synthetic reminder", metadata={"occurrence_key": occurrence.occurrence_key, "occurrence_delivery_count": 2},
+        )
+    first = delivery("one")
+    runtime.outbox.mark_delivered(first.outbox_message_id, provider_message_id="provider-1")
+    daemon._on_outbox_delivered(first)
+    assert store.list_executions(scheduled_task_id=task.scheduled_task_id)[0].status == "claimed"
+
+    second = delivery("two")
+    daemon._on_outbox_delivered(first)
+    assert store.list_executions(scheduled_task_id=task.scheduled_task_id)[0].status == "claimed"
+    runtime.outbox.mark_delivered(second.outbox_message_id, provider_message_id="provider-2")
+    daemon._on_outbox_delivered(second)
+    assert store.list_executions(scheduled_task_id=task.scheduled_task_id)[0].status == "delivered"
+
+
+def test_scheduled_message_delivery_does_not_complete_a_running_task() -> None:
+    from alphonse.agent_v2.core.intelligence.task_state import TaskState
+
+    store = ScheduledTaskStore(":memory:")
+    runtime = build_runtime_host(schedule_store=store)
+    daemon = V2Daemon(runtime)
+    now = datetime(2026, 7, 10, 12, 30, tzinfo=timezone.utc)
+    schedule = store.create_task(owner_user_id="u-alex", name="Fixture", prompt="Fixture", schedule_kind="once",
+                                 run_at=(now - timedelta(seconds=1)).isoformat(), timezone_name="UTC",
+                                 now=now - timedelta(minutes=1))
+    occurrence = store.claim_due_occurrences(worker_id="fixture", now=now)[0]
+    store.mark_occurrence_enqueued(occurrence.occurrence_key, worker_id="fixture", message_id="task-1")
+    store.mark_occurrence_processing(occurrence.occurrence_key)
+    task = TaskState(task_id="task-1", user="u-alex", status="running", metadata={"occurrence_key": occurrence.occurrence_key})
+    runtime.question_store.save_task_checkpoint(task, status="running")
+    outbound = runtime.outbox.enqueue(
+        address=ChannelAddress(integration_id="fixture", provider_key="fixture", channel_target="recipient"),
+        message="Synthetic reminder", task_id="task-1", metadata={"occurrence_key": occurrence.occurrence_key, "scheduled_delivery_evidence": True},
+    )
+    runtime.outbox.mark_delivered(outbound.outbox_message_id, provider_message_id="fixture-provider")
+    daemon._on_outbox_delivered(outbound)
+    assert store.list_executions(scheduled_task_id=schedule.scheduled_task_id)[0].status == "processing"
+    task.status = "completed"
+    runtime.question_store.save_task_checkpoint(task, status="done")
+    daemon._on_outbox_delivered(outbound)
+    assert store.list_executions(scheduled_task_id=schedule.scheduled_task_id)[0].status == "delivered"
 
 
 def test_direct_reminder_delivery_enqueues_one_idempotent_copy_per_destination() -> None:

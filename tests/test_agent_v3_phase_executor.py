@@ -644,6 +644,28 @@ def test_phase_executor_checks_steering_before_each_action() -> None:
     assert state.steering_pending is True
 
 
+@pytest.mark.parametrize("source", ["scheduled_task", "event_automation"])
+def test_automation_does_not_trigger_steering_review(source: str) -> None:
+    from alphonse.agent_v2.core.intelligence.v3.executor import _steering_is_pending
+
+    queue = InMemoryMessageQueue()
+    queued = CommunicationChannel(queue).queue_message(
+        prompt="Run the scheduled work", user="alex", project_id="home",
+        metadata={"source": source, "routing_disposition": "pdca_task"},
+    )
+    task = TaskState(user="alex", project_id="home")
+    context = CoreLoopContext(messages=queue)
+
+    assert not _steering_is_pending(task, context)
+    assert queue.peek().message_id == queued.message_id
+
+    CommunicationChannel(queue).queue_message(
+        prompt="Change the active work", user="alex", project_id="home",
+        metadata={"routing_disposition": "steering"},
+    )
+    assert _steering_is_pending(task, context)
+
+
 def test_phase_executor_checks_cancellation_before_action() -> None:
     state = new_tactical_state(_phase())
     outcome = PhaseExecutor(action_selector=lambda *_: pytest.fail("selector should not run")).run(

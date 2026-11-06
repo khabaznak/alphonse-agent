@@ -128,6 +128,7 @@ class V2Daemon:
             else EventAutomationStore(schedule_db_path)
         )
         self.runtime.core.event_store = self.event_store
+        self.runtime.core.scheduled_handoff_enabled = True
         self.daemon_id = str(self.daemon_id or "").strip() or f"daemon-{uuid4().hex[:12]}"
         if hasattr(self.runtime.queue, "lease_owner"):
             self.runtime.queue.lease_owner = self.daemon_id
@@ -513,7 +514,10 @@ class V2Daemon:
         task = self._scheduled_task_for_actor(actor_user_id=actor_user_id, scheduled_task_id=scheduled_task_id)
         if getattr(task, "status", "") not in {"active", "paused"}:
             raise ValueError("scheduled_task_not_cancellable")
-        return self.runtime.schedule_store.cancel_task(scheduled_task_id).to_dict()
+        cancelled = self.runtime.schedule_store.cancel_task(scheduled_task_id)
+        self._last_unconfirmed_delivery_reconciliation = None
+        self._reconcile_unconfirmed_scheduled_deliveries()
+        return cancelled.to_dict()
 
     def delete_scheduled_task(self, *, actor_user_id: str = "", scheduled_task_id: str) -> bool:
         self._scheduled_task_for_actor(actor_user_id=actor_user_id, scheduled_task_id=scheduled_task_id)
@@ -1342,9 +1346,14 @@ class V2Daemon:
     def acknowledge_desktop_delivery(self, *, client_id: str, outbox_message_id: str) -> bool:
         delivery = self.runtime.outbox.get(outbox_message_id)
         expected_owner = f"desktop:{str(client_id or 'desktop').strip() or 'desktop'}"
-        if delivery is None or delivery.integration_id != "desktop" or delivery.lease_owner != expected_owner:
+        late_owner = str(delivery.metadata.get("unconfirmed_lease_owner") or "") if delivery is not None else ""
+        valid_lease = delivery is not None and (delivery.lease_owner == expected_owner or
+                      (delivery.status == "unconfirmed" and late_owner == expected_owner))
+        if delivery is None or delivery.integration_id != "desktop" or not valid_lease:
             return False
         acknowledged = self.runtime.outbox.mark_delivered(outbox_message_id)
+        if acknowledged:
+            self._on_outbox_delivered(delivery)
         if acknowledged and delivery.task_id and delivery.kind != "task_acknowledgement":
             key = (str(client_id or "desktop").strip() or "desktop", str(delivery.audience_user_id or "").strip())
             self._desktop_progress_closures.setdefault(key, set()).add(str(delivery.task_id))
@@ -2334,6 +2343,7 @@ class V2Daemon:
 
     def run_once(self) -> Any:
         self._run_retention_if_due()
+        self._reconcile_unconfirmed_scheduled_deliveries()
         queued = self.runtime.queue.peek()
         self._set_active_work(queued)
         if queued is not None:
@@ -2346,6 +2356,7 @@ class V2Daemon:
             step = self.runtime.core.step()
             if step.status in {
                 LoopStepStatus.PROCESSED,
+                LoopStepStatus.YIELDED,
                 LoopStepStatus.PARKED,
                 LoopStepStatus.WAITING,
                 LoopStepStatus.CANCELLED,
@@ -2355,12 +2366,39 @@ class V2Daemon:
                     failed=step.status == LoopStepStatus.FAILED,
                     waiting=step.status in {LoopStepStatus.PARKED, LoopStepStatus.WAITING},
                 )
-        queued_metadata = getattr(getattr(queued, "message", None), "metadata", {}) or {}
-        occurrence_key = str(queued_metadata.get("occurrence_key") or "").strip() if isinstance(queued_metadata, dict) and str(queued_metadata.get("source") or "") == "scheduled_task" else ""
+        snapshot = self.runtime.visible_state.snapshot()
+        queued_metadata = self._scheduled_metadata_for_step(queued, snapshot)
+        occurrence_key = str(queued_metadata.get("occurrence_key") or "").strip()
         if occurrence_key and step.queued_message_id:
             self.runtime.schedule_store.mark_occurrence_processing(occurrence_key)
-        snapshot = self.runtime.visible_state.snapshot()
-        if step.status in {LoopStepStatus.PROCESSED, LoopStepStatus.PARKED, LoopStepStatus.WAITING}:
+        handoff_release_failed = False
+        if step.status == LoopStepStatus.YIELDED and step.queued_message_id:
+            release = getattr(self.runtime.queue, "release_scheduled_handoff", None)
+            cancel = getattr(self.runtime.queue, "cancel_scheduled_handoff", None)
+            from alphonse.agent_v2.core.intelligence.task_state import TaskState
+            raw_task = snapshot.metadata.get("task_state") if isinstance(snapshot.metadata, dict) else None
+            saved_task = TaskState.from_dict(raw_task) if isinstance(raw_task, dict) else None
+            waiting = saved_task.metadata.get("v3_scheduled_delivery_wait") if saved_task is not None else None
+            if occurrence_key and isinstance(waiting, dict):
+                self.runtime.schedule_store.mark_occurrence_response_pending(
+                    occurrence_key, response_outbox_id=str(waiting.get("outbox_message_id") or ""),
+                )
+            cancelled, finished = self.kill_switch.finish_handoff(
+                step.queued_message_id,
+                release=lambda: callable(release) and release(step.queued_message_id, lease_owner=self.daemon_id),
+                cancel=lambda: saved_task is not None and callable(cancel) and cancel(
+                    saved_task, self.runtime.question_store, lease_owner=self.daemon_id,
+                ),
+            )
+            if not finished:
+                handoff_release_failed = True
+                logger.error("scheduled handoff lease release failed message_id=%s", step.queued_message_id)
+            elif cancelled:
+                step = replace(step, status=LoopStepStatus.CANCELLED)
+                if occurrence_key:
+                    self.runtime.schedule_store.mark_occurrence_cancelled(occurrence_key)
+                self._publish_task_progress(snapshot, status="cancelled")
+        elif step.status in {LoopStepStatus.PROCESSED, LoopStepStatus.PARKED, LoopStepStatus.WAITING}:
             if step.status == LoopStepStatus.PROCESSED:
                 self._clear_selected_model_access_warning()
             outbox_path = str(getattr(self.runtime.outbox, "db_path", ":memory:"))
@@ -2383,6 +2421,8 @@ class V2Daemon:
                         acknowledge(step.queued_message_id, lease_owner=self.daemon_id)
             if step.status == LoopStepStatus.PROCESSED:
                 self._mark_snapshot_checkpoint_terminal(snapshot, status="done")
+                if occurrence_key:
+                    self._reconcile_completed_scheduled_delivery(occurrence_key)
                 self._publish_task_progress(snapshot, status="completed")
         elif step.status == LoopStepStatus.CANCELLED and step.queued_message_id:
             acknowledge = getattr(self.runtime.queue, "ack", None)
@@ -2392,11 +2432,13 @@ class V2Daemon:
                 else:
                     acknowledge(step.queued_message_id, lease_owner=self.daemon_id)
             self._mark_snapshot_checkpoint_terminal(snapshot, status="cancelled")
+            if occurrence_key:
+                self.runtime.schedule_store.mark_occurrence_cancelled(occurrence_key)
             self._publish_task_progress(snapshot, status="cancelled")
         elif step.status == LoopStepStatus.FAILED and step.queued_message_id:
             error = str(getattr(step, "error", "") or "capd_processing_failed")
-            metadata = getattr(getattr(queued, "message", None), "metadata", {}) or {}
-            scheduled_occurrence = str(metadata.get("occurrence_key") or "").strip() if isinstance(metadata, dict) and str(metadata.get("source") or "") == "scheduled_task" else ""
+            metadata = queued_metadata
+            scheduled_occurrence = occurrence_key
             non_retryable = _scheduled_failure_is_non_retryable(error)
             if _model_access_rejection(error):
                 self._record_selected_model_access_warning(error)
@@ -2416,8 +2458,17 @@ class V2Daemon:
             else:
                 self._publish_task_progress(snapshot, status="retrying")
             if scheduled_occurrence and terminal:
-                self.runtime.schedule_store.mark_occurrence_processing_failed(scheduled_occurrence, error=error)
-                self._notify_scheduled_task_failure(metadata, error=error)
+                if error == "v3_task_failed:scheduled_delivery_outcome_unavailable":
+                    failed_task = snapshot.metadata.get("task_state") if isinstance(snapshot.metadata, dict) else {}
+                    failed_metadata = failed_task.get("metadata") if isinstance(failed_task, dict) else {}
+                    failed_metadata = failed_metadata if isinstance(failed_metadata, dict) else {}
+                    self.runtime.schedule_store.mark_occurrence_delivery_unconfirmed(
+                        scheduled_occurrence, response_outbox_id=str(failed_metadata.get("v3_unconfirmed_delivery_outbox_id") or ""),
+                    )
+                    self._notify_scheduled_delivery_unconfirmed(metadata)
+                else:
+                    self.runtime.schedule_store.mark_occurrence_processing_failed(scheduled_occurrence, error=error)
+                    self._notify_scheduled_task_failure(metadata, error=error)
             elif terminal and queued is not None:
                 self._notify_inbound_failure(queued, error=error, task_state=snapshot.metadata.get("task_state"))
             self.runtime.core.clear_failure()
@@ -2431,7 +2482,8 @@ class V2Daemon:
                     LoopStepStatus.FAILED: "failed",
                 }[step.status])
         if step.status != LoopStepStatus.BUSY:
-            self.kill_switch.clear(str(step.queued_message_id or ""))
+            if not handoff_release_failed:
+                self.kill_switch.clear(str(step.queued_message_id or ""))
             self._set_active_work(None)
             terminal_state = {
                 LoopStepStatus.WAITING: "waiting",
@@ -2440,6 +2492,74 @@ class V2Daemon:
             }.get(step.status, "idle")
             self._set_activity_status(terminal_state)
         return step
+
+    def _reconcile_unconfirmed_scheduled_deliveries(self) -> None:
+        now = datetime.now(timezone.utc)
+        last = getattr(self, "_last_unconfirmed_delivery_reconciliation", None)
+        if last is not None and now - last < timedelta(seconds=30):
+            return
+        self.runtime.outbox.reclaim_expired(now=now)
+        for outbound in self.runtime.outbox.list_unconfirmed_scheduled():
+            self.runtime.schedule_store.mark_occurrence_delivery_unconfirmed(
+                str(outbound.metadata["occurrence_key"]), response_outbox_id=outbound.outbox_message_id,
+            )
+            self._notify_scheduled_delivery_unconfirmed(outbound.metadata)
+        for outbound in self.runtime.outbox.list_confirmed_scheduled_evidence():
+            self._reconcile_confirmed_scheduled_evidence(outbound)
+        schedule_path = str(getattr(self.runtime.schedule_store, "db_path", ""))
+        if (schedule_path and schedule_path != ":memory:"
+                and schedule_path == str(getattr(self.runtime.question_store, "db_path", ""))
+                and schedule_path == str(getattr(self.runtime.queue, "db_path", ""))):
+            for parked in self.runtime.schedule_store.cancelled_parked_questions():
+                question = self.runtime.question_store.get_question(parked["question_id"])
+                if (question is not None and question.task_id == parked["task_id"] and question.status == "pending"
+                        and self.runtime.question_store.cancel_question(question.question_id)):
+                    self.runtime.schedule_store.mark_occurrence_cancelled(parked["occurrence_key"])
+            self.runtime.schedule_store.reconcile_terminal_checkpoints()
+            for occurrence in self.runtime.schedule_store.completed_unreconciled_occurrences():
+                self._reconcile_completed_scheduled_delivery(occurrence)
+        self._last_unconfirmed_delivery_reconciliation = now
+
+    def _scheduled_metadata_for_step(self, queued: Any, snapshot: Any) -> dict[str, Any]:
+        """Recover occurrence provenance for a verified answer to a parked task."""
+        message = getattr(queued, "message", None)
+        metadata = getattr(message, "metadata", {}) or {}
+        if not isinstance(metadata, dict):
+            return {}
+        if metadata.get("source") == "scheduled_task":
+            matches = self.runtime.schedule_store.matches_queued_occurrence(
+                occurrence_key=str(metadata.get("occurrence_key") or ""),
+                scheduled_task_id=str(metadata.get("scheduled_task_id") or ""),
+                message_id=str(getattr(queued, "message_id", "") or ""),
+                owner_user_id=str(getattr(message, "user", "") or ""),
+            )
+            return metadata if matches else {}
+        if metadata.get("routing_disposition") != "correlated_response":
+            return {}
+        question_id = str(metadata.get("answered_question_id") or "")
+        question = self.runtime.question_store.get_question(question_id) if question_id else None
+        snapshot_metadata = getattr(snapshot, "metadata", {}) or {}
+        task_state = snapshot_metadata.get("task_state") if isinstance(snapshot_metadata, dict) else None
+        if not isinstance(task_state, dict) or question is None:
+            return {}
+        if (question.status != "answered" or question.task_id != str(task_state.get("task_id") or "")
+                or question.respondent_user_id != str(getattr(message, "user", "") or "")):
+            return {}
+        checkpoint = self.runtime.question_store.load_task_checkpoint(question.task_id)
+        checkpoint_metadata = checkpoint.metadata if checkpoint is not None else {}
+        task_metadata = task_state.get("metadata")
+        if (not isinstance(task_metadata, dict) or not isinstance(checkpoint_metadata, dict)
+                or checkpoint_metadata.get("source") != "scheduled_task"
+                or not checkpoint_metadata.get("occurrence_key")
+                or checkpoint_metadata.get("occurrence_key") != task_metadata.get("occurrence_key")):
+            return {}
+        if not self.runtime.schedule_store.matches_queued_occurrence(
+            occurrence_key=str(checkpoint_metadata["occurrence_key"]),
+            scheduled_task_id=str(checkpoint_metadata.get("scheduled_task_id") or ""),
+            message_id=question.task_id, owner_user_id=str(checkpoint.user or ""),
+        ):
+            return {}
+        return checkpoint_metadata
 
     def _project_snapshot_delivery(
         self,
@@ -2523,14 +2643,10 @@ class V2Daemon:
                 origins.insert(0, origin)
         if not origins:
             raise RuntimeError("scheduled_reminder_delivery_unresolved")
+        destinations = list({(item.integration_id, item.provider_key, item.channel_target): item for item in origins}.values())
         message = str(task.description or task.name or "Reminder").strip()
         outbounds = []
-        seen: set[tuple[str, str, str]] = set()
-        for destination in origins:
-            identity = (destination.integration_id, destination.provider_key, destination.channel_target)
-            if identity in seen:
-                continue
-            seen.add(identity)
+        for destination in destinations:
             outbound = self.runtime.outbox.enqueue(
                 address=destination,
                 message=f"Reminder: {message}",
@@ -2541,6 +2657,7 @@ class V2Daemon:
                     "source": "scheduled_reminder",
                     "scheduled_task_id": task.scheduled_task_id,
                     "occurrence_key": occurrence.occurrence_key,
+                    "occurrence_delivery_count": len(destinations),
                 },
                 idempotency_key=f"scheduled-reminder:{occurrence.occurrence_key}:{destination.integration_id}:{destination.channel_target}",
             )
@@ -2588,6 +2705,29 @@ class V2Daemon:
             content=message,
             source=origin.integration_id,
             source_message_id=f"outbound:{outbound.outbox_message_id}",
+        )
+
+    def _notify_scheduled_delivery_unconfirmed(self, metadata: dict[str, Any]) -> None:
+        task = self.runtime.schedule_store.get_task(str(metadata.get("scheduled_task_id") or ""))
+        occurrence = str(metadata.get("occurrence_key") or "")
+        if task is None or not occurrence:
+            return
+        origin = channel_address_from_metadata({"channel": dict(task.origin_channel)})
+        if origin is None:
+            resolved = self.runtime.identity_resolver.resolve_outbound_address(alphonse_user_id=task.owner_user_id)
+            origin = resolved.address if resolved.resolved else None
+        if origin is None:
+            return
+        message = f"I could not confirm whether the reminder ‘{task.name}’ was delivered. Please check before retrying."
+        outbound = self.runtime.outbox.enqueue(
+            address=origin, message=message, kind="scheduled_delivery_unconfirmed",
+            audience_user_id=task.owner_user_id, project_id=task.project_id,
+            metadata={"source": "scheduled_delivery_unconfirmed", "scheduled_task_id": task.scheduled_task_id},
+            idempotency_key=f"scheduled-delivery-unconfirmed:{occurrence}",
+        )
+        self.runtime.conversation_store.record(
+            owner_user_id=task.owner_user_id, project_id=task.project_id, role="assistant", content=message,
+            source=origin.integration_id, source_message_id=f"outbound:{outbound.outbox_message_id}",
         )
 
     def _notify_inbound_failure(self, queued: Any, *, error: str, task_state: Any = None) -> None:
@@ -2796,22 +2936,70 @@ class V2Daemon:
 
     def _on_outbox_delivered(self, outbound: Any) -> None:
         message_id = str(getattr(outbound, "outbox_message_id", "") or "")
-        if message_id:
-            delivered = self.runtime.outbox.get(message_id)
-            self.runtime.communication_router.threads.mark_delivered(
-                message_id,
-                str(getattr(delivered, "provider_message_id", "") or ""),
-            )
-        metadata = getattr(outbound, "metadata", {}) if outbound is not None else {}
+        delivered = self.runtime.outbox.get(message_id) if message_id else None
+        if delivered is None or delivered.status != "delivered":
+            return
+        self.runtime.communication_router.threads.mark_delivered(
+            message_id, str(getattr(delivered, "provider_message_id", "") or ""),
+        )
+        metadata = delivered.metadata
+        if metadata.get("scheduled_question"):
+            occurrence_key = str(metadata.get("occurrence_key") or "").strip()
+            if occurrence_key:
+                self.runtime.schedule_store.mark_question_delivery_confirmed(occurrence_key, response_outbox_id=message_id)
+            return
+        if metadata.get("scheduled_delivery_evidence"):
+            self._reconcile_confirmed_scheduled_evidence(delivered)
+            return
         occurrence_key = str(metadata.get("occurrence_key") or "").strip() if isinstance(metadata, dict) else ""
         if occurrence_key:
+            expected = metadata.get("occurrence_delivery_count", 1)
+            if not isinstance(expected, int) or expected < 1:
+                return
+            deliveries = self.runtime.outbox.list_for_occurrence(occurrence_key)
+            if len(deliveries) < expected or any(item.status != "delivered" for item in deliveries):
+                return
             self.runtime.schedule_store.mark_occurrence_delivered(
                 occurrence_key,
-                response_outbox_id=str(getattr(outbound, "outbox_message_id", "") or ""),
+                response_outbox_id=message_id,
             )
+
+    def _reconcile_confirmed_scheduled_evidence(self, delivered: Any) -> None:
+        resume = getattr(self.runtime.queue, "resume_confirmed_scheduled_delivery", None)
+        if callable(resume) and resume(delivered.outbox_message_id, self.runtime.question_store):
+            return
+        metadata = delivered.metadata if isinstance(delivered.metadata, dict) else {}
+        checkpoint = self.runtime.question_store.load_task_checkpoint(delivered.task_id) if delivered.task_id else None
+        if (checkpoint is not None and checkpoint.status == "completed" and metadata.get("occurrence_key")
+                and checkpoint.metadata.get("occurrence_key") == metadata.get("occurrence_key")):
+            self._reconcile_completed_scheduled_delivery(str(metadata["occurrence_key"]))
+
+    def _reconcile_completed_scheduled_delivery(self, occurrence_key: str) -> None:
+        deliveries = self.runtime.outbox.list_for_occurrence(occurrence_key)
+        if not deliveries:
+            self.runtime.schedule_store.mark_occurrence_completed_without_delivery(occurrence_key)
+            return
+        if any(item.status == "unconfirmed" for item in deliveries):
+            item = next(item for item in deliveries if item.status == "unconfirmed")
+            self.runtime.schedule_store.mark_occurrence_delivery_unconfirmed(occurrence_key, response_outbox_id=item.outbox_message_id)
+        elif any(item.status == "failed" for item in deliveries):
+            self.runtime.schedule_store.mark_occurrence_failed(occurrence_key, error="scheduled_delivery_failed")
+        elif all(item.status == "delivered" for item in deliveries):
+            self.runtime.schedule_store.mark_occurrence_delivered(occurrence_key, response_outbox_id=deliveries[0].outbox_message_id)
+        else:
+            self.runtime.schedule_store.mark_occurrence_response_pending(occurrence_key, response_outbox_id=deliveries[0].outbox_message_id)
 
     def _on_outbox_failed(self, outbound: Any, error: str) -> None:
         message_id = str(getattr(outbound, "outbox_message_id", "") or "")
+        persisted = self.runtime.outbox.get(message_id) if message_id else None
+        if persisted is not None and persisted.status == "unconfirmed":
+            occurrence_key = str(persisted.metadata.get("occurrence_key") or "").strip()
+            if occurrence_key:
+                self.runtime.schedule_store.mark_occurrence_delivery_unconfirmed(
+                    occurrence_key, response_outbox_id=message_id,
+                )
+                self._notify_scheduled_delivery_unconfirmed(persisted.metadata)
+            return
         if message_id:
             thread = self.runtime.communication_router.threads.mark_failed(message_id)
             if thread is not None:
@@ -2928,7 +3116,9 @@ def _model_access_rejection(error: str) -> bool:
 
 def _scheduled_failure_message(task_name: str, error: str) -> str:
     code = _scheduled_failure_code(error)
-    if code == "system_one_unavailable":
+    if error == "v3_task_failed:scheduled_delivery_repetition_unresolved":
+        detail = "A similar message was already queued or delivered. I stopped to avoid sending it again; please check before retrying."
+    elif code == "system_one_unavailable":
         detail = _system_one_failure_detail(error)
     elif code == "openai_codex_auth_required":
         detail = "Codex needs to be signed in again before I can run it."
