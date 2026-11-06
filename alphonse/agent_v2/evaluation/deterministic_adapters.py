@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from dataclasses import dataclass, field
@@ -16,7 +17,7 @@ from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.intelligence.v3 import HierarchicalCAPDProcessor
 from alphonse.agent_v2.core.intelligence.v3.contracts import PhaseStatus, TacticalAction, new_tactical_state
 from alphonse.agent_v2.core.intelligence.v3.contracts import PhasePlan
-from alphonse.agent_v2.system_one import SystemOneActRecommendation, SystemOneReviewResult
+from alphonse.agent_v2.system_one import SystemOneActJudgments, SystemOneReviewResult
 from alphonse.agent_v2.core.messages import CommunicationChannel, InMemoryMessageQueue
 from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry, ToolDefinition
 from alphonse.agent_v2.evaluation.replay import EngineTrace, EvaluationCase
@@ -61,6 +62,8 @@ class _RunState:
 
 
 class _DeterministicProvider:
+    supports_image_input = True
+
     def __init__(self, state: _RunState) -> None:
         self.state = state
 
@@ -216,10 +219,22 @@ def _run(
         messages=queue,
         tools=registry,
         inference=router,
-        system_one=_ReplayJev(),
+        system_one=_ReplayJev({action.tool_id for action in scenario.actions if not action.read_only}),
         telemetry_sink=telemetry_sink,
         ui_event_sink=lambda event: ui_events.append({"event_type": event.event_type, "payload": dict(event.payload)}),
     )
+    # Offline image fixtures use the same authorized asset resolution as runtime.
+    from alphonse.agent_v2.assets import AttachmentDescriptor, SQLiteAssetStore
+    assets = SQLiteAssetStore(":memory:", fixture_root / "assets")
+    attachments = []
+    for item in case.fixture.get("attachments") or []:
+        asset = assets.register_bytes(
+            owner_user_id="evaluation-user",
+            descriptor=AttachmentDescriptor("fixture.png", "image/png", 3),
+            content=b"png", source="offline-replay",
+        )
+        attachments.append({**item, "asset_id": asset.asset_id, "mime_type": "image/png"})
+    context.asset_store = assets
     task = TaskState(
         task_id=f"replay-{case.case_id}-{engine}",
         message_id=f"message-{case.case_id}",
@@ -228,7 +243,7 @@ def _run(
         goal=case.goal,
         intelligence_engine=engine,
         intelligence_schema_version=3 if engine == "hierarchical_v3" else 2,
-        metadata={"attachments": list(case.fixture.get("attachments") or [])},
+        metadata={"attachments": attachments},
         recent_conversation_md=str(case.fixture.get("recent_conversation") or "- (none)"),
     )
     if scenario.initial_acceptance or scenario.restart_after_role:
@@ -326,7 +341,7 @@ def _phase_plan(scenario: _Scenario) -> PhasePlan:
             "objective": f"Execute {action.role}",
             "required_output_type": f"result_{index}",
             "depends_on": list(prior[-1:]),
-            "allowed_capabilities": [action.capability],
+            "allowed_capabilities": [action.capability] + (["user_response"] if action.tool_id == "native.respond" else []),
             "allowed_side_effects": allowed_effects,
             "completion": completion,
             "failure_policy": action.failure_policy,
@@ -352,7 +367,7 @@ def _phase_plan(scenario: _Scenario) -> PhasePlan:
         "objective": scenario.acceptance,
         "subgoals": subgoals,
         "criterion_ids": ["ac-1"],
-        "authorized_capabilities": list(dict.fromkeys(action.capability for action in scenario.actions)),
+        "authorized_capabilities": list(dict.fromkeys(action.capability for action in scenario.actions)) + (["user_response"] if any(action.tool_id == "native.respond" for action in scenario.actions) else []),
         "mutation_scope": {
             "allowed_paths": list(scenario.mutation_paths),
             "allow_external_effects": any(action.side_effect.startswith("external_") for action in scenario.actions),
@@ -365,6 +380,9 @@ def _phase_plan(scenario: _Scenario) -> PhasePlan:
 class _ReplayJev:
     """Deterministic Jev stand-in for offline V2/V3 evaluation runs."""
 
+    def __init__(self, effect_tools: set[str] | None = None) -> None:
+        self.effect_tools = effect_tools or set()
+
     def evaluate(self, *, contract, phase, evidence):
         _ = phase
         entries = evidence.get("entries") if isinstance(evidence, dict) else []
@@ -372,10 +390,14 @@ class _ReplayJev:
             str(item.get("evidence_ref")) for item in entries
             if isinstance(item, dict) and item.get("status") == "success" and item.get("evidence_ref")
         ]
+        effect_refs = [str(item["evidence_ref"]) for item in entries
+                       if item.get("status") == "success" and item.get("evidence_ref")
+                       and item.get("tool_id") in self.effect_tools]
+        support = effect_refs or successful[-1:]
         updates = tuple({
             "criterion_id": str(item.get("id") or ""),
             "status": "satisfied",
-            "evidence_refs": successful[-1:],
+            "evidence_refs": support,
             "reason": "Deterministic replay evidence",
         } for item in contract.get("criteria") or [] if isinstance(item, dict) and successful)
         return SystemOneReviewResult(updates, (), model="replay-jev")
@@ -393,17 +415,15 @@ class _ReplayJev:
     def triage_plan_messages(self, *, candidates, **_values):
         return tuple(str(item.get("message_id")) for item in candidates if isinstance(item, dict))
 
-    def recommend_act(self, *, state):
-        verdict = str(state.get("check_verdict") or "wip")
-        action = "complete" if verdict in {"success", "mission_success"} else "continue" if verdict == "wip" else "fail_explain"
-        return SystemOneActRecommendation(
-            action=action, confidence=0.99, confident=True, rationale=f"Replay Jev recommends {action}.",
-            answers={
-                "continuation_is_worthwhile": 0.99,
-                "user_input_can_unblock": 0.1,
-                "closure_explanation_is_warranted": 0.99,
-            }, model="replay-jev",
-        )
+    def judge_act(self, *, state):
+        observed = any(row.get("tool_id") in self.effect_tools and row.get("observation_kind") == "operational_result"
+                       for row in state["execution_evidence"])
+        return SystemOneActJudgments(answers={
+            "effect_requested": 0.99 if self.effect_tools else 0.01,
+            "effect_supported": 0.99 if observed else 0.01,
+            "effect_contradicted": 0.01,
+            "reply_addresses_request": 0.99, "reply_grounded": 0.99,
+        }, model="replay-jev")
 
     def evaluate_tactical_progress(self, *, questions=None, **_values):
         from alphonse.agent_v2.system_one import SystemOneTacticalReview
@@ -449,8 +469,12 @@ def _edit_fixture(root: Path, arguments: dict[str, Any]) -> dict[str, Any]:
     content = path.read_text(encoding="utf-8")
     if old not in content:
         raise ValueError("fixture_edit_anchor_missing")
-    path.write_text(content.replace(old, new, 1), encoding="utf-8")
-    return {"affected_paths": [relative], "verification": {"status": "verified"}}
+    updated = content.replace(old, new, 1)
+    path.write_text(updated, encoding="utf-8")
+    digest = hashlib.sha256(updated.encode()).hexdigest()
+    read_back = hashlib.sha256(path.read_bytes()).hexdigest()
+    return {"affected_paths": [relative], "after_sha256": digest,
+            "verification": {"status": "verified", "post_write_sha256": read_back}}
 
 
 def _read_fixture(root: Path, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -584,7 +608,7 @@ def _scenario(case_id: str) -> _Scenario:
             acceptance="The known treatment is recalled and the health event is recorded.", final_response="Listo, registré el evento con el tratamiento conocido.",
         ),
         "prescription-image-ocr": _Scenario(
-            actions=(_Action("native.analyze_image", "attachment_analysis", {"asset_id": "prescription-image"}, role="extract", result={"medicines": ["Medicine A"]}),),
+            actions=(_Action("native.respond", "attachment_analysis", {"message": "Medicine A"}, role="extract", behavior="respond", side_effect="user_response"),),
             acceptance="Medicine names are extracted from the attached prescription.", final_response="Extraje el nombre del medicamento de la receta.",
         ),
         "markdown-prescription-no-ocr": _Scenario(
@@ -625,7 +649,10 @@ def _scenario(case_id: str) -> _Scenario:
                 _Action(
                     "native.scheduled_task", "scheduling",
                     {"name": "Subir yogurt a mi suegra", "schedule_kind": "once", "local_time": "09:00", "day": "today"},
-                    role="schedule", read_only=False, result={"scheduled_task_id": "fixture-reminder", "run_at": "today 09:00"},
+                    role="schedule", read_only=False, result={
+                        "scheduled_task_id": "fixture-reminder", "run_at": "today 09:00",
+                        "verification": {"status": "verified", "source": "schedule_store_readback"},
+                    },
                     side_effect="external_reversible",
                 ),
             ),

@@ -62,7 +62,7 @@ class ToolRevealPolicy:
         Capability.SKILL_MANAGEMENT.value: "Install or maintain reusable skill packages under the requester's authorized workflow; maintenance also requires local_shell for validation.",
         Capability.SKILL_RESOURCES.value: "Inspect activated skill references, script documentation/source and text assets without execution or live data access.",
         Capability.MEMORY_RECALL.value: "Search the user's conversation history and bounded memory for the task's authorized scope.",
-        Capability.ATTACHMENT_ANALYSIS.value: "Analyze an image attached to the current task.",
+        Capability.ATTACHMENT_ANALYSIS.value: "Use images supplied directly to the selected inference model, following selected skill guidance.",
         Capability.DOCUMENT_EXTRACTION.value: "Extract information from a discovered document.",
         Capability.EXACT_TEXT_MUTATION.value: "Legacy exact text mutation capability; use local_shell for new plans.",
         Capability.COMMUNICATION.value: "Deliver a message to another registered user.",
@@ -165,6 +165,8 @@ def action_compatibility_error(subgoal: PhaseSubgoal, descriptor: "ToolDescripto
     effects = set(subgoal.allowed_side_effects)
     if descriptor.tool_id == "native.ask_question":
         compatible = bool(effects & {SideEffectClass.READ_ONLY, SideEffectClass.USER_RESPONSE})
+    elif descriptor.tool_id == "native.respond":
+        compatible = SideEffectClass.USER_RESPONSE in effects
     elif descriptor.tool_id == "native.bash" or descriptor.read_only:
         compatible = True
     elif descriptor.metadata.get("side_effect_class"):
@@ -243,7 +245,7 @@ _TOOL_CAPABILITIES: dict[str, tuple[str, ...]] = {
     "native.bash": (Capability.LOCAL_SHELL.value,),
     "native.skill_read": (Capability.SKILL_RESOURCES.value,),
     "native.search_memory": (Capability.MEMORY_RECALL.value,),
-    "native.analyze_image": (Capability.ATTACHMENT_ANALYSIS.value,),
+    "native.read_memory_source": (Capability.MEMORY_RECALL.value,),
     "native.deliver_message": (Capability.COMMUNICATION.value,),
     "native.scheduled_task": (Capability.SCHEDULING.value,),
     "native.scheduled_task_delivery": (Capability.SCHEDULING.value,),

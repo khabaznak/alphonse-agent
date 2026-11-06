@@ -25,6 +25,12 @@ class FailureInference:
         return SimpleNamespace(content=EXPLANATION)
 
 
+class FailureReview:
+    def review_task_failure(self, *, message, explanation):
+        assert message
+        return explanation == EXPLANATION
+
+
 def _task():
     return TaskState(
         task_id="current", message_id="current", user="alex",
@@ -44,7 +50,7 @@ def test_no_progress_failure_keeps_failed_status_and_prepares_evidence_based_exp
     task = _task()
     inference = FailureInference()
     questions = SQLiteQuestionStore(":memory:")
-    context = CoreLoopContext(messages=InMemoryMessageQueue(), inference=inference, question_store=questions)
+    context = CoreLoopContext(messages=InMemoryMessageQueue(), inference=inference, question_store=questions, system_one=FailureReview())
 
     result = HierarchicalCAPDProcessor._result(task, context)
 
@@ -70,8 +76,22 @@ def test_failure_explanation_generation_failure_preserves_original_failure():
 
     assert result.status == ProcessingStatus.FAILED
     assert result.error == f"v3_task_failed:{REASON}"
-    assert "v3_failure_response" not in task.metadata
+    assert task.metadata["v3_failure_response"]["source"] == "v3_failure_fallback"
+    assert "not been fully verified" in task.metadata["v3_failure_response"]["message"]
     assert task.metadata["v3_failure_response_error_type"] == "RuntimeError"
+
+
+def test_failure_explanation_keeps_successful_observations_and_redacts_named_secrets():
+    task = _task()
+    task.hierarchical_state["evidence"]["entries"].insert(0, {
+        "evidence_ref": "action:earlier", "tool_id": "native.bash", "status": "success",
+        "result": {"exit_code": 0, "stdout": '{"temperature_c":24}', "api_key": "DO_NOT_FORWARD"},
+    })
+    inference = FailureInference()
+    HierarchicalCAPDProcessor._result(task, CoreLoopContext(messages=InMemoryMessageQueue(), inference=inference, system_one=FailureReview()))
+    assert "temperature_c" in inference.requests[0].prompt and "24" in inference.requests[0].prompt
+    assert "DO_NOT_FORWARD" not in inference.requests[0].prompt
+    assert task.status == "failed"
 
 
 def test_failure_closure_reuses_prepared_response_without_another_model_call():
@@ -80,7 +100,7 @@ def test_failure_closure_reuses_prepared_response_without_another_model_call():
     task.metadata["prepared_user_response"] = {"source": "native.respond", "message": EXPLANATION}
     inference = FailureInference()
 
-    HierarchicalCAPDProcessor._result(task, CoreLoopContext(messages=InMemoryMessageQueue(), inference=inference))
+    HierarchicalCAPDProcessor._result(task, CoreLoopContext(messages=InMemoryMessageQueue(), inference=inference, system_one=FailureReview()))
 
     assert task.metadata["v3_failure_response"]["message"] == EXPLANATION
     assert inference.requests == []
@@ -102,6 +122,7 @@ def test_daemon_delivers_failure_explanation_to_origin_and_records_actual_text()
     assert outbound.kind == "task_failed"
     assert outbound.integration_id == "desktop"
     assert outbound.message == EXPLANATION
+    assert outbound.task_id == task.task_id
     events = runtime.conversation_store.list_recent(owner_user_id="alex")
     assert events[-1].content == EXPLANATION
 
@@ -133,6 +154,7 @@ def test_daemon_terminal_failure_projects_explanation_instead_of_generic_fallbac
             task.outcome = failed.outcome
             task.hierarchical_state = failed.hierarchical_state
             context.inference = inference
+            context.system_one = FailureReview()
             return HierarchicalCAPDProcessor._result(task, context)
 
     runtime.core.intelligence = FailedProcessor()
@@ -159,3 +181,63 @@ def test_required_service_failure_does_not_attempt_another_inference():
 
     assert result.error == task.outcome["reason"]
     assert inference.requests == []
+
+
+def test_failure_closure_cannot_reuse_a_reassuring_success_response():
+    task = _task()
+    task.metadata["act_directive"] = {"closure_only": True}
+    task.metadata["prepared_user_response"] = {"message": "Done, everything is fixed."}
+    inference = FailureInference()
+    result = HierarchicalCAPDProcessor._result(task, CoreLoopContext(
+        messages=InMemoryMessageQueue(), inference=inference, system_one=FailureReview()))
+    assert result.status == ProcessingStatus.FAILED
+    assert task.metadata["v3_failure_response"]["source"] == "v3_failure_fallback"
+    assert "ask me to retry" in task.metadata["v3_failure_response"]["message"]
+    assert "everything is fixed" not in task.metadata["v3_failure_response"]["message"]
+    assert inference.requests == []
+
+
+def test_unavailable_failure_review_preserves_failure_and_provides_next_action():
+    task = _task()
+    class UnavailableReview:
+        def review_task_failure(self, **kwargs):
+            raise RuntimeError("review unavailable")
+    result = HierarchicalCAPDProcessor._result(task, CoreLoopContext(
+        messages=InMemoryMessageQueue(), inference=FailureInference(), system_one=UnavailableReview()))
+    assert result.status == ProcessingStatus.FAILED
+    assert "not been fully verified" in task.metadata["v3_failure_response"]["message"]
+    assert "ask me to retry" in task.metadata["v3_failure_response"]["message"]
+
+
+def test_rejected_final_review_reports_preserved_draft_without_delivering_it():
+    runtime = build_runtime_host()
+    queued = runtime.channel.queue_message(prompt='Read the fixture schedule', user='alex',
+        integration_id='desktop', provider_key='desktop', channel_target='alex')
+    task = _task(); task.message_id = queued.message_id
+    task.outcome = {'status': 'failure', 'reason': 'system_one_unavailable:act_recommendation:system_one_context_limit_exceeded'}
+    task.set_acceptance_contract_from_markdown('1.- [ ] The recorded schedule is retrieved')
+    task.acceptance_contract['criteria'][0]['status'] = 'satisfied'
+    task.metadata['prepared_user_response'] = {'message': 'PRIVATE_UNDELIVERED_DRAFT'}
+    task.metadata['v3_phase_review'] = {'status': 'phase_verified_task_complete'}
+    V2Daemon(runtime)._notify_inbound_failure(queued, error=task.outcome['reason'], task_state=task.to_dict())
+    notification = runtime.outbox.list()[0]
+    assert 'size limit' in notification.message and 'draft answer was prepared' in notification.message
+    assert 'draft was not delivered' in notification.message
+    assert 'PRIVATE_UNDELIVERED_DRAFT' not in notification.message
+    assert 'temporarily unavailable' not in notification.message
+    assert notification.kind == 'task_failed' and task.status == 'failed'
+    assert task.metadata['prepared_user_response']['message'] == 'PRIVATE_UNDELIVERED_DRAFT'
+
+
+def test_final_review_progress_does_not_cross_task_or_owner_boundary():
+    runtime = build_runtime_host()
+    queued = runtime.channel.queue_message(prompt='Read the fixture schedule', user='alex',
+        integration_id='desktop', provider_key='desktop', channel_target='alex')
+    task = _task(); task.message_id = 'different-message'
+    task.set_acceptance_contract_from_markdown('1.- [ ] The recorded schedule is retrieved')
+    task.acceptance_contract['criteria'][0]['status'] = 'satisfied'
+    task.metadata['prepared_user_response'] = {'message': 'PRIVATE_UNDELIVERED_DRAFT'}
+    task.metadata['v3_phase_review'] = {'status': 'phase_verified_task_complete'}
+    V2Daemon(runtime)._notify_inbound_failure(queued,
+        error='system_one_unavailable:act_recommendation:system_one_request_rejected:400', task_state=task.to_dict())
+    assert 'draft answer was prepared' not in runtime.outbox.list()[0].message

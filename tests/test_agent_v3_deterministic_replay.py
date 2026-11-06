@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from pathlib import Path
 
 from alphonse.agent_v2.evaluation.deterministic_adapters import v2_runner, v3_runner
@@ -23,3 +25,7 @@ def test_checked_in_corpus_runs_through_real_v2_and_v3_processors() -> None:
     # treating a diagnostic replay as a gate pass.
     assert report["summary"]["engines"]["tactical_v2"]["failed"] > 0
     assert report["summary"]["engines"]["hierarchical_v3"]["failed"] > 0
+
+
+# Existing scripted providers delegate the shared interpretation call explicitly.
+pytestmark = pytest.mark.usefixtures("task_understanding_provider")

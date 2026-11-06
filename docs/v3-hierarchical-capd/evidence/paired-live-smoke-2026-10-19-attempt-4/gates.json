@@ -1,0 +1,40 @@
+{
+  "experiment_kind": "harness_smoke",
+  "gates": {
+    "DC-0": "pass",
+    "DC-1": "unassessed",
+    "DC-2": "unassessed",
+    "DC-3": "unassessed",
+    "DC-4": "unassessed",
+    "DC-5": "unassessed"
+  },
+  "invalid_reason": null,
+  "complete": true,
+  "expected_arm_runs": 6,
+  "recorded_arm_runs": 6,
+  "measured_arm_runs": 6,
+  "failures_including_warmup": [
+    "current-state:smoke:legacy",
+    "current-state:smoke:candidate",
+    "follow-up-query:smoke:legacy",
+    "follow-up-query:smoke:candidate"
+  ],
+  "candidate_failures_including_warmup": [
+    "current-state:smoke:candidate",
+    "follow-up-query:smoke:candidate"
+  ],
+  "historical_instances": 131,
+  "irrelevant_instances": 85,
+  "independent_human_review": "unassessed",
+  "rollout_accepted": false,
+  "usage": {
+    "system_two_calls": 49,
+    "jev_calls": 141,
+    "native_tool_calls": 45
+  },
+  "limits": [
+    "DC-2 requires independent full-response/trace review; regex diagnostics cannot pass it.",
+    "DC-1 qualification belongs to #24; repeated comparisons and human review belong to #25.",
+    "Provider usage is retained per call; missing usage is unavailable, never zero."
+  ]
+}

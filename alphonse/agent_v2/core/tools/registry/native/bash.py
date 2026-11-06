@@ -35,6 +35,23 @@ BASH_ARGUMENT_SCHEMA: dict[str, Any] = {
         "required_files": {"type": "array", "items": {"type": "string"}, "description": "Optional documented prerequisite files. Relative to resolved cwd; absolute paths denote explicit host configuration. Check existence/readability before dispatch. No files are created."},
         "binding_names": {"type": "array", "items": {"type": "string"}, "minItems": 1, "uniqueItems": True,
                           "description": "Explicit logical binding roles configured for this actor. Trusted scripts read ALPHONSE_SKILL_BINDINGS JSON from their process environment; never put credential values in commands."},
+        "verification": {
+            "type": "object", "additionalProperties": False,
+            "description": "Optional independent harness read-back of the authorized resource before and after this command; never relies on the command's own success claim.",
+            "properties": {
+                "source": {"type": "string", "enum": ["skill_data_json", "workspace_text", "public_json"],
+                           "description": "Independent actor-authorized binding, scoped file, or nonce-aware public receipt."},
+                "binding_name": {"type": "string", "description": "Selected data binding also supplied in binding_names."},
+                "path": {"type": "string", "description": "Scoped workspace-relative text file path."},
+                "url": {"type": "string", "description": "Public JSON read-back URL on an origin explicitly named in the request; no redirects."},
+                "pointer": {"type": "string", "description": "JSON Pointer to the requested value in a bound JSON file or public receipt."},
+                "nonce_pointer": {"type": "string", "description": "JSON Pointer to the per-action nonce returned by a nonce-v1 public receipt."},
+                "event_pointer": {"type": "string", "description": "JSON Pointer to the new resource-specific event ID in a nonce-v1 public receipt."},
+                "expected": {"type": ["string", "number", "boolean", "null"], "maxLength": 4096,
+                             "description": "Exact value to verify against the independent source."},
+                "require_change": {"type": "boolean", "description": "Require the source value or public event ID to change; required for workspace and public receipts."},
+            }, "required": ["source", "expected"],
+        },
         "cwd": {
             "type": "string",
             "description": "Optional working directory. With skill_id, omit for package root or supply a contained package-relative directory; absolute cwd must also be within that package. Otherwise defaults to the authorized project or the active owner’s ordinary workspace.",
@@ -62,7 +79,11 @@ def build_bash_tool_definition() -> ToolDefinition:
             "Execute one Bash command on the local host and return stdout/stderr. Use Bash for local file and project work: "
             "search filenames and file contents with find, rg, or grep; read files with cat or sed; create and edit "
             "files with shell redirection or standard command-line editors; and verify changes by reading them back "
-            'or comparing diffs. For standard package scripts supply skill_id, follow the documented command and '
+            'or comparing diffs. For independently verifiable effects, verification can read an authorized skill data JSON field, '
+            'a scoped workspace text file, or a public JSON endpoint on a user-provided origin before and after the command. Data bindings require owner-configured alphonse_verification_authority=resource_state. '
+            'Public confirmation requires the service to return the per-action ALPHONSE_VERIFICATION_NONCE, a new event ID, and the matching value. '
+            'A data binding read-back establishes only the bound data, not that a cache represents a physical device. '
+            'For standard package scripts supply skill_id, follow the documented command and '
             'interpreter, and quote paths/ALPHONSE_SKILL_ROOT/ALPHONSE_SKILL_RUNTIME. Check dependencies with the '
             'documented runtime (for example imports) before mutation; missing prerequisites require actionable setup, '
             'never an automatic install or repeated failing route. A zero exit alone does not verify a write: read back '
@@ -157,6 +178,7 @@ def _execute_bash(arguments: dict[str, Any], *, context: ToolExecutionContext | 
         cwd = _resolve_cwd(arguments.get("cwd"), context=context)
     environment = dict(os.environ)
     environment.pop("ALPHONSE_SKILL_BINDINGS", None)
+    environment.pop("ALPHONSE_VERIFICATION_NONCE", None)
     if skill_root:
         environment["ALPHONSE_SKILL_ROOT"] = str(skill_root)
     runtime = _resolve_runtime(arguments.get("runtime"), skill_root or Path(cwd))
@@ -177,6 +199,16 @@ def _execute_bash(arguments: dict[str, Any], *, context: ToolExecutionContext | 
     if cancelled and cancelled():
         return {"exit_code": -1, "stdout": "", "stderr": "Command cancelled before dispatch.",
                 "cancelled": True, "timed_out": False, "cwd": cwd, "timeout_seconds": timeout_seconds, "duration_ms": 0}
+    verification = before = None
+    if "verification" in arguments:
+        from .bash_verification import prepare_verification, observe
+        verification = prepare_verification(arguments["verification"], arguments, context, prepared, cwd)
+        before = observe(verification, before=True, context=context)
+        if verification['nonce']:
+            environment['ALPHONSE_VERIFICATION_NONCE'] = verification['nonce']
+        if cancelled and cancelled():
+            return {"exit_code": -1, "stdout": "", "stderr": "Command cancelled before dispatch.",
+                    "cancelled": True, "timed_out": False, "cwd": cwd, "timeout_seconds": timeout_seconds, "duration_ms": 0}
     started_at = time.monotonic()
 
     try:
@@ -202,7 +234,7 @@ def _execute_bash(arguments: dict[str, Any], *, context: ToolExecutionContext | 
             "duration_ms": _duration_ms(started_at),
         }
 
-    return {
+    result = {
         "exit_code": int(process.returncode),
         "stdout": output(stdout),
         "stderr": output(stderr),
@@ -212,6 +244,23 @@ def _execute_bash(arguments: dict[str, Any], *, context: ToolExecutionContext | 
         "timeout_seconds": timeout_seconds,
         "duration_ms": _duration_ms(started_at),
     }
+    if verification is not None and result["exit_code"] == 0:
+        try:
+            from .bash_verification import finish_verification, observe, output_reports_failure
+            if output_reports_failure(result['stdout'], result['stderr']):
+                raise ValueError('verification_action_reported_failure')
+            if cancelled and cancelled():
+                raise ValueError('verification_cancelled')
+            after = observe(verification, before=False, context=context)
+            if cancelled and cancelled():
+                raise ValueError('verification_cancelled')
+            result['verification'] = finish_verification(verification, before, after, context)
+        except Exception:
+            # The command may already have changed a resource. Preserve its
+            # evidence, fail closed, and never automatically replay the action.
+            result['verification_failed'] = True
+            result['verification'] = {'status': 'unavailable', 'source': 'bash_independent_readback'}
+    return result
 
 
 class _CommandCancelled(subprocess.TimeoutExpired):

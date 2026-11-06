@@ -44,6 +44,7 @@ def plan_acceptance_contract(task: "TaskState", context: "CoreLoopContext | None
         result = context.inference.generate_markdown(InferenceRequest(
             prompt=prompt, purpose=InferencePurpose.ACCEPTANCE_CRITERIA,
             project_id=task.project_id, user=task.user, task_id=task.task_id,
+            images=context.image_inputs(task),
             cancel_checker=context.is_cancelled if context.cancellation_checker is not None else None,
         ))
         criteria = str(result.content or "").strip()
@@ -67,6 +68,7 @@ def plan_acceptance_contract(task: "TaskState", context: "CoreLoopContext | None
     result = context.inference.generate_json(InferenceRequest(
         prompt=prompt, purpose=InferencePurpose.ACCEPTANCE_CRITERIA,
         project_id=task.project_id, user=task.user, task_id=task.task_id,
+        images=context.image_inputs(task),
         cancel_checker=context.is_cancelled if context.cancellation_checker is not None else None,
     ))
     task.metadata["acceptance_criteria_amendment_plan_prompt"] = prompt

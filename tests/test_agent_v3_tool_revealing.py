@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from alphonse.agent_v2.core.core import ToolDescriptor, ToolKind
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.intelligence.v3 import Capability
@@ -51,7 +53,7 @@ def test_solar_record_discovery_hides_ocr_home_assistant_and_lg() -> None:
     available = (
         _descriptor("native.project_search", Capability.PROJECT_RECORD_SEARCH),
         _descriptor("native.search_memory", Capability.MEMORY_RECALL),
-        _descriptor("native.analyze_image", Capability.ATTACHMENT_ANALYSIS),
+        _descriptor("fixture.document_reader", Capability.ATTACHMENT_ANALYSIS),
         _descriptor("artifact.home_assistant", Capability.HOME_AUTOMATION),
         _descriptor("artifact.lg", Capability.DEVICE_CONTROL),
     )
@@ -67,7 +69,7 @@ def test_attachment_analysis_requires_attachment_or_discovered_document() -> Non
         allowed_capabilities=(Capability.ATTACHMENT_ANALYSIS.value,),
     )
     state = _state(subgoal)
-    tool = _descriptor("native.analyze_image", Capability.ATTACHMENT_ANALYSIS)
+    tool = _descriptor("fixture.document_reader", Capability.ATTACHMENT_ANALYSIS)
 
     hidden = ToolRevealPolicy().reveal(TaskState(project_id="health"), state, subgoal, (tool,))
     visible = ToolRevealPolicy().reveal(
@@ -77,7 +79,7 @@ def test_attachment_analysis_requires_attachment_or_discovered_document() -> Non
 
     assert hidden.tools == ()
     assert hidden.decisions[0].reason == "attachment_required"
-    assert [item.tool_id for item in visible.tools] == ["native.analyze_image"]
+    assert [item.tool_id for item in visible.tools] == ["fixture.document_reader"]
 
 
 def test_plain_markdown_record_does_not_satisfy_ocr_prerequisite() -> None:
@@ -90,24 +92,25 @@ def test_plain_markdown_record_does_not_satisfy_ocr_prerequisite() -> None:
 
     result = ToolRevealPolicy().reveal(
         TaskState(project_id="health"), state, subgoal,
-        (_descriptor("native.analyze_image", Capability.ATTACHMENT_ANALYSIS),),
+        (_descriptor("fixture.document_reader", Capability.ATTACHMENT_ANALYSIS),),
     )
 
     assert result.tools == ()
 
 
-def test_memory_recall_is_available_for_unassociated_conversation() -> None:
+@pytest.mark.parametrize("tool_id", ["native.search_memory", "native.read_memory_source"])
+def test_memory_recall_is_available_for_unassociated_conversation(tool_id) -> None:
     subgoal = PhaseSubgoal(
         "recall", "Recall treatment", "memory_matches",
         allowed_capabilities=(Capability.MEMORY_RECALL.value,),
     )
-    tool = _descriptor("native.search_memory", Capability.MEMORY_RECALL)
+    tool = _descriptor(tool_id, Capability.MEMORY_RECALL)
 
     unassociated = ToolRevealPolicy().reveal(TaskState(), _state(subgoal), subgoal, (tool,))
     visible = ToolRevealPolicy().reveal(TaskState(project_id="health"), _state(subgoal), subgoal, (tool,))
 
-    assert [item.tool_id for item in unassociated.tools] == ["native.search_memory"]
-    assert [item.tool_id for item in visible.tools] == ["native.search_memory"]
+    assert [item.tool_id for item in unassociated.tools] == [tool_id]
+    assert [item.tool_id for item in visible.tools] == [tool_id]
 
 
 def test_exact_mutation_requires_scope_and_subgoal_authorization() -> None:

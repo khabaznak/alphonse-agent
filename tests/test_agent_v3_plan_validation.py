@@ -267,3 +267,6 @@ def test_failed_correction_preserves_actual_completed_subgoal_after_checkpoint(t
     assert restored.hierarchical_state['bindings']['value']['value'] == {'value': 'synthetic'}
     assert len(restored.hierarchical_state['actions']) == 1
     assert len(calls) == 1
+
+
+pytestmark = pytest.mark.usefixtures("task_understanding_provider")

@@ -1,0 +1,206 @@
+# Bounded conversation and active-task continuity
+
+Issue #15, under #10; builds on #12's canonical source contracts.
+Implementation candidate, 2026-10-17. Live rollout gates remain in
+[the evaluation protocol](07-memory-evaluation.md).
+
+`core/memory/transcript.py` projects at most three recent exchanges within a
+character budget. A user record starts an exchange; subsequent assistant records
+belong to it until the next user record. Consecutive user messages each form a
+record-sized exchange. Date, channel, project and memory-session changes never
+split or discard a record. The store fetch is owner scoped and capped at 30
+records; deterministic access filtering and canonical-ID deduplication precede
+selection. The projection is a small immediate window, not semantic task selection
+or complete historical recall. It can contain unrelated recent exchanges, but
+completed tasks cannot accumulate without bound. Older context requires recall.
+
+Current-task messages get priority over the historical window. New checkpoints
+persist structured conversation records so multiline steering stays whole. Old
+Markdown checkpoints remain readable as opaque records, including any old prefix
+before subsequently appended structured messages. The newest canonical user turn
+can replace an identical current turn; earlier repeated short answers remain
+separate events. Task-local working IDs and canonical IDs remain distinct.
+
+History fits as whole exchanges or is omitted. After a historical exchange fails
+to fit, older exchanges are withheld too, avoiding an older answer presented as
+the immediate antecedent. Current steering fits as whole messages, newest first.
+Oversized current records are explicitly omitted rather than sliced. Tiny budgets
+may not fit even the omission notice; metadata still reports missing records.
+`conversation_sources` now describes only canonical records actually included in
+full. `conversation_projection` describes source IDs/reasons for historical
+omissions, included/omitted task-local record IDs, required recall, fetch failure,
+and a possibly incomplete 30-record store window. It does not claim a full-history
+coverage scan or resolve ambiguous pronouns by guessing.
+
+`core/memory/continuity.py` projects only the current checkpoint's objective,
+acceptance constraints, actual pending/answered question, and evidence status with
+stable task-evidence references. It reserves 9,000 characters before optional
+conversation/project/memory sections. Overflow omits whole records and sets
+`active_continuity_projection.reserved_overflow`; omitted text remains in the
+checkpoint. This extractive projection uses no generated prose, invented outcomes,
+or imported historical permission. Failed and successful execution statuses retain
+their original meaning; the ordinary deterministic effect/authorization/terminal
+checks remain authoritative. It is not a claim that a successful call verified its
+effects. System One admission and final context assembly omit whole opaque records
+or sections rather than slicing conversation/goal text downstream.
+
+Question resolution retains the question and normalized answer together in the
+checkpoint independently of plan compaction. Channel delivery metadata is excluded
+from the continuity projection. Reopening the SQLite question store and changing
+the memory session do not lose the pair. Existing explicit question expiry still
+applies; midnight itself has no effect.
+
+## Task selection and resumption
+
+The existing runtime boundaries remain authoritative:
+
+1. An authenticated explicit question ID (or bound provider reply ID) selects only
+   a pending question assigned to that respondent. With no target, exactly one
+   pending question may resume; several return an ambiguity response and park all
+   tasks. Neither project nor newest timestamp breaks this tie.
+2. The selected question loads its exact persisted task ID, preserving the original
+   objective, constraints and audit evidence. Its answer is checkpointed before
+   requeue. A different channel can deliver the answer.
+3. An authorized active correlation routes a correlated response. The same owner's
+   active project can nominate steering; Jev's existing bounded intake decision
+   determines relevance before consumption, within deterministic eligibility.
+4. Other messages enter normal admission with the bounded immediate conversation
+   window. Historical context never revives a completed task or copies its mutation
+   authority. Ambiguous language can require a new clarification. There is no new
+   heuristic that picks one of several persisted tasks by lexical similarity.
+
+## Validation and limits
+
+### System Two native memory workflow (#166)
+
+Historical interpretation belongs to System Two. Strategic and tactical prompts
+share `core/memory/workflow.py`: use current steering and authenticated answers
+first, compose targeted `native.search_memory` queries, expand stable source IDs
+with `native.read_memory_source`, and deliberately resolve dates, references and
+conflicting episodes. These are the existing native memory adapters and stores;
+there is no second memory system or automatic originating-episode selector.
+Jev may curate memory capabilities and judge bounded relevance, but does not
+choose the retry source, compose queries or resolve a historical workflow.
+
+Missing history is an information dependency of the operation that needs it.
+System Two expresses phase prerequisites with `depends_on`, orders independent
+fully specified work before a blocking question, and uses `native.ask_question`
+for one specific unresolved source/value/conflict. The existing question store
+persists the question and task checkpoint and parks execution until an authenticated
+answer arrives. On resumption, use that question/answer and current corrections;
+do not repeatedly reject plans or ask for the same information.
+
+A standalone reminder can schedule and verify persistence despite optional recall
+being ambiguous or unavailable. An updated-file retry can use current steering
+and authorized history to identify the resource, but must freshly inspect its
+current contents before acting. Old observations never establish current state.
+Search coverage, original source IDs, dates, uncertainty and read-time access checks
+remain intact; private, deleted and unavailable sources are not substitute evidence.
+Ownership, scope, prerequisites, cancellation and verified effects remain enforced
+by deterministic runtime code. Historical content and answers never grant authority.
+
+`retry_context.py` now interprets only authenticated current answers with System
+Two and expands legacy checkpoint source IDs under current access. It does not
+scan history or call Jev to screen, compare or confirm retry episodes. Legacy
+selected sources are candidate context for System Two to reassess, never an
+instruction binding the task to a particular episode. Legacy ambiguous/unavailable
+statuses and revoked optional sources cannot veto planning, execution or Act.
+
+A resolved answer assessment must cite valid same-task/requester receipts,
+including the latest answer, with no remaining missing information. Whole inputs
+are bounded (32 receipts/24,000 characters); malformed, cancelled or unavailable
+assessments preserve the information gap for System Two. Cached assessments survive
+restart but invalidate when steering or answers change. Acceptance criteria,
+authorization and execution effects cannot be changed by an answer assessment.
+
+The following earlier read-only evaluations concern clarification interpretation,
+not end-to-end qualification of this replacement workflow:
+
+A configured-System-Two read-only evaluation on 2026-11-02 used only invented
+invoice/calendar inputs. A complete replacement source resolved the gap; partial
+and conflicting answers each retained a specific clarification requirement. No
+task was submitted or database record changed. A separately approved read-only replay
+of the failed household checkpoint passed twice through the configured System Two
+provider: the complete latest authenticated answer was retained, the historical
+question-only blocker was released, and no Jev recall/source-selection call was
+made. No task was submitted or record changed. Actual database update/read-back
+and owner acceptance remain pending; these checks validate context resolution only.
+
+Clarification answer references include a `clarification_answer` provenance reason.
+Work-log rendering also accepts already-saved source/omission references without
+that optional reason and labels it `unspecified`, without rewriting evidence.
+A missing display reason must not break the Desktop polling response or appear as
+a daemon disconnect. The regression exercises the A2UI task-progress path; a
+read-only replay of the affected saved checkpoint confirms it renders successfully.
+
+
+The binding stores a current-request/steering fingerprint and canonical source IDs,
+never cached prescription contents or imported mutation authority. Every prompt
+rechecks source access and existence. Missing antecedents withhold the whole bundle
+rather than displaying approval without the payload it approved. Selected sources
+fit whole within 16,000 characters/32 records; otherwise context reports the limit
+and requires targeted recall or a concrete source question. Current attachments
+take precedence over historical source selection. New steering invalidates the
+binding. The default path and the opt-in projection both supply source receipts
+to admission, tool curation, planning, execution and review; projection inputs are
+required records and therefore cannot be silently evicted by optional history.
+An unresolved or revoked binding cannot fall back to writing an older similar
+record: Plan must produce one specific source/change question, with its native
+capability retained only within runtime exposure. The executor rechecks bound
+sources before each action, including resumed phases, and blocks an already
+planned operation if the originating payload becomes unavailable.
+
+This selects task parameters for the current authorized retry. It does not resume
+an old failed task, copy its authorization, prove that a record was written, or
+modify any skill/artifact program. Jev selects bounded sources only; System Two
+composes plans and operations, and deterministic ownership, scope, cancellation
+and effect checks remain authoritative.
+
+Synthetic regressions place a reviewed October prescription and its confirmation
+behind forty failed retries, alongside an older September treatment and another
+owner's private records. Both context paths recover the October source and retain
+its uncertainty; a disposable SQLite transaction and fresh read-back preserve the
+older record and create the requested new one. The regressions also cover restart,
+revocation, ambiguity, fresh attachments, steering changes and whole-source limits.
+No synthetic test calls a live provider or writes household records.
+
+An explicitly approved read-only live diagnostic on 2026-10-31 recovered the exact
+original payload and confirmation IDs and reloaded both complete records in two
+trials. Source-form confidence was 0.96/0.96, comparative choice 0.81/0.82, and
+independent source support 0.92/0.92, at the unchanged 0.8 threshold. The diagnostic
+used a read-only SQLite connection, submitted no Alphonse task and changed zero
+rows. This validates source recovery only: live database mutation/read-back and
+owner acceptance remain pending. Household source contents are not included here.
+
+Eleven new synthetic tests cover complete exchange omissions and manifests,
+repeated short answers, retry/pronoun antecedents, channel and midnight changes,
+multiline and legacy checkpoints, tiny budgets, task restart/plan compaction,
+multiple pending tasks, owner isolation, failed evidence, and explicit overflow.
+
+The version 4 [offline candidate](evidence/memory-continuity-v4/results.json)
+retains the frozen version 1 corpus and version 1–3 evidence. Necessary-source
+recall is unchanged on every existing case. No live inference or external action
+was performed. This is not evidence of end-to-end pronoun interpretation or
+permission safety by a live model. Implicit recall beyond the window remains
+incomplete; a recent irrelevant record may still be present. Source-linked
+extractive working state avoids introducing a new generative summarizer.
+
+Full Python verification: 718 passed, 36 failed. All 36 failure identities also
+occur against an archive of unchanged HEAD `1d20b7a` (707 passed, 36 failed).
+The candidate introduces 11 passing tests and no new full-suite failures. Existing
+failures include legacy project-context expectations, V2 CAPD/Act provider setup,
+IPC/UI contracts, and prior Jev admission/intake expectations; they are not waived
+rollout gates. Replay preserves necessary-source recall, reduces aggregate
+irrelevant included sources from 83 to 29, and increases the aggregate prompt
+estimate from 3,287 to 3,776 tokens because explicit task-state/provenance labels
+add overhead. Token reduction and live answer quality are not claimed.
+
+### 2026-11-02: unresolved recall must permit evidence gathering
+
+An ambiguous historical-source selection no longer forces a user question before
+read-only discovery. Plan and Do allow read-only subgoals and evidence-grounded
+responses against selected skill resources or authorized memory. Source-dependent
+mutations and mixed read/write stages remain blocked until the intended source is
+resolved; unknown recall is neither denial of access nor proof of absent records.
+The ordinary authorization, effect, source visibility, and acceptance checks still
+apply. No household records are copied into product fixtures.

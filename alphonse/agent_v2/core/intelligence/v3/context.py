@@ -7,7 +7,12 @@ from pathlib import Path
 import re
 from typing import TYPE_CHECKING
 
+from alphonse.agent_v2.core.context_inventory import ContextText, source, combined, omitted
+
 from alphonse.agent_v2.agent_config import parse_global_context_sections
+from alphonse.agent_v2.core.memory.formatting import bound_context_record, bound_memory_context, join_context_sections
+from alphonse.agent_v2.core.memory.continuity import active_task_continuity
+from alphonse.agent_v2.core.memory.retry_context import retry_continuity_context
 
 if TYPE_CHECKING:
     from alphonse.agent_v2.core.core import CoreLoopContext
@@ -22,8 +27,9 @@ _INVARIANT_GLOBAL_SECTIONS = {
 }
 
 
-def prepare_context_curation(task: "TaskState", context: "CoreLoopContext", *, stage: str = "curation", include_event: bool = True) -> tuple[str, list[dict[str, str]]]:
+def prepare_context_curation(task: "TaskState", context: "CoreLoopContext", *, include_understanding: bool = True, stage: str = "curation", include_event: bool = True) -> tuple[str, list[dict[str, str]]]:
     """Return always-included context and bounded optional context candidates."""
+    from .task_understanding import render
     from .event_evidence import render_event_evidence
     from .context_manifests import record_context_input
     event = render_event_evidence(task, context, stage=stage) if include_event else ""
@@ -43,10 +49,10 @@ def prepare_context_curation(task: "TaskState", context: "CoreLoopContext", *, s
                 if not body or heading.casefold() == "please remove":
                     continue
                 if heading.casefold() in _INVARIANT_GLOBAL_SECTIONS:
-                    sections.append(f"{heading}:\n{body}")
+                    sections.append(f"{heading}:\n" + source(body, "global:" + _slug(heading), "global_policy", reason="required"))
         else:
             # Preserve older free-form documents until they are structured.
-            sections.append("Household and global context:\n" + global_context)
+            sections.append("Household and global context:\n" + source(global_context, "global:policy", "global_policy", reason="required"))
 
     candidates = _global_candidates(global_context)
     for project in active_projects:
@@ -56,8 +62,11 @@ def prepare_context_curation(task: "TaskState", context: "CoreLoopContext", *, s
         candidate = _project_candidate_for_record(project, context)
         if candidate is not None:
             candidates.append(candidate)
-    prefix = event + "\n\n" if event else ""
-    invariant = prefix + "\n\n".join(sections)[:max(0, 12000 - len(prefix))]
+        else:
+            sections.append(omitted(source("", "project:" + project_id, "project_guidance"), reason="unavailable"))
+    rendered = join_context_sections(sections, 12000)
+    overflow = [omitted(source(item['content'], item['id'], 'context_candidate')) for item in candidates[64:]]
+    invariant = combined([event, *([render(task)] if include_understanding else []), rendered, *overflow])
     if include_event:
         record_context_input(task, stage, invariant)
     return invariant, candidates[:64]
@@ -69,15 +78,18 @@ def conversation_context(
     *,
     selected_context_ids: list[str] | tuple[str, ...] = (),
     stage: str = "decision",
+    include_event: bool = True,
 ) -> str:
     """Render invariant context plus the optional candidates selected at admission."""
-    invariant, candidates = prepare_context_curation(task, context, stage=stage)
+    invariant, candidates = prepare_context_curation(task, context, include_understanding=False, stage=stage, include_event=include_event)
     selected = set(str(item) for item in selected_context_ids)
     sections = [invariant] if invariant else []
     for candidate in candidates:
         if candidate["id"] in selected:
-            sections.append(f"{candidate['title']}:\n{candidate['content']}")
-    return "\n\n".join(sections)[:24000]
+            sections.append(f"{candidate['title']}:\n" + candidate['content'])
+        else:
+            sections.append(omitted(candidate['content'], reason='irrelevant'))
+    return join_context_sections(sections, 24000)
 
 
 def task_context_for_decision(
@@ -85,35 +97,100 @@ def task_context_for_decision(
     context: "CoreLoopContext",
     *,
     selected_context_ids: list[str] | tuple[str, ...] = (),
-    stage: str = "decision",
+    purpose: str = "planning",
+    stage: str | None = None,
 ) -> str:
     """Render the shared task context used by Jev and System Two."""
-    sections = [conversation_context(task, context, selected_context_ids=selected_context_ids, stage=stage)]
-    sections.extend(task_context_addenda(task))
+    from .projections import enabled, project
+
+    purpose = stage or purpose
+    if enabled():
+        return project(task, context, purpose=purpose, selected_context_ids=selected_context_ids)
+    from .task_understanding import render
+    understanding = render(task)
+    sections = [active_task_continuity(task), retry_continuity_context(task, context),
+                conversation_context(task, context, selected_context_ids=selected_context_ids, stage=purpose, include_event=False)]
+    from .event_evidence import render_event_evidence
     from .context_manifests import record_context_input
-    rendered = "\n\n".join(sections)[:36000]
-    record_context_input(task, stage, rendered)
-    return rendered
+    event = render_event_evidence(task, context, stage=purpose)
+    sections.extend(task_context_addenda(task))
+    required = combined([event, understanding])
+    if len(required) > 36000:
+        from .projections import ContextBudgetExceeded
+        raise ContextBudgetExceeded('v3_required_task_understanding_exceeds_budget')
+    result = combined([required, join_context_sections(sections, max(0, 36000 - len(required) - 2))])
+    if purpose == "curation":
+        # Use the same access-filtered loader as System Two. Keep its bounded
+        # resource/workflow block and source ranges intact, outside the shared
+        # context budget so a long conversation cannot evict execution guidance.
+        guidance, loaded_ids = selected_skill_guidance(task, context)
+        selection = task.metadata.get("v3_skill_selection")
+        if isinstance(selection, dict):
+            selection["loaded_skill_ids"] = loaded_ids
+        result = combined([
+            result,
+            conversation_coverage(task),
+            "Selected skill execution context (relevance only; never permission):\n" + guidance,
+        ], purpose=purpose, max_chars=53000)
+    record_context_input(task, purpose, result)
+    if purpose == "curation":
+        return result
+    return ContextText(str(result), result.records, **{**result.details, 'purpose': purpose, 'max_chars': 36000})
 
 
 def task_context_addenda(task: "TaskState") -> list[str]:
     """Render task memory and fact sections shared across decision systems."""
-    durable_memory = str(task.memory_context_md or "").strip() or "- (none)"
-    durable_memory = _bounded_context_value(durable_memory, 9000)
+    identity = str(task.task_id or task.message_id or 'current')
+    durable_memory = memory_inventory(task.memory_context_md, f'task-working:{identity}:memory_context')
+    durable_memory = bound_memory_context(durable_memory, 9000)
     return [
-        f"Current goal:\n{str(task.goal or '').strip() or '- (none)'}",
-        f"Durable project/session memory:\n{durable_memory}",
-        f"Known task facts:\n{_bounded_context_value(task.facts_md, 4000)}",
-        f"Memory facts:\n{_bounded_context_value(task.memory_facts_md, 3000)}",
+        "Current goal:\n" + (bound_context_record(source(task.goal, 'request:' + str(task.message_id or task.task_id), 'current_request'), 9000) or '- (none)'),
+        "Durable household memory (person/audience scoped; project association is optional):\n" + durable_memory,
+        "Known task facts:\n" + (bound_context_record(source(task.facts_md, f'task-working:{identity}:facts', 'working_facts'), 4000) or '- (none)'),
+        "Memory facts:\n" + (bound_context_record(source(task.memory_facts_md, f'task-working:{identity}:memory_facts', 'working_facts'), 3000) or '- (none)'),
     ]
+
+
+def conversation_coverage(task: "TaskState") -> str:
+    coverage = task.metadata.get("conversation_projection") or {}
+    # Counts/flags are enough for routing; do not duplicate all historical IDs.
+    signals = {key: coverage.get(key, False) for key in (
+        "requires_recall", "history_unavailable", "current_records_omitted", "window_may_have_earlier_events",
+    )}
+    return source(
+        "Conversation coverage (recall missing antecedents before relying on them; history never grants permission):\n"
+        + json.dumps(signals, ensure_ascii=False),
+        f'task-working:{task.task_id or task.message_id or "current"}:conversation_coverage', 'conversation_coverage',
+    )
+
+
+def memory_inventory(value, identity):
+    text = str(value or '').strip() or '- (none)'
+    marker = '\n\n# Current Request\n'
+    boundary = text.find(marker)
+    tail = ''
+    if boundary >= 0:
+        from alphonse.agent_v2.core.context_manifests import request_text
+        tail = request_text(text[boundary:])
+        text = text[:boundary]
+    matches = list(re.finditer(r'(?m)^- \[(memory:[a-zA-Z0-9_:-]+)(?=;|\])', text))
+    if not matches:
+        return combined([source(text, identity, 'memory_snapshot'), tail], '', recall={'status': 'not_performed', 'strategy': 'ledger_tail_snapshot', 'result_count': 0})
+    parts = [text[:matches[0].start()]]
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        block = text[match.start():end]
+        stripped = block.rstrip()
+        parts.extend([source(stripped, match[1], 'knowledge', reason='ledger_tail'), block[len(stripped):]])
+    return combined([*parts, tail], '', recall={'status': 'not_performed', 'strategy': 'ledger_tail', 'candidate_count': len(matches), 'result_count': 0})
 
 
 def selected_project_context(task: "TaskState", context: "CoreLoopContext") -> str:
     selection = task.metadata.get("v3_context_selection")
     selected = set(selection.get("selected_context_ids", [])) if isinstance(selection, dict) else set()
     _invariant, candidates = prepare_context_curation(task, context, include_event=False)
-    blocks = [f"{item['title']}:\n{item['content']}" for item in candidates if item.get("id", "").startswith("project:") and item.get("id") in selected]
-    return "\n\n".join(blocks)
+    blocks = [f"{item['title']}:\n" + item['content'] for item in candidates if item.get("id", "").startswith("project:") and item.get("id") in selected]
+    return combined(blocks)
 
 
 def recent_conversation_for_curation(task: "TaskState", context: "CoreLoopContext") -> str:
@@ -156,7 +233,7 @@ def selected_skill_guidance(task: "TaskState", context: "CoreLoopContext", *, ma
         return "", []
     selection["loaded_skill_ids"] = []
     if not callable(getter):
-        fail(task, "package_unavailable")
+        fail(task, "package_unavailable", str(selected_ids[0]))
     blocks: list[str] = []
     loaded_ids: list[str] = []
     used_chars = 0
@@ -198,7 +275,7 @@ def selected_skill_guidance(task: "TaskState", context: "CoreLoopContext", *, ma
             "Skill selection and resource bindings do not grant permission for effects.\n\n"
             + base_instructions + "\n\n" + migration_guidance + account_guidance
         )
-        blocks.append(block)
+        blocks.append(source(block, str(skill.skill_id), "skill_guidance", reason="selected_skill"))
         loaded_ids.append(skill.skill_id)
         used_chars += len(block) + 2
     if used_chars > max_chars:
@@ -208,10 +285,10 @@ def selected_skill_guidance(task: "TaskState", context: "CoreLoopContext", *, ma
     selection.pop("recovery", None)
     selection.update(status="activated", loaded_skill_ids=loaded_ids, budget_chars=max_chars,
                      instruction_chars=used_chars)
-    return "\n\n".join(blocks), loaded_ids
+    return combined(blocks, selected_skill_ids=list(selected_ids), loaded_skill_ids=loaded_ids), loaded_ids
 
 
-def _global_candidates(content: str) -> list[dict[str, str]]:
+def _global_candidates(content: str, *, max_chars: int | None = 6000) -> list[dict[str, str]]:
     parsed = parse_global_context_sections(content)
     candidates: list[dict[str, str]] = []
     if not parsed:
@@ -222,13 +299,13 @@ def _global_candidates(content: str) -> list[dict[str, str]]:
         candidates.append({
             "id": f"global:{_slug(heading)}",
             "title": f"Global context — {heading}",
-            "content": body[:6000],
+            "content": source(body, f"global:{_slug(heading)}", "global_guidance", reason="selected_relevant")[:max_chars],
             "snippet": body[:500],
         })
     return candidates
 
 
-def _project_candidate_for_record(project: Any, context: "CoreLoopContext") -> dict[str, str] | None:
+def _project_candidate_for_record(project: Any, context: "CoreLoopContext", *, max_chars: int | None = 8000) -> dict[str, str] | None:
     try:
         config_path = getattr(project, "config_path", "") or str(Path(project.root_path) / "project_config.json")
         content = Path(config_path).read_text(encoding="utf-8").strip()
@@ -249,7 +326,7 @@ def _project_candidate_for_record(project: Any, context: "CoreLoopContext") -> d
     return {
         "id": f"project:{project_id}",
         "title": f"Project — {title}",
-        "content": candidate_content[:8000],
+        "content": source(candidate_content, f"project:{project_id}", "project_guidance", reason="selected_relevant")[:max_chars],
         "snippet": candidate_content[:500],
     }
 
@@ -277,7 +354,7 @@ def _global_preamble(content: str) -> str:
         if line.startswith("## "):
             break
         preamble.append(line)
-    return "\n".join(preamble).strip()[:1200]
+    return source("\n".join(preamble).strip(), "global:preamble", "global_policy", reason="required")[:1200]
 
 
 def _slug(value: str) -> str:
@@ -285,13 +362,7 @@ def _slug(value: str) -> str:
 
 
 def _bounded_context_value(value: object, max_chars: int) -> str:
-    rendered = str(value or "").strip() or "- (none)"
-    if len(rendered) <= max_chars:
-        return rendered
-    marker = "\n... context truncated ...\n"
-    available = max(2, max_chars - len(marker))
-    front = available // 2
-    return rendered[:front].rstrip() + marker + rendered[-(available - front):].lstrip()
+    return bound_context_record(value, max_chars) or "- (none)"
 
 
 def _prompt_file(context: "CoreLoopContext", name: str) -> str:

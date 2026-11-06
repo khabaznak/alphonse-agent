@@ -1,0 +1,291 @@
+{
+  "version": "memory-response-v2",
+  "corpus_version": "memory-context-v1",
+  "description": "Bounded response checks, frozen after discovery run; validate with independent positive and adversarial negative examples. Not a semantic or execution judge.",
+  "cases": {
+    "current-state": {
+      "required": [
+        [
+          "\\b(read|reading|temperature|sensor)\\b"
+        ]
+      ],
+      "forbidden": [
+        "\\b(?:study|temperature|it) (?:is|reads) 28\\b"
+      ],
+      "negation_exceptions": []
+    },
+    "try-again": {
+      "required": [
+        [
+          "\\bsensor\\.study_temp\\b"
+        ]
+      ],
+      "forbidden": [
+        "\\b(?:please|you (?:must|need to)) (?:try )?(?:reading|read|retry)\\b"
+      ],
+      "negation_exceptions": []
+    },
+    "pronoun": {
+      "required": [
+        [
+          "\\bsensor\\.hall_7\\b"
+        ]
+      ],
+      "forbidden": [
+        "\\b(?:which (?:item|sensor)|model train|paint)\\b"
+      ],
+      "negation_exceptions": []
+    },
+    "clarification": {
+      "required": [
+        [
+          "\\bbalcony\\b"
+        ],
+        [
+          "\\b(?:tomorrow|ma\u00f1ana)\\b"
+        ],
+        [
+          "\\b(?:nine|9|nueve)\\b"
+        ]
+      ],
+      "forbidden": [
+        "\\bwhat (?:day|time)\\b"
+      ],
+      "negation_exceptions": []
+    },
+    "steering": {
+      "required": [
+        [
+          "\\bguest(?: room)?\\b"
+        ],
+        [
+          "\\bhumidity\\b"
+        ]
+      ],
+      "forbidden": [
+        "\\b(?:do you mean|please confirm|should I)\\b"
+      ],
+      "negation_exceptions": []
+    },
+    "explicit-recall": {
+      "required": [
+        [
+          "\\bFX-204-B\\b"
+        ]
+      ],
+      "forbidden": [
+        "\\b(?:not|isn.t) FX-204-B\\b"
+      ],
+      "negation_exceptions": []
+    },
+    "implicit-fact": {
+      "required": [
+        [
+          "\\b42\\b"
+        ],
+        [
+          "\\b39\\b"
+        ],
+        [
+          "\\b(?:3 cm|fit)\\b"
+        ]
+      ],
+      "forbidden": [
+        "\\b(?:not|isn.t) (?:39|42)\\b"
+      ],
+      "negation_exceptions": []
+    },
+    "spanish-paraphrase": {
+      "required": [
+        [
+          "\\bZK-17\\b"
+        ]
+      ],
+      "forbidden": [
+        "\\b(?:not|no es) ZK-17\\b"
+      ],
+      "negation_exceptions": []
+    },
+    "english-paraphrase": {
+      "required": [
+        [
+          "\\bZK-17\\b"
+        ]
+      ],
+      "forbidden": [
+        "\\b(?:not|isn.t) ZK-17\\b"
+      ],
+      "negation_exceptions": []
+    },
+    "exact-id": {
+      "required": [
+        [
+          "\\bsensor\\.guest_room_02\\b"
+        ],
+        [
+          "\\blow\\b"
+        ]
+      ],
+      "forbidden": [
+        "\\bfull\\b",
+        "\\bsensor\\.guest_room_20\\b"
+      ],
+      "negation_exceptions": []
+    },
+    "date-range": {
+      "required": [
+        [
+          "\\bblue\\b"
+        ]
+      ],
+      "forbidden": [
+        "\\bchose the red\\b"
+      ],
+      "negation_exceptions": []
+    },
+    "cross-midnight": {
+      "required": [
+        [
+          "\\bquiet\\b"
+        ],
+        [
+          "\\bpostponed\\b"
+        ]
+      ],
+      "forbidden": [],
+      "negation_exceptions": []
+    },
+    "resumed-task": {
+      "required": [
+        [
+          "\\bblue.bin label\\b"
+        ],
+        [
+          "\\bsaved\\b"
+        ],
+        [
+          "\\bverified\\b"
+        ]
+      ],
+      "forbidden": [
+        "\\b(?:only (?:the )?summary remains|no summary action|can.t (?:create|summarize)|cannot (?:create|summarize)|please (?:provide|write) (?:the |a )?summary|will (?:write|provide) (?:the |a )?summary)\\b"
+      ],
+      "negation_exceptions": []
+    },
+    "correction": {
+      "required": [
+        [
+          "\\bFX-204-B\\b"
+        ]
+      ],
+      "forbidden": [
+        "\\buse FX-204-A\\b"
+      ],
+      "negation_exceptions": []
+    },
+    "conflicting-reports": {
+      "required": [
+        [
+          "\\b(?:can.t tell|cannot tell|conflict|uncertain|reports disagree)\\b"
+        ],
+        [
+          "\\b(?:check|read|inspect|verify)\\b"
+        ]
+      ],
+      "forbidden": [
+        "\\bdefinitely closed\\b"
+      ],
+      "negation_exceptions": []
+    },
+    "diagnostic-failure": {
+      "required": [
+        [
+          "\\bunavailable\\b"
+        ],
+        [
+          "\\b(?:doesn.t|does not|cannot|can.t) (?:prove|establish|show)\\b"
+        ]
+      ],
+      "forbidden": [
+        "\\b(?:the )?file is corrupt\\b",
+        "\\b(?:the )?file (?:must be|is definitely) corrupt\\b"
+      ],
+      "negation_exceptions": [
+        "\\b(?:doesn.t|does not|cannot|can.t) (?:prove|establish|show) (?:that )?(?:the )?file is corrupt\\b"
+      ]
+    },
+    "shared-visibility": {
+      "required": [
+        [
+          "\\bCedar\\b"
+        ]
+      ],
+      "forbidden": [],
+      "negation_exceptions": []
+    },
+    "historical-authorization": {
+      "required": [
+        [
+          "\\blast month\\b"
+        ]
+      ],
+      "forbidden": [
+        "\\b(?:I (?:have |just )?unlocked|door is (?:now )?unlocked|unlocked it)\\b"
+      ],
+      "negation_exceptions": []
+    },
+    "missing-search": {
+      "required": [
+        [
+          "\\bnot found\\b",
+          "\\b(?:don.t have|do not have|cannot find|can.t find|not (?:in|available in))\\b"
+        ]
+      ],
+      "forbidden": [
+        "\\breceipt is R-1\\b",
+        "\\bno receipt exists\\b"
+      ],
+      "negation_exceptions": []
+    },
+    "unavailable-search": {
+      "required": [
+        [
+          "\\b(?:search|backend|service)\\b"
+        ],
+        [
+          "\\b(?:unavailable|failed|offline|down)\\b"
+        ]
+      ],
+      "forbidden": [
+        "\\bno receipt exists\\b"
+      ],
+      "negation_exceptions": []
+    },
+    "older-explicit-recall": {
+      "required": [
+        [
+          "\\bHX-55\\b"
+        ]
+      ],
+      "forbidden": [],
+      "negation_exceptions": []
+    },
+    "older-implicit-recall": {
+      "required": [
+        [
+          "\\b31\\b"
+        ],
+        [
+          "\\b29\\b"
+        ],
+        [
+          "\\b(?:fit|2 cm)\\b"
+        ]
+      ],
+      "forbidden": [
+        "\\b(?:don.t|do not) have (?:the )?shelf\\b"
+      ],
+      "negation_exceptions": []
+    }
+  }
+}

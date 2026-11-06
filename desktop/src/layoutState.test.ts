@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { avatarState, avatarStateLabel, capdActivityLabel, projectKey } from "./layoutState";
+import { avatarState, avatarStateLabel, capdActivityLabel, canOpenSettingsSection, projectKey } from "./layoutState";
 
 describe("Desktop layout state helpers", () => {
   it("maps CAPD activity into compact node labels", () => {
@@ -18,6 +18,12 @@ describe("Desktop layout state helpers", () => {
     expect(avatarState(true, "", "acting")).toBe("acting");
     expect(avatarState(true, "", "unknown")).toBe("idle");
     expect(avatarStateLabel("checking")).toBe("Checking");
+  });
+
+  it("keeps optional account settings available to a household member", () => {
+    expect(canOpenSettingsSection("integrations", false)).toBe(true);
+    expect(canOpenSettingsSection("skills", false)).toBe(false);
+    expect(canOpenSettingsSection("skills", true)).toBe(true);
   });
 
   it("uses a stable home bucket for blank projects", () => {

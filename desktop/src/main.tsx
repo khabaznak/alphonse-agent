@@ -3,7 +3,11 @@ import { createRoot } from "react-dom/client";
 import App from "./App";
 import { getDesktopDiagnosticMode, getDesktopDiagnosticProjectId } from "./api";
 import { parseDesktopDiagnosticMode } from "./diagnosticMode";
+import { resolveDesktopSkin } from "./desktopStyle";
 import "./styles.css";
+
+// Paint the system skin while the native diagnostic settings are loading.
+document.documentElement.dataset.alphonseTheme = resolveDesktopSkin("system", window.matchMedia("(prefers-color-scheme: dark)").matches);
 
 async function start() {
   const [rawMode, diagnosticProjectId] = await Promise.all([

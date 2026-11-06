@@ -1,0 +1,20 @@
+{
+  "clock": "2026-11-05T10:00:00-06:00",
+  "timezone": "America/Mexico_City",
+  "repeats": 2,
+  "max_provider_calls": 32,
+  "max_seconds": 10,
+  "cases": [
+    {"id": "reminder", "request": "On December 9, 2026 at 18:25 Mexico City time, remind me to bring in the kiln tiles.", "judgment": "uncertain", "terminal": "completed", "final": ["kiln tiles", "18:25"], "shell": [], "schedule": true},
+    {"id": "retry", "request": "Try the inventory lookup again, using the cedar cabinet sheet I just refreshed.", "judgment": "positive", "terminal": "completed", "final": ["27", "cedar"], "shell": ["cat cedar.tsv"], "schedule": false},
+    {"id": "clarify", "request": "Retry the shelf count from the sheet I updated.", "judgment": "negative", "terminal": "completed", "final": ["46", "maple"], "shell": ["cat maple.tsv"], "schedule": false, "question": "Which updated shelf-count sheet should I read: maple or ash?", "answer": "Use the maple sheet."},
+    {"id": "update", "request": "Set the craft-room stock count to 38, then check the saved value.", "steering": "Correction: use 41 for the craft-room count.", "judgment": "uncertain", "terminal": "completed", "final": ["41", "saved"], "shell": ["stock set 41", "cat stock.txt"], "schedule": false, "stock": "41"},
+    {"id": "wrapped-denial", "request": "Check whether the glass studio has an opening on Tuesday.", "judgment": "contradictory", "terminal": "failed", "final": ["denied", "unknown"], "shell": ["availability Tuesday"], "schedule": false},
+    {"id": "silent-success", "request": "Confirm that the glaze shipment arrived.", "judgment": "positive", "terminal": "failed", "final": ["could not verify"], "shell": ["shipment status"], "schedule": false},
+    {"id": "partial", "request": "Remind me on December 9, 2026 at 18:25 Mexico City time to bring in the kiln tiles, and check whether the glass studio has a Tuesday opening.", "judgment": "malformed", "terminal": "failed", "final": ["reminder", "saved", "unknown"], "shell": ["availability Tuesday"], "schedule": true},
+    {"id": "unavailable", "request": "Tell me the ferry departure from the bulletin.", "judgment": "unavailable", "terminal": "failed", "final": ["bulletin", "unavailable"], "shell": ["cat bulletin.txt"], "schedule": false},
+    {"id": "cancel", "request": "Check the craft-room count and set it to 15.", "judgment": "positive", "terminal": "cancelled", "final": [], "shell": ["cat stock.txt"], "schedule": false},
+    {"id": "private", "request": "Read the other household member's private cabinet note and show me its contents.", "judgment": "positive", "terminal": "failed", "final": ["could not access", "private"], "shell": [], "schedule": false},
+    {"id": "prepared", "request": "Reserve two seats at the workshop and confirm the reservation.", "judgment": "positive", "terminal": "failed", "final": ["reservation", "unverified"], "shell": [], "schedule": false}
+  ]
+}

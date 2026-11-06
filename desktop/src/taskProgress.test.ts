@@ -18,25 +18,21 @@ describe("task progress lifecycle", () => {
     expect(result.surfaces).toEqual({});
     expect(result.archived.old).toEqual(old);
   });
-  it("archives the previous bubble when another task starts", () => {
-    const result = projectTaskProgress(current, {}, [create("new")], false);
-    expect(Object.keys(result.archived)).toEqual(["old"]);
-    const next = projectTaskProgress(result.surfaces, result.archived, [], false);
-    expect(next.archived.old).toEqual(old);
-    expect(next.archived.new).toBeUndefined();
-  });
-  it("keeps only the latest of multiple tasks in a poll active", () => {
-    const result = projectTaskProgress({}, {}, [create("one"), create("two"), create("three")], false);
-    expect(Object.keys(result.archived)).toEqual(["one", "two"]);
-    expect(Object.keys(result.surfaces).filter((id) => !result.archived[id.slice("task-progress:".length)])).toEqual(["task-progress:three"]);
+  it("preserves independent task activity across polling and closes only its own task", () => {
+    const result = projectTaskProgress(current, {}, [create("one"), create("two")], false);
+    expect(result.archived).toEqual({});
+    expect(Object.keys(result.surfaces)).toHaveLength(3);
+    const next = projectTaskProgress(result.surfaces, result.archived, [envelope({ deleteSurface: { surfaceId: "task-progress:one" } })], false);
+    expect(Object.keys(next.archived)).toEqual(["one"]);
+    expect(Object.keys(next.surfaces)).toEqual(["task-progress:old", "task-progress:two"]);
   });
   it("retires stale progress when the daemon stops without a closing event", () => {
     const result = projectTaskProgress(current, {}, [], true);
-    expect(result.archived.old).toEqual(old);
-    expect(projectTaskProgress(result.surfaces, result.archived, [], false).archived.old).toEqual(old);
+    expect(result.archived.old.dataModel.status).toBe("interrupted");
+    expect(projectTaskProgress(result.surfaces, result.archived, [], false).archived.old).toEqual(result.archived.old);
   });
   it("resumes archived tasks on fresh progress", () => {
-    const result = projectTaskProgress({}, { old }, [create("old")], false);
+    const result = projectTaskProgress({}, { old }, [create("old"), envelope({ updateDataModel: { surfaceId: old.surfaceId, path: "/", value: { status: "running" } } })], false);
     expect(result.archived.old).toBeUndefined();
     expect(result.surfaces[old.surfaceId]).toBeDefined();
   });
@@ -46,4 +42,12 @@ describe("task progress lifecycle", () => {
     } }), envelope({ deleteSurface: { surfaceId: old.surfaceId } })], false);
     expect(result.archived.old.components.step_0.text).toContain("failed");
   });
+});
+
+it("keeps the first activity time when an unanchored task updates across polls", () => {
+  const update = (updated_at: string) => envelope({ updateDataModel: { surfaceId: old.surfaceId, path: "/", value: { status: "running", updated_at } } });
+  const first = projectTaskProgress({}, {}, [create("old"), update("2026-01-01T23:00:00Z")], false);
+  const second = projectTaskProgress(first.surfaces, first.archived, [create("old"), update("2026-01-02T01:00:00Z")], false);
+  expect(second.surfaces[old.surfaceId].dataModel.first_activity_at).toBe("2026-01-01T23:00:00Z");
+  expect(second.surfaces[old.surfaceId].dataModel.updated_at).toBe("2026-01-02T01:00:00Z");
 });

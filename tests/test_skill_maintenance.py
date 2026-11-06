@@ -326,9 +326,13 @@ class Jev:
         return SystemOneReviewResult(tuple({'criterion_id': c['id'], 'status': 'satisfied', 'evidence_refs': refs}
                                           for c in values['contract']['criteria']), ())
 
-    def recommend_act(self, **values):
-        return SystemOneActRecommendation('complete', .99, True, 'Verified', answers={
-            'continuation_is_worthwhile': .1, 'user_input_can_unblock': .1, 'closure_explanation_is_warranted': .99})
+    def judge_act(self, *, state):
+        from conftest import act_judgments
+        published = any(row['tool_id'] == 'native.skill_maintain' for row in state['execution_evidence'])
+        return act_judgments(effect_requested=.99 if published else .01)
+
+    def review_task_failure(self, **_):
+        return True
 
 
 class SystemTwo:
@@ -435,3 +439,6 @@ def test_failed_validation_cannot_become_processor_success(household):
     assert 'could not be verified' in task.metadata['v3_failure_response']['message']
     assert 'retained draft' in task.metadata['v3_failure_response']['message']
     assert f.skills.read_file(SKILL, 'scripts/report.py') == BROKEN
+
+
+pytestmark = pytest.mark.usefixtures("task_understanding_provider")

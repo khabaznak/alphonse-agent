@@ -21,6 +21,9 @@ export type Delivery = {
 
 export type Question = {
   question_id: string;
+  respondent_user_id?: string;
+  expires_at?: string;
+  context?: { text?: string; artifacts?: Array<{ artifact_id?: string; name?: string; description?: string; status: string }> };
   task_id: string;
   project_id: string;
   created_at?: string;
@@ -87,7 +90,6 @@ export type MediaToolsSettings = {
   platform: string; say_available: boolean;
   tts: { enabled: boolean; model_id: string; device_map: string; dtype: string; language: string; speaker: string; instruct: string; attn_implementation: string; local_files_only: boolean; available: boolean; verification: VerificationState };
   stt: { enabled: boolean; executable_path: string; model: string; default_language: string; available: boolean; verification: VerificationState };
-  ocr: { enabled: boolean; ollama_base_url: string; model_id: string; timeout_seconds: number; available: boolean; verification: VerificationState };
 };
 
 export type ChatMessage = {

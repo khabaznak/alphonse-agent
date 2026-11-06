@@ -12,6 +12,8 @@ from alphonse.agent_v2.core.inference.models import InferenceResult
 class StubInferenceProvider:
     """Configurable no-network provider used while real providers are absent."""
 
+    supports_image_input = True
+
     def __init__(
         self,
         *,

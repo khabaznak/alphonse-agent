@@ -10,7 +10,15 @@ not qualify live sites. No live API calls, credentials or household state are us
 
 ## Frozen protocol
 
-The versioned corpus is `tests/fixtures/resourceful_delegation/v1.json`.
+The original frozen corpus and historical receipts remain at
+`tests/fixtures/resourceful_delegation/v1.json` and
+`docs/v3-hierarchical-capd/evidence/resourceful-delegation-v1/`. The current
+independent-readback harness uses `tests/fixtures/resourceful_delegation/v2.json`.
+Its form server explicitly supports the `nonce-v1` read-back protocol and the
+notes case verifies the scoped file. A passing v2 synthetic run does not qualify
+arbitrary forms or providers without independent receipts. The report records
+`harness_version` separately from the corpus version and hash; previous v1
+qualification receipts are not rewritten or treated as v2 evidence.
 Before the qualifying run, commit the corpus, harness and these thresholds:
 
 - Two fresh runs of each of 14 cases; report every run, including exceptions.
@@ -66,8 +74,7 @@ python -m alphonse.agent_v2.evaluation.resourceful_delegation --output /tmp/reso
 
 A nonzero exit means a gate failed. The report records HEAD, tracked-tree dirtiness,
 Python version, corpus SHA-256, configuration and thresholds. Qualifying evidence
-must use a committed clean harness. Store compressed raw JSON plus a review in
-`docs/v3-hierarchical-capd/evidence/resourceful-delegation-v1/`; the report commit
+must use a committed clean harness. Store compressed raw JSON plus a review in a new version-specific evidence directory; the report commit
 will necessarily follow the exact evaluated harness revision.
 
 ## Remaining qualification

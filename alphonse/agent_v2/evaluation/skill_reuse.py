@@ -25,13 +25,13 @@ from alphonse.agent_v2.core.questions import SQLiteQuestionStore
 from alphonse.agent_v2.core.tools.registry.native import build_native_tool_registry
 from alphonse.agent_v2.skills import SkillStore
 from alphonse.agent_v2.system_one import (
-    SystemOneAdmissionDecision, SystemOneActRecommendation, SystemOneReviewResult,
+    SystemOneAdmissionDecision, SystemOneActJudgments, SystemOneReviewResult,
     SystemOneTacticalReview, SystemOneToolRegistrySelection,
 )
 from alphonse.agent_v2.users import V2UserStore
 
 SKILL = 'skill:study-temperature'
-BUDGET = {'planning_calls': 4, 'tactical_calls': 10, 'command_timeout_seconds': 5,
+BUDGET = {'planning_calls': 6, 'tactical_calls': 10, 'command_timeout_seconds': 5,
           'wall_seconds': 30, 'automatic_shell_retries': 0}
 QUESTIONS = [{'question_id': 'observed', 'type': 'noul',
               'instructions': 'Does the observed result establish this stage?',
@@ -70,7 +70,14 @@ class Decisions:
     select_plan_tools = curate_request_tools
 
     def evaluate_tactical_progress(self, **values):
-        return SystemOneTacticalReview(True, .99, True, answers={'observed': .99})
+        current = values['action']
+        previous = [item for item in values.get('execution_log', [])
+                    if item.get('evidence_ref') != 'tactical-action:' + current.get('action_id', '')]
+        repeated = any(item.get('status') == 'success' and item.get('arguments') == current.get('arguments')
+                       and (item.get('result') or {}).get('stdout') == (current.get('result') or {}).get('stdout')
+                       for item in previous)
+        return SystemOneTacticalReview(True, .99, True,
+            answers={'observed': .99, 'runtime_action_added_progress': .01 if repeated else .99})
 
     def evaluate(self, **values):
         evidence = values['evidence']['entries']
@@ -81,11 +88,17 @@ class Decisions:
         return SystemOneReviewResult(tuple({'criterion_id': c['id'], 'status': 'satisfied',
                                            'evidence_refs': refs} for c in values['contract']['criteria']), ())
 
-    def recommend_act(self, **values):
-        if values['state']['check_verdict'] == 'wip':
-            return SystemOneActRecommendation('fail', .99, True, 'Both available routes failed; restore sensor connectivity.',
-                                             answers={'closure_explanation_is_warranted': .99})
-        return SystemOneActRecommendation('complete', .99, True, 'Fixture verified', answers={})
+    def judge_act(self, *, state):
+        return SystemOneActJudgments({
+            'effect_requested': .99 if any(row["tool_id"] == "native.skill_install" for row in state["execution_evidence"]) else .01,
+            'effect_supported': .99,
+            'effect_contradicted': .01,
+            'reply_addresses_request': .99,
+            'reply_grounded': .99,
+        })
+
+    def review_task_failure(self, **_):
+        return True
 
 
 class ScriptedSystemTwo:
@@ -106,6 +119,18 @@ class ScriptedSystemTwo:
 
     def generate_json(self, request):
         self.prompts.append(request.prompt)
+        if request.purpose == InferencePurpose.TASK_UNDERSTANDING:
+            return InferenceResult(json_value={
+                'requested_outcome': self.task.goal, 'supplied_parameters': [], 'constraints': [],
+                'unresolved_dependencies': [], 'superseded_constraints': [],
+            })
+        properties = (request.output_schema or {}).get('properties', {})
+        if 'supporting_answer_refs' in properties:
+            return InferenceResult(json_value={
+                'resolution': 'resolved', 'reason': 'The scripted answer supplies the required input.',
+                'supporting_answer_refs': properties['supporting_answer_refs']['items']['enum'],
+                'remaining_information': [],
+            })
         if request.purpose == InferencePurpose.PHASE_PLANNING:
             self.plans += 1
             assert self.plans <= BUDGET['planning_calls'], 'fixed planning budget exhausted'

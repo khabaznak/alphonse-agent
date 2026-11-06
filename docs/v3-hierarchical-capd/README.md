@@ -32,6 +32,9 @@ One-time admission for a new human task
   Task or ambiguity -> acknowledge immediately and continue
           |
           v
+One structured request-level tool relevance pass (uncertain/failed -> LLM fallback)
+          |
+          v
 Outer CAPD
   Check task/steering
   Act defines or amends immutable outcomes
@@ -40,7 +43,7 @@ Outer CAPD
           v
 Tactical Phase Executor inside Do
   Resolve current subgoal
-  Ask Jev about native tools, then reveal relevant authorized tools
+  Reveal native tools through deterministic capability/prerequisite checks
   Choose and execute the next action
   Inspect local result and recover within policy
   Return structured phase evidence
@@ -68,7 +71,9 @@ success.
 - Steering and cancellation are checked between tactical actions.
 - Local recovery remains within the phase objective; material strategy changes return
   to outer Act.
-- Overall completion requires phase-level evidence and a final outer Check.
+- Overall completion requires phase-level evidence and a final outer Check. Act
+  uses focused outcome judgments to gate completion and sends unresolved work to
+  System Two with the observed evidence and blockers.
 - The final user response is produced only after task completion is verified.
 
 ## Delivery stages
@@ -79,6 +84,13 @@ success.
 4. [Outer completion routing and response](04-outer-routing.md)
 5. [Compatibility, observability, evaluation, and rollout](05-rollout.md)
 6. [System One Do, Check, and Act](06-system-one-check-act.md)
+7. [Shared task understanding and source-linked revisions](07-shared-task-understanding.md)
+8. [Memory evaluation and rollout gates](07-memory-evaluation.md)
+9. [Canonical history and source contracts](08-memory-contracts.md)
+10. [Durable person/audience knowledge](09-durable-knowledge.md)
+11. [Structured memory recall](10-memory-recall.md)
+12. [Bounded conversation and active-task continuity](11-conversation-continuity.md)
+13. [Synthetic lifecycle qualification](14-lifecycle-qualification.md)
 
 Stages are ordered. A later stage may be prototyped early, but it must not be declared
 complete before its dependencies and exit gates pass.
@@ -167,3 +179,25 @@ This is an implementation contract for the Adding Skills milestone, not a claim
 that its runtime is complete. Existing Artifact containment, sharing and data
 checks stay active until verified replacements and migration land. See the
 contract's delivery boundaries for issues #33–#39 and integration #42.
+## Memory source contracts
+
+See [canonical history and source-linked memory](08-memory-contracts.md) for the
+accepted contract layer, provenance, visibility, migration and retention boundaries.
+
+See [decision-specific context](12-decision-context.md) for the opt-in token-budgeted
+projection and bounded hybrid recall candidate (issue #16). The default ledger-tail
+path remains in place pending rollout gates.
+
+See [call-time decision context manifests](14-decision-context-manifests.md) for
+work-log input inventories, legacy labels, authorized source expansion and retention
+(issue #17). Projection rollout remains opt-in.
+
+See [household delegation](16-household-delegation.md) for the outcome-first pilot:
+historical recall, reminders to another member, resourceful recovery, visible
+failure and reuse of an approved skill. Functional evidence comes before a larger
+qualifying rollout run; synthetic success does not itself change defaults.
+
+See [the paired memory harness](17-paired-memory-harness.md) for #23's frozen
+41-case flag-off/on adapter, decision-local source-range oracles and disposable
+effect verification. Harness tests are supporting evidence; live qualification and
+independent review remain outstanding.

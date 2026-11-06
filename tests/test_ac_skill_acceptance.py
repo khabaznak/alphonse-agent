@@ -52,7 +52,7 @@ def household(tmp_path, monkeypatch):
     for identity, kind, extra in [
         ('settings', 'configuration', {'configuration': {'rooms': {
             'study': ['fake-study'], 'office': ['fake-study'], 'bedroom': ['fake-study', 'fake-other']}}}),
-        ('device', 'data', {'target': str(device)}),
+        ('device', 'data', {'target': str(device), 'configuration': {'alphonse_verification_authority': 'resource_state'}}),
     ]:
         bindings.configure(actor_id='owner', owner_id='member', binding_id=identity,
                            skill_id=SKILL, kind=kind, **extra)
@@ -77,6 +77,10 @@ class Jev:
         refs = [e['evidence_ref'] for e in values['evidence']['entries'] if e.get('status') == 'success']
         return SystemOneReviewResult(tuple({'criterion_id': c['id'], 'status': 'satisfied',
                                            'evidence_refs': refs} for c in values['contract']['criteria']), ())
+
+    def judge_act(self, *, state):
+        from conftest import act_judgments
+        return act_judgments(effect_requested=.99 if "set its AC" in state["task_understanding"]["inputs"][0]["content"] else .01)
 
     def recommend_act(self, **values):
         return SystemOneActRecommendation('complete', .99, True, 'Synthetic verified outcome', answers={
@@ -106,11 +110,15 @@ def action(operation, *, room='study'):
     if operation in ('usage', 'devices'):
         return {'tool_id': 'native.skill_read', 'arguments': {
             'skill_id': SKILL, 'path': f'references/{operation}.md'}, 'acceptance_questions': QUESTIONS}
-    return {'tool_id': 'native.bash', 'arguments': {
+    arguments = {
         'skill_id': SKILL, 'binding_names': ['settings', 'device'], 'runtime': sys.executable,
         'command': f'"$ALPHONSE_SKILL_RUNTIME" scripts/ac.py {operation} --room {room}'
                    + (' --target 23' if operation in ('set', 'verify') else ''),
-    }, 'acceptance_questions': QUESTIONS}
+    }
+    if operation == 'set' and room == 'study':
+        arguments['verification'] = {'source': 'skill_data_json', 'binding_name': 'device',
+                                     'pointer': '/devices/fake-study/target', 'expected': 23}
+    return {'tool_id': 'native.bash', 'arguments': arguments, 'acceptance_questions': QUESTIONS}
 
 
 class SystemTwo:
@@ -230,9 +238,9 @@ def test_acknowledgement_without_actual_change_fails_verification(household):
     device(household, ignore_write=True)
     task, context, state = admitted_phase(household, ['set', 'verify'])
     assert run(task, context, state).status == PhaseStatus.BLOCKED
-    assert state.completed_subgoal_ids == ['usage', 'devices', 'set']
-    assert receipt(state)['attempts'] == 4 and receipt(state)['failures'] == 1
-    assert 'state_mismatch' in state.actions[-1].result['stdout']
+    assert state.completed_subgoal_ids == ['usage', 'devices']
+    assert receipt(state)['attempts'] == 3 and receipt(state)['failures'] == 1
+    assert state.actions[-1].result['verification_failed'] is True
     assert device(household)['target'] == 25 and device(household)['writes'] == 1
 
 
@@ -312,3 +320,57 @@ def test_missing_shell_capability_blocks_cli_dispatch(household):
     state = new_tactical_state(PhasePlan.from_dict(value))
     assert run(task, context, state).status == PhaseStatus.BLOCKED
     assert len(state.actions) == 2 and device(household)['writes'] == 0
+
+
+pytestmark = pytest.mark.usefixtures("task_understanding_provider")
+
+
+def test_revoked_binding_after_write_cannot_become_verified_success(household, monkeypatch):
+    task, context, state = admitted_phase(household, ['set', 'verify'])
+    original = household.bindings.prepare
+    calls = []
+    def revoke_before_readback(**values):
+        calls.append(values)
+        if len(calls) >= 3:
+            raise PermissionError('fixture access revoked')
+        return original(**values)
+    monkeypatch.setattr(household.bindings, 'prepare', revoke_before_readback)
+    outcome = run(task, context, state)
+    assert outcome.status == PhaseStatus.BLOCKED
+    assert device(household)['writes'] == 1
+    assert state.actions[-1].status == 'failed'
+    assert state.actions[-1].result['verification_failed'] is True
+    assert not task.metadata.get('prepared_user_response')
+
+
+def test_unmarked_data_binding_cannot_authorize_verification(household):
+    with household.bindings.integrations._connect() as conn:
+        conn.execute("UPDATE v2_skill_bindings SET configuration='{}' WHERE binding_id='device'")
+    task, context, state = admitted_phase(household, ['set', 'verify'])
+    assert run(task, context, state).status == PhaseStatus.BLOCKED
+    assert device(household)['writes'] == 0
+    assert not task.metadata.get('prepared_user_response')
+
+
+def test_binding_revoked_before_act_withholds_readback_and_completion_evidence(household):
+    from alphonse.agent_v2.core.intelligence.v3.act_context import mission_review_state
+
+    task, context, state = admitted_phase(household, ['set', 'verify'])
+    assert run(task, context, state).status == PhaseStatus.PHASE_COMPLETE
+    projected = mission_review_state(task, state, context=context)
+    write = next(row for row in projected['execution_evidence'] if row.get('subgoal_id') == 'set')
+    assert write['verification']['source'] == 'bash_independent_readback'
+    household.bindings.set_access('device', actor_id='member', enabled=False)
+    revoked = mission_review_state(task, state, context=context)
+    write = next(row for row in revoked['execution_evidence'] if row.get('subgoal_id') == 'set')
+    assert write['result_coverage']['status'] == 'unavailable'
+    assert 'result' not in write and 'verification' not in write
+    assert 'target' not in write['operation']
+    assert write['effect_status'] == 'unknown'
+    # An expired proof must not bypass the same access recheck.
+    from datetime import timedelta
+    entry = next(item for item in state.evidence.entries if item.get('subgoal_id') == 'set')
+    entry['result']['verification']['observed_at'] = (datetime.now(timezone.utc) - timedelta(minutes=6)).isoformat()
+    expired = mission_review_state(task, state, context=context)
+    write = next(row for row in expired['execution_evidence'] if row.get('subgoal_id') == 'set')
+    assert write['result_coverage']['status'] == 'unavailable' and 'result' not in write

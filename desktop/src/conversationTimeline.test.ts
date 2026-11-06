@@ -35,3 +35,36 @@ describe("buildConversationTimeline", () => {
     expect(items.filter((item) => item.kind === "message" && item.message.id === final.id)).toHaveLength(1);
   });
 });
+
+it("keeps an older task log with its request when a receipt and acknowledgement arrive", () => {
+  const items = buildConversationTimeline([
+    { id: "repair", role: "user", content: "Repair the artifact", sequence: 1 },
+    { id: "failed", role: "assistant", content: "Could not repair it", sequence: 2 },
+    { id: "receipt", role: "user", content: "Dinner receipt", sequence: 3 },
+    { id: "ack", role: "assistant", content: "I will read the receipt", sequence: 4 },
+  ], ["repair", "receipt"], {}, {});
+  expect(items.map((item) => item.key)).toEqual([
+    "message:repair", "task:repair", "message:failed", "message:receipt", "task:receipt", "message:ack",
+  ]);
+});
+
+it("places an archived task from a previous day before today's receipt conversation", () => {
+  const items = buildConversationTimeline([
+    { id: "receipt", role: "user", content: "Dinner receipt", created_at: "2026-01-02T10:00:00Z" },
+    { id: "ack", role: "assistant", content: "I will read the receipt", created_at: "2026-01-02T10:01:00Z" },
+  ], ["yesterday-repair", "receipt"], {}, {}, ["yesterday-repair"], { "yesterday-repair": { created_at: "2026-01-01T00:00:00Z" } });
+  expect(items.map((item) => item.key)).toEqual([
+    "task:yesterday-repair", "message:receipt", "task:receipt", "message:ack",
+  ]);
+});
+
+it("places unanchored active and archived logs by request time", () => {
+  const messages: ChatMessage[] = [
+    { id: "one", role: "user", content: "One", created_at: "2026-01-02T10:00:00Z" },
+    { id: "two", role: "assistant", content: "Two", created_at: "2026-01-02T12:00:00Z" },
+  ];
+  const metadata = { earlier: { created_at: "2026-01-01T23:00:00Z" }, between: { created_at: "2026-01-02T11:00:00Z" } };
+  expect(buildConversationTimeline(messages, ["between", "earlier"], {}, {}, ["earlier"], metadata).map((item) => item.key)).toEqual([
+    "task:earlier", "message:one", "task:between", "message:two",
+  ]);
+});

@@ -211,3 +211,6 @@ def test_runtime_probe_timeout_is_failed_and_not_retried(tmp_path):
     assert outcome.status == PhaseStatus.BLOCKED
     assert len(state.actions) == 1
     assert state.evidence.entries[-1]['result']['timed_out'] is True
+
+
+pytestmark = pytest.mark.usefixtures("task_understanding_provider")

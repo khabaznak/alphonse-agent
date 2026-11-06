@@ -1,44 +1,62 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "questions": {
     "native.respond": {
       "type": "noul",
-      "instructions": "Does this phase need to send a direct response to the requester?",
+      "instructions": "Does the requester need an answer about `request.text`?",
       "criteria": {
-        "true": "The phase includes a user-visible answer, greeting, status update, clarification, or presentation of completed work. Select this when the task completes and needs to inform the user of the results, or when the task fails and needs to communicate the reason for failure to the requester.",
-        "false": "The phase only performs or verifies work and does not need to send the requester an answer, status update, result summary, or explanation of failure."
+        "true": "The request calls for a reply to the requester.",
+        "false": "The task is internal processing with no requester-facing reply."
       }
     },
     "native.bash": {
       "type": "noul",
-      "instructions": "Does this phase need Bash for local shell, project files, or ordinary skill scripts and CLIs?",
+      "instructions": "Does fulfilling `request.text` require reading a local resource?",
       "criteria": {
-        "true": "The phase needs any local command or project-file operation: discover files or search contents with find, rg, or grep; inspect or read files with cat or sed; create or edit files with shell commands; verify edits by reading them back or comparing diffs; run local processes, builds, tests, or diagnostics; or create, inspect, repair, or invoke an ordinary skill script or CLI. Select Bash for these tasks even when the file path or CLI is already known. Use authorized native Bash for documented skill commands and runtime checks; scripts require no registration. Bash is also relevant to bounded feasibility inspection, dependency checks and temporary programs for requests lacking a dedicated tool, even when the user names no technical library. Relevance does not authorize execution or installation.",
-        "false": "The request can be answered without local feasibility inspection, local commands, filesystem access, project-file changes, or skill script or CLI work."
-      }
+        "true": "A relevant selected workflow or the request uses information in local files or a local database.",
+        "false": "The needed information is supplied or is obtained through a remote service without local file access."
+      },
+      "additional_judgments": [
+        {
+          "type": "noul",
+          "instructions": "Does fulfilling `request.text` require changing local files?",
+          "criteria": {
+            "true": "The requested outcome involves creating or modifying local files or database records.",
+            "false": "The request only needs information or an operation on a remote service."
+          }
+        },
+        {
+          "type": "noul",
+          "instructions": "Does a selected workflow for `request.text` use a local command?",
+          "criteria": {
+            "true": "The applicable workflow runs a local program, CLI, build, test, or process.",
+            "false": "The applicable workflow can be performed without a local command."
+          }
+        }
+      ]
     },
     "native.deliver_message": {
       "type": "noul",
-      "instructions": "Does this phase need to send a message to another registered Alphonse user?",
+      "instructions": "Does `request.text` call for a message to someone other than the requester?",
       "criteria": {
-        "true": "The requested outcome requires delivering information or a question to a person other than the current requester.",
-        "false": "The phase only needs to reply to the requester, perform local work, or does not require person-to-person delivery."
+        "true": "The intended recipient is another person.",
+        "false": "Only the current requester needs a reply."
       }
     },
     "native.send_attachment": {
       "type": "noul",
-      "instructions": "Does this phase need to send an existing durable attachment to a registered person?",
+      "instructions": "Does `request.text` call for delivering a file?",
       "criteria": {
-        "true": "The requested outcome requires delivering a specific known asset to a registered recipient.",
-        "false": "No attachment must be delivered, the asset has not been identified, or a text-only response is sufficient."
+        "true": "The requested result includes sending a document or other attachment.",
+        "false": "A text reply or internal operation supplies the requested result."
       }
     },
     "native.ask_question": {
       "type": "noul",
-      "instructions": "Does this phase need information or a decision that only a user can provide?",
+      "instructions": "Is an essential detail in `request.text` only obtainable from a person?",
       "criteria": {
-        "true": "A required fact, choice, approval, or clarification is missing and the task must pause until the appropriate user answers.",
-        "false": "Available tools or evidence can continue the work, or the phase can answer without requesting user input."
+        "true": "A personal choice or unresolved fact requires a person to answer.",
+        "false": "Records, available resources, or supplied facts can resolve the missing detail."
       }
     },
     "native.scheduled_task": {
@@ -49,6 +67,14 @@
         "false": "The request only asks whether future or recurring work is possible, without requesting activation; or the work should happen now, has no time-based recurrence, or only needs an immediate response."
       }
     },
+    "native.scheduled_task_delivery": {
+      "type": "noul",
+      "instructions": "Does `request.text` concern the delivery of an existing reminder?",
+      "criteria": {
+        "true": "The user wants to inspect pending reminder deliveries or change their destinations.",
+        "false": "The user wants immediate work or a new reminder."
+      }
+    },
     "native.skill_install": {
       "type": "noul",
       "instructions": "Does this phase need to install a new reusable Alphonse skill that the requester has already reviewed and approved?",
@@ -57,44 +83,36 @@
         "false": "The phase is drafting or revising a skill proposal, the requester has not approved installation, or the task only needs to use an existing skill."
       }
     },
-    "native.analyze_image": {
-      "type": "noul",
-      "instructions": "Does this phase need to inspect or extract text from an image attached to the task?",
-      "criteria": {
-        "true": "An attached image contains visual or textual information required for the current phase, including OCR of receipts or documents.",
-        "false": "There is no relevant image attachment, the source is already text, or image contents are unnecessary."
-      }
-    },
     "native.web_search": {
       "type": "noul",
-      "instructions": "Does this phase need to discover current or external information on the public web?",
+      "instructions": "Does answering `request.text` require discovering public web sources?",
       "criteria": {
-        "true": "The phase needs web sources or current external information and does not yet have a specific authoritative page to fetch.",
-        "false": "The answer is available locally, a known URL can be fetched directly, or no public-web research is needed."
+        "true": "Relevant external information is needed and a source URL must be found.",
+        "false": "Supplied or local evidence suffices, or the source URL is already known."
       }
     },
     "native.web_fetch": {
       "type": "noul",
-      "instructions": "Does this phase need readable text from a specific public web page?",
+      "instructions": "Does answering `request.text` require reading a known public web page?",
       "criteria": {
-        "true": "The phase has a known public URL whose page contents are needed as evidence or input.",
-        "false": "A URL has not been identified, web search is needed first, or no web-page contents are required."
+        "true": "A supplied or discovered public URL must be read.",
+        "false": "No specific public page needs to be read."
       }
     },
     "native.search_memory": {
       "type": "noul",
-      "instructions": "Does this request need to search archived conversation memory for information from this project?",
+      "instructions": "Does `request.text` depend on earlier household information absent from the supplied evidence?",
       "criteria": {
-        "true": "The answer depends on details from older or closed conversations that are not present in the current conversation or supplied project context.",
-        "false": "The current conversation, project files, or other available tools provide the needed information without searching archived memory."
+        "true": "Earlier conversation or remembered household facts are needed to interpret or fulfill the request.",
+        "false": "The supplied evidence settles the request or fresh external observations are needed instead."
       }
     },
-    "native.scheduled_task_delivery": {
+    "native.read_memory_source": {
       "type": "noul",
-      "instructions": "Does this request need to find an active reminder or change where a pending reminder is delivered?",
+      "instructions": "Does fulfilling `request.text` require expanding a historical source?",
       "criteria": {
-        "true": "The user asks what reminders are active, asks whether a reminder exists, or asks to add or change a delivery channel for an existing reminder.",
-        "false": "The user is creating or changing the reminder's schedule or content, or the request does not concern an existing reminder or its delivery destinations."
+        "true": "An original passage or surrounding exchange is needed to interpret or verify recalled information.",
+        "false": "The supplied passages already suffice or no historical information is involved."
       }
     },
     "native.skill_maintain": {

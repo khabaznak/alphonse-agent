@@ -7,6 +7,7 @@ import or adapt v1 agent internals.
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import Enum
@@ -29,7 +30,7 @@ from alphonse.agent_v2.core.state.ddfsm import build_default_ddfsm
 from alphonse.agent_v2.core.state.runtime import State
 
 if TYPE_CHECKING:
-    from alphonse.agent_v2.core.inference import InferenceRouter
+    from alphonse.agent_v2.core.inference import InferenceImage, InferenceRouter
     from alphonse.agent_v2.core.intelligence.task_state import TaskState
     from alphonse.agent_v2.core.messages.queue import MessageSelector, QueuedMessage
     from alphonse.agent_v2.core.tools.registry import ToolDefinition
@@ -237,7 +238,14 @@ class CoreLoopContext:
     artifact_resources: Any | None = None
     skill_bindings: Any | None = None
     event_store: Any | None = None
+    asset_store: Any | None = None
     consumed_message_ids: list[str] = field(default_factory=list)
+
+    def image_inputs(self, task: TaskState) -> tuple[InferenceImage, ...]:
+        """Resolve authorized images for a substantive System Two call."""
+        from alphonse.agent_v2.core.inference.images import task_image_inputs
+
+        return task_image_inputs(task, self.asset_store)
 
     def consume_message(self, selector: MessageSelector | None = None) -> QueuedMessage | None:
         queued = self.messages.dequeue(selector)
@@ -296,18 +304,19 @@ class CoreLoopContext:
             record(task, heading, content)
 
 
-_SENSITIVE_PROGRESS_KEYS = ("secret", "token", "password", "authorization", "cookie", "api_key", "apikey")
+_SENSITIVE_PROGRESS_KEYS = ("secret", "token", "password", "authorization", "cookie", "api_key", "apikey", "internal_state", "reasoning", "chain_of_thought")
 
 
 def _task_progress_snapshot(task: Any) -> dict[str, Any]:
     """Build the Desktop progress view from the current TaskState only."""
+    from alphonse.agent_v2.core.memory.formatting import bound_memory_context
     metadata = getattr(task, "metadata", {}) if isinstance(getattr(task, "metadata", {}), dict) else {}
     planned = metadata.get("planned_tool_call") if isinstance(metadata.get("planned_tool_call"), dict) else None
     latest_call = getattr(task, "get_latest_executed_plan_call", None)
     latest = latest_call() if callable(latest_call) else None
     latest = latest if isinstance(latest, dict) else None
     selected = planned or latest or {}
-    execution = latest.get("execution") if isinstance(latest, dict) and isinstance(latest.get("execution"), dict) else {}
+    execution = selected.get("execution") if isinstance(selected.get("execution"), dict) else {}
     try:
         plan_calls = json.loads(str(getattr(task, "plan_json", "") or ""))
     except (TypeError, ValueError):
@@ -322,7 +331,8 @@ def _task_progress_snapshot(task: Any) -> dict[str, Any]:
         tool_id = str(call.get("tool_id") or "").strip()
         steps.append({
             "attempt": attempt,
-            "intention": _truncate_progress(str(call.get("internal_state") or ""), 500),
+            "intention": "",
+            "tool_id": tool_id,
             "tool_name": str(call.get("tool_name") or _progress_tool_label(tool_id) or ("Program (Python)" if call.get("execution_mode") == "program" else "Tool")).strip(),
             "arguments": _safe_progress_value(call.get("arguments"), limit=6000),
             "action": _safe_progress_value(call.get("program"), limit=10000) if call.get("execution_mode") == "program" else None,
@@ -338,6 +348,7 @@ def _task_progress_snapshot(task: Any) -> dict[str, Any]:
         if isinstance(item, dict) and str(item.get("subgoal_id") or "").strip()
     }
     v3_actions = [item for item in hierarchical_state.get("actions") or [] if isinstance(item, dict)]
+    intention = str(getattr(task, "goal", "") or "")
     if v3_actions:
         steps = []
         recent_actions = v3_actions[-10:]
@@ -350,6 +361,7 @@ def _task_progress_snapshot(task: Any) -> dict[str, Any]:
             steps.append({
                 "attempt": attempt,
                 "intention": _truncate_progress(subgoal_intentions.get(subgoal_id, ""), 500),
+                "tool_id": str(action.get("tool_id") or "").strip(),
                 "tool_name": _progress_tool_label(str(action.get("tool_id") or "").strip()),
                 "arguments": _safe_progress_value(action.get("arguments"), limit=6000),
                 "action": _safe_progress_value(action.get("command") or action.get("action"), limit=10000),
@@ -365,8 +377,8 @@ def _task_progress_snapshot(task: Any) -> dict[str, Any]:
         selected = {
             "tool_id": str(current.get("tool_id") or "").strip(),
             "arguments": current.get("arguments"),
-            "internal_state": subgoal_intentions.get(current_subgoal_id, ""),
         }
+        intention = subgoal_intentions.get(current_subgoal_id, "")
         execution = {
             "status": str(current.get("status") or "planned").strip(),
             "result": current_result,
@@ -380,15 +392,18 @@ def _task_progress_snapshot(task: Any) -> dict[str, Any]:
         "tool_name": str(selected.get("tool_name") or _progress_tool_label(str(selected.get("tool_id") or "").strip())).strip(),
         "tool_arguments": _safe_progress_value(selected.get("arguments") if isinstance(selected, dict) else {}),
         "tool_result": _safe_progress_value(execution.get("result") if isinstance(execution, dict) else None, limit=4000),
-        "tool_status": str(execution.get("status") or "").strip() if isinstance(execution, dict) else "",
-        "intention": _truncate_progress(str(selected.get("internal_state") or ""), 500),
+        "tool_status": str(execution.get("status") or ("planned" if selected else "")).strip() if isinstance(execution, dict) else "",
+        "intention": _truncate_progress(intention, 500),
+        "tool_id": str(selected.get("tool_id") or "").strip(),
         "steps": steps,
+        "owner_user_id": str(getattr(task, "user", "") or ""),
+        "decision_context_manifests": deepcopy(metadata.get("decision_context_manifests", [])),
         "goal": _truncate_progress(str(getattr(task, "goal", "") or ""), 1200),
         "facts": _truncate_progress(str(getattr(task, "facts_md", "") or ""), 3000),
         "memory_facts": _truncate_progress(str(getattr(task, "memory_facts_md", "") or ""), 3000),
         "recent_conversation": _truncate_progress_tail(str(getattr(task, "recent_conversation_md", "") or ""), 3000),
         "conversation_history": _truncate_progress_tail(str(getattr(task, "conversation_history_md", "") or ""), 5000),
-        "durable_memory": _truncate_progress_tail(str(getattr(task, "memory_context_md", "") or ""), 5000),
+        "durable_memory": bound_memory_context(getattr(task, "memory_context_md", ""), 5000),
         "updates": _truncate_progress(str(getattr(task, "updates_md", "") or ""), 3000),
         "evidence": _safe_progress_value(getattr(task, "evidence_journal", [])[-10:], limit=3000),
         "question": _safe_progress_value(metadata.get("question_interrupt")),
@@ -527,6 +542,7 @@ class AlphonseCore:
     artifact_resources: Any | None = None
     skill_bindings: Any | None = None
     event_store: Any | None = None
+    asset_store: Any | None = None
     question_store: Any | None = None
     project_store: Any | None = None
     schedule_store: Any | None = None
@@ -633,6 +649,7 @@ class AlphonseCore:
                 artifact_resources=self.artifact_resources,
                 skill_bindings=self.skill_bindings,
                 event_store=self.event_store,
+                asset_store=self.asset_store,
                 question_store=self.question_store,
                 project_store=self.project_store,
                 schedule_store=self.schedule_store,
@@ -646,8 +663,9 @@ class AlphonseCore:
                 cancellation_checker=(lambda: bool(self.cancellation_checker and self.cancellation_checker(queued.message_id))),
             )
             start_memory = getattr(self.memory, "start_task", None)
+            memory_options = {"cancel_checker": context.is_cancelled} if getattr(self.memory, "supports_knowledge_cancellation", False) else {}
             if callable(start_memory):
-                task.memory_context_md = str(start_memory(task) or "")
+                task.memory_context_md = str(start_memory(task, **memory_options) or "")
             from alphonse.agent_v2.core.memory.transcript import conversation_transcript
             task.conversation_history_md = conversation_transcript(task, self.conversation_store)
             result = self.intelligence.process(task, context)
@@ -655,7 +673,7 @@ class AlphonseCore:
             if callable(finish_memory):
                 serialized_task = result.snapshot.metadata.get("task_state") if isinstance(result.snapshot.metadata, dict) else None
                 finished_task = TaskState.from_dict(serialized_task) if isinstance(serialized_task, dict) else task
-                finish_memory(finished_task)
+                finish_memory(finished_task, **memory_options)
             if result.status not in {ProcessingStatus.FAILED, ProcessingStatus.CANCELLED}:
                 context.acknowledge_consumed_messages()
         except Exception as exc:

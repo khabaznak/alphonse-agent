@@ -77,11 +77,14 @@ def test_legacy_disabled_resources_remain_unavailable_to_migration(setup):
         resources.require_ready(record.artifact_id, "alex", [skill.skill_id])
 
 
-def test_private_artifact_sections_do_not_leak_into_another_users_skill_prompt(setup):
+@pytest.mark.parametrize("projected", [False, True])
+def test_private_artifact_sections_do_not_leak_into_another_users_skill_prompt(setup, monkeypatch, projected):
     skills, skill, _, _, resources = setup
     record, root = register(setup, instructions="PRIVATE_ARTIFACT_INSTRUCTION")
     task = TaskState(user="gaby", metadata={"v3_skill_selection": {"selected_skill_ids": [skill.skill_id]}})
-    text, _ = selected_skill_guidance(task, CoreLoopContext(messages=InMemoryMessageQueue(), skill_store=skills, artifact_resources=resources))
+    from alphonse.agent_v2.core.intelligence.v3.context import task_context_for_decision
+    monkeypatch.setenv("ALPHONSE_V3_CONTEXT_PROJECTIONS", str(int(projected)))
+    text = task_context_for_decision(task, CoreLoopContext(messages=InMemoryMessageQueue(), skill_store=skills, artifact_resources=resources), purpose="curation")
     assert "PRIVATE_ARTIFACT_INSTRUCTION" not in text
     assert str(root) not in text
     assert record.artifact_id not in text
@@ -304,3 +307,24 @@ def test_onboarding_wires_skill_library_and_artifact_repository_to_new_workspace
     assert (workspace / "artifacts").is_dir()
     assert runtime.skill_store.skills_dir == workspace / "skills"
     assert runtime.skill_store.get("skill:sensor").directory == str(workspace / "skills" / "sensor")
+
+
+@pytest.mark.parametrize("purpose", ["admission", "curation", "planning", "execution", "review", "response"])
+def test_candidate_projection_excludes_retired_artifact_instructions(setup, monkeypatch, purpose):
+    from alphonse.agent_v2.core.intelligence.v3.projections import project
+    skills, skill, _, _, resources = setup
+    instructions = 'Read this disposable fixture carefully.\n' * 500 + 'ARTIFACT_INSTRUCTION_TAIL'
+    record, root = register(setup, instructions=instructions)
+    task = TaskState(user='alex', goal='Read fixture', metadata={'v3_skill_selection': {'selected_skill_ids': [skill.skill_id]}})
+    context = CoreLoopContext(messages=InMemoryMessageQueue(), skill_store=skills, artifact_resources=resources)
+    monkeypatch.setenv('ALPHONSE_V3_CONTEXT_TOKEN_BUDGET', '60000')
+    text = project(task, context, purpose=purpose)
+    assert 'Read the registered fixture.' in text
+    assert 'ARTIFACT_INSTRUCTION_TAIL' not in text
+    assert str(root / 'reader.py') not in text
+    assert 'Registered argument schema' not in text
+    assert build_artifact_tool_definitions(resources.store, resources.projects) == []
+    from alphonse.agent_v2.core.intelligence.v3.projections import ContextBudgetExceeded
+    monkeypatch.setenv('ALPHONSE_V3_CONTEXT_TOKEN_BUDGET', '1000')
+    with pytest.raises(ContextBudgetExceeded):
+        project(task, context, purpose=purpose)

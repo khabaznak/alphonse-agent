@@ -129,7 +129,7 @@ def test_synthetic_sensor_runs_through_selected_engine_and_reaches_all_decisions
 
     class Jev(_TestJev):
         def curate_request_tools(self, **values):
-            assert "fern-42" in values["task_context"]
+            assert "fern-42" in json.dumps(values["state"])
             observed.append("curation")
             return super().curate_request_tools(**values)
 
@@ -196,13 +196,14 @@ def test_actual_jev_transport_gets_exact_receipted_context():
 
     provider = JevCriterionDecisionProvider(SystemOneSettings(enabled=True, api_key="synthetic", validated_at="now"), transport=transport)
     task, context, _, _, _ = fixture()
-    text = task_context_for_decision(task, context, stage="curation")
-    provider.curate_request_tools(goal=task.goal, task_context=text, system_prompt="Select tools", session_history="",
-        tools=(ToolDescriptor("native.respond", "Respond", ToolKind.NATIVE),))
-    actual = captured[0]["state"]["task_context"]
-    receipt = task.metadata["v3_event_input_manifests"]["curation"]
-    assert digest(actual) == receipt["context_sha256"]
-    assert digest(actual[:receipt["rendered_chars"]]) == receipt["rendered_sha256"]
+    from alphonse.agent_v2.core.intelligence.v3.tool_curation import request_tool_state
+    state = request_tool_state(task, context)
+    provider.curate_request_tools(state=state, tools=(ToolDescriptor("native.respond", "Respond", ToolKind.NATIVE),))
+    actual = captured[0]["state"]["evidence"][0]
+    assert actual["kind"] == "authorized_trigger_snapshot"
+    assert actual["source_id"] == task.metadata["event"]["event_key"]
+    assert digest(actual["excerpt"]) == actual["excerpt_sha256"]
+    assert actual["trust"] == "untrusted_external_content"
 
 
 def test_revocation_during_action_composition_stops_native_dispatch():
@@ -254,3 +255,6 @@ def test_durable_execution_lifecycle_fences_expansion(status):
         assert event_evidence_projection(task, context) is not None
     else:
         with pytest.raises(EventEvidenceDenied): event_evidence_projection(task, context)
+
+
+pytestmark = pytest.mark.usefixtures("task_understanding_provider")

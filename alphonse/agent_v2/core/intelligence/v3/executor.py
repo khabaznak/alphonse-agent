@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import hashlib
+from alphonse.agent_v2.core.context_inventory import source, prompt_receipt
+
 import json
 import time
 from typing import TYPE_CHECKING, Any, Callable
@@ -10,13 +12,15 @@ from uuid import uuid4
 
 from alphonse.agent_v2.core.core import ImprovementPhase, ToolKind
 from alphonse.agent_v2.core.inference import InferencePurpose, InferenceRequest
-from alphonse.agent_v2.core.intelligence.v3.contracts import PhaseOutcome
+from alphonse.agent_v2.core.intelligence.v3.contracts import PhaseOutcome, FailurePolicy
 from alphonse.agent_v2.core.intelligence.v3.contracts import PhaseStatus
 from alphonse.agent_v2.core.intelligence.v3.contracts import PhaseSubgoal
 from alphonse.agent_v2.core.intelligence.v3.contracts import SideEffectClass
 from alphonse.agent_v2.core.intelligence.v3.contracts import TacticalAction
 from alphonse.agent_v2.core.intelligence.v3.contracts import TacticalState
 from alphonse.agent_v2.core.intelligence.v3.revealing import ToolRevealPolicy, action_compatibility_error
+from alphonse.agent_v2.core.intelligence.v3.revealing import ToolRevealPolicy
+from alphonse.agent_v2.core.intelligence.v3.projections import enabled as projections_enabled
 from alphonse.agent_v2.core.intelligence.v3.context import selected_skill_guidance
 from alphonse.agent_v2.core.intelligence.v3.context import task_context_for_decision
 from alphonse.agent_v2.core.intelligence.v3.revealing import Capability
@@ -24,7 +28,12 @@ from alphonse.agent_v2.core.messages.queue import MessageSelector
 from alphonse.agent_v2.core.tools.invocation import ToolInvocationService
 from alphonse.agent_v2.core.tools.registry.native.bash import BASH_TOOL_ID
 from alphonse.agent_v2.core.tools.registry.native.respond import RESPOND_TOOL_ID
-from alphonse.agent_v2.system_one import SystemOneUnavailableError
+from alphonse.agent_v2.system_one import SystemOneUnavailableError, system_one_error_code
+from alphonse.agent_v2.core.intelligence.v3.response_state import work_evidence_refs
+from alphonse.agent_v2.core.intelligence.v3.task_understanding import receipt as task_understanding_receipt
+from alphonse.agent_v2.core.tools.registry import ToolExposurePolicy
+from alphonse.agent_v2.core.memory.workflow import MEMORY_WORKFLOW
+from alphonse.agent_v2.core.memory.retry_context import retry_continuity_context
 from .feasibility import FEASIBILITY_GUIDANCE
 from ..routine_autonomy import ROUTINE_AUTONOMY_GUIDANCE, ordinary_workspace_context
 
@@ -34,6 +43,7 @@ if TYPE_CHECKING:
 
 ActionSelector = Callable[[TacticalState, PhaseSubgoal, tuple["ToolDescriptor", ...]], dict[str, Any] | None]
 TACTICAL_RETRY_BASE_SECONDS = 1.0
+MAX_UPDATE_INSPECTION_ACTIONS = 6
 
 
 class PhaseExecutor:
@@ -101,6 +111,17 @@ class PhaseExecutor:
                 self._checkpoint(task, state, context)
                 reason = ("tactical_planning_error_repeated:" if repeated else "tactical_correction_exhausted:") + error
                 return self._outcome(state, reason, blockers=(reason,))
+            recovery = (task.metadata.get("act_directive") or {}).get("outcome_review") or {}
+            verified_refs = set(recovery.get("verified_evidence_refs") or ())
+            if any(
+                entry.get("evidence_ref") in verified_refs and entry.get("tool_id") == action.tool_id
+                and (entry.get("arguments") or {}) == action.arguments
+                for entry in state.evidence.entries
+            ):
+                blocker = "act_recovery_repeats_verified_work"
+                state.transition(PhaseStatus.BLOCKED)
+                self._checkpoint(task, state, context)
+                return self._outcome(state, blocker, blockers=(blocker,))
             retry_count = 0
             retry_interrupted = False
             while True:
@@ -134,6 +155,7 @@ class PhaseExecutor:
                     state.actions.pop()  # This action never reached native dispatch.
                     self._checkpoint(task, state, context)
                     return interruption
+                understanding = task_understanding_receipt(task)
                 outcome = ToolInvocationService(context=context, task=task).invoke(
                     action.tool_id, action.arguments, call_id=action.action_id
                 )
@@ -151,6 +173,12 @@ class PhaseExecutor:
                 state.evidence.append(
                     {
                         "evidence_ref": f"tactical-action:{completed.action_id}",
+                        "invocation": {
+                            "call_id": outcome["call_id"],
+                            "read_only": next((tool.read_only for tool in tools if tool.tool_id == completed.tool_id), False),
+                            "task_understanding": understanding,
+                        },
+                        "error_code": (outcome.get("error") or {}).get("code"),
                         "phase_id": state.phase.phase_id,
                         "subgoal_id": subgoal.subgoal_id,
                         "tool_id": completed.tool_id,
@@ -162,6 +190,14 @@ class PhaseExecutor:
                         "acceptance_questions": [dict(item) for item in completed.acceptance_questions],
                     }
                 )
+                interruption = self._interruption(task, state, context)
+                if interruption is not None:
+                    self._checkpoint(task, state, context)
+                    return interruption
+                if completed.status == "waiting":
+                    state.transition(PhaseStatus.WAITING_USER)
+                    self._checkpoint(task, state, context)
+                    return self._outcome(state, "A tactical action requires user input.")
                 self._checkpoint(task, state, context)
                 completion_met, retry_approved, progress_review = self._completion_review(
                     task, state, subgoal, completed, context
@@ -171,11 +207,47 @@ class PhaseExecutor:
                     "confident": bool(progress_review.get("confident")),
                     "confidence": progress_review.get("confidence"),
                     "retry_approved": retry_approved,
+                    "context_complete": progress_review.get("context_complete", True),
+                    "context_coverage": progress_review.get("context_coverage", {}),
                     "answers": dict(progress_review.get("answers") or {}),
                 }
+                if not completion_met and _is_update_inspection(state, subgoal, progress_review.get("answers") or {},
+                    float(getattr(getattr(context.system_one, "settings", None), "yes_threshold", 0.8))):
+                    count = int(task.metadata.get("v3_update_inspection_actions") or 0) + 1
+                    task.metadata["v3_update_inspection_actions"] = count
+                    threshold = float(getattr(getattr(context.system_one, "settings", None), "yes_threshold", 0.8))
+                    answers = progress_review.get("answers") or {}
+                    ready = answers.get("runtime_inspection_ready_for_action", 0.0)
+                    missing = answers.get("runtime_inspection_requires_user_input", 0.0)
+                    route = None
+                    if completed.status == "success" and progress_review.get("context_complete", True):
+                        if _confident_probability(ready, threshold) and _confident_negative(missing, threshold):
+                            route = "ready_for_action"
+                        elif _confident_probability(missing, threshold) and _confident_negative(ready, threshold):
+                            route = "requires_user_input"
+                    if route is None and not completion_met and count >= MAX_UPDATE_INSPECTION_ACTIONS:
+                        route = "decision_required"
+                    if route is not None:
+                        task.metadata["v3_inspection_resolution"] = {
+                            "route": route, "phase_id": state.phase.phase_id,
+                            "evidence_refs": [entry["evidence_ref"] for entry in state.evidence.entries
+                                              if entry.get("status") == "success" and entry.get("evidence_ref")],
+                        }
+                        blocker = "inspection_" + route
+                        state.evidence.entries[-1]["inspection_resolution"] = route
+                        state.transition(PhaseStatus.BLOCKED)
+                        self._checkpoint(task, state, context)
+                        return self._outcome(state, "Inspection must now resolve into the authorized operation or a specific missing-information question; do not restart inspection.", blockers=(blocker,))
+                progress_threshold = float(getattr(getattr(context.system_one, "settings", None), "yes_threshold", 0.8))
+                if not completion_met and _consecutive_no_progress(state, subgoal.subgoal_id, progress_threshold) >= 3:
+                    blocker = "tactical_stage_no_new_progress"
+                    state.evidence.entries[-1]["no_progress_blocker"] = blocker
+                    state.transition(PhaseStatus.BLOCKED)
+                    self._checkpoint(task, state, context)
+                    return self._outcome(state, "Repeated attempts added no useful evidence; a different strategy is required.", blockers=(blocker,))
                 repeated_evidence = (
                     _matching_prior_incomplete_result(state, completed)
-                    if not completion_met and completed.status == "success"
+                    if not completion_met and (completed.status == "success" or (completed.status == "failed" and not retry_approved))
                     else None
                 )
                 if repeated_evidence is not None:
@@ -210,10 +282,6 @@ class PhaseExecutor:
                 if interruption is not None:
                     self._checkpoint(task, state, context)
                     return interruption
-            if completed.status == "waiting":
-                state.transition(PhaseStatus.WAITING_USER)
-                self._checkpoint(task, state, context)
-                return self._outcome(state, "A tactical action requires user input.")
             if completed.status != "success":
                 failure = self._handle_failure(state, subgoal, completed)
                 self._checkpoint(task, state, context)
@@ -229,7 +297,9 @@ class PhaseExecutor:
                         "source": RESPOND_TOOL_ID,
                         "tool_call_id": completed.action_id,
                         "message": message,
+                        "work_evidence_refs": work_evidence_refs(state.evidence.entries),
                     }
+                    task.metadata.pop("v3_response_refresh_required", None)
             state.bind_subgoal_output(subgoal.subgoal_id, subgoal.required_output_type, completed.result)
             state.completed_subgoal_ids.append(subgoal.subgoal_id)
             state.transition(PhaseStatus.SUBGOAL_COMPLETE)
@@ -276,46 +346,91 @@ class PhaseExecutor:
             return selected
         if context.inference is None:
             return None
+        skill_guidance, loaded_skill_ids = ("", []) if projections_enabled() else selected_skill_guidance(task, context)
         skill_selection = task.metadata.get("v3_skill_selection")
-        if isinstance(skill_selection, dict):
+        if isinstance(skill_selection, dict) and not projections_enabled():
             skill_selection["loaded_skill_ids"] = loaded_skill_ids
+        if not projections_enabled():
+            from .task_understanding import render
+            skill_guidance = skill_guidance + retry_continuity_context(task, context) + render(task)
+        directive = task.metadata.get("act_directive") or {}
+        recovery = directive.get("outcome_review") or {}
+        if recovery.get("remaining_work"):
+            skill_guidance = skill_guidance + source(
+                "\nOutcome recovery: " + json.dumps(recovery, ensure_ascii=False)
+                + "\nAddress the specific remaining work within the authorized phase. Preserve the verified work. "
+                "For a question, ask for the specific missing fact and choose the answer form that fits it.",
+                'task:' + str(task.task_id) + ':outcome_recovery', 'outcome_recovery',
+            )
+        resolution = directive.get("inspection_resolution")
+        if resolution:
+            skill_guidance = skill_guidance + source(
+                "\nInspection handoff: " + json.dumps(resolution, ensure_ascii=False)
+                + "\nUse the existing evidence to carry out the authorized operation or ask the specific missing-information "
+                "question in this phase. Do not repeat broad database inspection or independently re-extract an already "
+                "reviewed and confirmed source. Missing or conflicting essential fields still require a question; never guess them.",
+                'task:' + str(task.task_id) + ':inspection_handoff', 'inspection_handoff',
+            )
+        skill_guidance = skill_guidance + "\n" + MEMORY_WORKFLOW
+        selection = task.metadata.get("v3_context_selection") or {}
+        task_context = task_context_for_decision(task, context, purpose="execution",
+                                                selected_context_ids=selection.get("selected_context_ids", []))
         prompt = _tactical_prompt(
             state,
             subgoal,
             tools,
-            goal=task.goal,
+            goal="" if projections_enabled() else task.goal,
             task_project_root=_task_project_root(task, context),
             attachment_manifest=_task_attachment_manifest(task),
             skill_guidance=skill_guidance,
-            task_context=task_context_for_decision(task, context, stage="execution") + "\n" + ordinary_workspace_context(task, context),
+            task_context=task_context + "\n" + ordinary_workspace_context(task, context),
         )
         from .context_manifests import event_input_metadata
+        images = context.image_inputs(task)
         result = context.inference.generate_json(
             InferenceRequest(
                 prompt=prompt,
                 purpose=InferencePurpose.TACTICAL_ACTION,
+                context_manifests=prompt_receipt(prompt, [task_context, skill_guidance,
+                    source('Strategic plan: ' + json.dumps(state.phase.to_dict(), ensure_ascii=False), 'phase:' + state.phase.phase_id, 'strategic_plan'),
+                    source('Complete tool execution log (every entry, no omissions or truncation):\n' + state.prompt_projection(max_evidence_entries=None, max_chars=None), 'phase:' + state.phase.phase_id + ':execution', 'execution_evidence'),
+                    *([source('Goal: ' + task.goal, 'request:' + str(task.message_id or task.task_id), 'current_request')] if not projections_enabled() else []),
+                ], purpose='execution'),
                 project_id=task.project_id,
                 user=task.user,
                 task_id=task.task_id,
+                images=images,
                 tools=tools,
                 metadata={"phase_id": state.phase.phase_id, "subgoal_id": subgoal.subgoal_id,
                           **event_input_metadata(task, "execution")},
                 cancel_checker=context.is_cancelled if context.cancellation_checker is not None else None,
             )
         )
-        return dict(result.json_value) if isinstance(result.json_value, dict) else None
+        if not isinstance(result.json_value, dict):
+            return None
+        if images:
+            state.evidence.append({
+                "evidence_ref": f"inference-images:{uuid4()}",
+                "phase_id": state.phase.phase_id,
+                "subgoal_id": subgoal.subgoal_id,
+                "kind": "inference_image_input",
+                "status": "provided",
+                "asset_ids": [image.asset_id for image in images],
+                "model": result.model_profile.model if result.model_profile else "",
+            })
+        return dict(result.json_value)
 
     def _revealed_tools(
         self, task: "TaskState", state: TacticalState, subgoal: PhaseSubgoal, context: "CoreLoopContext"
     ) -> tuple["ToolDescriptor", ...]:
         if context.tools is None:
             return ()
-        available = tuple(context.tools.list())
-        candidates = available
-        if state.phase.tool_curation_status == "used":
-            relevant = set(state.phase.curated_tool_ids)
-            candidates = tuple(item for item in available if item.tool_id in relevant)
-        if self._reveal_policy is not None and not state.revealed_tool_ids:
+        # Re-evaluate current runtime exposure even for legacy Jev-curated
+        # checkpoints. Historical relevance omissions must not hide capabilities.
+        candidates = ToolExposurePolicy().select_tools(
+            registry=context.tools, project_id=task.project_id, user=task.user, task=task,
+        )
+        if self._reveal_policy is not None:
             reveal = self._reveal_policy.reveal(task, state, subgoal, candidates)
             state.revealed_capabilities = [item["capability"] for item in reveal.catalog]
             state.revealed_tool_ids = [item.tool_id for item in reveal.tools]
@@ -349,9 +464,10 @@ class PhaseExecutor:
         deterministic = _condition_met(subgoal, action.result)
         if context.system_one is None or not hasattr(context.system_one, "evaluate_tactical_progress"):
             raise SystemOneUnavailableError("tactical_acceptance_unavailable")
+        from .task_understanding import render
         try:
             review = context.system_one.evaluate_tactical_progress(
-                goal=task.goal,
+                goal=render(task),
                 phase=state.phase.to_dict(),
                 subgoal={
                     "subgoal_id": subgoal.subgoal_id,
@@ -367,7 +483,7 @@ class PhaseExecutor:
                 questions=list(action.acceptance_questions),
                 execution_log=[dict(item) for item in state.evidence.entries],
                 task_context=task_context_for_decision(
-                    task, context, stage="progress_review",
+                    task, context, purpose="progress_review",
                     selected_context_ids=(
                         task.metadata.get("v3_context_selection", {}).get("selected_context_ids", [])
                         if isinstance(task.metadata.get("v3_context_selection"), dict) else []
@@ -375,20 +491,33 @@ class PhaseExecutor:
                 ),
             )
         except Exception as exc:
-            raise SystemOneUnavailableError(f"tactical_acceptance:{type(exc).__name__}") from exc
+            raise SystemOneUnavailableError(f"tactical_acceptance:{type(exc).__name__}:{system_one_error_code(exc)}") from exc
         else:
             metadata = {"status": "used" if review.confident else "ambiguous_fallback", **review.to_metadata()}
             result = review.complete if review.confident else deterministic
-            retry_approved = bool(getattr(review, "retry_approved", False))
+            stage_answer = review.answers.get("runtime_declared_subgoal_complete")
+            response_only = (action.tool_id == RESPOND_TOOL_ID
+                             and set(subgoal.allowed_side_effects) == {SideEffectClass.USER_RESPONSE})
+            if isinstance(stage_answer, (int, float)) and not response_only:
+                threshold = float(getattr(getattr(context.system_one, "settings", None), "yes_threshold", 0.8))
+                # A generic output-present predicate cannot turn an ambiguous
+                # judgment of an operational stage into completion. Preparing a
+                # response retains ambiguous fallback; outer acceptance review
+                # still verifies whether its content fulfills the request.
+                result = result and stage_answer >= threshold
+            if not getattr(review, 'context_complete', True):
+                result = False
+                metadata['completion_blocker'] = 'targeted_observation_required'
+            retry_approved = bool(getattr(review, "retry_approved", False)) and getattr(review, 'context_complete', True)
             metadata["retry_approved"] = retry_approved
         if (
             Capability.ATTACHMENT_ANALYSIS.value in subgoal.allowed_capabilities
             and _has_task_image(task)
-            and not _successful_image_analysis(state, subgoal.subgoal_id)
+            and not _image_inputs_provided(state, subgoal.subgoal_id)
         ):
-            # Permission to analyze an attached image in a subgoal is an
-            # explicit plan prerequisite; a successful file lookup or Bash
-            # inspection cannot stand in for OCR/vision evidence.
+            # Successful inference transport is required; a filename or a
+            # shell lookup alone is not a model image input. Jev still reviews
+            # whether the resulting action satisfies the requested outcome.
             result = False
             metadata["completion_blocker"] = "required_attachment_analysis_not_completed"
         if action.status != "success":
@@ -465,6 +594,14 @@ class PhaseExecutor:
     def _handle_failure(
         self, state: TacticalState, subgoal: PhaseSubgoal, action: TacticalAction
     ) -> PhaseOutcome | None:
+        if (subgoal.failure_policy == FailurePolicy.LOCAL_FALLBACK
+                and set(subgoal.allowed_side_effects) == {SideEffectClass.READ_ONLY}):
+            failures = sum(item.status == "failed" and item.subgoal_id == subgoal.subgoal_id for item in state.actions)
+            if failures < 3:
+                # System Two can inspect the recorded failure and compose an
+                # alternative within the same read-only stage. Writes and unknown
+                # partial external effects still require outer recovery.
+                return None
         state.transition(PhaseStatus.BLOCKED)
         return self._outcome(state, action.error or "A tactical action failed.", blockers=(action.error or "tactical_action_failed",))
 
@@ -590,13 +727,17 @@ def _tactical_prompt(
         "operation with the discovered identifier.\n\n"
         "Rejected entries contain precise validation feedback. Correct the action within the unchanged phase; "
         "never repeat an equivalent rejected action or replay completed work. "
+        "If progress_review.context_complete is false, the current result exceeded the bounded judgment view. "
+        "The original result remains below. Obtain a targeted source expansion or narrower observation to verify the "
+        "stage; do not repeat the broad search or re-execute a mutation whose effects may already exist. "
         "Every completed execution-log entry includes progress_review.complete from Jev. When it is false, the call "
         "executed but did not make semantic progress. Do not select the same tool with the same arguments again; "
         "choose different arguments or another revealed tool. For a CLI-backed artifact that returns an unexpected "
         "result shape, use native.bash to inspect or invoke the underlying CLI when Bash is revealed. "
-        "If the current subgoal authorizes attachment_analysis, first call native.analyze_image with the exact asset ID from "
-        "the task attachment manifest and read its returned text. Do not ask the user to repeat image contents before this "
-        "call; Bash file discovery is not image analysis.\n\n"
+        "Task images are attached directly to this inference request and mapped to asset IDs. Inspect them using your "
+        "vision capabilities and follow the selected skill guidance for what to extract or describe. Use the observations "
+        "to compose the current action. No separate OCR tool is needed. Do not ask the user to repeat readable image contents. "
+        "Image input delivery establishes availability only; do not claim an external effect from visual reasoning.\n\n"
         "The tool entries below include their complete registry descriptors: descriptions, schemas, capabilities, tags, "
         "metadata, program behavior, and read-only semantics. Treat description and metadata as operational guidance. "
         "Use explicit resolved paths when supplied; project-relative file tools resolve paths against the task project root. "
@@ -656,6 +797,39 @@ def _matching_prior_incomplete_result(state: TacticalState, completed: TacticalA
     return None
 
 
+def _confident_probability(value, threshold: float) -> bool:
+    import math
+    return type(value) in {int, float} and math.isfinite(value) and threshold <= value <= 1.0
+
+
+def _confident_negative(value, threshold: float) -> bool:
+    import math
+    return type(value) in {int, float} and math.isfinite(value) and 0.0 <= value <= 1.0 - threshold
+
+
+def _is_update_inspection(state: TacticalState, subgoal: PhaseSubgoal, answers: dict, threshold: float) -> bool:
+    return (set(subgoal.allowed_side_effects) == {SideEffectClass.READ_ONLY}
+            or _confident_probability(answers.get("runtime_action_is_inspection"), threshold)) and any(
+        set(item.allowed_side_effects) & {
+            SideEffectClass.PROJECT_MUTATION, SideEffectClass.EXTERNAL_REVERSIBLE,
+            SideEffectClass.EXTERNAL_IRREVERSIBLE, SideEffectClass.LOCAL_SKILL_INSTALLATION,
+        }
+        for item in state.phase.subgoals
+    )
+
+
+def _consecutive_no_progress(state: TacticalState, subgoal_id: str, threshold: float = 0.8) -> int:
+    count = 0
+    for entry in reversed(state.evidence.entries):
+        if entry.get("phase_id") != state.phase.phase_id or entry.get("subgoal_id") != subgoal_id:
+            continue
+        answer = (entry.get("progress_review") or {}).get("answers", {}).get("runtime_action_added_progress")
+        if not isinstance(answer, (int, float)) or answer >= threshold:
+            break
+        count += 1
+    return count
+
+
 def _has_task_image(task: "TaskState") -> bool:
     attachments = task.metadata.get("attachments") if isinstance(task.metadata, dict) else None
     return any(
@@ -681,11 +855,12 @@ def _task_attachment_manifest(task: "TaskState") -> list[dict[str, str]]:
     return manifest
 
 
-def _successful_image_analysis(state: TacticalState, subgoal_id: str) -> bool:
+def _image_inputs_provided(state: TacticalState, subgoal_id: str) -> bool:
     return any(
         str(item.get("subgoal_id") or "") == subgoal_id
-        and str(item.get("tool_id") or "") == "native.analyze_image"
-        and str(item.get("status") or "") == "success"
+        and item.get("kind") == "inference_image_input"
+        and item.get("status") == "provided"
+        and bool(item.get("asset_ids"))
         for item in state.evidence.entries
     )
 
@@ -714,18 +889,6 @@ def _wait_for_retry(delay: float, task: "TaskState", state: TacticalState, conte
             return False
         time.sleep(min(0.1, max(0.0, deadline - time.monotonic())))
     return True
-
-
-def _record_system_one_registry_selection(
-    task: "TaskState", state: TacticalState, metadata: dict[str, Any]
-) -> None:
-    history = task.metadata.setdefault("system_one_tool_registry_selections", [])
-    if not isinstance(history, list):
-        history = []
-        task.metadata["system_one_tool_registry_selections"] = history
-    history.append({"phase_id": state.phase.phase_id, **metadata})
-    if len(history) > 20:
-        del history[:-20]
 
 
 def _record_system_one_tactical_review(

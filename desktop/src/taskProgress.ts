@@ -2,7 +2,12 @@ import { applyA2uiEvent, type A2uiSurface, type AgUiEvent } from "./a2ui";
 
 const PREFIX = "task-progress:";
 
-// Keep the last snapshot even when deleteSurface arrives without a delivery.
+export const terminalProgressStates = new Set(["completed", "done", "success", "failed", "cancelled", "canceled", "abandoned", "interrupted"]);
+export function progressStatus(surface: A2uiSurface): string {
+  return String(surface.dataModel.status || "").toLowerCase();
+}
+
+// Each task owns its activity; closures preserve the last snapshot as a work log.
 export function projectTaskProgress(
   current: Record<string, A2uiSurface>,
   archived: Record<string, A2uiSurface>,
@@ -11,29 +16,43 @@ export function projectTaskProgress(
 ) {
   let surfaces = current;
   const logs = { ...archived };
-  let activeId = Object.keys(current).filter((id) => id.startsWith(PREFIX) && !logs[id.slice(PREFIX.length)]).at(-1);
+  const firstActivity: Record<string, string> = {};
+  for (const surface of [...Object.values(current), ...Object.values(archived)]) {
+    const first = String(surface.dataModel.first_activity_at || "");
+    if (first) firstActivity[surface.surfaceId] = first;
+  }
+
   const remember = (id: string) => {
     if (surfaces[id]) logs[id.slice(PREFIX.length)] = surfaces[id];
   };
   for (const { event } of events) {
-    const next = applyA2uiEvent(surfaces, event);
+    let next = applyA2uiEvent(surfaces, event);
+    for (const [id, surface] of Object.entries(next)) {
+      if (!id.startsWith(PREFIX)) continue;
+      const updated = String(surface.dataModel.updated_at || "");
+      if (!firstActivity[id] && Number.isFinite(Date.parse(updated))) firstActivity[id] = updated;
+      if (firstActivity[id] && surface.dataModel.first_activity_at !== firstActivity[id]) {
+        next = { ...next, [id]: { ...surface, dataModel: { ...surface.dataModel, first_activity_at: firstActivity[id] } } };
+      }
+    }
     for (const id of Object.keys(surfaces)) {
       if (id.startsWith(PREFIX) && !next[id]) {
         remember(id);
-        if (activeId === id) activeId = undefined;
       }
     }
     for (const id of Object.keys(next)) {
       if (!id.startsWith(PREFIX) || next[id] === surfaces[id]) continue;
-      if (activeId && activeId !== id) remember(activeId);
-      activeId = id;
-      delete logs[id.slice(PREFIX.length)];
+      if (next[id].dataModel.status && !terminalProgressStates.has(progressStatus(next[id]))) delete logs[id.slice(PREFIX.length)];
     }
     surfaces = next;
   }
   // Also recover stale cards after failures that emitted no closing envelope.
   for (const id of Object.keys(surfaces)) {
-    if (id.startsWith(PREFIX) && (stopped || id !== activeId)) remember(id);
+    if (!id.startsWith(PREFIX)) continue;
+    if (terminalProgressStates.has(progressStatus(surfaces[id]))) remember(id);
+    else if (stopped && !logs[id.slice(PREFIX.length)]) logs[id.slice(PREFIX.length)] = {
+      ...surfaces[id], dataModel: { ...surfaces[id].dataModel, status: "interrupted" },
+    };
   }
   return { surfaces, archived: logs };
 }
