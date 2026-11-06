@@ -419,3 +419,58 @@ sources use one persisted `native.ask_question` and authenticated resumption.
 Source reads retain current access checks, and historical content supplies neither
 authorization nor verified current state/effects. See
 [conversation continuity](11-conversation-continuity.md#system-two-native-memory-workflow-166).
+
+### Integration reconciliation: independent effect evidence
+
+The existing tactical Jev judgment can identify read-only phases that add no
+meaningful progress. Code uses it only when the relevant result and prior context
+are complete and the negative probability crosses the configured threshold.
+Uncertain judgments and mutation phases retain their evidence as potential
+progress. The blocked-recovery fixture preserves both failed routes and reaches a
+bounded stop without exhausting its scripted planner.
+
+Native Bash supports an optional `verification` request. Harness code reads an
+actor-authorized source before and after the command; the command's own printed
+`verified` flag is never an independent receipt. Supported sources are a JSON
+field in a selected skill's actor-authorized data binding explicitly marked by
+an authorized administrator with `alphonse_verification_authority: resource_state`, a text file inside the
+ordinary workspace or project and declared mutation scope, and a public JSON
+HTTPS endpoint on an origin explicitly named in the current request. The read-back
+checks the exact expected scalar. Workspace confirmation requires the file state
+to change, and public confirmation requires a new event; neither can turn an
+unchanged pre-existing result into a new-effect receipt. For physical devices, a file proves only the
+bound data it actually contains; a cache is not automatically a device read-back.
+
+Public confirmation is opt-in: the endpoint must advertise `_verification_protocol`
+as `nonce-v1`, and return a matching expected field, the per-action
+`ALPHONSE_VERIFICATION_NONCE`, and a new event ID at the specified JSON pointers.
+The harness checks the endpoint before dispatch and again afterwards. Plain HTTP cannot
+establish an external receipt. It rejects
+non-public DNS answers, pins the checked address for the request, verifies TLS
+for the original hostname, forbids redirects, and bounds response size and time.
+A site that cannot support this protocol remains unverified; do not repeat an
+uncertain registration or invent a receipt.
+
+Before dispatch, deterministic checks enforce actor selection, data-binding ACLs,
+phase side-effect scope, workspace containment, and allowed paths. Binding access
+and its configured authority are checked again after the command and immediately
+before Act reviews the read-back. Revocation also withholds the earlier data from
+that review. A failed, cancelled, timed-out, explicitly
+reported failed, inaccessible, mismatched, unchanged-when-required or uncorrelated
+action cannot become successful evidence. If the post-write check fails, the
+result remains failed and warns that the effect may have occurred. At Act, code
+requires the original task, actor, current input digest, invocation, phase scope,
+and a read-back no more than five minutes old; an unrelated, stale or forged
+script output is not a receipt. The projected receipt identifies the logical
+binding and pointer, workspace-relative path, or public URL and pointer so that
+semantic review can compare the observed resource with the request; physical
+binding paths are not sent in the receipt. A matching state with no change is labeled
+`verified_existing_state`, not a new persisted event. Jev still judges whether the
+actual authorized observation addresses the user's requested outcome; it cannot
+supply authorization or override a failed verification.
+
+The synthetic AC and registration fixtures now obtain their read-back from the
+bound data file and the fixture server respectively. The server exposes a
+nonce-aware read-only verification endpoint for the test. These fixtures do not
+qualify arbitrary physical devices, external sites without such an endpoint, or
+live model behavior.

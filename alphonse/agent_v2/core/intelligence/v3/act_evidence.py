@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+from datetime import datetime, timezone
 import json
 import posixpath
 import re
@@ -232,7 +233,26 @@ def _result_view(value):
     return value, {"source_truncated"} if clipped else set()
 
 
-def observation(entry, criterion_ids, *, include_result=True):
+def _same_readback_value(actual, expected):
+    if type(actual) in (int, float) and type(expected) in (int, float):
+        return actual == expected
+    return type(actual) is type(expected) and actual == expected
+
+
+def _fresh_independent_readback(value):
+    if not isinstance(value, str):
+        return False
+    try:
+        observed = datetime.fromisoformat(value)
+        if observed.tzinfo is None:
+            return False
+        age = (datetime.now(timezone.utc) - observed.astimezone(timezone.utc)).total_seconds()
+        return -5 <= age <= 300
+    except (ValueError, OverflowError):
+        return False
+
+
+def observation(entry, criterion_ids, *, include_result=True, task_id='', actor_user_id='', input_digest=''):
     ref = entry["evidence_ref"]
     tool_id = entry.get("tool_id")
     status = entry.get("status")
@@ -249,6 +269,36 @@ def observation(entry, criterion_ids, *, include_result=True):
     operation = {"kind": _NON_EFFECT.get(tool_id, "unknown")}
     if tool_id == "native.bash":
         operation = _shell_operation(arguments, fields)
+        proof = fields.get('verification')
+        spec = arguments.get('verification')
+        invocation = entry.get('invocation') or {}
+        target = proof.get('target') if isinstance(proof, dict) else None
+        resource = None
+        if isinstance(spec, dict):
+            if spec.get('source') == 'workspace_text':
+                resource = {'path': spec.get('path')}
+            elif spec.get('source') == 'skill_data_json':
+                resource = {'skill_id': arguments.get('skill_id'), 'binding_name': spec.get('binding_name'), 'pointer': spec.get('pointer')}
+            elif spec.get('source') == 'public_json':
+                resource = {'url': spec.get('url'), 'pointer': spec.get('pointer'), 'event_pointer': spec.get('event_pointer')}
+        if (isinstance(spec, dict) and isinstance(proof, dict) and proof.get('status') == 'verified'
+                and proof.get('source') == 'bash_independent_readback'
+                and _fresh_independent_readback(proof.get('observed_at'))
+                and proof.get('task_id') == task_id and proof.get('actor_user_id') == actor_user_id
+                and task_id and actor_user_id and input_digest and ref.startswith('tactical-action:')
+                and (invocation.get('task_understanding') or {}).get('input_digest') == input_digest
+                and invocation.get('call_id') == ref.removeprefix('tactical-action:')
+                and resource is not None and proof.get('resource') == resource
+                and isinstance(target, dict) and target.get('kind') == spec.get('source')
+                and 'expected' in spec and type(proof.get('changed')) is bool
+                and isinstance(target.get('id'), str) and re.fullmatch(r'[a-f0-9]{64}', target['id'])
+                and _same_readback_value(proof.get('observed'), spec['expected'])
+                and (not spec.get('require_change') or proof.get('changed') is True)
+                and (spec.get('source') != 'public_json' or (spec.get('require_change') is True
+                    and proof.get('changed') is True and proof.get('nonce_checked') is True
+                    and isinstance(proof.get('event_id_hash'), str)
+                    and re.fullmatch(r'[a-f0-9]{64}', proof['event_id_hash'])))):
+            operation = {**operation, 'kind': 'mutation', 'target': deepcopy(target), 'independent_readback': True}
     elif tool_id == "native.integration_manage":
         operation = _management_operation(arguments, fields)
     elif tool_id == "native.skill_maintain":
@@ -337,6 +387,11 @@ def observation(entry, criterion_ids, *, include_result=True):
         effect_status = "unknown"
     elif outcome in {"failed", "denied"}:
         effect_status = "failed_attempt_possible_partial_effect" if operation["kind"] == "mutation" else "unverified"
+    elif (include_result and tool_id == 'native.bash' and outcome == 'process_exited_zero'
+          and operation.get('independent_readback') and not fields.get('verification_failed')):
+        effect_status = 'verified_persisted_effect' if fields['verification']['changed'] else 'verified_existing_state'
+        row['verification'] = {'source': 'bash_independent_readback', 'readback_ref': ref,
+                               'target': deepcopy(operation['target']), 'observed_at': fields['verification']['observed_at']}
     elif include_result and outcome == "returned" and _native_verified(tool_id, fields, operation.get("target")):
         effect_status = "verified_existing_state" if fields.get("created") is False else "verified_persisted_effect"
         row["verification"] = {"source": _NATIVE_READBACK[tool_id], "readback_ref": ref,

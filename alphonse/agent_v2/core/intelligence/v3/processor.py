@@ -114,6 +114,7 @@ class HierarchicalCAPDProcessor:
                     if state.status == PhaseStatus.PHASE_COMPLETE else self.executor.run(task, state, context)
                 )
                 evidence_before = _successful_evidence_signatures(task.metadata.get("v3_phase_history"))
+                refs_before = _successful_evidence_refs(task.metadata.get("v3_phase_history"))
                 satisfied_before = _satisfied_criterion_ids(task)
                 self._append_history(task, state, outcome.to_dict())
                 if outcome.reason.startswith(("tactical_planning_error_repeated:", "tactical_correction_exhausted:")):
@@ -133,7 +134,10 @@ class HierarchicalCAPDProcessor:
                 break
             self._persist(task, context)
             evidence_after = _successful_evidence_signatures(task.metadata.get("v3_phase_history"))
-            evidence_progress = bool(evidence_after - evidence_before) or bool(_satisfied_criterion_ids(task) - satisfied_before)
+            new_evidence = bool(evidence_after - evidence_before)
+            if new_evidence and _phase_observations_report_no_progress(state, refs_before, context):
+                new_evidence = False
+            evidence_progress = new_evidence or bool(_satisfied_criterion_ids(task) - satisfied_before)
             review_status = str(getattr(getattr(review, "status", None), "value", ""))
             inspection_handoff = (
                 (task.metadata.get("v3_inspection_resolution") or {}).get("phase_id") == state.phase.phase_id
@@ -710,6 +714,29 @@ def _successful_evidence_signatures(raw_history: object) -> set[str]:
         for item in _deduplicated_history_evidence(raw_history)
         if item.get("status") == "success" and item.get("tool_id") != "native.respond"
     }
+
+
+def _phase_observations_report_no_progress(state: TacticalState, prior_refs: set[str], context: "CoreLoopContext") -> bool:
+    """Use only complete, confident Jev judgments; unknown evidence stays progress."""
+    observations = [item for item in state.evidence.entries if item.get("status") == "success"
+                    and item.get("tool_id") != "native.respond" and item.get("evidence_ref") not in prior_refs]
+    if not observations:
+        return False
+    read_only = {goal.subgoal_id for goal in state.phase.subgoals
+                 if all(getattr(effect, "value", effect) == "read_only" for effect in goal.allowed_side_effects)}
+    threshold = getattr(getattr(context.system_one, "settings", None), "no_threshold", 0.2)
+    if type(threshold) not in (int, float) or not 0 <= threshold <= 1:
+        return False
+    for item in observations:
+        review = item.get("progress_review") or {}
+        coverage = review.get("context_coverage") or {}
+        answer = (review.get("answers") or {}).get("runtime_action_added_progress")
+        if (item.get("subgoal_id") not in read_only or review.get("context_complete") is not True
+                or coverage.get("omitted_prior_count", 0) or coverage.get("omitted_prior_result_count", 0)
+                or coverage.get("omitted_prior_refs")
+                or type(answer) not in (int, float) or not 0 <= answer <= threshold):
+            return False
+    return True
 
 
 def _satisfied_criterion_ids(task: "TaskState") -> set[str]:

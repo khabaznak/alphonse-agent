@@ -31,7 +31,7 @@ from alphonse.agent_v2.system_one import (
 from alphonse.agent_v2.users import V2UserStore
 
 SKILL = 'skill:study-temperature'
-BUDGET = {'planning_calls': 4, 'tactical_calls': 10, 'command_timeout_seconds': 5,
+BUDGET = {'planning_calls': 6, 'tactical_calls': 10, 'command_timeout_seconds': 5,
           'wall_seconds': 30, 'automatic_shell_retries': 0}
 QUESTIONS = [{'question_id': 'observed', 'type': 'noul',
               'instructions': 'Does the observed result establish this stage?',
@@ -70,7 +70,14 @@ class Decisions:
     select_plan_tools = curate_request_tools
 
     def evaluate_tactical_progress(self, **values):
-        return SystemOneTacticalReview(True, .99, True, answers={'observed': .99})
+        current = values['action']
+        previous = [item for item in values.get('execution_log', [])
+                    if item.get('evidence_ref') != 'tactical-action:' + current.get('action_id', '')]
+        repeated = any(item.get('status') == 'success' and item.get('arguments') == current.get('arguments')
+                       and (item.get('result') or {}).get('stdout') == (current.get('result') or {}).get('stdout')
+                       for item in previous)
+        return SystemOneTacticalReview(True, .99, True,
+            answers={'observed': .99, 'runtime_action_added_progress': .01 if repeated else .99})
 
     def evaluate(self, **values):
         evidence = values['evidence']['entries']

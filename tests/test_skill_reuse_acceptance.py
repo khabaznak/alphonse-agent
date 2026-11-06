@@ -48,11 +48,12 @@ def test_blocked_recovery_reports_evidence_without_install_or_success():
     assert report['mechanical_pass'], report['checks']
     assert report['approval'] is None and report['fresh_task'] is None
     assert report['learning_task']['status'] == 'failed'
-    assert 'Both available routes failed' in report['learning_task']['outcome']['reason']
+    assert 'repeated phases made no acceptance progress' in report['learning_task']['outcome']['reason']
+    assert report['learning_task']['metadata']['v3_no_progress_stop'] is True
     message = report['learning_task']['metadata']['v3_failure_response']['message']
     assert 'could not obtain a fresh reading' in message
     assert '24' not in message
-    assert report['calls']['learning'] == {'planning': 4, 'tactical': 4}
+    assert report['calls']['learning'] == {'planning': 6, 'tactical': 6}
 
 
 def approved_trial(tmp_path):

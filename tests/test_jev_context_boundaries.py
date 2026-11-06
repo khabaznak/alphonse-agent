@@ -63,6 +63,7 @@ def test_targeted_read_after_large_search_can_complete_using_complete_current_ob
     assert review.context_complete and review.complete
     assert calls[0]['state']['current_action']['result'] == result
     assert calls[0]['state']['tool_execution_log'][0]['result_omitted']
+    assert review.context_coverage['omitted_prior_result_count'] == 1
 
 
 def test_large_opaque_result_requires_a_targeted_observation_instead_of_silent_slicing():

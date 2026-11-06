@@ -283,7 +283,7 @@ def _assess_act(task, state, context):
                  "content": str(record)}
                 for record in records[1:]
             ]
-        input_state = mission_review_state(task, state, request_sources=request_sources)
+        input_state = mission_review_state(task, state, request_sources=request_sources, context=context)
         evidence_version = hashlib.sha256(json.dumps(
             [task.task_id, input_state], ensure_ascii=False, sort_keys=True,
         ).encode()).hexdigest()

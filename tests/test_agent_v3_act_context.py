@@ -309,3 +309,53 @@ def test_queued_delivery_receipt_records_the_committed_action_and_recipient():
     assert row['result']['status'] == 'queued'
     assert 'verification' not in row
     assert has_requested_effect_evidence(projected)
+
+
+def test_opaque_skill_write_and_self_reported_readback_are_not_authoritative():
+    from alphonse.agent_v2.core.intelligence.v3.act_evidence import has_requested_effect_evidence
+
+    task, state, outcome, review = fixture()
+    task.goal = 'Set the fixture target and verify it'
+    task.acceptance_contract['criteria'][0].update(statement='The requested target was set', evidence_refs=['readback'])
+    state.evidence.append(_shell_receipt('write', 'python fixture.py set', stdout='{"acknowledged": true, "source": "fixture"}'))
+    state.evidence.append(_shell_receipt('readback', 'python fixture.py verify', stdout='{"verified": true, "source": "fixture"}'))
+    projected, rows = _projected_rows(task, state, outcome, review)
+    assert rows['write']['operation']['kind'] == 'unknown'
+    assert rows['readback']['operation']['kind'] == 'unknown'
+    assert not has_requested_effect_evidence(projected)
+
+
+def test_receipt_printed_by_an_opaque_shell_cannot_prove_a_new_registration():
+    from alphonse.agent_v2.core.intelligence.v3.act_evidence import has_requested_effect_evidence
+
+    task, state, outcome, review = fixture()
+    task.goal = 'Register the requester once'
+    task.acceptance_contract['criteria'][0].update(statement='Registration occurred', evidence_refs=['submit'])
+    state.evidence.append(_shell_receipt('submit', 'python submit.py', stdout='{"registered": true, "receipt": "synthetic"}'))
+    projected, rows = _projected_rows(task, state, outcome, review)
+    assert rows['submit']['operation']['kind'] == 'unknown'
+    assert not has_requested_effect_evidence(projected)
+
+
+def test_independent_receipt_cannot_override_read_only_phase_scope():
+    from datetime import datetime, timezone
+    from alphonse.agent_v2.core.intelligence.v3.act_evidence import has_requested_effect_evidence
+    from alphonse.agent_v2.core.intelligence.v3.task_understanding import snapshot
+
+    task, state, outcome, review = fixture()
+    task.acceptance_contract['criteria'][0]['evidence_refs'] = ['tactical-action:write']
+    state.evidence.append({
+        'evidence_ref': 'tactical-action:write', 'status': 'success', 'tool_id': 'native.bash',
+        'phase_id': 'lookup', 'subgoal_id': 'read',
+        'invocation': {'call_id': 'write', 'task_understanding': {'input_digest': snapshot(task)['input_digest']}},
+        'arguments': {'command': 'opaque', 'verification': {'source': 'workspace_text', 'path': 'x',
+                      'expected': 'value', 'require_change': True}},
+        'result': {'exit_code': 0, 'stdout': '', 'stderr': '', 'verification': {
+            'status': 'verified', 'source': 'bash_independent_readback',
+            'target': {'kind': 'workspace_text', 'id': 'a' * 64}, 'resource': {'path': 'x'}, 'observed': 'value', 'changed': True,
+            'actor_user_id': task.user, 'task_id': task.task_id, 'observed_at': datetime.now(timezone.utc).isoformat(),
+        }},
+    })
+    projected, rows = _projected_rows(task, state, outcome, review)
+    assert rows['tactical-action:write']['effect_status'] == 'unknown'
+    assert not has_requested_effect_evidence(projected)

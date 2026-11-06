@@ -971,3 +971,38 @@ def test_processor_continues_until_a_real_terminal_state(tmp_path: Path) -> None
 
 # Existing scripted providers delegate the shared interpretation call explicitly.
 pytestmark = pytest.mark.usefixtures("task_understanding_provider")
+
+
+def test_no_progress_requires_complete_confident_semantic_judgment():
+    from types import SimpleNamespace
+    from alphonse.agent_v2.core.intelligence.v3.processor import _phase_observations_report_no_progress
+    phase = PhasePlan("phase", "Inspect", (PhaseSubgoal("read", "Read", "output", allowed_side_effects=("read_only",)),))
+    state = new_tactical_state(phase)
+    entry = {"evidence_ref": "new", "status": "success", "subgoal_id": "read", "tool_id": "native.bash",
+             "progress_review": {"context_complete": True, "context_coverage": {},
+                                 "answers": {"runtime_action_added_progress": .1}}}
+    state.evidence.append(entry)
+    context = SimpleNamespace(system_one=None)
+    assert _phase_observations_report_no_progress(state, set(), context)
+    entry = state.evidence.entries[-1]
+    entry["progress_review"]["answers"]["runtime_action_added_progress"] = .9
+    assert not _phase_observations_report_no_progress(state, set(), context)
+    entry["progress_review"]["answers"]["runtime_action_added_progress"] = .5
+    assert not _phase_observations_report_no_progress(state, set(), context)
+    entry["progress_review"]["answers"]["runtime_action_added_progress"] = .1
+    entry["progress_review"]["context_coverage"] = {"omitted_prior_count": 1}
+    assert not _phase_observations_report_no_progress(state, set(), context)
+    entry["progress_review"]["context_coverage"] = {"omitted_prior_result_count": 1}
+    assert not _phase_observations_report_no_progress(state, set(), context)
+    entry["progress_review"]["context_coverage"] = {}
+    entry["progress_review"]["context_complete"] = False
+    assert not _phase_observations_report_no_progress(state, set(), context)
+    entry["progress_review"]["context_complete"] = True
+    entry["progress_review"]["answers"] = {}
+    assert not _phase_observations_report_no_progress(state, set(), context)
+    entry["progress_review"]["answers"] = {"runtime_action_added_progress": .1}
+    context.system_one = SimpleNamespace(settings=SimpleNamespace(no_threshold=.05))
+    assert not _phase_observations_report_no_progress(state, set(), context)
+    context.system_one.settings.no_threshold = .2
+    state.phase = PhasePlan("write", "Update", (PhaseSubgoal("read", "Update", "output", allowed_side_effects=("external_reversible",)),))
+    assert not _phase_observations_report_no_progress(state, set(), context)

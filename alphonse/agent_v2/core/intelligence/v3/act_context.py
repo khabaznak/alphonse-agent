@@ -18,7 +18,7 @@ def _size(value):
     return len(json.dumps(value, ensure_ascii=False, sort_keys=True, default=str, allow_nan=False).encode('utf-8'))
 
 
-def mission_review_state(task, state, *, request_sources=()):
+def mission_review_state(task, state, *, request_sources=(), context=None):
     """Keep the request, steering and supporting observations complete and unique.
 
     Keep every observation referenced by a satisfied semantic criterion; other
@@ -87,7 +87,7 @@ def mission_review_state(task, state, *, request_sources=()):
     declared_mutations = set()
     for entry in entries.values():
         ref = entry['evidence_ref']
-        row = observation(entry, criterion_ids.get(ref, []))
+        row = observation(entry, criterion_ids.get(ref, []), task_id=str(task.task_id), actor_user_id=str(task.user), input_digest=str(understanding['input_digest']))
         if entry.get('tool_id') == 'native.respond' and prepared.get('message') and ref == response_ref:
             row.pop('result', None)
             row['result_reference'] = 'prepared_response.message'
@@ -100,6 +100,35 @@ def mission_review_state(task, state, *, request_sources=()):
                                  if subgoal.get("subgoal_id") == entry.get("subgoal_id")), [])
         if any(effect not in {"read_only", "user_response"} for effect in declared_effects):
             declared_mutations.add(ref)
+        spec = (entry.get('arguments') or {}).get('verification') or {}
+        source = spec.get('source') if isinstance(spec, dict) else None
+        if entry.get('tool_id') == 'native.bash' and source in {'skill_data_json', 'workspace_text'}:
+            from alphonse.agent_v2.core.tools.registry.native.bash_verification import binding_still_authorized, workspace_still_authorized
+            result = entry.get('result') if isinstance(entry.get('result'), dict) else {}
+            proof = result.get('verification') if isinstance(result.get('verification'), dict) else {}
+            check = binding_still_authorized if source == 'skill_data_json' else workspace_still_authorized
+            if not check(task=task, arguments=entry.get('arguments') or {}, context=context, target=proof.get('target')):
+                # Redact even expired or invalid receipts after access is revoked.
+                row.pop('result', None)
+                row.pop('verification', None)
+                row['operation'].pop('independent_readback', None)
+                row['operation'].pop('target', None)
+                row['operation']['kind'] = 'unknown'
+                row['effect_status'] = 'unknown'
+                row['result_coverage']['status'] = 'unavailable'
+        if row['operation'].get('independent_readback'):
+            scope = plan.get('mutation_scope') or {}
+            authorized = (source == 'workspace_text' and 'project_mutation' in declared_effects
+                          and spec.get('path') in allowed and spec.get('require_change') is True)
+            authorized = authorized or (source == 'skill_data_json' and bool(scope.get('allow_external_effects'))
+                and bool(set(declared_effects) & {'project_mutation', 'external_reversible', 'external_irreversible'}))
+            authorized = authorized or (source == 'public_json' and bool(scope.get('allow_external_effects'))
+                and bool(set(declared_effects) & {'external_reversible', 'external_irreversible'}))
+            if not authorized:
+                row['operation'].pop('independent_readback', None)
+                row['operation']['kind'] = 'unknown'
+                row.pop('verification', None)
+                row['effect_status'] = 'unknown'
         path = target.get('path')
         if path:
             cwd = (entry['result'].get('cwd') if isinstance(entry.get('result'), dict) else None)
@@ -153,7 +182,7 @@ def mission_review_state(task, state, *, request_sources=()):
             continue
         value['execution_evidence'].pop()
         coverage['omitted_result_refs'].append(ref)
-        shell = observation(entries[ref], [], include_result=False)
+        shell = observation(entries[ref], [], include_result=False, task_id=str(task.task_id), actor_user_id=str(task.user), input_digest=str(understanding['input_digest']))
         value['execution_evidence'].append(shell)
         if _size(value) <= ACT_STATE_MAX_BYTES - 2000:
             rows[ref] = shell

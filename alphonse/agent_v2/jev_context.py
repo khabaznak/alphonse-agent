@@ -99,8 +99,9 @@ def tactical_review_state(goal, phase, subgoal, action, execution_log):
             coverage['omitted_prior_count'] += 1
             if len(coverage['omitted_prior_refs']) < 16:
                 coverage['omitted_prior_refs'].append(str(entry.get('evidence_ref') or 'prior'))
+    value['tool_execution_log'].reverse()
+    coverage['omitted_prior_result_count'] = sum(1 for row in value['tool_execution_log'] if row.get('result_omitted'))
+    coverage['state_bytes'] = encoded_size(value)
     if encoded_size(value) > TACTICAL_STATE_BYTES:
         raise ValueError('system_one_context_budget_exceeded')
-    value['tool_execution_log'].reverse()
-    coverage['state_bytes'] = encoded_size(value)
     return value

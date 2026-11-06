@@ -144,6 +144,8 @@ def _descriptor_for(registry: Any, tool_id: str) -> Any | None:
 def _bash_result_error(tool_id: str, result: Any) -> str:
     if tool_id != "native.bash" or not isinstance(result, dict):
         return ""
+    if result.get("verification_failed") is True:
+        return "Independent read-back failed; the action may have taken effect and must be reconciled before retrying."
     if result.get("cancelled") is True:
         return "Bash command cancelled; reconcile any partial effects before retrying."
     if result.get("timed_out") is True:

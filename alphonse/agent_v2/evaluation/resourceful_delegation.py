@@ -38,7 +38,7 @@ from alphonse.agent_v2.system_one import (SystemOneAdmissionDecision, SystemOneA
     SystemOneReviewResult, SystemOneTacticalReview, SystemOneToolRegistrySelection)
 from alphonse.agent_v2.users import V2UserStore
 
-CORPUS = Path(__file__).resolve().parents[3] / 'tests/fixtures/resourceful_delegation/v1.json'
+CORPUS = Path(__file__).resolve().parents[3] / 'tests/fixtures/resourceful_delegation/v2.json'
 QUESTIONS = [{'question_id': 'observed', 'type': 'noul', 'instructions': 'Is this stage evidenced by the result?',
               'criteria': {'true': 'Direct successful evidence.', 'false': 'Missing or failed evidence.'}}]
 FORM_KINDS = {'form', 'absent', 'broken', 'changed', 'restart', 'clarify'}
@@ -58,19 +58,33 @@ def fixture_server(kind, *, identity='Synthetic Alex'):
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
+            if self.path == '/verification':
+                prior = next((row for row in reversed(receipts) if row['method'] == 'POST' and row['status'] == 201), None)
+                receipts.append({'method': 'VERIFY', 'status': 200})
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(json.dumps({'_verification_protocol': 'nonce-v1',
+                    'name': prior['values'][field][0] if prior else None,
+                    'nonce': prior['values']['verification_nonce'][0] if prior else None,
+                    'event_id': prior['event_id'] if prior else None}).encode())
+                return
             status = 403 if kind == 'denied' else 503 if kind == 'unavailable' else 200
             receipts.append({'method': 'GET', 'status': status, **({'places': []} if kind == 'empty' else {})})
             self.send_response(status)
             self.end_headers()
             body = {'places': []} if kind == 'empty' else None
             self.wfile.write(json.dumps(body).encode() if body is not None else
-                             f'<form action="/register" method="post"><input required name="{field}"><button>Join</button></form>'.encode())
+                             f'<form action="/register" method="post"><input type="hidden" name="verification_nonce"><input required name="{field}"><button>Join</button></form>'.encode())
 
         def do_POST(self):
             from urllib.parse import parse_qs
             values = parse_qs(self.rfile.read(int(self.headers.get('Content-Length', '0'))).decode())
-            valid = self.path == '/register' and values == {field: [identity]}
-            receipts.append({'method': 'POST', 'status': 201 if valid else 422, 'values': values})
+            valid = (self.path == '/register' and values.get(field) == [identity]
+                     and len(values.get('verification_nonce', [])) == 1
+                     and set(values) == {field, 'verification_nonce'})
+            from uuid import uuid4
+            receipts.append({'method': 'POST', 'status': 201 if valid else 422, 'values': values,
+                             'event_id': str(uuid4()) if valid else None})
             self.send_response(201 if valid else 422)
             self.end_headers()
             self.wfile.write(json.dumps({'registered': valid, 'receipt': 'synthetic-registration' if valid else None}).encode())
@@ -82,7 +96,20 @@ def fixture_server(kind, *, identity='Synthetic Alex'):
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        yield f'http://127.0.0.1:{server.server_port}', receipts
+        # Test-only loopback transport: production verification uses the public
+        # web fetcher's destination checks. The verifier still performs its own
+        # independent HTTP reads against the fixture server.
+        from unittest.mock import patch
+        from urllib.request import urlopen
+        fixture_origin = f'http://127.0.0.1:{server.server_port}'
+        def fixture_read(url):
+            if not url.startswith(fixture_origin + '/'):
+                raise ValueError('fixture_origin_denied')
+            with urlopen(url, timeout=5) as response:
+                return json.load(response)
+        with patch('alphonse.agent_v2.core.tools.registry.native.bash_verification._http_json', fixture_read), \
+             patch('alphonse.agent_v2.core.tools.registry.native.bash_verification._require_secure_public', lambda _url: None):
+            yield fixture_origin, receipts
     finally:
         server.shutdown()
         server.server_close()
@@ -214,6 +241,13 @@ class ScriptedSystemTwo:
                 'dtstart': '2030-01-01T09:00:00+00:00', 'timezone': 'UTC'}
         else:
             tool, args = 'native.bash', {'command': trial.command(stage), 'timeout_seconds': 5}
+            if stage == 'submit':
+                args['verification'] = {'source': 'public_json', 'url': trial.url + '/verification',
+                    'pointer': '/name', 'nonce_pointer': '/nonce', 'event_pointer': '/event_id',
+                    'expected': 'Synthetic Alex', 'require_change': True}
+            elif stage == 'notes':
+                args['verification'] = {'source': 'workspace_text', 'path': 'workshop-notes.md',
+                    'expected': 'Workshop on Friday', 'require_change': True}
         return {'tool_id': tool, 'arguments': args, 'acceptance_questions': QUESTIONS}
 
 
@@ -281,12 +315,13 @@ except (ImportError, RuntimeError) as error:
             program = f"""from urllib.request import urlopen, Request
 from urllib.parse import urlencode
 from html.parser import HTMLParser
+from os import environ
 class Form(HTMLParser):
  def handle_starttag(self, tag, attrs):
   if tag == 'input': self.field = dict(attrs)['name']
 p = Form()
 p.feed(urlopen({self.url!r}, timeout=2).read().decode())
-request = Request({self.url + '/register'!r}, data=urlencode({{p.field: 'Synthetic Alex'}}).encode())
+request = Request({self.url + '/register'!r}, data=urlencode({{p.field: 'Synthetic Alex', 'verification_nonce': environ['ALPHONSE_VERIFICATION_NONCE']}}).encode())
 print(urlopen(request, timeout=2).read().decode())
 """
         return shlex.join([sys.executable, '-c', program])
@@ -439,7 +474,7 @@ def run_suite(corpus_path=CORPUS):
     gates['all_trials_recorded'] = all('metrics' in r and 'error' not in r for r in results)
     revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
     dirty = subprocess.check_output(['git', 'status', '--porcelain', '--untracked-files=no'], text=True).strip()
-    return {'version': corpus['version'], 'mode': corpus['mode'], 'timestamp_utc': datetime.now(timezone.utc).isoformat(),
+    return {'version': corpus['version'], 'harness_version': 'independent-readback-v2', 'mode': corpus['mode'], 'timestamp_utc': datetime.now(timezone.utc).isoformat(),
             'revision': revision, 'tracked_tree_dirty': bool(dirty), 'python': sys.version,
             'corpus_sha256': hashlib.sha256(raw).hexdigest(), 'thresholds': threshold, 'summary': summary,
             'gates': gates, 'qualified_synthetic_runtime': all(gates.values()),
@@ -447,6 +482,7 @@ def run_suite(corpus_path=CORPUS):
             'limitations': ['System One judgments, System Two plans and prose are scripted.',
                             'Held-out split tests fixture variation, not unseen model generalization.',
                             'No browser JavaScript, accounts, production daemon ingress, live providers or live sites are qualified.',
+                            'Form fixtures opt into nonce-v1 independent receipts; sites without that protocol are not qualified.',
                             'Bash is a trusted host capability; disposable fixtures are not an OS security sandbox.'],
             'results': results}
 
