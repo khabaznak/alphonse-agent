@@ -367,6 +367,31 @@ def test_final_response_delivery_requires_completed_task_even_when_prepared(stat
     assert len(outbox.list()) == (1 if status == "completed" else 0)
 
 
+def test_scheduled_result_projection_is_idempotent_after_restart(tmp_path):
+    from alphonse.agent_v2.core.core import StateSnapshot
+    from alphonse.agent_v2.core.io import project_snapshot_to_outbox
+
+    task = _new_task()
+    task.status = "completed"
+    task.metadata["prepared_user_response"] = {"message": "The scheduled work finished."}
+    task.metadata["occurrence_key"] = "schedule:occurrence-1"
+    snapshot = StateSnapshot(metadata={"task_state": task.to_dict()})
+    path = tmp_path / "outbox.sqlite3"
+
+    first = project_snapshot_to_outbox(snapshot=snapshot, outbox=SQLiteOutboundStore(path))
+    reopened = SQLiteOutboundStore(path)
+    second = project_snapshot_to_outbox(snapshot=snapshot, outbox=reopened)
+
+    assert first.outbox_message_id == second.outbox_message_id
+    assert len(reopened.list()) == 1
+    task.metadata["occurrence_key"] = "schedule:occurrence-2"
+    third = project_snapshot_to_outbox(
+        snapshot=StateSnapshot(metadata={"task_state": task.to_dict()}), outbox=reopened,
+    )
+    assert third.outbox_message_id != first.outbox_message_id
+    assert len(reopened.list()) == 2
+
+
 def test_parked_task_does_not_announce_prepared_completion_through_daemon():
     from alphonse.agent_v2.core.core import ProcessingResult, ProcessingStatus, StateSnapshot
     from alphonse.agent_v2.core.state import reset_state

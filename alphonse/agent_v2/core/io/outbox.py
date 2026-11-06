@@ -715,6 +715,10 @@ def project_snapshot_to_outbox(
             "scheduled_run_id": str(task_metadata.get("scheduled_run_id") or "").strip(),
             "occurrence_key": str(task_metadata.get("occurrence_key") or "").strip(),
         },
+        idempotency_key=(
+            f"scheduled-result:{task_metadata['occurrence_key']}"
+            if str(task_metadata.get("occurrence_key") or "").strip() else ""
+        ),
         connection=connection,
     )
     if mirror_automation_messages_to_preferred_channel and str(task_metadata.get("scheduled_task_id") or "").strip():
@@ -777,6 +781,7 @@ def _enqueue_preferred_automation_copy(
             task_id=original.task_id,
             project_id=original.project_id,
             metadata=metadata,
+            idempotency_key=f"automation-copy:{original.outbox_message_id}:{preferred.integration_id}:{preferred.provider_key}:{preferred.channel_target}",
             connection=connection,
         )
         logger.info("automation preferred-channel copy queued correlation_id=%s", original.correlation_id)

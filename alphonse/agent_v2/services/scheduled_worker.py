@@ -148,7 +148,7 @@ class ScheduledTaskWorker:
                     "scheduled_task_id": occurrence.task.scheduled_task_id,
                     "project_id": occurrence.task.project_id,
                     "occurrence_key": occurrence.occurrence_key,
-                    "status": "delivered",
+                    "status": "response_pending",
                     "response_outbox_id": outbox_message_id,
                 }
             metadata: dict[str, Any] = {
