@@ -44,7 +44,7 @@ describe("poll projection through the production task renderer", () => {
     expect(result.archived).toEqual({});
     expect(renderToStaticMarkup(<TaskProgressBubble surface={result.surfaces["task-progress:repair"]} />)).toContain("Waiting to retry");
     result = projectTaskProgress(result.surfaces, result.archived, [...update("repair", "failed"), event({ deleteSurface: { surfaceId: "task-progress:repair" } })], false);
-    const items = buildConversationTimeline([{ id: "repair", role: "user", content: "Repair" }, { id: "reply", role: "assistant", content: "Could not repair" }], ["repair", "receipt"], {}, {}, Object.keys(result.archived));
+    const items = buildConversationTimeline([{ id: "repair", role: "user", content: "Repair", created_at: "2026-10-29T17:00:00Z" }, { id: "reply", role: "assistant", content: "Could not repair", created_at: "2026-10-29T17:30:00Z" }], ["repair", "receipt"], {}, {}, Object.keys(result.archived), { receipt: { created_at: "2026-10-29T18:00:00Z" } });
     expect(items.map(i => i.key)).toEqual(["message:repair", "task:repair", "message:reply", "task:receipt"]);
     expect(renderToStaticMarkup(<TaskProgressBubble surface={result.surfaces["task-progress:receipt"]} />)).toContain("Alphonse is working");
     expect(renderToStaticMarkup(<TaskProgressBubble surface={result.archived.repair} archived />)).toContain("Work log · Failed");

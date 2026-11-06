@@ -323,6 +323,14 @@ class SQLiteConversationStore:
             self._daily_ledger_projector.rebuild_owner(owner_user_id)
         return True
 
+    def event_for_source_message_id(self, *, owner_user_id: str, source_message_id: str) -> ConversationEvent | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM v2_conversation_events WHERE owner_user_id=? AND source_message_id=?",
+                (owner_user_id, source_message_id),
+            ).fetchone()
+        return _event(row) if row is not None else None
+
     def sequence_for_source_message_id(self, source_message_id: str) -> int:
         with self._connect() as conn:
             row = conn.execute(

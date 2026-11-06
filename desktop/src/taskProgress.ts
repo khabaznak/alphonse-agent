@@ -16,12 +16,25 @@ export function projectTaskProgress(
 ) {
   let surfaces = current;
   const logs = { ...archived };
+  const firstActivity: Record<string, string> = {};
+  for (const surface of [...Object.values(current), ...Object.values(archived)]) {
+    const first = String(surface.dataModel.first_activity_at || "");
+    if (first) firstActivity[surface.surfaceId] = first;
+  }
 
   const remember = (id: string) => {
     if (surfaces[id]) logs[id.slice(PREFIX.length)] = surfaces[id];
   };
   for (const { event } of events) {
-    const next = applyA2uiEvent(surfaces, event);
+    let next = applyA2uiEvent(surfaces, event);
+    for (const [id, surface] of Object.entries(next)) {
+      if (!id.startsWith(PREFIX)) continue;
+      const updated = String(surface.dataModel.updated_at || "");
+      if (!firstActivity[id] && Number.isFinite(Date.parse(updated))) firstActivity[id] = updated;
+      if (firstActivity[id] && surface.dataModel.first_activity_at !== firstActivity[id]) {
+        next = { ...next, [id]: { ...surface, dataModel: { ...surface.dataModel, first_activity_at: firstActivity[id] } } };
+      }
+    }
     for (const id of Object.keys(surfaces)) {
       if (id.startsWith(PREFIX) && !next[id]) {
         remember(id);

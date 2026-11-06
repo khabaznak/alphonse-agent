@@ -1,4 +1,5 @@
 import type { ChatMessage } from "./types";
+import { orderConversationMessages } from "./conversationHistory";
 
 export type ConversationTimelineItem =
   | { kind: "message"; key: string; message: ChatMessage }
@@ -10,6 +11,7 @@ export function buildConversationTimeline(
   pendingProgressMessages: Record<string, ChatMessage>,
   morphedMessageTaskIds: Record<string, string>,
   archivedProgressTaskIds: string[] = [],
+  progressMetadata: Record<string, { created_at?: string; sequence?: number }> = {},
 ): ConversationTimelineItem[] {
   const pendingMessageIds = new Set(Object.values(pendingProgressMessages).map((message) => message.id));
   const visibleMessages = messages.filter((message) => !pendingMessageIds.has(message.id));
@@ -25,13 +27,23 @@ export function buildConversationTimeline(
       anchored.add(message.id);
     }
   }
-  const earlier: ConversationTimelineItem[] = [];
-  for (const taskId of activeProgressTaskIds) {
-    if (anchored.has(taskId)) continue;
-    const item: ConversationTimelineItem = { kind: "progress", key: `task:${taskId}`, taskId };
-    // An archived task may have started on a previous conversation day. Its
-    // request is outside this page; do not attach its log to today's newest task.
-    if (archivedProgressTaskIds.includes(taskId)) earlier.push(item); else items.push(item);
-  }
-  return [...earlier, ...items];
+  // An unanchored log uses the initiating request's occurrence time. If that
+  // metadata is unavailable, the same deterministic missing-time rule applies.
+  const unanchored = activeProgressTaskIds.filter((id) => !anchored.has(id));
+  const ordered = orderConversationMessages([
+    ...visibleMessages,
+    ...unanchored.map((id): ChatMessage => ({ id: `\u0000progress:${id}`, role: "system", content: "", ...progressMetadata[id] })),
+  ]);
+  const byMessage = new Map(items.filter((item) => item.kind === "message").map((item) => [item.kind === "message" ? item.message.id : "", item]));
+  const progressByAnchor = new Map(items.filter((item) => item.kind === "progress").map((item) => [item.kind === "progress" ? item.taskId : "", item]));
+  return ordered.flatMap((message) => {
+    if (message.id.startsWith("\u0000progress:")) {
+      const taskId = message.id.slice("\u0000progress:".length);
+      return [{ kind: "progress" as const, key: `task:${taskId}`, taskId }];
+    }
+    const item = byMessage.get(message.id);
+    if (!item) return [];
+    const progress = progressByAnchor.get(message.id);
+    return progress ? [item, progress] : [item];
+  });
 }

@@ -542,6 +542,8 @@ def test_desktop_task_progress_a2ui_is_admin_desktop_only_and_sanitized(tmp_path
     assert progress["tool_result"] is None
     assert progress["tool_status"] == "planned"
     assert progress["steps"][0]["result"]["access_token"] == "[redacted]"
+    request_event = runtime.conversation_store.record(owner_user_id=admin.user_id, role="user", content="Check status",
+        source="desktop", source_message_id="inbound:task-progress", created_at="2026-10-28T23:00:00+00:00")
     runtime.activity_events.append(CoreActivityEvent(
         phase=ImprovementPhase.PLAN,
         label="thinking",
@@ -560,6 +562,9 @@ def test_desktop_task_progress_a2ui_is_admin_desktop_only_and_sanitized(tmp_path
     assert any(item.get("createSurface", {}).get("surfaceId") == "task-progress:task-progress" for item in envelopes)
     assert "secret-value" not in str(envelopes)
     assert "Choosing the weather source" not in str(envelopes)
+    model = next(item["updateDataModel"]["value"] for item in envelopes if "updateDataModel" in item)
+    assert model["request_created_at"] == request_event.created_at
+    assert model["request_sequence"] == request_event.sequence
     assert "Intention: Check status" in str(envelopes)
     assert "Sunny" in str(envelopes)
 

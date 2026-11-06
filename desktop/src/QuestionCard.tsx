@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { daemonRequest } from "./api";
 import type { Question } from "./types";
+import { formatMessageTime } from "./messageTime";
 
 type AnswerResult = { handled?: boolean; invalid?: boolean; ambiguous?: boolean; question_id?: string; task_id?: string; message?: string; answer?: Record<string, unknown> };
 
@@ -40,8 +41,10 @@ export function QuestionCard({ question, user, timezone, onDone }: { question: Q
     if (question.kind === "datetime") return act({ datetime: value });
     return act({ text: value.trim() });
   };
+  const timestamp = question.created_at ? formatMessageTime(question.created_at, timezone) : null;
   return <section className="question-card" data-question-id={question.question_id} aria-label="Question from Alphonse" tabIndex={-1}>
     <strong>Alphonse needs your input</strong><p>{question.message}</p>
+    {timestamp && <time className="message-timestamp" dateTime={question.created_at} title={timestamp.tooltip}>{timestamp.visible}</time>}
     {question.context?.text && <p className="question-context">{question.context.text}</p>}
     {question.context?.artifacts?.map((artifact, index) => <article className="question-resource" key={artifact.artifact_id || index}>
       {artifact.name ? <><strong>{artifact.name}</strong><p>{artifact.description}</p><small>{artifact.status === "ready" ? "Related skill resource · read-only context" : "Resource currently unavailable"}</small></> : <p>Related resource unavailable or no longer authorized.</p>}

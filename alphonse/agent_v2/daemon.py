@@ -1275,10 +1275,16 @@ class V2Daemon:
             delivery = self.runtime.outbox.claim_next(selector, lease_owner=f"desktop:{normalized_client}", lease_seconds=120)
             if delivery is None:
                 break
+            question = self.runtime.question_store.get_question(delivery.question_id) if delivery.kind == "question" and delivery.question_id else None
+            if question is not None and question.respondent_user_id != normalized_user:
+                question = None
+            question_event = self._record_question_conversation_event(question) if question is not None else None
             deliveries.append({
                 **delivery.to_dict(),
-                "conversation_sequence": self.runtime.conversation_store.sequence_for_source_message_id(
-                    f"outbound:{delivery.outbox_message_id}"
+                "conversation_id": f"question:{question.question_id}" if question is not None else delivery.outbox_message_id,
+                "conversation_created_at": question.created_at if question is not None else delivery.created_at,
+                "conversation_sequence": question_event.sequence if question_event is not None else self.runtime.conversation_store.sequence_for_source_message_id(
+                    f"question:{question.question_id}" if question is not None else f"outbound:{delivery.outbox_message_id}"
                 ),
             })
         questions = []
@@ -1366,9 +1372,30 @@ class V2Daemon:
         ):
             self._record_question_conversation_event(question)
         timeline = self.runtime.conversation_store.list_between(owner_user_id=normalized_user, start_utc=start.isoformat(), end_utc=end.isoformat())
-        return [
-            {
-                "id": _conversation_message_id(event.source_message_id, event.event_id),
+        messages: dict[str, dict[str, Any]] = {}
+        for event in timeline:
+            # Older stores may contain both an outbound question and its
+            # backfilled question event. Only an explicit outbox relationship
+            # identifies them as the same event; equal text is not enough.
+            if event.source_message_id.startswith("outbound:"):
+                delivery = self.runtime.outbox.get(event.source_message_id.removeprefix("outbound:"))
+                question = self.runtime.question_store.get_question(delivery.question_id) if delivery and delivery.kind == "question" and delivery.question_id else None
+                if question is not None and question.respondent_user_id == normalized_user:
+                    canonical = self._record_question_conversation_event(question)
+                    if canonical is None:
+                        canonical = self.runtime.conversation_store.event_for_source_message_id(
+                            owner_user_id=normalized_user, source_message_id=f"question:{question.question_id}"
+                        )
+                    if canonical is not None:
+                        # A delayed delivery belongs to the question's day,
+                        # not the later day on which it was sent.
+                        occurred = datetime.fromisoformat(canonical.created_at)
+                        if not start <= occurred < end:
+                            continue
+                        event = canonical
+            message_id = _conversation_message_id(event.source_message_id, event.event_id)
+            messages[message_id] = {
+                "id": message_id,
                 "role": event.role,
                 "content": event.content,
                 "source": event.source,
@@ -1376,8 +1403,7 @@ class V2Daemon:
                 "project_id": event.project_id,
                 "sequence": event.sequence,
             }
-            for event in timeline
-        ]
+        return list(messages.values())
 
     def mark_desktop_project_seen(self, *, user: str, project_id: str = "", local_date: str = "", through_sequence: int | None = None) -> dict[str, Any]:
         normalized_user = self._admin_user_id(user)
@@ -2225,7 +2251,12 @@ class V2Daemon:
             progress = event.get("progress") if isinstance(event.get("progress"), dict) else {}
             if not task_id or not progress or (project_id and str(progress.get("project_id") or "").strip() != project_id):
                 continue
-            progress = {**progress, "updated_at": str(event.get("occurred_at") or "")}
+            request = self.runtime.conversation_store.event_for_source_message_id(
+                owner_user_id=user, source_message_id=f"inbound:{task_id}"
+            )
+            progress = {**progress, "updated_at": str(event.get("occurred_at") or ""),
+                        "request_created_at": request.created_at if request else "",
+                        "request_sequence": request.sequence if request else 0}
             rendered.extend({"event": _a2ui_custom(envelope)} for envelope in self._a2ui.task_progress(task_id, progress))
             known.add(task_id)
             if str(progress.get("status") or "") in {"completed", "done", "failed", "cancelled", "abandoned"}:
