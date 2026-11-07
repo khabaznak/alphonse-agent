@@ -61,10 +61,10 @@
     },
     "native.project_todo_list": {
       "type": "noul",
-      "instructions": "Does `request.text` require inspecting an existing project to-do list?",
+      "instructions": "Does `request.text` require looking up project information for a to-do?",
       "criteria": {
-        "true": "The requester asks to see, find, or change an item already on a project to-do list.",
-        "false": "The requester only asks for a new to-do, a timed reminder, or general conversation."
+        "true": "The requester asks to see or find an item on a project to-do list, or the named target project for a requested to-do needs to be identified.",
+        "false": "The project is already identified and no to-do list needs inspection, or the request concerns only a timed reminder or general conversation."
       }
     },
     "native.project_todo": {

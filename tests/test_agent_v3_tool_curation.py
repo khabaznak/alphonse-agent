@@ -143,3 +143,15 @@ def test_recovered_origin_is_ordered_before_recent_history_and_other_owners_are_
     assert len(curate_request_tools(task, context.tools.list(), context)) == 2
     assert task.metadata['v3_request_tool_curation']['status'] == 'incomplete_state_llm_fallback'
     assert calls == []
+
+
+def test_project_todo_request_remains_discoverable_with_uncertain_relevance(tmp_path):
+    from alphonse.agent_v2.core.tools.registry.native.project_todo import build_project_todo_tool_definition, build_project_todo_list_tool_definition
+    task, context, calls, _ = setup(tmp_path, probability=.5)
+    task.goal = "Add book trains to the Weekend Away project"
+    context.tools.register(build_project_todo_tool_definition())
+    context.tools.register(build_project_todo_list_tool_definition())
+    chosen = curate_request_tools(task, context.tools.list(), context)
+    assert {"native.project_todo", "native.project_todo_list"} <= {tool.tool_id for tool in chosen}
+    assert calls[0]["state"]["request"]["text"] == task.goal
+    assert {"native.project_todo", "native.project_todo_list"} <= set(task.metadata["v3_request_tool_curation"]["ambiguous_tool_ids"])

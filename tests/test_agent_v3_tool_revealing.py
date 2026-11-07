@@ -243,3 +243,13 @@ def test_project_todo_mutation_requires_project_mutation_effect():
     assert action_compatibility_error(read, mutation)
     assert not action_compatibility_error(read, listing)
     assert not action_compatibility_error(write, mutation)
+
+
+def test_project_todo_tool_is_revealed_for_projectless_conversation():
+    from alphonse.agent_v2.core.tools.registry.native.project_todo import build_project_todo_tool_definition
+    subgoal = PhaseSubgoal("add", "Add a to-do to the named project", "todo", allowed_capabilities=("project_todos",), allowed_side_effects=(SideEffectClass.PROJECT_MUTATION,))
+    task = TaskState(user="alex", project_id="", goal="Add book trains to Weekend Away")
+    descriptor = build_project_todo_tool_definition().descriptor_with_schema()
+    revealed = ToolRevealPolicy().reveal(task, _state(subgoal), subgoal, (descriptor,))
+    assert [tool.tool_id for tool in revealed.tools] == ["native.project_todo"]
+    assert "project_name" in revealed.tools[0].argument_schema["properties"]
