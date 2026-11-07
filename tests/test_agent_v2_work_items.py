@@ -132,3 +132,24 @@ def test_project_summary_covers_history_outside_active_page_without_cross_owner_
     page = daemon.work_items(actor_user_id=admin, limit=1)
     assert len(page["items"]) == 1
     assert page["project_summaries"]["effort"] == {"total": 6, "completed": 2, "failed": 1, "cancelled": 1}
+
+
+def test_project_filter_applies_before_paging_and_enforces_access(work):
+    daemon, admin, member, stranger, tmp_path = work
+    project = daemon.runtime.project_store.create_project(name="Plan", root_path=str(tmp_path / "plan"), owner_user_id=member)
+    other = daemon.runtime.project_store.create_project(name="Other", root_path=str(tmp_path / "other"), owner_user_id=member)
+    for task_id in ("first", "second"):
+        save(daemon, member, task_id, project_id=project.project_id)
+    save(daemon, member, "unrelated", project_id=other.project_id)
+    first = daemon.work_items(actor_user_id=member, project_id=project.project_id, limit=1)
+    second = daemon.work_items(actor_user_id=member, project_id=project.project_id, limit=1, offset=1)
+    assert first["has_more"] and not second["has_more"]
+    assert {first["items"][0]["task_id"], second["items"][0]["task_id"]} == {"first", "second"}
+    with pytest.raises(PermissionError, match="work_project_forbidden"):
+        daemon.work_items(actor_user_id=stranger, project_id=project.project_id)
+    with pytest.raises(PermissionError, match="work_owner_forbidden"):
+        daemon.work_items(actor_user_id=stranger, owner_user_id=member, project_id=project.project_id)
+    server = object.__new__(V2DaemonServer)
+    server.daemon = daemon
+    result = server._dispatch({"method": "work_items", "params": {"actor_user_id": member, "project_id": project.project_id}})
+    assert {item["task_id"] for item in result["items"]} == {"first", "second"}

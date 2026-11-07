@@ -469,7 +469,7 @@ class V2Daemon:
         from alphonse.agent_v2.household import household_overview
         return household_overview(self.runtime, actor=str(actor_user_id or "").strip(), include_personal=include_personal)
 
-    def work_items(self, *, actor_user_id: str, owner_user_id: str = "", view: str = "active", limit: int = 50, offset: int = 0) -> dict[str, Any]:
+    def work_items(self, *, actor_user_id: str, owner_user_id: str = "", view: str = "active", limit: int = 50, offset: int = 0, project_id: str = "") -> dict[str, Any]:
         from alphonse.agent_v2.work_items import project_work_items
         actor = str(actor_user_id or "").strip()
         if not actor or self.runtime.user_store.get_user(actor) is None:
@@ -479,7 +479,10 @@ class V2Daemon:
             raise PermissionError("work_owner_forbidden")
         if self.runtime.user_store.get_user(owner) is None:
             raise KeyError("work_owner_not_found")
-        return project_work_items(self.runtime, actor=actor, owner=owner, view=view, limit=limit, offset=offset)
+        project_id = str(project_id or "").strip()
+        if project_id and not self.runtime.project_store.get_project(project_id, requester_user_id=actor, requester_is_admin=self.runtime.user_store.is_admin(actor), include_archived=True):
+            raise PermissionError("work_project_forbidden")
+        return project_work_items(self.runtime, actor=actor, owner=owner, view=view, limit=limit, offset=offset, project_id=project_id)
 
     def scheduled_tasks(
         self,

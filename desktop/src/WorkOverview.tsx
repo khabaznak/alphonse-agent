@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { ArrowRight, CalendarDays, ChevronDown, Folder, Plus, RefreshCw } from "lucide-react";
 import { daemonRequest } from "./api";
 import type { Project } from "./types";
 
@@ -20,8 +21,8 @@ export function scheduleMatches(task: Schedule, view: WorkView) {
 }
 const time = (value: string | null) => value ? new Date(value).toLocaleString() : "Not scheduled";
 
-export function WorkOverview({ active, user, ownerId, initialTaskId = "", selectionRequest = 0, projects, users, onProject, onAgenda, onConversation, onQuestions }: {
-  active: boolean; user: string; ownerId: string; initialTaskId?: string; selectionRequest?: number; projects: Project[]; users: Array<{ user_id: string; display_name: string }>; onProject: (project: Project) => void;
+export function WorkOverview({ onCreate, onOwnerChange, active, user, ownerId, initialTaskId = "", selectionRequest = 0, projects, users, onProject, onAgenda, onConversation, onQuestions }: {
+  onCreate: () => void; onOwnerChange: (id: string) => void; active: boolean; user: string; ownerId: string; initialTaskId?: string; selectionRequest?: number; projects: Project[]; users: Array<{ user_id: string; display_name: string }>; onProject: (project: Project) => void;
   onAgenda: (id: string) => void; onConversation: (day: string) => void; onQuestions: () => void;
 }) {
   const [view, setView] = useState<WorkView>("active");
@@ -67,30 +68,30 @@ export function WorkOverview({ active, user, ownerId, initialTaskId = "", select
     view === "attention" ? items.some((item) => item.project_id === project.project_id) || visibleSchedules.some((item) => item.project_id === project.project_id) : ["active", "paused"].includes(project.status) || items.some((item) => item.project_id === project.project_id) || visibleSchedules.some((item) => item.project_id === project.project_id)
   ));
   const taskRow = (item: WorkItem) => <button type="button" key={item.task_id} className={`work-task${selected?.task_id === item.task_id ? " selected" : ""}`} onClick={() => setSelected(item)}>
-    <span><strong>{item.goal}</strong><small>Owner: {memberName(item.owner_user_id)} · Assigned: Alphonse</small><small>{item.next_action}</small></span>
-    <span className="work-task-state"><span>{workStatus(item.status)}{item.blocked && !["done", "failed", "cancelled"].includes(item.status) ? " · Blocked" : ""}</span><small>{item.criteria.length ? `${item.completed_criteria} of ${item.criteria.length} criteria met` : "Progress not recorded"}</small></span>
+    <span className={`work-task-indicator${item.status === "done" ? " done" : ""}`} aria-hidden="true">{item.status === "done" ? "✓" : ""}</span><span className={`work-task-title${item.status === "done" ? " done" : ""}`}>{item.goal}</span>
+    <span className={`work-task-state${item.status === "waiting_user" || item.blocked ? " attention" : ""}`}>{workStatus(item.status)}{item.blocked && !["done", "failed", "cancelled"].includes(item.status) ? " · Blocked" : ""}</span>
   </button>;
-  const scheduleRow = (task: Schedule) => <button type="button" className="work-task" key={task.scheduled_task_id} onClick={() => onAgenda(task.scheduled_task_id)}><span><strong>{task.name}</strong><small>Scheduled · Owner: {memberName(task.owner_user_id)}</small><small>{task.next_run_at ? `Next: ${time(task.next_run_at)}` : "No next run"}</small></span><span className="work-task-state">{workStatus(task.status)}<small>Latest execution: {task.latest_execution?.status || "Not run"}</small></span></button>;
+  const scheduleRow = (task: Schedule) => <button type="button" className="work-task" key={task.scheduled_task_id} onClick={() => onAgenda(task.scheduled_task_id)}><span className="work-task-indicator" aria-hidden="true"><CalendarDays size={12} /></span><span className="work-task-title">{task.name}</span><span className="work-task-state">Scheduled · {workStatus(task.status)}</span></button>;
   return <div className="work-overview">
-    <header className="work-heading"><div><p className="eyebrow">The bigger plans. The everyday things.</p><h1>Projects &amp; Tasks</h1></div><button onClick={() => onAgenda("")}>Agenda</button></header>
-    <div className="work-filters" role="group" aria-label="Work filter">{([["active", "Active work"], ["attention", "Needs input / blocked"], ["history", "Completed & history"]] as const).map(([value, label]) => <button key={value} aria-pressed={view === value} onClick={() => chooseView(value)}>{label}</button>)}<button disabled={loading} onClick={() => void load()}>Refresh</button></div>
-    <p>Owner: {memberName(ownerId)}. Project totals cover recorded work; task lists are paged. Alphonse executes delegated tasks; questions may involve another member.</p>
+    <header className="work-heading work-overview-heading"><div><h1>Projects &amp; Tasks</h1><p>The bigger plans. The everyday things.</p></div><button className="work-add" onClick={onCreate}><Plus size={15} /> Add</button></header>
+    <div className="work-controls"><div className="work-filters" role="group" aria-label="Work filter">{([["active", "In progress"], ["attention", "Needs you"], ["history", "History"]] as const).map(([value, label]) => <button key={value} aria-pressed={view === value} onClick={() => chooseView(value)}>{label}</button>)}</div><button className="work-agenda" onClick={() => onAgenda("")}><CalendarDays size={15} /> Agenda</button></div>
+    <div className="work-utility"><label>Owner <select aria-label="Work owner" value={ownerId} onChange={event => onOwnerChange(event.target.value)}>{users.map(member => <option key={member.user_id} value={member.user_id}>{member.display_name}</option>)}</select></label><button disabled={loading} onClick={() => void load()} aria-label="Refresh work" title="Refresh work"><RefreshCw size={14} /></button></div>
     {loading ? <p role="status">Loading work…</p> : error ? <div role="alert"><p>{error}</p><button onClick={() => void load()}>Retry</button></div> : <>
       {scheduleError && <p role="alert">Schedules unavailable: {scheduleError} <button onClick={() => void load()}>Retry</button></p>}
-      <h2>Projects</h2>
-      {projectGroups.map((project) => {
+      <div className="work-section-heading"><h2>Projects</h2><span>{projectGroups.length} {projectGroups.length === 1 ? "project" : "projects"}</span></div>
+      {projectGroups.map((project, index) => {
         const nested = items.filter((item) => item.project_id === project.project_id);
         const scheduled = visibleSchedules.filter((item) => item.project_id === project.project_id);
         const totals = page?.project_summaries?.[project.project_id];
         const done = totals?.completed ?? nested.filter((item) => item.status === "done").length;
         const total = totals?.total ?? nested.length;
         const basis = totals ? "recorded" : "shown";
-        return <details className="work-project" key={project.project_id} open={view === "attention" || undefined}><summary><span><strong>{project.name}</strong><small>{project.visibility === "shared" ? "Shared" : "Private"} · Owner: {memberName(project.owner_user_id)}</small><small>{project.description}</small><small>{nested.find((item) => item.status === "waiting_user" || item.blocked)?.next_action || nested[0]?.next_action || (scheduled.length ? "Review upcoming schedules in Agenda" : "Review project details or choose the next step in conversation")}</small></span><span>{workStatus(project.status)}<small>{total ? `${done} of ${total} ${basis} tasks completed` : "No tasks recorded"}</small>{total > 0 && <progress aria-label={`${project.name}: ${basis} task completion`} value={done} max={total} />}{totals && (totals.failed > 0 || totals.cancelled > 0) && <small>{totals.failed} failed · {totals.cancelled} cancelled</small>}</span></summary>
-          <div className="work-project-tasks">{nested.map(taskRow)}{scheduled.map(scheduleRow)}{!nested.length && !scheduled.length && <p>No work in this view. Ask Alphonse in conversation to work on this project.</p>}<button onClick={() => onProject(project)}>Project details, sharing &amp; files</button></div>
+        return <details className="work-project" key={project.project_id} open={view === "attention" || index === 0 || undefined}><summary><span className="work-project-icon"><Folder size={17} /></span><span className="work-project-name"><strong>{project.name}</strong><small>{project.visibility === "shared" ? "Shared" : "Private"} · {memberName(project.owner_user_id)}</small></span><span className="work-project-progress"><small>{total ? `${done} of ${total} complete` : "No tasks recorded"}</small>{total > 0 && <progress aria-label={`${project.name}: ${basis} task completion`} value={done} max={total} />}<small>{workStatus(project.status)}</small></span><ChevronDown className="work-project-chevron" size={15} /></summary>
+          <div className="work-project-tasks">{nested.map(taskRow)}{scheduled.map(scheduleRow)}{!nested.length && !scheduled.length && <p>No work in this view. Ask Alphonse in conversation to work on this project.</p>}{page?.has_more && <p>More tasks may be available on other pages.</p>}<button className="work-project-link" onClick={() => onProject(project)}>View project details <ArrowRight size={14} /></button></div>
         </details>;
       })}
       {!projectGroups.length && <p>No projects in this view.</p>}
-      <h2>Everyday tasks</h2><p>No project needed.</p>
+      <div className="work-section-heading"><h2>Everyday tasks</h2><span>No project needed</span></div>
       <div className="work-everyday">{items.filter((item) => item.everyday).map(taskRow)}{visibleSchedules.filter((task) => everyday(task.project_id)).map(scheduleRow)}</div>
       {!items.some((item) => item.everyday) && !visibleSchedules.some((task) => everyday(task.project_id)) && <p>No everyday work in this view. Delegate a task in conversation.</p>}
       {items.some((item) => !item.everyday && !projects.some((project) => project.project_id === item.project_id)) && <section><h2>Other project work</h2>{items.filter((item) => !item.everyday && !projects.some((project) => project.project_id === item.project_id)).map(taskRow)}</section>}

@@ -708,7 +708,7 @@ class V2DaemonServer:
             return self.daemon.work_items(
                 actor_user_id=str(params.get("actor_user_id") or ""),
                 owner_user_id=str(params.get("owner_user_id") or ""),
-                view=str(params.get("view") or "active"),
+                view=str(params.get("view") or "active"), project_id=str(params.get("project_id") or ""),
                 limit=int(params.get("limit") or 50), offset=int(params.get("offset") or 0),
             )
         if method == "manageable_projects":

@@ -1114,6 +1114,70 @@ a { color: var(--accent); }
 .work-overview-mode .projects-workspace-filters { display: flex; align-items: center; }
 .work-overview-mode .projects-workspace-filters select { color: var(--text); background: var(--surface-raised); border-color: var(--border); }
 .work-overview-mode .projects-workspace-filters { color: var(--muted); }
+/* Projects & Tasks overview */
+.desktop-shell .projects-workspace.work-overview-mode { display: block; }
+.work-overview-mode > .projects-workspace-sidebar { display: none; }
+.work-overview-mode > .projects-workspace-main { height: 100%; }
+.work-overview { max-width: 898px; padding: 32px 24px; }
+.work-overview-heading { align-items: center; }
+.work-overview-heading h1 { margin: 0; font-size: 32px; line-height: 1.25; letter-spacing: -.045em; }
+.work-overview-heading p { margin: 8px 0 0; font-size: 13px; }
+.work-add { display: inline-flex; align-items: center; gap: 7px; padding: 9px 14px; color: var(--accent-contrast); background: var(--accent); font-size: 12px; }
+.work-controls { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 27px; }
+.work-filters { display: inline-flex; gap: 2px; margin: 0; padding: 2px; border-radius: 6px; background: var(--surface-subtle); }
+.work-filters button { padding: 7px 13px; color: var(--muted); background: transparent; font-size: 10px; }
+.work-filters button[aria-pressed="true"] { background: var(--surface); color: var(--text); }
+.work-agenda { display: inline-flex; align-items: center; gap: 8px; padding: 9px 12px; border: 1px solid var(--border); background: transparent; font-size: 12px; }
+.work-utility { display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin-top: 8px; color: var(--muted); font-size: 11px; }
+.work-utility label { display: flex; align-items: center; gap: 6px; }
+.work-utility select { max-width: 150px; padding: 3px 6px; border-color: var(--border); background: transparent; font-size: 11px; }
+.work-utility button { display: grid; place-items: center; padding: 4px; background: transparent; color: var(--muted); }
+.work-section-heading { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin: 24px 0 12px; color: var(--muted); font-size: 12px; }
+.work-section-heading h2 { margin: 0; font: 700 10px var(--font-body); letter-spacing: .14em; text-transform: uppercase; }
+.work-project, .work-everyday { margin: 0 0 14px; border-radius: 11px; background: var(--surface-subtle); }
+.work-project summary { display: grid; grid-template-columns: 38px minmax(0, 1fr) auto 15px; align-items: center; gap: 12px; padding: 18px; list-style: none; }
+.work-project summary::-webkit-details-marker { display: none; }
+.work-project-icon { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 9px; color: var(--accent); background: var(--accent-soft); }
+.work-project-name strong { font-size: 14px; }
+.work-project-name small { margin-top: 4px; font-size: 11px; }
+.work-project-progress { display: grid; justify-items: end; gap: 4px; min-width: 100px; text-align: right; }
+.work-project-progress small { margin: 0; font-size: 10px; }
+.work-project progress { width: 85px; height: 5px; accent-color: var(--accent); }
+.work-project-chevron { color: var(--text); }
+.work-project[open] .work-project-chevron { transform: rotate(180deg); }
+.work-project-tasks { margin-left: 68px; padding: 0 18px 12px 0; border: 0; }
+.work-task { display: flex; flex-direction: row; align-items: center; gap: 12px; min-height: 48px; padding: 10px 4px; border-top: 1px solid var(--border); border-bottom: 0; }
+.work-task-indicator { display: grid; flex: 0 0 13px; width: 13px; height: 13px; place-items: center; border: 1px solid var(--muted); border-radius: 2px; color: var(--accent-contrast); font-size: 10px; line-height: 1; }
+.work-task-indicator.done { border-color: var(--accent); background: var(--accent); }
+.work-task-title { flex: 1; font-size: 12px; font-weight: 500; }
+.work-task-title.done { color: var(--muted); text-decoration: line-through; }
+.work-task-state { flex: 0 0 auto; padding: 5px 8px; border: 1px solid var(--border); border-radius: 6px; color: var(--muted); font-size: 10px; text-align: right; }
+.work-task-state.attention { color: var(--warning); border-color: transparent; background: var(--warning-soft); }
+.work-project-link { display: inline-flex; align-items: center; gap: 7px; padding: 12px 0 0; background: transparent; color: var(--accent); font-size: 11px; }
+.work-everyday { padding: 4px 17px; }
+.work-everyday:empty { display: none; }
+.work-everyday .work-task:first-child { border-top: 0; }
+.work-pagination { justify-content: flex-end; font-size: 11px; }
+.work-pagination button { padding: 6px 9px; font-size: 11px; }
+/* A project opens on its delegated work; administration remains available separately. */
+.project-activity-dialog { width: min(760px, calc(100vw - 40px)); max-height: min(80vh, 760px); padding: 26px; border: 1px solid var(--border); border-radius: 16px; color: var(--text); background: var(--surface); overflow: auto; }
+.project-activity-dialog::backdrop { background: var(--overlay); backdrop-filter: blur(4px); }
+.project-activity-dialog > header { display: flex; align-items: start; justify-content: space-between; gap: 16px; }
+.project-activity-dialog h1 { margin: 0; font-size: 22px; }
+.project-activity-dialog header p { margin: 12px 0 0; color: var(--muted); font-size: 12px; }
+.project-activity-close { display: grid; place-items: center; width: 42px; height: 42px; padding: 0; border: 1px solid var(--border); background: transparent; color: var(--muted); }
+.project-activity-heading { display: flex; align-items: center; justify-content: space-between; margin: 28px 0 15px; }
+.project-activity-heading h2 { margin: 0; font-size: 15px; }
+.project-activity-heading > span { padding: 5px 8px; border: 1px solid var(--border); border-radius: 6px; color: var(--muted); font-size: 10px; }
+.project-activity-list { display: grid; gap: 16px; margin: 0; padding: 0 0 0 16px; border-left: 2px solid var(--border); list-style: none; }
+.project-activity-list li { display: grid; gap: 3px; font-size: 12px; }
+.project-activity-list li > span, .project-activity-list li p { margin: 0; color: var(--muted); font-size: 11px; }
+.project-activity-actions { display: flex; gap: 10px; }
+.project-activity-actions button, .project-activity-settings { padding: 3px 0; color: var(--accent); background: transparent; font-size: 11px; }
+.project-activity-pages { display: flex; align-items: center; gap: 8px; margin-top: 12px; color: var(--muted); font-size: 11px; }
+.project-activity-pages span { flex: 1; }
+.project-activity-pages button { padding: 4px 8px; font-size: 11px; }
+.project-activity-note { margin: 22px 0 12px; padding: 12px 14px; border-radius: 6px; color: var(--muted); background: var(--surface-subtle); font-size: 11px; }
 /* Keep visited Settings screens and their scroll positions in the workspace. */
 .settings-workspace { height: 100%; min-height: 0; display: flex; flex-direction: column; }
 .settings-workspace-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding: 24px 28px 16px; border-bottom: 1px solid var(--border); }
@@ -1206,19 +1270,56 @@ a { color: var(--accent); }
 .coordination-list button { white-space: normal; }
 
 .widget-item-detail { margin: 1rem; padding: 1rem; max-height: 45vh; overflow: auto; }
-.agenda { padding: 1.2rem; min-width: 0; }
-.agenda-toolbar, .agenda-toolbar > div, .agenda footer { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; }
-.agenda-toolbar { justify-content: space-between; }
-.agenda-toolbar button[aria-pressed="true"] { background: var(--accent-soft, #d6e9df); color: var(--text, #173c32); }
-.agenda-days { display: grid; gap: .35rem; }
-.agenda-month, .agenda-week { grid-template-columns: repeat(7, minmax(0, 1fr)); }
-.agenda-day { border: 1px solid var(--border); border-radius: .6rem; padding: .4rem; min-height: 6rem; min-width: 0; }
-.agenda-day h3 { font-size: .8rem; margin: .2rem 0 .5rem; }
-.agenda-current { outline: 2px solid var(--accent, #518575); outline-offset: -2px; }
-.agenda-outside h3 { opacity: .55; }
-.agenda-occurrence { display: flex; flex-direction: column; align-items: flex-start; text-align: left; width: 100%; min-width: 0; padding: .4rem; margin-bottom: .4rem; overflow-wrap: anywhere; }
-.agenda-occurrence time, .agenda-occurrence small { font-size: .7rem; }
-.agenda-source-note { font-size: .8rem; opacity: .8; }
+/* Full agenda workspace */
+.agenda-workspace { width: min(100%, 898px); margin: 0 auto; padding: 25px 24px; min-width: 0; }
+.agenda-workspace header h1 { margin: 0; font-size: 32px; line-height: 1.25; letter-spacing: -.045em; }
+.agenda-workspace header p { margin: 8px 0 27px; color: var(--muted); font-size: 13px; }
+.agenda-toolbar, .agenda-period-controls, .agenda-navigation, .agenda-view-switch { display: flex; align-items: center; }
+.agenda-toolbar { justify-content: space-between; gap: 12px; margin-bottom: 24px; }
+.agenda-period-controls { gap: 8px; min-width: 0; }
+.agenda-period-controls h2 { margin: 0; font-size: 15px; white-space: nowrap; }
+.agenda-navigation { gap: 1px; }
+.agenda-navigation > button, .agenda-workspace-picker > summary { display: grid; place-items: center; padding: 5px; color: var(--muted); background: transparent; cursor: pointer; }
+.agenda-navigation svg { width: 14px; height: 14px; }
+.agenda-workspace-picker { position: relative; }
+.agenda-workspace-picker > summary { list-style: none; }
+.agenda-workspace-picker > summary::-webkit-details-marker { display: none; }
+.agenda-workspace-picker[open] { z-index: 2; }
+.agenda-workspace-picker label { position: absolute; top: 27px; left: 0; display: grid; gap: 4px; padding: 10px; background: var(--surface-raised); border: 1px solid var(--border); border-radius: 7px; white-space: nowrap; }
+.agenda-workspace-picker[open] > button { position: absolute; top: 100px; left: 0; white-space: nowrap; border: 1px solid var(--border); }
+.agenda-view-switch { padding: 2px; border-radius: 6px; background: var(--surface-subtle); }
+.agenda-view-switch button { padding: 6px 14px; background: transparent; color: var(--muted); font-size: 10px; }
+.agenda-view-switch button[aria-pressed="true"] { color: var(--text); background: var(--surface); }
+.agenda-grid-scroll { overflow-x: auto; }
+.agenda-calendar { overflow: hidden; border: 1px solid var(--border); border-radius: 10px; }
+.agenda-calendar-month, .agenda-calendar-week { min-width: 630px; }
+.agenda-weekdays, .agenda-month, .agenda-week { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); }
+.agenda-weekdays { background: var(--surface-subtle); border-bottom: 1px solid var(--border); }
+.agenda-weekdays span { padding: 12px; color: var(--muted); font-size: 10px; }
+.agenda-day { min-width: 0; min-height: 90px; padding: 8px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.agenda-month .agenda-day:nth-child(7n), .agenda-week .agenda-day:last-child { border-right: 0; }
+.agenda-month .agenda-day:nth-last-child(-n+7), .agenda-week .agenda-day, .agenda-today .agenda-day { border-bottom: 0; }
+.agenda-today .agenda-day { border-right: 0; min-height: 150px; }
+.agenda-week .agenda-day { min-height: 220px; }
+.agenda-day h3 { margin: 0 0 8px; font-family: var(--font-body); font-size: 11px; font-weight: 600; letter-spacing: 0; }
+.agenda-current { background: var(--accent-soft); }
+.agenda-occurrence { display: block; width: 100%; min-width: 0; padding: 4px 5px; margin: 0 0 4px; overflow-wrap: anywhere; border-radius: 3px; background: var(--accent-soft); color: var(--accent); text-align: left; font-size: 9px; line-height: 1.35; }
+.agenda-occurrence:hover { filter: brightness(1.1); }
+.agenda-occurrence time { font-variant-numeric: tabular-nums; }
+.agenda-today-list { overflow: hidden; border: 1px solid var(--border); border-radius: 10px; }
+.agenda-today-event { display: grid; grid-template-columns: 76px minmax(0, 1fr); align-items: start; width: 100%; min-height: 76px; padding: 18px; border-radius: 0; background: transparent; text-align: left; }
+.agenda-today-event + .agenda-today-event { border-top: 1px solid var(--border); }
+.agenda-today-event:hover { background: var(--surface-subtle); }
+.agenda-today-event > time { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+.agenda-today-details { display: grid; gap: 4px; min-height: 39px; padding-left: 10px; border-left: 2px solid var(--accent); }
+.agenda-today-details strong { font-size: 13px; font-weight: 600; }
+.agenda-today-details small { color: var(--muted); font-size: 11px; text-transform: none; }
+.agenda-today-empty { margin: 0; padding: 24px 18px; color: var(--muted); font-size: 13px; }
+.agenda-source-note, .agenda-empty { font-size: 12px; color: var(--muted); }
+.agenda-workspace footer { display: flex; gap: 16px; margin-top: 23px; padding-top: 11px; border-top: 1px solid var(--border); }
+.agenda-workspace footer button { display: inline-flex; align-items: center; gap: 8px; padding: 0; background: transparent; color: var(--accent); font-size: 11px; }
+.agenda-workspace footer svg { width: 14px; height: 14px; }
+.agenda-help { margin: 22px 0 0; padding: 12px 14px; border-radius: 7px; background: var(--surface-subtle); color: var(--muted); font-size: 11px; }
 .agenda-compact { padding: 0; }
 /* Compact Agenda is a purpose-built preview, never a compressed workspace. */
 .agenda-segments { display: flex; gap: 2px; padding: 3px; margin-bottom: 14px; background: var(--surface-subtle); border-radius: 7px; }
@@ -1250,7 +1351,7 @@ a { color: var(--accent); }
 .agenda-compact footer { display: grid; gap: 4px; margin-top: 12px; border-top: 1px solid var(--border); padding-top: 8px; }
 .at-hand-drawer .agenda-compact footer button { display: flex; justify-content: space-between; align-items: center; padding: 5px 0; color: var(--accent); background: transparent; text-align: left; }
 .agenda-compact footer svg { width: 14px; height: 14px; }
-@media (max-width: 1100px) { .agenda-month, .agenda-week { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
 
 .activity-widget { display: grid; gap: 8px; }
 .activity-widget section { border-top: 1px solid var(--border); padding-block: 10px; }

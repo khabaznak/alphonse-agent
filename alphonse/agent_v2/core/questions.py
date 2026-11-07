@@ -348,7 +348,7 @@ class SQLiteQuestionStore:
         )
         return version if cursor.rowcount else version - 1
 
-    def list_work_checkpoints(self, *, owner_id: str, view: str = "active", limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+    def list_work_checkpoints(self, *, owner_id: str, view: str = "active", limit: int = 50, offset: int = 0, project_id: str = "") -> list[dict[str, Any]]:
         """Bounded owner-scoped reads; status is independent of serialized state."""
         statuses = {
             "active": ("queued", "running", "waiting_user"),
@@ -367,12 +367,13 @@ class SQLiteQuestionStore:
                 "AND COALESCE(json_extract(c.value, '$.required'), 1)=1 "
                 "AND COALESCE(json_extract(c.value, '$.superseded'), 0)=0)))"
             )
+        project_clause = " AND project_id=?" if project_id else ""
         with self._connect() as conn:
             rows = conn.execute(
                 f"SELECT task_id, owner_id, project_id, status, created_at, updated_at, task_state_json "
-                f"FROM v2_task_checkpoints WHERE owner_id=? AND {status_clause} "
+                f"FROM v2_task_checkpoints WHERE owner_id=? AND {status_clause}{project_clause} "
                 "ORDER BY updated_at DESC, task_id LIMIT ? OFFSET ?",
-                (owner_id, *statuses[view], max(1, min(100, limit)), max(0, offset)),
+                (owner_id, *statuses[view], *((project_id,) if project_id else ()), max(1, min(100, limit)), max(0, offset)),
             ).fetchall()
         return [{**dict(row), "state": _json_object(row["task_state_json"])} for row in rows]
 

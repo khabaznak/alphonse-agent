@@ -8,10 +8,10 @@ from zoneinfo import ZoneInfo
 from alphonse.agent_v2.core.intelligence.acceptance_contract import normalize_contract
 
 
-def project_work_items(runtime: Any, *, actor: str, owner: str, view: str, limit: int, offset: int) -> dict[str, Any]:
+def project_work_items(runtime: Any, *, actor: str, owner: str, view: str, limit: int, offset: int, project_id: str = "") -> dict[str, Any]:
     size = max(1, min(99, limit))
     offset = max(0, offset)
-    rows = runtime.question_store.list_work_checkpoints(owner_id=owner, view=view, limit=size + 1, offset=offset)
+    rows = runtime.question_store.list_work_checkpoints(owner_id=owner, view=view, limit=size + 1, offset=offset, project_id=project_id)
     items = []
     zone = ZoneInfo(runtime.user_store.timezone(owner))
     for row in rows[:size]:
