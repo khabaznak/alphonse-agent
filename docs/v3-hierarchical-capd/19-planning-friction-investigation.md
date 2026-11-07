@@ -2,6 +2,47 @@
 
 Status: diagnostic review and initial fixes; broader comparative evaluation pending
 
+## Browser orchestration experiment, 2026-11-07
+
+An experimental browser integration on a separate branch was exercised against an
+authorized vehicle-debt lookup. It did not deliver a verified result and is not
+part of this implementation. The disposable test database and browser profile
+were removed after the investigation; the observations below are a sanitized
+summary, not a replayable dataset. Do not put vehicle identifiers, sensitive page
+contents, screenshots, or credentials in issue evidence or test fixtures.
+
+One approximately 16-minute attempt recorded 17 phase-planning decisions, 25
+tactical-action decisions, and 21 tactical-progress decisions. It made ten
+distinct browser observations, captured three screenshots, collected four private
+fields, performed two fills and a click, and ended without a verified result.
+The click does not by itself prove form submission. Deduplicate cumulative phase
+evidence by reference when counting actions. Approximate intervals between
+consecutive decision records had medians of 28.5 seconds for phase planning,
+15.1 seconds for tactical action, and 0.4 seconds for tactical progress. These
+are not measured provider durations; the interval can include other runtime work.
+
+The run exposed repeated inspection and replanning, multiple private-input
+handoffs, and a false duplicate-action diagnosis when different fill arguments
+were redacted identically. Other attempts paused for human verification when no
+CAPTCHA was visible, expired while waiting or planning, or stopped after malformed
+tactical JSON. A narrow retry change did not prevent the last malformed-response
+failure. These findings justify further investigation; they do not prove that a
+particular alternative graph or retry policy will solve the workflow.
+
+Issues [#186](https://github.com/khabaznak/alphonse-agent/issues/186),
+[#188](https://github.com/khabaznak/alphonse-agent/issues/188),
+[#189](https://github.com/khabaznak/alphonse-agent/issues/189),
+[#190](https://github.com/khabaznak/alphonse-agent/issues/190), and
+[#192](https://github.com/khabaznak/alphonse-agent/issues/192) track state,
+transitions, handoffs, bounded execution, and structured action reliability.
+[#187](https://github.com/khabaznak/alphonse-agent/issues/187) tracks measurement,
+including a direct-assistant comparison under equivalent conditions; no such
+comparison has yet been measured. [#191](https://github.com/khabaznak/alphonse-agent/issues/191)
+tracks end-to-end qualification, and [#185](https://github.com/khabaznak/alphonse-agent/issues/185)
+remains open until its own acceptance criteria are met. Any proposed change must
+preserve actor-scoped authorization, private data boundaries, cancellation,
+verified effects, and truthful terminal outcomes.
+
 ## Finding
 
 The household traffic-check history supports concern that the interaction between
