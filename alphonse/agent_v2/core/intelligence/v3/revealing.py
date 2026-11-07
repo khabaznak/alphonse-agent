@@ -28,6 +28,7 @@ class Capability(str, Enum):
     DOCUMENT_EXTRACTION = "document_extraction"
     EXACT_TEXT_MUTATION = "exact_text_mutation"
     COMMUNICATION = "communication"
+    PROJECT_TODOS = "project_todos"
     SCHEDULING = "scheduling"
     HOME_AUTOMATION = "home_automation"
     DEVICE_CONTROL = "device_control"
@@ -66,6 +67,7 @@ class ToolRevealPolicy:
         Capability.DOCUMENT_EXTRACTION.value: "Extract information from a discovered document.",
         Capability.EXACT_TEXT_MUTATION.value: "Legacy exact text mutation capability; use local_shell for new plans.",
         Capability.COMMUNICATION.value: "Deliver a message to another registered user.",
+        Capability.PROJECT_TODOS.value: "Create or inspect explicitly requested to-dos in the associated project.",
         Capability.SCHEDULING.value: "Create or manage a requested time-based action.",
         Capability.HOME_AUTOMATION.value: "Read or control an authorized home-automation service.",
         Capability.DEVICE_CONTROL.value: "Read or control an authorized device through its native client.",
@@ -247,6 +249,8 @@ _TOOL_CAPABILITIES: dict[str, tuple[str, ...]] = {
     "native.search_memory": (Capability.MEMORY_RECALL.value,),
     "native.read_memory_source": (Capability.MEMORY_RECALL.value,),
     "native.deliver_message": (Capability.COMMUNICATION.value,),
+    "native.project_todo": (Capability.PROJECT_TODOS.value,),
+    "native.project_todo_list": (Capability.PROJECT_TODOS.value,),
     "native.scheduled_task": (Capability.SCHEDULING.value,),
     "native.scheduled_task_delivery": (Capability.SCHEDULING.value,),
     "native.skill_install": (Capability.SKILL_MANAGEMENT.value,),

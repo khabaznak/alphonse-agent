@@ -153,3 +153,106 @@ def test_project_filter_applies_before_paging_and_enforces_access(work):
     server.daemon = daemon
     result = server._dispatch({"method": "work_items", "params": {"actor_user_id": member, "project_id": project.project_id}})
     assert {item["task_id"] for item in result["items"]} == {"first", "second"}
+
+
+def test_project_records_are_scoped_paginated_and_exclude_conversation(work):
+    from alphonse.agent_v2.conversations import SQLiteConversationStore
+    from alphonse.agent_v2.core.scheduled_tasks import ScheduledTaskStore
+
+    daemon, admin, member, stranger, tmp_path = work
+    daemon.runtime.conversation_store = SQLiteConversationStore(":memory:")
+    daemon.runtime.schedule_store = ScheduledTaskStore(":memory:")
+    project = daemon.runtime.project_store.create_project(name="Plan", root_path=str(tmp_path / "plan-records"), owner_user_id=member)
+    other = daemon.runtime.project_store.create_project(name="Other", root_path=str(tmp_path / "other-records"), owner_user_id=member)
+    for n in range(3):
+        daemon.runtime.conversation_store.record(owner_user_id=member, project_id=project.project_id, role="user", content=f"Request {n}", source="test", source_message_id=f"message-{n}")
+        task = daemon.runtime.schedule_store.create_task(owner_user_id=member, project_id=project.project_id, name=f"Schedule {n}", prompt="Work", schedule_kind="once", run_at="2030-01-01T10:00:00+00:00")
+        daemon.runtime.schedule_store.record_execution(scheduled_task_id=task.scheduled_task_id, run_id=f"run-{n}", status="queued")
+    daemon.runtime.conversation_store.record(owner_user_id=member, project_id=other.project_id, role="user", content="Other project", source="test", source_message_id="other")
+    first = daemon.project_records(actor_user_id=member, owner_user_id=member, project_id=project.project_id, limit=2)
+    assert first["schedules_more"] and first["executions_more"]
+    assert "conversation" not in first
+    assert len(first["schedules"]) == len(first["executions"]) == 2
+    assert all(task["schedule_kind"] == "once" for task in first["schedules"])
+    assert "Other project" not in str(first)
+    second = daemon.project_records(actor_user_id=member, owner_user_id=member, project_id=project.project_id, limit=2, schedules_offset=2, executions_offset=2)
+    assert len(second["schedules"]) == len(second["executions"]) == 1
+    assert not second["schedules_more"] and not second["executions_more"]
+    admin_page = daemon.project_records(actor_user_id=admin, owner_user_id=member, project_id=project.project_id)
+    assert "conversation" not in admin_page
+    with pytest.raises(PermissionError):
+        daemon.project_records(actor_user_id=stranger, owner_user_id=member, project_id=project.project_id)
+    with pytest.raises(PermissionError):
+        daemon.project_records(actor_user_id=stranger, owner_user_id=stranger, project_id=project.project_id)
+
+
+def test_project_todos_are_explicit_scoped_idempotent_and_verified(work):
+    from alphonse.agent_v2.core.core import ToolExecutionContext
+    from alphonse.agent_v2.core.io.identity import V2IdentityResolver
+    from alphonse.agent_v2.core.messages import InMemoryMessageQueue
+    from alphonse.agent_v2.core.scheduled_tasks import ScheduledTaskStore
+    from alphonse.agent_v2.core.tools.registry.native.project_todo import execute_project_todo, execute_project_todo_list
+
+    daemon, admin, member, stranger, tmp_path = work
+    daemon.runtime.schedule_store = ScheduledTaskStore(":memory:")
+    project = daemon.runtime.project_store.create_project(name="Trip", root_path=str(tmp_path / "todo-trip"), owner_user_id=member)
+    task = TaskState(task_id="request-1", user=member, project_id=project.project_id, goal="Add packing")
+    context = ToolExecutionContext(task=task, messages=InMemoryMessageQueue(), project_store=daemon.runtime.project_store,
+        schedule_store=daemon.runtime.schedule_store, identity_resolver=V2IdentityResolver(user_store=daemon.runtime.user_store))
+    first = execute_project_todo({"action": "create", "title": "Pack bags"}, context=context)
+    retry = execute_project_todo({"action": "create", "title": "Pack bags"}, context=context)
+    assert first["todo_id"] == retry["todo_id"]
+    assert first["verification"] == {"status": "verified", "source": "project_todo_store_readback"}
+    assert execute_project_todo_list({}, context=context)["items"][0]["title"] == "Pack bags"
+    assert daemon.project_records(actor_user_id=member, owner_user_id=member, project_id=project.project_id)["todos"][0]["todo_id"] == first["todo_id"]
+    with pytest.raises(ValueError, match="project_todo_action_invalid"):
+        execute_project_todo({"action": "complete", "todo_id": first["todo_id"]}, context=context)
+    with pytest.raises(KeyError, match="project_todo_not_found"):
+        daemon.mutate_project_todo(actor_user_id=admin, project_id=project.project_id, action="complete", todo_id=first["todo_id"])
+    done = daemon.mutate_project_todo(actor_user_id=member, project_id=project.project_id, action="complete", todo_id=first["todo_id"])
+    assert done["status"] == "completed"
+    reopened = daemon.mutate_project_todo(actor_user_id=member, project_id=project.project_id, action="reopen", todo_id=first["todo_id"])
+    assert reopened["status"] == "pending"
+    task.user = stranger
+    with pytest.raises(PermissionError, match="project_todo_project_forbidden"):
+        execute_project_todo({"action": "create", "title": "No access"}, context=context)
+    with pytest.raises(PermissionError, match="project_todo_project_forbidden"):
+        daemon.mutate_project_todo(actor_user_id=stranger, project_id=project.project_id, action="create", title="No access", request_key="one")
+    task.user = member
+    cancelled = ToolExecutionContext(task=task, messages=InMemoryMessageQueue(), project_store=daemon.runtime.project_store,
+        schedule_store=daemon.runtime.schedule_store, identity_resolver=V2IdentityResolver(user_store=daemon.runtime.user_store), cancellation_checker=lambda: True)
+    with pytest.raises(RuntimeError, match="project_todo_cancelled"):
+        execute_project_todo({"action": "create", "title": "Cancelled"}, context=cancelled)
+
+
+def test_project_todos_survive_restart_and_require_exact_owner_project_and_id(tmp_path):
+    from alphonse.agent_v2.core.scheduled_tasks import ScheduledTaskStore
+    path = tmp_path / "todos.sqlite"
+    first = ScheduledTaskStore(path)
+    saved = first.create_project_todo(owner_user_id="alex", project_id="trip", title="Pack", idempotency_key="request-1")
+    with pytest.raises(ValueError, match="project_todo_idempotency_conflict"):
+        first.create_project_todo(owner_user_id="alex", project_id="trip", title="Different", idempotency_key="request-1")
+    reopened = ScheduledTaskStore(path)
+    assert reopened.project_todos_page(owner_user_id="alex", project_id="trip")[0]["todo_id"] == saved["todo_id"]
+    assert not reopened.project_todos_page(owner_user_id="alex", project_id="other")
+    assert not reopened.project_todos_page(owner_user_id="other", project_id="trip")
+    for owner, project in [("other", "trip"), ("alex", "other")]:
+        with pytest.raises(KeyError, match="project_todo_not_found"):
+            reopened.update_project_todo(owner_user_id=owner, project_id=project, todo_id=saved["todo_id"], status="completed")
+    assert reopened.project_todos_page(owner_user_id="alex", project_id="trip")[0]["status"] == "pending"
+
+
+def test_project_todo_ipc_binds_actor_and_does_not_accept_spoofed_owner(work):
+    from alphonse.agent_v2.core.scheduled_tasks import ScheduledTaskStore
+    daemon, admin, member, stranger, tmp_path = work
+    daemon.runtime.schedule_store = ScheduledTaskStore(":memory:")
+    project = daemon.runtime.project_store.create_project(name="Trip", root_path=str(tmp_path / "ipc-todos"), owner_user_id=member)
+    daemon.current_user = lambda: {"user": {"user_id": member}}
+    server = object.__new__(V2DaemonServer)
+    server.daemon = daemon
+    result = server._dispatch({"method": "mutate_project_todo", "params": {"actor_user_id": admin, "owner_user_id": admin, "project_id": project.project_id, "action": "create", "title": "Pack", "request_key": "request-1"}})
+    assert result["todo"]["owner_user_id"] == member
+    assert not daemon.runtime.schedule_store.project_todos_page(owner_user_id=admin, project_id=project.project_id)
+    daemon.current_user = lambda: {"user": {"user_id": stranger}}
+    with pytest.raises(PermissionError, match="project_todo_project_forbidden"):
+        server._dispatch({"method": "mutate_project_todo", "params": {"actor_user_id": member, "project_id": project.project_id, "action": "complete", "todo_id": result["todo"]["todo_id"]}})

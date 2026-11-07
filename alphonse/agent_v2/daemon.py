@@ -484,6 +484,53 @@ class V2Daemon:
             raise PermissionError("work_project_forbidden")
         return project_work_items(self.runtime, actor=actor, owner=owner, view=view, limit=limit, offset=offset, project_id=project_id)
 
+    def project_records(self, *, actor_user_id: str, owner_user_id: str, project_id: str,
+                        schedules_offset: int = 0, executions_offset: int = 0, todos_offset: int = 0,
+                        limit: int = 50) -> dict[str, Any]:
+        actor = str(actor_user_id or "").strip()
+        owner = str(owner_user_id or actor).strip()
+        project = str(project_id or "").strip()
+        if not actor or self.runtime.user_store.get_user(actor) is None:
+            raise PermissionError("work_actor_required")
+        if owner != actor and not self.runtime.user_store.is_admin(actor):
+            raise PermissionError("work_owner_forbidden")
+        if self.runtime.user_store.get_user(owner) is None:
+            raise KeyError("work_owner_not_found")
+        if not project or not self.runtime.project_store.get_project(project, requester_user_id=actor,
+                requester_is_admin=self.runtime.user_store.is_admin(actor), include_archived=True):
+            raise PermissionError("work_project_forbidden")
+        size = max(1, min(int(limit), 100))
+        schedules = self.runtime.schedule_store.project_tasks_page(owner_user_id=owner, project_id=project, limit=size + 1, offset=schedules_offset)
+        executions = self.runtime.schedule_store.project_executions_page(owner_user_id=owner, project_id=project, limit=size + 1, offset=executions_offset)
+        todos = self.runtime.schedule_store.project_todos_page(owner_user_id=owner, project_id=project, limit=size + 1, offset=todos_offset)
+        return {
+            "todos": todos[:size], "todos_more": len(todos) > size,
+            "schedules": [{"scheduled_task_id": task.scheduled_task_id, "name": task.name, "status": task.status, "next_run_at": task.next_run_at, "schedule_kind": task.schedule.get("kind", "")} for task in schedules[:size]],
+            "schedules_more": len(schedules) > size,
+            "executions": executions[:size], "executions_more": len(executions) > size,
+        }
+
+    def mutate_project_todo(self, *, actor_user_id: str, project_id: str, action: str,
+                            title: str = "", todo_id: str = "", request_key: str = "") -> dict[str, Any]:
+        actor = str(actor_user_id or "").strip()
+        user = self.runtime.user_store.get_user(actor) if actor else None
+        if user is None or not user.is_active:
+            raise PermissionError("project_todo_actor_forbidden")
+        project = self.runtime.project_store.get_project(project_id, requester_user_id=actor,
+                    requester_is_admin=self.runtime.user_store.is_admin(actor))
+        if project is None or project.status != "active":
+            raise PermissionError("project_todo_project_forbidden")
+        if action == "create":
+            key = str(request_key or "").strip()
+            if not key or len(key) > 200:
+                raise ValueError("project_todo_request_key_required")
+            return self.runtime.schedule_store.create_project_todo(owner_user_id=actor, project_id=project.project_id,
+                         title=title, idempotency_key="desktop:" + key)
+        if action in {"complete", "reopen", "cancel"}:
+            return self.runtime.schedule_store.update_project_todo(owner_user_id=actor, project_id=project.project_id,
+                         todo_id=todo_id, status={"complete": "completed", "reopen": "pending", "cancel": "cancelled"}[action])
+        raise ValueError("project_todo_action_invalid")
+
     def scheduled_tasks(
         self,
         *,
@@ -575,6 +622,7 @@ class V2Daemon:
             ids = [str(row[0]) for row in conn.execute("SELECT scheduled_task_id FROM v2_scheduled_tasks WHERE owner_user_id=?", (user_id,)).fetchall()]
             if ids:
                 conn.executemany("DELETE FROM v2_scheduled_task_executions WHERE scheduled_task_id=?", [(task_id,) for task_id in ids])
+            conn.execute("DELETE FROM v2_project_todos WHERE owner_user_id=?", (user_id,))
             return conn.execute("DELETE FROM v2_scheduled_tasks WHERE owner_user_id=?", (user_id,)).rowcount
 
     def _delete_user_question_data(self, user_id: str) -> int:

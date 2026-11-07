@@ -218,13 +218,14 @@ class ProjectInboundRouter:
         if kill_switch_reply is not None:
             self._reply(address, kill_switch_reply, correlation_id=correlation_id)
             return InboundRouteResult(handled_command=True)
-        if self.communication_router is not None and self.communication_router.relay_inbound(
+        explicit_desktop_request = bool(project_id and address.integration_id == "desktop" and (metadata or {}).get("desktop_project_request") is True)
+        if not explicit_desktop_request and self.communication_router is not None and self.communication_router.relay_inbound(
             sender_user_id=address.alphonse_user_id,
             address=address,
             text=prompt,
         ):
             return InboundRouteResult(handled_command=True)
-        if self.question_store is not None and not str(prompt or "").lstrip().startswith("/"):
+        if not explicit_desktop_request and self.question_store is not None and not str(prompt or "").lstrip().startswith("/"):
             answer = self.question_store.route_answer(
                 respondent_user_id=address.alphonse_user_id,
                 text=prompt,

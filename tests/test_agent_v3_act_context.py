@@ -359,3 +359,21 @@ def test_independent_receipt_cannot_override_read_only_phase_scope():
     projected, rows = _projected_rows(task, state, outcome, review)
     assert rows['tactical-action:write']['effect_status'] == 'unknown'
     assert not has_requested_effect_evidence(projected)
+
+
+def test_project_todo_effect_requires_verified_store_readback():
+    task, state, outcome, review = fixture()
+    for row in [
+        {'evidence_ref': 'todo-ok', 'tool_id': 'native.project_todo', 'status': 'success',
+         'result': {'todo_id': 'todo-1', 'status': 'pending', 'verification': {'status': 'verified', 'source': 'project_todo_store_readback'}}},
+        {'evidence_ref': 'todo-unverified', 'tool_id': 'native.project_todo', 'status': 'success',
+         'result': {'todo_id': 'todo-2', 'status': 'pending'}},
+        {'evidence_ref': 'todo-failed', 'tool_id': 'native.project_todo', 'status': 'failed',
+         'result': {'todo_id': 'todo-3', 'verification': {'status': 'verified', 'source': 'project_todo_store_readback'}}},
+    ]:
+        state.evidence.append(row)
+    _, rows = _projected_rows(task, state, outcome, review)
+    assert rows['todo-ok']['effect_status'] == 'verified_persisted_effect'
+    assert rows['todo-ok']['verification']['target'] == {'kind': 'project_todo', 'id': 'todo-1'}
+    assert rows['todo-unverified']['effect_status'] == 'attempted_unverified'
+    assert rows['todo-failed']['effect_status'] != 'verified_persisted_effect'

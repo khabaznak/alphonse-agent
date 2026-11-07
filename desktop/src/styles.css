@@ -1160,9 +1160,12 @@ a { color: var(--accent); }
 .work-pagination { justify-content: flex-end; font-size: 11px; }
 .work-pagination button { padding: 6px 9px; font-size: 11px; }
 /* A project opens on its delegated work; administration remains available separately. */
-.project-activity-dialog { width: min(760px, calc(100vw - 40px)); max-height: min(80vh, 760px); padding: 26px; border: 1px solid var(--border); border-radius: 16px; color: var(--text); background: var(--surface); overflow: auto; }
+.project-activity-dialog { width: min(760px, calc(100vw - 40px)); max-height: min(80vh, 760px); padding: 0; border: 1px solid var(--border); border-radius: 16px; color: var(--text); background: var(--surface); overflow: hidden; }
+.project-activity-dialog[open] { display: flex; flex-direction: column; }
+.project-activity-body { min-height: 0; overflow-y: auto; padding: 0 26px 26px; }
+.project-activity-meta, .project-activity-description { color: var(--muted); font-size: 12px; }
 .project-activity-dialog::backdrop { background: var(--overlay); backdrop-filter: blur(4px); }
-.project-activity-dialog > header { display: flex; align-items: start; justify-content: space-between; gap: 16px; }
+.project-activity-dialog > header { display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 16px; padding: 20px 26px 12px; }
 .project-activity-dialog h1 { margin: 0; font-size: 22px; }
 .project-activity-dialog header p { margin: 12px 0 0; color: var(--muted); font-size: 12px; }
 .project-activity-close { display: grid; place-items: center; width: 42px; height: 42px; padding: 0; border: 1px solid var(--border); background: transparent; color: var(--muted); }
@@ -1484,3 +1487,37 @@ a { color: var(--accent); }
   .desktop-shell .conversation { padding-inline: 20px; }
   .shell-toolbar { padding-inline: 20px; }
 }
+.project-records-title { margin: 24px 0 8px; font-size: 15px; }
+.project-records-caption, .project-activity-dialog > p { color: var(--muted); font-size: 11px; }
+.project-record-list { display: grid; gap: 12px; padding: 0 0 0 16px; border-left: 2px solid var(--border); list-style: none; }
+.project-record-list li { display: grid; gap: 3px; font-size: 12px; overflow-wrap: anywhere; }
+.project-record-list small { color: var(--muted); font-size: 11px; }
+.project-record-list p { margin: 0; white-space: pre-wrap; }
+.project-record-list button { padding: 0; background: transparent; color: var(--accent); text-align: left; }
+.project-main-actions { flex-wrap: wrap; margin-top: 22px; gap: 14px; }
+.project-inline-edit { display: grid; gap: 10px; margin-top: 16px; padding: 14px; border: 1px solid var(--border); border-radius: 8px; }
+.project-inline-edit label { display: grid; gap: 4px; font-size: 12px; }
+.project-inline-edit p { margin: 0; color: var(--muted); font-size: 12px; }
+.composer-context button { padding: 0 4px; color: inherit; background: transparent; }
+.project-work-list { margin: 0; padding: 0; list-style: none; }
+.project-work-list > li { display: flex; align-items: flex-start; gap: 12px; padding: 13px 0; border-top: 1px solid var(--border); }
+.project-work-icon { flex: 0 0 auto; display: grid; place-items: center; padding-top: 2px; color: var(--accent); }
+.project-work-content { display: grid; flex: 1; min-width: 0; gap: 4px; overflow-wrap: anywhere; }
+.project-work-content strong, .project-work-content > button { font-size: 12px; font-weight: 600; }
+.project-work-content > button { padding: 0; color: var(--text); background: transparent; text-align: left; }
+.project-work-content > button:hover { color: var(--accent); }
+.project-work-content small, .project-work-empty { color: var(--muted); font-size: 11px; }
+.project-work-status { padding: 4px 7px; border: 1px solid var(--border); border-radius: 6px; color: var(--muted); font-size: 10px; text-align: right; }
+.project-work-status.attention { border-color: transparent; color: var(--warning); background: var(--warning-soft); }
+.project-history { margin-top: 20px; padding-top: 12px; border-top: 1px solid var(--border); }
+.project-history > summary { color: var(--text); font-size: 12px; font-weight: 600; cursor: pointer; }
+.project-history h3 { margin: 18px 0 8px; font-size: 12px; }
+.project-history p { color: var(--muted); font-size: 11px; }
+.project-todo-row { display: flex; flex: 1; align-items: center; gap: 10px; min-width: 0; font-size: 12px; }
+.project-todo-row input { flex: 0 0 auto; margin: 0; }
+.project-todo-row span { overflow-wrap: anywhere; }
+.project-todo-complete { color: var(--muted); text-decoration: line-through; }
+.project-todo-add { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.project-todo-add label { color: var(--muted); font-size: 11px; }
+.project-todo-add input { flex: 1; min-width: 140px; padding: 6px 8px; font-size: 12px; }
+.project-todo-add button { padding: 6px 10px; font-size: 11px; }

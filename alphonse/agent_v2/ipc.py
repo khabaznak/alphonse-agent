@@ -711,6 +711,21 @@ class V2DaemonServer:
                 view=str(params.get("view") or "active"), project_id=str(params.get("project_id") or ""),
                 limit=int(params.get("limit") or 50), offset=int(params.get("offset") or 0),
             )
+        if method == "project_records":
+            current = self.daemon.current_user().get("user")
+            actor = str(current.get("user_id") or "") if isinstance(current, dict) else ""
+            return self.daemon.project_records(
+                actor_user_id=actor, owner_user_id=str(params.get("owner_user_id") or ""),
+                project_id=str(params.get("project_id") or ""),
+                schedules_offset=int(params.get("schedules_offset") or 0), executions_offset=int(params.get("executions_offset") or 0), todos_offset=int(params.get("todos_offset") or 0),
+                limit=int(params.get("limit") or 50),
+            )
+        if method == "mutate_project_todo":
+            current = self.daemon.current_user().get("user")
+            actor = str(current.get("user_id") or "") if isinstance(current, dict) else ""
+            return {"todo": self.daemon.mutate_project_todo(actor_user_id=actor, project_id=str(params.get("project_id") or ""),
+                action=str(params.get("action") or ""), title=str(params.get("title") or ""),
+                todo_id=str(params.get("todo_id") or ""), request_key=str(params.get("request_key") or ""))}
         if method == "manageable_projects":
             return {"projects": self.daemon.manageable_projects(user=str(params.get("user") or ""), status=str(params.get("status") or ""))}
         if method == "create_project":

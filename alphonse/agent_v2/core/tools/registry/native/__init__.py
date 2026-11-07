@@ -2,6 +2,7 @@
 
 from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry
 from alphonse.agent_v2.core.tools.registry.native.memory import build_search_memory_tool_definition, build_read_memory_source_tool_definition
+from alphonse.agent_v2.core.tools.registry.native.project_todo import build_project_todo_tool_definition, build_project_todo_list_tool_definition
 from alphonse.agent_v2.core.tools.registry.native.ask_question import ASK_QUESTION_TOOL_ID
 from alphonse.agent_v2.core.tools.registry.native.ask_question import ASK_QUESTION_TOOL_NAME
 from alphonse.agent_v2.core.tools.registry.native.ask_question import build_ask_question_tool_definition
@@ -49,6 +50,8 @@ def build_native_tool_registry(web_tools_settings: WebToolsSettings | None = Non
     registry.register(build_deliver_message_tool_definition())
     registry.register(build_send_attachment_tool_definition(asset_store))
     registry.register(build_ask_question_tool_definition())
+    registry.register(build_project_todo_tool_definition())
+    registry.register(build_project_todo_list_tool_definition())
     registry.register(build_scheduled_task_tool_definition())
     registry.register(build_scheduled_task_delivery_tool_definition())
     if skill_store is not None:

@@ -59,6 +59,22 @@
         "false": "Records, available resources, or supplied facts can resolve the missing detail."
       }
     },
+    "native.project_todo_list": {
+      "type": "noul",
+      "instructions": "Does `request.text` require inspecting an existing project to-do list?",
+      "criteria": {
+        "true": "The requester asks to see, find, or change an item already on a project to-do list.",
+        "false": "The requester only asks for a new to-do, a timed reminder, or general conversation."
+      }
+    },
+    "native.project_todo": {
+      "type": "noul",
+      "instructions": "Does `request.text` ask to create an explicit project to-do?",
+      "criteria": {
+        "true": "The requester wants an item added to a project to-do list.",
+        "false": "The requester is conversing, updating an existing item, or requesting a timed reminder without asking for a new to-do."
+      }
+    },
     "native.scheduled_task": {
       "type": "noul",
       "instructions": "Does this phase need to create or change future or recurring work?",
