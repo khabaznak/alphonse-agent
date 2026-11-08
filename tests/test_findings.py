@@ -265,6 +265,29 @@ def test_historical_version_revalidates_its_own_retention(findings):
         f.findings.view(RECIPIENT, ref['finding_id'], version=1)
 
 
+def test_purge_does_not_redact_a_finding_changed_during_authorization(findings, monkeypatch):
+    f = findings
+    ref = f.save()
+    changed = []
+    def concurrent_change_then_denial(finding, recipient=None):
+        with f.schedules._connect() as conn:
+            row = conn.execute('SELECT definition FROM v2_findings WHERE finding_id=?', (ref['finding_id'],)).fetchone()
+            value = json.loads(row[0])
+            value['summary'] = 'synthetic changed finding'
+            conn.execute('UPDATE v2_findings SET definition=? WHERE finding_id=?',
+                         (json.dumps(value), ref['finding_id']))
+        changed.append(True)
+        raise PermissionError('synthetic_authority_changed')
+    monkeypatch.setattr(f.findings, '_authorize', concurrent_change_then_denial)
+    monkeypatch.setattr(f.outbox, 'redact_finding', lambda _: pytest.fail('stale result must not redact outbox'))
+    f.findings.purge()
+    assert changed
+    with f.schedules._connect() as conn:
+        value = json.loads(conn.execute('SELECT definition FROM v2_findings WHERE finding_id=?', (ref['finding_id'],)).fetchone()[0])
+        versions = conn.execute('SELECT COUNT(*) FROM v2_finding_versions WHERE finding_id=?', (ref['finding_id'],)).fetchone()[0]
+    assert value['summary'] == 'synthetic changed finding' and versions == 1
+
+
 def test_restored_evidence_cannot_override_current_revocation(findings):
     f = findings
     ref = f.save()

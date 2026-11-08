@@ -389,8 +389,11 @@ class SourceAcquisition:
             if state:
                 value.update(content={}, state=state)
                 with self.dispatcher.store._connect() as conn:
-                    conn.execute('UPDATE v2_source_evidence SET definition=? WHERE evidence_id=?',
-                                 (json.dumps(value), row['evidence_id']))
+                    # A newer provider deletion or revocation may have changed
+                    # this evidence while authority was checked. Never replace
+                    # its newer tombstone with a stale expiry snapshot.
+                    conn.execute('UPDATE v2_source_evidence SET definition=? WHERE evidence_id=? AND definition=?',
+                                 (json.dumps(value), row['evidence_id'], row['definition']))
 
         findings = getattr(self, 'findings', None)
         if findings is not None:

@@ -224,7 +224,10 @@ safety deferrals can exceed 30 days. Synthetic tests confirm decision and
 event-input manifests in completed, failed and cancelled task checkpoints expire
 after 30 days, while active and waiting tasks retain recovery state. That test
 does not qualify other consumers, remote model sessions or filesystem copies of a
-manifest. Collected transient UI and activity journals now expire after 30 days;
+manifest. Source and finding cleanup now compare the exact previously checked
+record before updating it, so a concurrent deletion tombstone or newer finding
+is not overwritten by a stale cleanup decision; changed records are revisited on
+a later cleanup pass. Collected transient UI and activity journals now expire after 30 days;
 future timestamps are clamped and malformed ones are rejected. Uncollected
 transient events are also pruned by the running daemon's daily maintenance;
 producers, pruning and collection share a lock to preserve fresh events. Cleanup

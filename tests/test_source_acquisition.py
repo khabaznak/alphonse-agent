@@ -296,6 +296,28 @@ def test_content_removal_leaves_only_provenance(acquisition, cause):
     assert all(json.loads(row[0])['state'] != 'available' for row in rows)
 
 
+def test_expiry_does_not_overwrite_a_concurrent_deletion_tombstone(acquisition):
+    f = acquisition
+    f.adapter.pages = [SourcePage((record(f),), 'next', False)]
+    f.process()
+    updated = []
+    def clock_with_concurrent_deletion():
+        if not updated:
+            with f.schedules._connect() as conn:
+                row = conn.execute('SELECT evidence_id,definition FROM v2_source_evidence').fetchone()
+                value = json.loads(row['definition'])
+                value.update(state='deleted', deleted=True, content={})
+                conn.execute('UPDATE v2_source_evidence SET definition=? WHERE evidence_id=?',
+                             (json.dumps(value), row['evidence_id']))
+            updated.append(True)
+        return f.now + timedelta(days=8)
+    f.acquisition.clock = clock_with_concurrent_deletion
+    f.acquisition.purge_content()
+    with f.schedules._connect() as conn:
+        value = json.loads(conn.execute('SELECT definition FROM v2_source_evidence').fetchone()[0])
+    assert value['state'] == 'deleted' and value['deleted'] is True and value['content'] == {}
+
+
 def test_folder_change_uses_new_bounded_baseline(acquisition):
     from test_account_grants import expiry
     f = acquisition

@@ -283,7 +283,9 @@ class FindingService:
                          'project_id', 'executing_user_id', 'audience_user_ids')}
             tombstone.update(state='redacted', source_refs=[])
             with self.store._connect() as conn:
-                conn.execute('UPDATE v2_findings SET definition=? WHERE finding_id=?',
-                             (json.dumps(tombstone), finding['finding_id']))
-                conn.execute('DELETE FROM v2_finding_versions WHERE finding_id=?', (finding['finding_id'],))
-            self.outbox.redact_finding(finding['finding_id'])
+                cursor = conn.execute('UPDATE v2_findings SET definition=? WHERE finding_id=? AND definition=?',
+                                      (json.dumps(tombstone), finding['finding_id'], row['definition']))
+                if cursor.rowcount:
+                    conn.execute('DELETE FROM v2_finding_versions WHERE finding_id=?', (finding['finding_id'],))
+            if cursor.rowcount:
+                self.outbox.redact_finding(finding['finding_id'])
