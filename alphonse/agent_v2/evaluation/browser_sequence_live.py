@@ -54,7 +54,10 @@ def main():
             report['results'].append(row)
             args.output.write_text(json.dumps(report, indent=2) + '\n')
             print(json.dumps(row), flush=True)
-    return 0
+    # Field verification alone is partial progress: this fixture does not
+    # qualify task completion, so blocked or errored runs must not exit as a pass.
+    return 0 if len(report['results']) == len(arms) and all(
+        row.get('task_completion') == 'qualified' and row.get('effect_oracle_pass') for row in report['results']) else 1
 
 
 if __name__ == '__main__':

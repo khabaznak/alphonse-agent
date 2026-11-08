@@ -86,3 +86,23 @@ could bypass browser-specific rejection redaction. Rejections in active or
 legacy browser workflow contexts now redact the entire proposed action, even
 when no valid top-level tool ID is present. This does not make malformed actions
 executable; they still follow normal validation and recovery.
+
+Three subsequent paired trials used the same frozen executor and fixture source
+(`c8510456`). Pair 1's control verified both fields in eight model calls and four
+observations; the sequence arm failed on invalid JSON before dispatch. Pair 2
+verified both in both arms: seven versus four model calls and three observations
+in each, with elapsed times of 63.26 s and 66.37 s. Pair 3's control stopped after
+one verified field, while its sequence arm verified both in seven calls and four
+observations. Every phase ended blocked or errored; none qualified task
+completion. These results show variation and do not establish a reproducible
+observation reduction. All three content-free reports, including the unsuccessful
+attempts, are retained in `evidence/issue-190/`.
+
+Following the invalid-JSON attempt, browser tactical composition now permits one
+fresh retry after that specific parse error. It supplies a generic correction,
+never the malformed response, and checks cancellation before the retry. If both
+attempts fail, the phase blocks; no browser action is dispatched. This narrowly
+addresses one response failure and does not complete the broader structured-output
+work in #192. The sequence validator also permits the existing bounded uncertainty
+assessment alongside the sequence. Regression fixtures cover successful retry,
+exhaustion, and cancellation before retry.

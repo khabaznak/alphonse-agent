@@ -51,3 +51,16 @@ def test_sequence_comparison_retains_each_safety_outcome():
     assert all(row["scenario_expectation_met"] for row in value["runs"])
     assert "SYNTHETIC_NAME" not in json.dumps(value)
     assert "SYNTHETIC_NUMBER" not in json.dumps(value)
+
+
+@pytest.mark.parametrize("sequence", [False, True])
+def test_browser_malformed_response_retry_is_bounded_and_cancellable(sequence):
+    recovered = run_case(control=False, scenario="malformed_once", sequence=sequence)
+    assert recovered["scenario_expectation_met"] and recovered["verified_fields"] == 2
+    assert recovered["composition_calls"] == (4 if sequence else 8)
+    exhausted = run_case(control=False, scenario="malformed_always", sequence=sequence)
+    assert exhausted["scenario_expectation_met"] and exhausted["composition_calls"] == 2
+    assert exhausted["tool_calls"] == 0
+    cancelled = run_case(control=False, scenario="malformed_cancelled", sequence=sequence)
+    assert cancelled["scenario_expectation_met"] and cancelled["composition_calls"] == 1
+    assert cancelled["tool_calls"] == 0

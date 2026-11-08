@@ -61,7 +61,7 @@ def run_case(*, control: bool, changed: bool = False, sequence: bool = False, in
         if scenario != "normal":
             raise ValueError("conflicting_scenario")
         scenario = "changed"
-    if scenario not in {"normal", "changed", "stale", "denied", "cancelled", "retry"}:
+    if scenario not in {"normal", "changed", "stale", "denied", "cancelled", "retry", "malformed_once", "malformed_always", "malformed_cancelled"}:
         raise ValueError("unknown_scenario")
     with TemporaryDirectory(prefix="alphonse-browser-comparison-") as directory:
         form = _Form(scenario)
@@ -117,6 +117,8 @@ def run_case(*, control: bool, changed: bool = False, sequence: bool = False, in
                         nonlocal compositions, recovery_guidance_calls, sequence_proposals
                         compositions += 1
                         recovery_guidance_calls += int("A previous browser fill has an unresolved effect." in request.prompt)
+                        if scenario in {"malformed_always", "malformed_cancelled"} or (scenario == "malformed_once" and compositions == 1):
+                            raise ValueError("openai_codex_invalid_json")
                         item = next(selected, None)
                         question = {"question_id": "result", "type": "noul", "instructions": "Was the step completed?",
                                     "criteria": {"true": "The step was completed.", "false": "The step was not completed."}}
@@ -173,7 +175,8 @@ def run_case(*, control: bool, changed: bool = False, sequence: bool = False, in
                                         inference=MeasuredProvider() if inference is not None else ScriptedProvider(),
                                         system_one=SimpleNamespace(evaluate_tactical_progress=review),
                                         cancellation_checker=lambda: compositions >= 12 or
-                                            (scenario == "cancelled" and bool(form.calls))))
+                                            (scenario == "cancelled" and bool(form.calls)) or
+                                            (scenario == "malformed_cancelled" and compositions >= 1)))
                     outcome_status = outcome.status.value
                 except Exception as exc:
                     failure_type = type(exc).__name__
@@ -207,10 +210,12 @@ def run_case(*, control: bool, changed: bool = False, sequence: bool = False, in
                 expected = not form.calls and not browser_workflow.unresolved(workflow) and not verified
             elif scenario in {"stale", "cancelled", "retry"}:
                 expected = len(form.calls) == 1 and browser_workflow.unresolved(workflow) and not verified
+            elif scenario in {"malformed_always", "malformed_cancelled"}:
+                expected = not form.calls and not browser_workflow.unresolved(workflow) and not verified
             else:
                 expected = oracle and verified == ["name", "number"] and not browser_workflow.unresolved(workflow)
             expected = expected and failure_type is None and bool(outcomes) and outcomes[-1] == (
-                "cancelled" if scenario == "cancelled" else "blocked")
+                "cancelled" if scenario in {"cancelled", "malformed_cancelled"} else "blocked")
             return {"variant": "fill_sequence" if sequence else "forced_phase_breaks" if control else "continued_phase", "changed": scenario == "changed", "scenario": scenario,
                     "composition_calls": compositions,
                     "recovery_guidance_calls": recovery_guidance_calls,

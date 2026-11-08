@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import replace
 from alphonse.agent_v2.core.context_inventory import source, prompt_receipt
 
 import json
@@ -589,25 +590,40 @@ class PhaseExecutor:
         )
         from .context_manifests import event_input_metadata
         images = context.image_inputs(task)
-        result = context.inference.generate_json(
-            InferenceRequest(
-                prompt=prompt,
-                purpose=InferencePurpose.TACTICAL_ACTION,
-                context_manifests=prompt_receipt(prompt, [task_context, skill_guidance,
-                    source('Strategic plan: ' + json.dumps(state.phase.to_dict(), ensure_ascii=False), 'phase:' + state.phase.phase_id, 'strategic_plan'),
-                    source('Complete tool execution log (every entry, no omissions or truncation):\n' + state.prompt_projection(max_evidence_entries=None, max_chars=None), 'phase:' + state.phase.phase_id + ':execution', 'execution_evidence'),
-                    *([source('Goal: ' + task.goal, 'request:' + str(task.message_id or task.task_id), 'current_request')] if not projections_enabled() else []),
-                ], purpose='execution'),
-                project_id=task.project_id,
-                user=task.user,
-                task_id=task.task_id,
-                images=images,
-                tools=tools,
-                metadata={"phase_id": state.phase.phase_id, "subgoal_id": subgoal.subgoal_id,
-                          **event_input_metadata(task, "execution")},
-                cancel_checker=context.is_cancelled if context.cancellation_checker is not None else None,
-            )
+        request = InferenceRequest(
+            prompt=prompt,
+            purpose=InferencePurpose.TACTICAL_ACTION,
+            context_manifests=prompt_receipt(prompt, [task_context, skill_guidance,
+                source('Strategic plan: ' + json.dumps(state.phase.to_dict(), ensure_ascii=False), 'phase:' + state.phase.phase_id, 'strategic_plan'),
+                source('Complete tool execution log (every entry, no omissions or truncation):\n' + state.prompt_projection(max_evidence_entries=None, max_chars=None), 'phase:' + state.phase.phase_id + ':execution', 'execution_evidence'),
+                *([source('Goal: ' + task.goal, 'request:' + str(task.message_id or task.task_id), 'current_request')] if not projections_enabled() else []),
+            ], purpose='execution'),
+            project_id=task.project_id,
+            user=task.user,
+            task_id=task.task_id,
+            images=images,
+            tools=tools,
+            metadata={"phase_id": state.phase.phase_id, "subgoal_id": subgoal.subgoal_id,
+                      **event_input_metadata(task, "execution")},
+            cancel_checker=context.is_cancelled if context.cancellation_checker is not None else None,
         )
+        try:
+            result = context.inference.generate_json(request)
+        except ValueError as exc:
+            # A malformed provider response contains no executable action. A
+            # single fresh attempt can recover without replaying that response,
+            # any browser mutation, or sensitive output into the next prompt.
+            if "v3_browser_workflow" not in task.metadata or str(exc) != "openai_codex_invalid_json":
+                raise
+            if context.is_cancelled():
+                return None
+            try:
+                result = context.inference.generate_json(replace(request, prompt=request.prompt +
+                    "\nThe previous response could not be parsed. Return one valid JSON object using the action contract."))
+            except ValueError as retry_exc:
+                if str(retry_exc) != "openai_codex_invalid_json":
+                    raise
+                return None
         if recovery is not None:
             _record_uncertainty_assessment(state, recovery, result.json_value)
         if not isinstance(result.json_value, dict):
@@ -1140,7 +1156,7 @@ def _validate_browser_fill_sequence(executor: PhaseExecutor, state: TacticalStat
     items = selected.get("browser_fill_sequence")
     expected = ["native.browser_workflow_fill", "native.browser_workflow_observe",
                 "native.browser_workflow_reconcile"]
-    if (set(selected) != {"browser_fill_sequence"} or not isinstance(items, list)
+    if (set(selected) - {"browser_fill_sequence", "uncertainty_assessment"} or not isinstance(items, list)
             or len(items) != len(expected)
             or any(not isinstance(item, dict) or item.get("tool_id") != name
                    for item, name in zip(items, expected))):

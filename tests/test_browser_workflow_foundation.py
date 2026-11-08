@@ -687,7 +687,7 @@ def test_verified_fill_resets_phase_stall_despite_redacted_prior_fill(tmp_path, 
     service.private_data.clear()
 
 
-@pytest.mark.parametrize("scenario", ["normal", "sequence", "sequence_failed_verify", "sequence_cancelled", "sequence_revoked", "sequence_stale", "sequence_changed", "sequence_denied", "sequence_invalid", "sequence_invalid_wrapper", "repeated", "replay_verified", "failed_verify", "cancelled", "revoked"])
+@pytest.mark.parametrize("scenario", ["normal", "sequence", "sequence_assessment", "sequence_failed_verify", "sequence_cancelled", "sequence_revoked", "sequence_stale", "sequence_changed", "sequence_denied", "sequence_invalid", "sequence_invalid_wrapper", "repeated", "replay_verified", "failed_verify", "cancelled", "revoked"])
 def test_executor_reconciles_distinct_fills_in_same_phase(tmp_path, scenario):
     from alphonse.agent_v2.core.core import CoreLoopContext
     from alphonse.agent_v2.core.intelligence.v3 import PhaseExecutor, PhasePlan, PhaseSubgoal, PhaseStatus, SideEffectClass, MutationScope, new_tactical_state
@@ -762,8 +762,11 @@ def test_executor_reconciles_distinct_fills_in_same_phase(tmp_path, scenario):
             steps = [item, next(operations), next(operations)]
             if scenario == "sequence_invalid":
                 steps[1] = ("submit", {"target": "1_1"})
-            return {"browser_fill_sequence": [{"tool_id": "native.browser_workflow_" + name,
+            result = {"browser_fill_sequence": [{"tool_id": "native.browser_workflow_" + name,
                     "arguments": args, "acceptance_questions": [question]} for name, args in steps]}
+            if scenario == "sequence_assessment":
+                result["uncertainty_assessment"] = {"answer": "uncertain", "evidence_refs": []}
+            return result
         item = next(operations, None)
         selections.append(item)
         if len(selections) == 4:
@@ -774,7 +777,7 @@ def test_executor_reconciles_distinct_fills_in_same_phase(tmp_path, scenario):
         CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry, question_store=store, browser_workflow_service=service,
                         cancellation_checker=lambda: scenario in {"cancelled", "sequence_cancelled"} and bool(page.calls)))
     saved = workflow.load(task)
-    if scenario in {"normal", "sequence"}:
+    if scenario in {"normal", "sequence", "sequence_assessment"}:
         assert page.calls == ["1_1", "1_2"]
         assert not workflow.unresolved(saved)
         assert [e["field"] for e in saved["events"] if e["kind"] == "verified"] == ["name", "number"]
