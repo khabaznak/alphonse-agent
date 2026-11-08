@@ -126,13 +126,13 @@ class IntegrationManagement:
             # Never serialize checkpoints, raw evidence, provider cursors or exception text.
             runs = [{k: r.get(k) for k in ('check_run_id', 'state', 'outcome', 'error_code',
                 'window_start', 'window_end', 'coverage', 'stale', 'offline', 'items', 'acquisition_checkpoint',
-                'analysis_checkpoint')} for r in runs]
+                'analysis_checkpoint', 'processing_details_expired')} for r in runs]
             for run in runs:
                 for key in ('acquisition_checkpoint', 'analysis_checkpoint'):
                     checkpoint = run.pop(key, None)
                     run[key.replace('_checkpoint', '_state')] = 'checkpoint_saved' if checkpoint else 'not_started'
-                run['pending_analysis'] = False
-                if self.findings and run.get('items') and not run.get('coverage', {}).get('triage_no_match'):
+                run['pending_analysis'] = None if run.get('processing_details_expired') else False
+                if not run.get('processing_details_expired') and self.findings and run.get('items') and not run.get('coverage', {}).get('triage_no_match'):
                     with self.dispatcher.store._connect() as conn:
                         row = conn.execute("SELECT definition FROM v2_source_processing WHERE check_run_id=? AND stage='capd'",
                                            (run['check_run_id'],)).fetchone()

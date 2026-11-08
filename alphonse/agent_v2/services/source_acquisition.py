@@ -8,6 +8,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta
 import hashlib
 import json
+from pathlib import Path
 
 from alphonse.agent_v2.accounts import AccountSession
 from alphonse.agent_v2.automations import EventEnvelope
@@ -419,6 +420,39 @@ class SourceAcquisition:
                     HAVING COUNT(*) = COUNT(julianday(json_extract(p.definition, '$.observed_at')))
                        AND MAX(julianday(json_extract(p.definition, '$.observed_at'))) < julianday(?)
                 )""", (cutoff,))
+            # Processing records can be removed only when event and run state
+            # share this transaction. Unknown topology or any active work keeps
+            # them: neither a missing event nor a separate database proves that
+            # downstream work is finished.
+            source_db = str(self.dispatcher.store.db_path)
+            event_db = str(self.events.db_path)
+            same_database = (source_db != ':memory:' and event_db != ':memory:'
+                             and Path(source_db).resolve() == Path(event_db).resolve())
+            tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            required = {'v2_event_receipts', 'v2_automation_executions', 'v2_source_publications'}
+            event_active = (conn.execute("SELECT 1 FROM v2_automation_executions WHERE status NOT IN ('completed','cancelled','failed','denied') LIMIT 1").fetchone()
+                            if same_database and required <= tables else True)
+            if not active and not event_active:
+                rows = conn.execute("""SELECT r.check_run_id, r.receipt FROM v2_project_check_runs r
+                    WHERE r.state='terminal'
+                      AND julianday(json_extract(r.receipt, '$.finished_at')) < julianday(?)
+                      AND julianday(json_extract(r.receipt, '$.window_end')) < julianday(?)
+                      AND (json_extract(r.receipt, '$.outcome') IN ('no_match','cancelled')
+                           OR (json_extract(r.receipt, '$.outcome')='complete'
+                               AND json_extract(r.receipt, '$.coverage.triage_no_match')=1)
+                           OR (EXISTS (SELECT 1 FROM v2_source_publications p WHERE p.check_run_id=r.check_run_id)
+                               AND EXISTS (SELECT 1 FROM v2_event_receipts e WHERE e.worker_id=?
+                                           AND e.source_event_id='source-result:' || r.check_run_id)))""",
+                    (cutoff, cutoff, WORKER)).fetchall()
+                for row in rows:
+                    count = conn.execute('DELETE FROM v2_source_processing WHERE check_run_id=?', (row['check_run_id'],)).rowcount
+                    if 'v2_project_triage' in tables:
+                        count += conn.execute('DELETE FROM v2_project_triage WHERE check_run_id=?', (row['check_run_id'],)).rowcount
+                    if count:
+                        receipt = json.loads(row['receipt'])
+                        receipt['processing_details_expired'] = True
+                        conn.execute("UPDATE v2_project_check_runs SET receipt=? WHERE check_run_id=? AND state='terminal'",
+                                     (json.dumps(receipt), row['check_run_id']))
             # Keep at least one recent age witness for a cursor that remains.
             conn.execute("""DELETE FROM v2_source_pages WHERE
                 julianday(json_extract(definition, '$.observed_at')) < julianday(?)

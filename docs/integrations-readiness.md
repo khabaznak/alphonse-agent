@@ -203,8 +203,13 @@ A partial cleanup now removes terminal source page receipts and source cursors
 whose newest known page is older than 30 days. Cursor eviction is deferred while
 any run is active, and cursors without reliable page timestamps remain; expiry
 records a content-free scope marker so the next bounded baseline reports a coverage
-gap. This is not a complete 30-day retention guarantee. Processing checkpoints,
-terminal run receipts and event/input manifests remain unqualified.
+gap. Terminal processing and triage details are also expired after 30 days
+when acquisition and event recovery share a database, no run or event execution is
+active, and publication is confirmed or the run was quiet/cancelled. Desktop
+reports expired analysis details as unknown rather than complete. Unknown storage
+topology, unconfirmed publication and active work keep the details. This is not a
+complete 30-day retention guarantee: terminal run receipts and input manifests
+remain unqualified, and safety deferrals can exceed 30 days.
 Operational retention also deletes event history older than 30 days when no
 nonterminal execution depends on it and its independent replay receipt exists;
 unknown/missing replay state keeps the event. Receipts remain in place. The event

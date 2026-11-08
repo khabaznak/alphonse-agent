@@ -419,3 +419,67 @@ def test_expired_cursor_forces_bounded_resync_and_reports_gap(acquisition):
     assert 'cursor_expired_bounded_resync' in result['coverage']['gaps']
     with f.schedules._connect() as db:
         assert db.execute('SELECT COUNT(*) FROM v2_source_expired_streams').fetchone()[0] == 0
+
+
+def test_old_processing_expires_only_with_shared_idle_recovery_store(acquisition):
+    f = acquisition
+    f.adapter.pages = [SourcePage(complete=True)]
+    assert f.process()['outcome'] == 'no_match'
+    with f.schedules._connect() as db:
+        db.execute('INSERT INTO v2_source_processing VALUES (?, ?, ?)', (f.run_id, 'capd', '["synthetic-ref"]'))
+    f.now += timedelta(days=31)
+    # Separate event storage cannot establish that downstream work is idle.
+    f.acquisition.purge_source_metadata()
+    with f.schedules._connect() as db:
+        assert db.execute('SELECT COUNT(*) FROM v2_source_processing').fetchone()[0] == 1
+    f.acquisition.events = EventAutomationStore(f.schedules.db_path)
+    with f.schedules._connect() as db:
+        db.execute('CREATE TABLE v2_project_triage (check_run_id TEXT NOT NULL, evidence_id TEXT NOT NULL, definition TEXT NOT NULL, PRIMARY KEY(check_run_id,evidence_id))')
+        db.execute('INSERT INTO v2_project_triage VALUES (?, ?, ?)', (f.run_id, 'synthetic-evidence', '{}'))
+        db.execute("INSERT INTO v2_automation_executions(execution_id,automation_id,event_key,status,queued_message_id,created_at,updated_at) VALUES('active','a','e','processing','','2026-01-01','2026-01-01')")
+    f.acquisition.purge_source_metadata()
+    with f.schedules._connect() as db:
+        assert db.execute('SELECT COUNT(*) FROM v2_source_processing').fetchone()[0] == 1
+        db.execute("UPDATE v2_automation_executions SET status='completed' WHERE execution_id='active'")
+    f.acquisition.purge_source_metadata()
+    with f.schedules._connect() as db:
+        assert db.execute('SELECT COUNT(*) FROM v2_source_processing').fetchone()[0] == 0
+        assert db.execute('SELECT COUNT(*) FROM v2_project_triage').fetchone()[0] == 0
+        receipt = json.loads(db.execute('SELECT receipt FROM v2_project_check_runs WHERE check_run_id=?', (f.run_id,)).fetchone()[0])
+        assert receipt['processing_details_expired'] is True
+        assert receipt['outcome'] == 'no_match'
+
+
+def test_old_processing_with_unverified_publication_is_preserved(acquisition):
+    f = acquisition
+    f.adapter.pages = [SourcePage((record(f),), 'history', True)]
+    assert f.process()['outcome'] == 'complete'
+    with f.schedules._connect() as db:
+        db.execute('INSERT INTO v2_source_processing VALUES (?, ?, ?)', (f.run_id, 'capd', '["synthetic-ref"]'))
+    f.acquisition.events = EventAutomationStore(f.schedules.db_path)
+    f.now += timedelta(days=31)
+    f.acquisition.purge_source_metadata()
+    with f.schedules._connect() as db:
+        assert db.execute('SELECT COUNT(*) FROM v2_source_processing').fetchone()[0] == 1
+        receipt = json.loads(db.execute('SELECT receipt FROM v2_project_check_runs WHERE check_run_id=?', (f.run_id,)).fetchone()[0])
+        assert 'processing_details_expired' not in receipt
+
+
+def test_published_processing_expires_without_manufacturing_run_success(acquisition):
+    f = acquisition
+    f.events = EventAutomationStore(f.schedules.db_path)
+    f.acquisition = SourceAcquisition(f.dispatcher, f.events, adapters={'synthetic': f.adapter}, clock=lambda: f.now)
+    f.adapter.pages = [SourcePage((record(f),), 'history', True)]
+    assert f.process()['outcome'] == 'complete'
+    evidence_id = f.acquisition.evidence(AccountSession('child'), f.run_id)[0]['evidence_id']
+    f.acquisition.checkpoint_processing(AccountSession('child'), f.run_id, stage='capd', evidence_ids=[evidence_id])
+    with f.schedules._connect() as db:
+        assert db.execute('SELECT COUNT(*) FROM v2_event_receipts').fetchone()[0] == 1
+        assert db.execute('SELECT COUNT(*) FROM v2_source_publications').fetchone()[0] == 1
+    f.now += timedelta(days=31)
+    f.acquisition.purge_source_metadata()
+    with f.schedules._connect() as db:
+        assert db.execute('SELECT COUNT(*) FROM v2_source_processing').fetchone()[0] == 0
+        assert db.execute('SELECT COUNT(*) FROM v2_event_receipts').fetchone()[0] == 1
+        receipt = json.loads(db.execute('SELECT receipt FROM v2_project_check_runs WHERE check_run_id=?', (f.run_id,)).fetchone()[0])
+        assert receipt['processing_details_expired'] is True and receipt['outcome'] == 'complete'
