@@ -266,6 +266,24 @@ class SourceAcquisition:
         # at a window boundary may be stored, but cannot cause another read.
         with self.dispatcher.store._connect() as conn:
             conn.execute('BEGIN IMMEDIATE')
+            # Provider pages and retries can arrive out of order. A later page
+            # alone is not proof that a previously deleted source was restored:
+            # keep it redacted and report the unresolved coverage gap.
+            deleted_keys = {tuple(row) for row in conn.execute("""
+                SELECT json_extract(definition, '$.connection_id'),
+                       json_extract(definition, '$.resource'),
+                       json_extract(definition, '$.source_id')
+                FROM v2_source_evidence
+                WHERE json_extract(definition, '$.deleted')=1
+                   OR json_extract(definition, '$.state')='deleted'""")}
+            for record in records:
+                identity = (record['connection_id'], record['resource'], record['source_id'])
+                if not record['deleted'] and identity in deleted_keys:
+                    record.update(content={}, state='deleted', deleted=True)
+                    if 'source_deletion_reconciliation_required' not in coverage['gaps']:
+                        coverage['gaps'].append('source_deletion_reconciliation_required')
+                elif record['deleted']:
+                    deleted_keys.add(identity)
             updated = conn.execute("""UPDATE v2_project_check_runs SET receipt=? WHERE check_run_id=?
                 AND state='leased' AND generation=? AND lease_owner=? AND lease_until>?""",
                 (json.dumps(receipt), ctx.run['check_run_id'], ctx.run['generation'], ctx.run['lease_owner'], observed))

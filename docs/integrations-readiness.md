@@ -232,6 +232,10 @@ future timestamps are clamped and malformed ones are rejected. Uncollected
 transient events are also pruned by the running daemon's daily maintenance;
 producers, pruning and collection share a lock to preserve fresh events. Cleanup
 is periodic, so an event can remain past its deadline until maintenance runs.
+After a provider deletion, a later page claiming the same connection, resource and
+source ID is available stays redacted and reports a reconciliation coverage gap.
+The system does not yet provide a verified way to clear that tombstone for a
+legitimately restored provider item.
 Operational retention also deletes event history older than 30 days when no
 nonterminal execution depends on it and its independent replay receipt exists;
 unknown/missing replay state keeps the event. Receipts remain in place. The event

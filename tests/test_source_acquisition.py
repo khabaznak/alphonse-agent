@@ -318,6 +318,24 @@ def test_expiry_does_not_overwrite_a_concurrent_deletion_tombstone(acquisition):
     assert value['state'] == 'deleted' and value['deleted'] is True and value['content'] == {}
 
 
+def test_later_stale_version_cannot_resurrect_deleted_source(acquisition):
+    f = acquisition
+    f.adapter.pages = [
+        SourcePage((record(f),), 'page-one', False),
+        SourcePage((record(f, version='deleted-version', deleted=True),), 'page-two', False),
+        SourcePage((record(f, version='stale-unseen-version'),), 'history', True),
+    ]
+    f.process()
+    f.process()
+    result = f.process()
+    with f.schedules._connect() as conn:
+        values = [json.loads(row[0]) for row in conn.execute('SELECT definition FROM v2_source_evidence')]
+    assert len(values) == 3
+    assert all(value['state'] == 'deleted' and value['content'] == {} for value in values)
+    assert result['outcome'] == 'partial'
+    assert 'source_deletion_reconciliation_required' in result['coverage']['gaps']
+
+
 def test_folder_change_uses_new_bounded_baseline(acquisition):
     from test_account_grants import expiry
     f = acquisition
