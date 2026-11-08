@@ -124,7 +124,13 @@ Sources checked on the review date:
 [submitted data](https://help.typesafe.ai/articles/5974925716-how-is-submitted-data-used-or-retained),
 [DPA, April 24 2026](https://typesafe.ai/legal/data-processing),
 [privacy policy, November 19 2025](https://typesafe.ai/legal/privacy-policy).
-No deployment-specific retention commitment was supplied.
+No deployment-specific retention commitment was supplied. On 2026-11-08,
+TypeSafe's public documentation stated that standard retention has no fixed
+published period and that zero data retention is available by support request,
+with confirmation visible in the organization settings. This is a possible
+operator action, not evidence that it is enabled or that all telemetry disappears:
+[TypeSafe data handling](https://help.typesafe.ai/articles/5974925716-how-is-submitted-data-used-or-retained),
+[TypeSafe ZDR request](https://help.typesafe.ai/articles/9520184411).
 
 **P2 — BLOCKED, operator:** record the exact System Two provider/model, CLI version,
 sign-in product/account plan, governing terms, training controls, remote retention,
