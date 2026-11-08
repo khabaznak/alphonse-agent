@@ -69,6 +69,20 @@ class HierarchicalCAPDProcessor:
             return self._result(task, context)
 
     def _process(self, task: "TaskState", context: "CoreLoopContext") -> ProcessingResult:
+        from . import browser_workflow
+        invalid_browser = browser_workflow.KEY not in task.metadata and browser_workflow._legacy_browser_state(task)
+        if browser_workflow.KEY in task.metadata:
+            try:
+                browser_workflow.load(task)
+            except browser_workflow.BrowserWorkflowError:
+                invalid_browser = True
+        if invalid_browser:
+            task.status = "failed"
+            task.outcome = {"status": "failure", "reason": "browser_workflow_legacy_reconciliation_required"}
+            task.metadata["v3_route"] = "end"
+            task.metadata["v3_failure_response"] = {"source": "browser_recovery", "communication_reviewed": True,
+                "message": "The earlier browser activity needs reconciliation before it can continue."}
+            return self._result(task, context)
         context.emit_ui_event("run_started", {"task": task.to_dict(), "engine": "hierarchical_v3"})
         task.intelligence_engine = "hierarchical_v3"
         task.intelligence_schema_version = 3
@@ -98,6 +112,23 @@ class HierarchicalCAPDProcessor:
                             task.status = "waiting_user"
                             self._persist(task, context)
                             break
+                        question_id = str((task.metadata.get("question_interrupt") or {}).get("question_id") or "")
+                        question = context.question_store.get_question(question_id) if context.question_store is not None and question_id else None
+                        delivery = (question.metadata.get("delivery") or {}) if question is not None else {}
+                        if delivery.get("private_browser_value") is True:
+                            from .browser_workflow import BrowserWorkflowError, FIELDS
+                            from alphonse.agent_v2.browser_private_data import BrowserPrivateDataError
+                            task.hierarchical_state = {**task.hierarchical_state, "status": "running"}
+                            try:
+                                if context.browser_workflow_service is None:
+                                    raise BrowserWorkflowError("browser_workflow_session_unavailable")
+                                context.browser_workflow_service.record_answered_question(task, question_id=question_id)
+                                task.metadata.pop("v3_browser_input_reacquisition_required", None)
+                            except (BrowserWorkflowError, BrowserPrivateDataError):
+                                field = delivery.get("browser_private_field")
+                                task.metadata["v3_browser_input_reacquisition_required"] = field if field in FIELDS else "other"
+                                task.metadata["act_directive"] = {"action": "replan", "rationale":
+                                    "The protected answer is unavailable. Reacquire it through the private channel before using it; preserve unresolved effects."}
                         self._append_history(task, state, PhaseOutcome(
                             state.phase.phase_id, PhaseStatus.WAITING_USER, "Question answered.",
                         ).to_dict())
@@ -379,6 +410,9 @@ class HierarchicalCAPDProcessor:
 
     @staticmethod
     def _complete_direct_response(task: "TaskState", context: "CoreLoopContext") -> None:
+        from .browser_workflow import completion_blocked
+        if completion_blocked(task, context.browser_workflow_service):
+            raise RuntimeError("browser_workflow_reconciliation_required")
         if context.inference is None:
             raise RuntimeError("v3_direct_response_inference_unavailable")
         # Make the existing skill decision visible while System Two composes
@@ -536,7 +570,14 @@ class HierarchicalCAPDProcessor:
     def _persist(task: "TaskState", context: "CoreLoopContext") -> None:
         if context.question_store is not None:
             checkpoint_status = "done" if task.status == "completed" else task.status
-            context.question_store.save_task_checkpoint(task, status=checkpoint_status)
+            from . import browser_workflow
+            if browser_workflow.KEY in task.metadata or browser_workflow._legacy_browser_state(task):
+                if checkpoint_status == "running":
+                    context.question_store.save_active_browser_checkpoint(task, expected_workflow=task.metadata.get(browser_workflow.KEY))
+                else:
+                    context.question_store.save_browser_transition(task, status=checkpoint_status)
+            else:
+                context.question_store.save_task_checkpoint(task, status=checkpoint_status)
 
     @staticmethod
     def _prepare_failure_response(task: "TaskState", context: "CoreLoopContext") -> None:

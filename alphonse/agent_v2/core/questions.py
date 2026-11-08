@@ -207,6 +207,16 @@ class SQLiteQuestionStore:
             },
         )
 
+        delivery = dict(delivery_metadata or {})
+        if delivery.get("private_browser_value") is True:
+            from alphonse.agent_v2.core.intelligence.v3 import browser_workflow
+            field = delivery.get("browser_private_field")
+            phase = (task.hierarchical_state.get("phase") or {}).get("phase_id")
+            if (field not in browser_workflow.FIELDS or respondent != originator
+                    or task.intelligence_engine != "hierarchical_v3"):
+                raise ValueError("browser_private_question_invalid")
+            browser_workflow.append(task, kind="requested", field=field, phase=phase, source=interrupt.question_id)
+
         task.status = "waiting_user"
         if task.intelligence_engine == "hierarchical_v3" and task.hierarchical_state.get("status") == "running":
             # The answer may arrive during delivery, before the executor returns.
@@ -216,6 +226,12 @@ class SQLiteQuestionStore:
         task.append_update(f"Task parked waiting for answer to question {interrupt.question_id}.")
 
         with self._connect() as conn:
+            if "v3_browser_workflow" in task.metadata:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute("SELECT status, owner_id, version FROM v2_task_checkpoints WHERE task_id=?", (task_id,)).fetchone()
+                if (row is None or row["status"] != "running" or row["owner_id"] != str(task.user or "")
+                        or int(row["version"]) != getattr(task, "_checkpoint_version", None)):
+                    raise ValueError("browser_checkpoint_stale")
             self._save_task_checkpoint(conn, task, status="waiting_user")
             conn.execute(
                 """
@@ -308,6 +324,64 @@ class SQLiteQuestionStore:
         with self._connect() as conn:
             return self._save_task_checkpoint(conn, task, status=status)
 
+    def save_active_browser_checkpoint(self, task: TaskState, *, expected_workflow: Any = None) -> int:
+        """Fence a browser writer against a terminal or differently owned task.
+
+        The status check and write share a SQLite write transaction. This does
+        not replace the live cancellation check immediately before dispatch.
+        """
+        task_id = _ensure_task_id(task)
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT status, owner_id, task_state_json, version FROM v2_task_checkpoints WHERE task_id=?", (task_id,)
+            ).fetchone()
+            if row is not None and (row["status"] != "running"
+                                    or row["owner_id"] != str(task.user or "")):
+                raise ValueError("browser_checkpoint_not_active")
+            if task.status != "running":
+                raise ValueError("browser_checkpoint_not_active")
+            expected_version = getattr(task, "_checkpoint_version", None)
+            if row is not None and expected_version != int(row["version"]):
+                raise ValueError("browser_checkpoint_stale")
+            persisted = _json_object(row["task_state_json"]) if row is not None else {}
+            persisted_metadata = persisted.get("metadata") or {}
+            current = persisted_metadata.get("v3_browser_workflow") if isinstance(persisted_metadata, dict) else None
+            if current != expected_workflow:
+                raise ValueError("browser_checkpoint_stale")
+            return self._save_task_checkpoint(conn, task, status="running")
+
+    def claim_browser_resumption(self, task: TaskState) -> bool:
+        """Atomically fence a queued browser resumption against stale workers."""
+        version = getattr(task, "_checkpoint_version", None)
+        if not isinstance(version, int) or not task.task_id or not task.user:
+            return False
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "UPDATE v2_task_checkpoints SET status='running', version=version+1, updated_at=? "
+                "WHERE task_id=? AND owner_id=? AND status='queued' AND version=?",
+                (_now().isoformat(), task.task_id, task.user, version),
+            )
+            if cursor.rowcount != 1:
+                return False
+            task._checkpoint_version = version + 1
+            return True
+
+    def save_browser_transition(self, task: TaskState, *, status: str) -> int:
+        """Persist a waiting or terminal browser transition only from its current version."""
+        allowed = {"waiting_user": {"waiting_user"}, "done": {"running"},
+                   "failed": {"running"}, "cancelled": {"running", "waiting_user"}}
+        if status not in allowed:
+            raise ValueError("browser_checkpoint_transition_invalid")
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT status, owner_id, version FROM v2_task_checkpoints WHERE task_id=?",
+                               (task.task_id,)).fetchone()
+            if (row is None or row["status"] not in allowed[status] or row["owner_id"] != str(task.user or "")
+                    or int(row["version"]) != getattr(task, "_checkpoint_version", None)):
+                raise ValueError("browser_checkpoint_stale")
+            return self._save_task_checkpoint(conn, task, status=status)
+
     def _save_task_checkpoint(
         self,
         conn: sqlite3.Connection,
@@ -346,7 +420,10 @@ class SQLiteQuestionStore:
                 task.metadata.get("pending_question_id") if checkpoint_status == "waiting_user" else None,
             ),
         )
-        return version if cursor.rowcount else version - 1
+        if cursor.rowcount:
+            task._checkpoint_version = version
+            return version
+        return version - 1
 
     def list_work_checkpoints(self, *, owner_id: str, view: str = "active", limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
         """Bounded owner-scoped reads; status is independent of serialized state."""
@@ -390,12 +467,14 @@ class SQLiteQuestionStore:
     def load_task_checkpoint(self, task_id: str) -> TaskState | None:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT task_state_json FROM v2_task_checkpoints WHERE task_id = ?",
+                "SELECT task_state_json, version FROM v2_task_checkpoints WHERE task_id = ?",
                 (str(task_id or "").strip(),),
             ).fetchone()
         if row is None:
             return None
-        return _task_state_cls().from_dict(_json_object(row["task_state_json"]))
+        task = _task_state_cls().from_dict(_json_object(row["task_state_json"]))
+        task._checkpoint_version = int(row["version"])
+        return task
 
     def mark_task_checkpoint_terminal(self, task_id: str, *, status: str) -> bool:
         normalized = str(status or "").strip().lower()
@@ -485,6 +564,8 @@ class SQLiteQuestionStore:
         payload: dict[str, Any] | None = None,
         question_id: str | None = None,
         reply_to_provider_message_id: str | None = None,
+        private_browser_ref: str | None = None,
+        private_ref_validator: Any | None = None,
     ) -> QuestionAnswerResult:
         respondent = str(respondent_user_id or "").strip()
         if not respondent:
@@ -502,6 +583,22 @@ class SQLiteQuestionStore:
             )
         if question is None:
             return QuestionAnswerResult(handled=False)
+
+        if (question.metadata.get("delivery") or {}).get("private_browser_value") is True:
+            # Raw private answers must never enter normalization, history or SQL.
+            # The host supplies an opaque handle and checks its live grant and
+            # task/actor binding in the protected store before routing it.
+            if (text is not None or not isinstance(private_browser_ref, str)
+                    or payload != {"text": private_browser_ref} or not callable(private_ref_validator)):
+                return QuestionAnswerResult(handled=True, question=question, invalid=True,
+                                            message="Private input is unavailable; use the protected input channel.")
+            try:
+                valid = private_ref_validator(respondent, question.task_id, private_browser_ref) is True
+            except Exception:
+                valid = False
+            if not valid:
+                return QuestionAnswerResult(handled=True, question=question, invalid=True,
+                                            message="Private input is unavailable; use the protected input channel.")
 
         answer = _normalize_answer(question, text=text, payload=payload)
         if answer is None:
@@ -529,6 +626,15 @@ class SQLiteQuestionStore:
 
         now = _now().isoformat()
         with self._connect() as conn:
+            if "v3_browser_workflow" in task.metadata:
+                conn.execute("BEGIN IMMEDIATE")
+                checkpoint = conn.execute(
+                    "SELECT status, owner_id, version FROM v2_task_checkpoints WHERE task_id=?", (task.task_id,)
+                ).fetchone()
+                if (checkpoint is None or checkpoint["status"] != "waiting_user"
+                        or checkpoint["owner_id"] != str(task.user or "")
+                        or int(checkpoint["version"]) != getattr(task, "_checkpoint_version", None)):
+                    return QuestionAnswerResult(handled=False)
             cursor = conn.execute(
                 """
                 UPDATE v2_questions

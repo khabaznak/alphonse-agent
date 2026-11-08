@@ -35,12 +35,15 @@ from alphonse.agent_v2.media_tools_settings import MediaToolsSettings
 from alphonse.agent_v2.skills import SkillStore
 from alphonse.agent_v2.core.tools.registry.native.skill_read import build_skill_read_tool_definition
 from alphonse.agent_v2.core.tools.registry.native.skill_maintain import build_skill_maintain_tool_definition
+from alphonse.agent_v2.core.tools.registry.native.browser_workflow import build_browser_workflow_tools
 
 
 def build_native_tool_registry(web_tools_settings: WebToolsSettings | None = None, asset_store: object | None = None, media_tools_settings: MediaToolsSettings | None = None, artifact_store: object | None = None, on_artifact_changed: object | None = None, user_store: object | None = None, skill_store: SkillStore | None = None, management_runtime: object | None = None) -> InMemoryToolRegistry:
     """Build the default v2-native tool registry."""
     from alphonse.agent_v2.core.tools.registry.native.integration_manage import build_integration_manage_tool_definition
     registry = InMemoryToolRegistry()
+    for tool in build_browser_workflow_tools():
+        registry.register(tool)
     registry.register(build_integration_manage_tool_definition(management_runtime))
     registry.register(build_respond_tool_definition())
     registry.register(build_search_memory_tool_definition())
