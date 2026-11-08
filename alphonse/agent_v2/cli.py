@@ -25,6 +25,8 @@ def build_parser() -> argparse.ArgumentParser:
     recovery = subparsers.add_parser("prepare-account-recovery", help="Prepare an isolated, fenced database copy; does not restore it")
     recovery.add_argument("source", help="Offline SQLite backup")
     recovery.add_argument("destination", help="New staging file in a private directory")
+    inspect_recovery = subparsers.add_parser("inspect-account-recovery", help="Count work in an isolated recovery copy without activating it")
+    inspect_recovery.add_argument("source", help="Already prepared isolated recovery copy")
     return parser
 
 
@@ -43,6 +45,13 @@ def main(argv: list[str] | None = None) -> int:
         result = prepare_restored_database(args.source, args.destination)
         print(f"Isolated recovery copy prepared: {result['connections']} accounts fenced, {result['grants']} grants revoked.")
         print("Do not start Alphonse from this copy; restore reconciliation is not yet supported.")
+        return 0
+    if args.command == "inspect-account-recovery":
+        from alphonse.agent_v2.account_recovery import inspect_staged_database
+        counts = inspect_staged_database(args.source)
+        for label, count in counts.items():
+            print(f"{label.replace('_', ' ')}: {count if count is not None else 'unknown (table absent)'}")
+        print("Inventory only; this copy remains isolated and is not ready to activate.")
         return 0
     return 2
 

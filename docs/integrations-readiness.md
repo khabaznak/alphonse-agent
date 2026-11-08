@@ -262,6 +262,12 @@ pre-revocation snapshot and verify account binding, findings and pending deliver
 remain denied. Use an offline backup as SOURCE; never target a running household
 database. Output still contains private data and needs protected storage.
 
+`alphonse inspect-account-recovery STAGED_COPY` inventories selected account,
+queue, scheduling and event tables by count without displaying row contents. An
+absent table is reported as unknown. Counts include terminal as well as pending
+rows; they do not certify fencing, completeness or readiness, and do not inspect
+independent stores or external copies. The command never activates the copy.
+
 This is **not** an automatic detector for arbitrary database restores or a complete
 restore procedure: queues, external copies, credentials, backup encryption/expiry,
 reconciliation and re-consent remain unqualified. There is deliberately no command

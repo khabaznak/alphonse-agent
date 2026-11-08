@@ -150,3 +150,38 @@ def test_cli_prepares_staged_copy_without_starting_daemon(f, capsys):
     assert 'disposable-' not in message
     with pytest.raises(RuntimeError, match='staged_database_not_activated'):
         reject_staged_database(destination)
+
+
+def test_inspection_counts_staged_work_without_exposing_or_changing_it(f, capsys):
+    from alphonse.agent_v2.account_recovery import prepare_restored_database, inspect_staged_database, reject_staged_database
+    from alphonse.agent_v2.cli import main
+
+    with f.store._connect() as db:
+        db.execute('CREATE TABLE v2_outbox (message TEXT)')
+        db.execute("INSERT INTO v2_outbox VALUES ('private-synthetic-content')")
+    destination = f.tmp / 'inventory.sqlite'
+    prepare_restored_database(f.store.db_path, destination)
+    before = destination.read_bytes()
+    counts = inspect_staged_database(destination)
+    assert counts['managed_connections'] == 2 and counts['grants'] == 2
+    assert counts['outbound_messages'] == 1 and counts['scheduled_tasks'] is None
+    assert main(['inspect-account-recovery', str(destination)]) == 0
+    output = capsys.readouterr().out
+    assert 'outbound messages: 1' in output and 'unknown (table absent)' in output
+    assert 'private-synthetic-content' not in output
+    assert destination.read_bytes() == before
+    with pytest.raises(RuntimeError, match='staged_database_not_activated'):
+        reject_staged_database(destination)
+
+
+def test_inspection_rejects_live_unstaged_and_symlinked_databases(f):
+    from alphonse.agent_v2.account_recovery import inspect_staged_database, prepare_restored_database
+
+    with pytest.raises(ValueError, match='not_staged'):
+        inspect_staged_database(f.store.db_path)
+    destination = f.tmp / 'stage.sqlite'
+    prepare_restored_database(f.store.db_path, destination)
+    link = f.tmp / 'link.sqlite'
+    link.symlink_to(destination)
+    with pytest.raises(ValueError, match='source_invalid'):
+        inspect_staged_database(link)

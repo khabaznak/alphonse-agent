@@ -164,3 +164,41 @@ def reject_staged_database(path):
         marker = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_recovery_staging'").fetchone()
         if marker:
             raise RuntimeError('account_recovery_staged_database_not_activated')
+
+
+def inspect_staged_database(path):
+    """Count recovery-sensitive rows without exposing their content or activating the copy.
+
+    Missing tables are reported as unknown, never as zero. These counts are an
+    inventory for reconciliation, not proof that a restore is safe to activate.
+    """
+    from pathlib import Path
+    import sqlite3
+
+    candidate = Path(path).expanduser().absolute()
+    if candidate.is_symlink() or not candidate.is_file():
+        raise ValueError('account_recovery_source_invalid')
+    # These table names are fixed by the application; never interpolate inputs.
+    tables_to_count = {
+        'managed_connections': 'v2_recovery_credential_references',
+        'grants': 'v2_account_grants',
+        'inbound_messages': 'v2_inbound_messages',
+        'outbound_messages': 'v2_outbox',
+        'scheduled_tasks': 'v2_scheduled_tasks',
+        'scheduled_executions': 'v2_scheduled_task_executions',
+        'automations': 'v2_automations',
+        'automation_executions': 'v2_automation_executions',
+        'project_check_policies': 'v2_project_check_policies',
+        'project_check_runs': 'v2_project_check_runs',
+        'event_history': 'v2_event_history',
+        'event_receipts': 'v2_event_receipts',
+    }
+    with sqlite3.connect(candidate.as_uri() + '?mode=ro', uri=True) as conn:
+        conn.execute('BEGIN')
+        existing = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if 'v2_recovery_staging' not in existing or conn.execute(
+                "SELECT COUNT(*) FROM v2_recovery_staging WHERE state='isolated'").fetchone()[0] != 1:
+            raise ValueError('account_recovery_not_staged')
+        return {label: (conn.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0]
+                        if table in existing else None)
+                for label, table in tables_to_count.items()}
