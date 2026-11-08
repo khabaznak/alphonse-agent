@@ -345,6 +345,7 @@ def test_daemon_api_lazy_trusted_session_and_no_clients_still_allows_disconnect(
     for provider in SCOPES:
         for suffix in ['CLIENT_ID', 'REDIRECT_URI']:
             monkeypatch.delenv(f'ALPHONSE_{provider.upper()}_OAUTH_{suffix}', raising=False)
+    monkeypatch.setattr('alphonse.agent_v2.integrations.oauth.packaged_client_manifest', lambda: {})
     daemon = SimpleNamespace(runtime=SimpleNamespace(integration_store=f.store, user_store=f.accounts.users),
         _lifecycle_lock=threading.RLock(), _optional_account_service=None)
     with pytest.raises(PermissionError, match='trusted_session_required'):
@@ -505,3 +506,68 @@ def test_classroom_consent_is_minimal_and_role_discovery_is_required(f, capabili
     with pytest.raises(OAuthError, match='scopes_missing'):
         f.service._validated(dict(access_token='fake', refresh_token='fake-refresh', expires_at=time.time() + 3600,
             token_type='Bearer', scope=[SCOPES['google'][capability]]), provider.scopes)
+
+
+def test_environment_clients_are_independent_and_desktop_only():
+    from alphonse.agent_v2.integrations.oauth import environment_clients
+
+    clients, status, sources = environment_clients({
+        'ALPHONSE_GOOGLE_OAUTH_CLIENT_ID': 'synthetic-google-client',
+        'ALPHONSE_GOOGLE_OAUTH_REDIRECT_URI': 'http://127.0.0.1:8765/callback',
+        'ALPHONSE_MICROSOFT_OAUTH_CLIENT_ID': 'synthetic-microsoft-client',
+        'ALPHONSE_MICROSOFT_OAUTH_REDIRECT_URI': 'http://127.0.0.1:invalid/callback',
+    }, {})
+    assert sources == {'google': 'operator', 'microsoft': 'operator'}
+    assert [c.provider for c in clients] == ['google']
+    assert status == {'google': 'available', 'microsoft': 'invalid_configuration'}
+    clients, status, sources = environment_clients({'ALPHONSE_GOOGLE_OAUTH_CLIENT_ID': 'synthetic'}, {})
+    assert not clients
+    assert status == {'google': 'invalid_configuration', 'microsoft': 'unconfigured'}
+    clients, status, sources = environment_clients({
+        'ALPHONSE_MICROSOFT_OAUTH_CLIENT_ID': 'synthetic',
+        'ALPHONSE_MICROSOFT_OAUTH_REDIRECT_URI': 'https://example.test/callback',
+    }, {})
+    assert len(clients) == 1 and status['microsoft'] == 'unsupported_desktop_callback'
+
+
+def test_packaged_clients_override_persistence_and_invalid_entries():
+    from alphonse.agent_v2.integrations.oauth import environment_clients
+    manifest = {'google': {'client_id': 'synthetic-google',
+                           'redirect_uri': 'http://127.0.0.1:8765/google'},
+                'microsoft': {'client_id': 'synthetic-microsoft',
+                              'redirect_uri': 'http://127.0.0.1:8766/microsoft'}}
+    clients, status, source = environment_clients({}, manifest)
+    assert [c.provider for c in clients] == ['google', 'microsoft']
+    assert set(status.values()) == {'available'}
+    assert set(source.values()) == {'distribution'}
+    # The same immutable manifest supplies the same clients after a daemon restart.
+    assert environment_clients({}, manifest)[0] == clients
+    clients, status, source = environment_clients({'ALPHONSE_GOOGLE_OAUTH_CLIENT_ID': 'partial'}, manifest)
+    assert [c.provider for c in clients] == ['microsoft']
+    assert status['google'] == 'invalid_configuration' and source['google'] == 'operator'
+    manifest['google']['client_secret'] = 'synthetic-secret-must-not-be-used'
+    clients, status, _ = environment_clients({}, manifest)
+    assert [c.provider for c in clients] == ['microsoft']
+    assert status['google'] == 'invalid_configuration'
+    assert 'synthetic-secret' not in str(status)
+    manifest['google'] = {'client_id': 'invalid client id', 'redirect_uri': 'http://127.0.0.1:8765/google'}
+    assert environment_clients({}, manifest)[1]['google'] == 'invalid_configuration'
+    assert set(environment_clients({}, None)[1].values()) == {'invalid_configuration'}
+
+
+def test_restart_with_same_distribution_client_preserves_connection_and_revocation(f):
+    from alphonse.agent_v2.integrations.oauth import environment_clients
+
+    manifest = {'google': {'client_id': 'public-app',
+                           'redirect_uri': 'http://127.0.0.1:54321/callback'}}
+    configs, _, _ = environment_clients({}, manifest)
+    f.service = OAuthService(f.accounts, configs, client_factory=FakeProvider)
+    connect(f)
+    grant = authorization(f)
+    restarted_configs, _, _ = environment_clients({}, manifest)
+    f.service = OAuthService(f.accounts, restarted_configs, client_factory=FakeProvider)
+    assert f.service.health(f.owner, 'one')['status'] == 'connected'
+    assert f.service.token(f.owner, authorization=grant) == 'disposable-access'
+    f.service.disconnect(f.owner, 'one', revision(f))
+    with pytest.raises((PermissionError, ValueError)):
+        f.service.token(f.owner, authorization=grant)

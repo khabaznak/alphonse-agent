@@ -63,11 +63,67 @@ class ClientConfig:
 
     def __post_init__(self):
         uri = urlsplit(self.redirect_uri)
-        if (self.provider not in SCOPES or not self.client_id.strip() or uri.query or uri.fragment
+        if (self.provider not in SCOPES or not self.client_id or any(c.isspace() for c in self.client_id) or uri.query or uri.fragment
                 or uri.username or uri.password or not uri.path
                 or not ((uri.scheme == 'http' and uri.hostname == '127.0.0.1' and uri.port)
                         or (uri.scheme == 'https' and uri.netloc))):
             raise OAuthError('oauth_client_configuration_invalid')
+
+
+def packaged_client_manifest():
+    """Read public distribution configuration bundled with this daemon."""
+    from importlib.resources import files
+    try:
+        raw = files('alphonse.agent_v2.integrations').joinpath('oauth_clients.json').read_text(encoding='utf-8')
+        manifest = json.loads(raw)
+        if not isinstance(manifest, dict) or set(manifest) != {'version', 'providers'} or manifest['version'] != 1:
+            raise ValueError
+        if not isinstance(manifest['providers'], dict) or set(manifest['providers']) - set(SCOPES):
+            raise ValueError
+        return manifest['providers']
+    except (OSError, ValueError, TypeError):
+        # Do not log file contents: an accidentally included secret must stay private.
+        return None
+
+
+def environment_clients(environ, packaged=None):
+    """Resolve operator overrides over bundled public clients, independently."""
+    clients, status, sources = [], {}, {}
+    for provider in SCOPES:
+        prefix = 'ALPHONSE_' + provider.upper() + '_OAUTH_'
+        overridden = prefix + 'CLIENT_ID' in environ or prefix + 'REDIRECT_URI' in environ
+        sources[provider] = 'operator' if overridden else 'distribution'
+        if overridden:
+            client_id = environ.get(prefix + 'CLIENT_ID', '')
+            redirect = environ.get(prefix + 'REDIRECT_URI', '')
+        elif packaged is None:
+            status[provider] = 'invalid_configuration'
+            continue
+        else:
+            entry = packaged.get(provider)
+            if entry is None:
+                status[provider] = 'unconfigured'
+                continue
+            if not isinstance(entry, dict) or set(entry) != {'client_id', 'redirect_uri'}:
+                status[provider] = 'invalid_configuration'
+                continue
+            client_id, redirect = entry['client_id'], entry['redirect_uri']
+        if not isinstance(client_id, str) or not isinstance(redirect, str):
+            status[provider] = 'invalid_configuration'
+            continue
+        if not client_id and not redirect:
+            status[provider] = 'invalid_configuration' if overridden else 'unconfigured'
+            continue
+        try:
+            config = ClientConfig(provider, client_id, redirect)
+            uri = urlsplit(config.redirect_uri)
+        except (ValueError, TypeError):
+            status[provider] = 'invalid_configuration'
+            continue
+        clients.append(config)
+        status[provider] = ('available' if uri.scheme == 'http' and uri.hostname == '127.0.0.1'
+                            else 'unsupported_desktop_callback')
+    return clients, status, sources
 
 
 class ProviderClient:

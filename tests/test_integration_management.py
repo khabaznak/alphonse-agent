@@ -200,3 +200,14 @@ def test_review_save_rechecks_authority_after_preflight(management, monkeypatch)
     with pytest.raises(ValueError, match='review_stale'):
         f.management.apply_review(AccountSession('child'), r['review_id'], activate=True)
     assert f.checks.list(AccountSession('child'), f.project.project_id) == []
+
+
+def test_catalog_reports_provider_readiness_without_exposing_configuration(management):
+    f = management
+    f.management.oauth = SimpleNamespace(clients={'google': object()},
+        provider_status={'google': 'available', 'microsoft': 'invalid_configuration'},
+        health=lambda session, connection_id: {'connection_id': connection_id})
+    providers = f.management.catalog(AccountSession('parent'))['providers']
+    assert [(p['provider'], p['status']) for p in providers] == [
+        ('google', 'available'), ('microsoft', 'invalid_configuration')]
+    assert 'client_id' not in json.dumps(providers)

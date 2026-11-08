@@ -2132,20 +2132,17 @@ class V2Daemon:
         this service or its token API.
         """
         from alphonse.agent_v2.accounts import AccountService, AccountSession
-        from alphonse.agent_v2.integrations.oauth import ClientConfig, OAuthService
+        from alphonse.agent_v2.integrations.oauth import environment_clients, packaged_client_manifest, OAuthService
         if not isinstance(session, AccountSession):
             raise PermissionError("account_trusted_session_required")
         accounts = AccountService(self.runtime.integration_store, self.runtime.user_store)
         accounts._active(session.actor_user_id)
         with self._lifecycle_lock:
             if self._optional_account_service is None:
-                clients = []
-                for provider in ("google", "microsoft"):
-                    prefix = "ALPHONSE_" + provider.upper() + "_OAUTH_"
-                    client_id, redirect = os.environ.get(prefix + "CLIENT_ID", ""), os.environ.get(prefix + "REDIRECT_URI", "")
-                    if client_id or redirect:
-                        clients.append(ClientConfig(provider, client_id, redirect))
+                clients, status, sources = environment_clients(os.environ, packaged_client_manifest())
                 self._optional_account_service = OAuthService(accounts, clients)
+                self._optional_account_service.provider_status = status
+                self._optional_account_service.provider_sources = sources
             return self._optional_account_service
 
     def list_integrations(self) -> list[dict[str, Any]]:

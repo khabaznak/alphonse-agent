@@ -47,10 +47,14 @@ class IntegrationManagement:
         # A household directory is needed for explicit recipients; no addresses or profiles.
         members = [dict(user_id=u.user_id, display_name=u.display_name) for u in
                    self.runtime.user_store.list_users() if u.is_active]
-        providers = []
-        if self.oauth:
-            from alphonse.agent_v2.integrations.oauth import SCOPES
-            providers = [dict(provider=p, capabilities=list(SCOPES[p])) for p in self.oauth.clients]
+        from alphonse.agent_v2.integrations.oauth import SCOPES
+        clients = self.oauth.clients if self.oauth else {}
+        status = getattr(self.oauth, 'provider_status', {})
+        sources = getattr(self.oauth, 'provider_sources', {})
+        providers = [dict(provider=p, capabilities=list(SCOPES[p]),
+                          status=status.get(p, 'available' if p in clients else 'unconfigured'),
+                          source=sources.get(p, 'distribution'))
+                     for p in SCOPES]
         return dict(actor_user_id=actor, connections=owned, grants=grants, members=members,
                     providers=providers, sources=self.sources(session), skills=[dict(skill_id=s.skill_id, name=s.name)
                         for s in self.runtime.skill_store.list_skills() if self.runtime.skill_store.can_use(s.skill_id, actor)],

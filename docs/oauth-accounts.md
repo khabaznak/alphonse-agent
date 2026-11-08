@@ -5,21 +5,85 @@ Provider configuration and dependencies are opt-in. No real-account connection,
 retrieval or provider writes were performed to validate this implementation.
 Connecting an account registers no sensor, event subscription or schedule.
 
-Install the `accounts-oauth` extra plus the deployment's secure credential backend.
-Configure `ALPHONSE_GOOGLE_OAUTH_CLIENT_ID` and
-`ALPHONSE_GOOGLE_OAUTH_REDIRECT_URI`, or the corresponding `MICROSOFT` variables.
-Both values are required for each configured provider. Use a provider registration
-qualified for public desktop clients (Microsoft personal/work/school eligibility
-must match the registration). There is no client-secret setting or bundled secret.
-Configuration is fixed for the daemon lifetime; changes require a restart.
+## Client provisioning and readiness (#201)
 
-The callback is an operator-configured exact URL: an explicit port and path on
+The distribution owner controls the provider registrations and release artifact.
+The daemon reads the versioned public manifest
+`alphonse/agent_v2/integrations/oauth_clients.json` from its installed package.
+It is included in the Python wheel; the Desktop sidecar build collects package data.
+A packaged sidecar must still be built and qualified for the target release.
+The checked-in manifest is empty: **no Alphonse-managed registration is asserted**.
+A release owner can populate its `providers` object with only `google` and/or
+`microsoft` entries, each with exactly `client_id` and `redirect_uri` strings.
+For example, the following identifiers are illustrative, not registered clients:
+
+```json
+{"version": 1, "providers": {
+  "google": {"client_id": "example-google-client", "redirect_uri": "http://127.0.0.1:8765/google"},
+  "microsoft": {"client_id": "example-microsoft-client", "redirect_uri": "http://127.0.0.1:8766/microsoft"}
+}}
+```
+
+Never put client secrets, tokens or account data in this file. Validate and qualify
+both actual client/callback pairs with their providers before release. The same
+manifest is loaded on each daemon start; replacing a package replaces its defaults.
+Retain the same registrations and callbacks across upgrades. Changing a client ID
+can invalidate existing tokens or change the provider-scoped identity; migration and
+reconsent for such a change are not yet qualified. Do not silently replace a client
+in a release with existing connections. Back up and test an explicit transition.
+
+For development or a personal pilot, an operator may instead install the
+`accounts-oauth` extra and the deployment's secure credential backend, then set
+`ALPHONSE_GOOGLE_OAUTH_CLIENT_ID` and `ALPHONSE_GOOGLE_OAUTH_REDIRECT_URI`, or
+the corresponding `MICROSOFT` variables, in the daemon's environment. Either
+variable selects the override for that provider, and both are required: an incomplete
+override fails closed rather than falling back to a distribution client. Overrides
+are distinct per provider and take precedence over the manifest. Configuration is
+fixed for the daemon lifetime; restart after changing it. A packaged household user
+should receive qualified distribution configuration, not edit environment variables.
+The current empty manifest means that path is not yet provisioned.
+
+The catalog reports missing, invalid and configured clients per provider. Configured
+means local syntax and Desktop transport are acceptable, **not** that the client is
+registered, approved, dependencies work or provider consent will succeed. HTTPS
+callbacks remain usable by a separately arranged headless callback transport but
+are unavailable to Desktop's loopback receiver. The existing account state and
+health controls report connection and reconnect status independently.
+
+Google requires a Desktop public client, the Gmail and Google Calendar APIs enabled,
+and a consent audience eligible for the account: consumer accounts need an External
+app; Testing requires the chosen account to be an allowed test user. Workspace admin
+policy may block access. Microsoft must use a public client supporting personal
+Microsoft accounts (Outlook.com/Hotmail); `/common` also supports eligible work or
+school accounts when the registration and tenant policies permit them. Register the
+exact supported callback using the provider's rules. The executable scope allowlist
+and consent behavior are described below; the detailed API/scope, publishing, tenant,
+verification and retention gates live in [#123 readiness](integrations-readiness.md).
+References: [Google desktop OAuth](https://developers.google.com/identity/protocols/oauth2/native-app),
+[Microsoft account types](https://learn.microsoft.com/en-us/security/zero-trust/develop/identity-supported-account-types),
+and [Microsoft redirect rules](https://learn.microsoft.com/en-us/entra/identity-platform/reply-url).
+
+### Separately authorized pilot record
+
+No pilot has been run or authorized by issue #201. After the #123 pilot gates are
+met, the operator must select an eligible test account, obtain its owner's explicit
+consent to the specific read-only test, and record in restricted operator storage:
+provider and registration owner; public client/configuration revision and exact
+callback; account class and test-user/tenant eligibility (without publishing account
+identifiers); enabled APIs and exact selected delegated scopes; consent/verification
+status; deployment revision and credential backend; approved read-only operation,
+retention and deletion plan; date, sanitized outcome, provider-side error code and
+operator action. Record only a redacted evidence locator in the repository or issue.
+A registration, synthetic exchange, or this checklist is not account consent.
+Do not start a live test while #123 remains blocked.
+
+The callback is an exact configured URL: an explicit port and path on
 `http://127.0.0.1`, or registered HTTPS. A native setup surface must bind its local
 callback receiver before opening the URL in the system browser, use the same exact
 callback for that attempt, suppress request/query logging, and pass the URL directly
 to `complete`. Do not route code/state through conversation, events or model tools.
-The #121 Desktop surface owns browser launch/callback transport and trusted session
-establishment. This service does not add a new listener or implicit connection flow.
+The #121 Desktop surface opens the system browser; its authenticated IPC starts the
+loopback listener before consent. No listener or connection is started implicitly.
 Headless deployments need an explicitly arranged supported callback transport; do
 not substitute an out-of-band code flow or disable transport checks globally.
 
