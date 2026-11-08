@@ -227,3 +227,16 @@ def test_client_configuration_is_desktop_only_and_admin_required(management):
         f.management.request(AccountSession('parent'), 'configure_oauth_client', request['params']['values'], channel='conversation')
     f.runtime.user = 'parent'
     assert server._optional_management(peer, request)['restart_required']
+
+
+def test_desktop_cannot_swap_a_running_oauth_client(management):
+    import os
+    f = management
+    f.runtime.user = 'parent'
+    client = SimpleNamespace(config=SimpleNamespace(client_id='123456-original.apps.googleusercontent.com'))
+    oauth = SimpleNamespace(clients={'google': client})
+    server = V2DaemonServer(SimpleNamespace(runtime=f.runtime, optional_accounts=lambda session: oauth))
+    request = {'version': PROTOCOL_VERSION, 'params': {'action': 'configure_oauth_client',
+        'values': {'provider': 'google', 'client_id': '123456-new.apps.googleusercontent.com'}}}
+    with pytest.raises(ValueError, match='existing_configuration_requires_migration'):
+        server._optional_management(SimpleNamespace(getpeereid=lambda: (os.getuid(), 0)), request)
