@@ -899,10 +899,12 @@ def _record_question_answer_tool_result(
     calls = _json_list(task.plan_json)
     if not calls:
         calls = []
+    delivery = question.metadata.get("delivery") or {}
+    safe_answer = ({"private_input_provided": True} if delivery.get("private_browser_value") is True else dict(answer))
     result = {
         "question_id": question.question_id,
         "question_kind": question.kind,
-        "answer": dict(answer),
+        "answer": safe_answer,
         "answered_by": question.respondent_user_id,
     }
     now = _now().isoformat()

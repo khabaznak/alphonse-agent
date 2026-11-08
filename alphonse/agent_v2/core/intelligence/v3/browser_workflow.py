@@ -27,6 +27,34 @@ class BrowserWorkflowError(RuntimeError):
     pass
 
 
+def public_question(question: Any) -> Any:
+    """Remove the protected handle from a model-facing question projection."""
+    if not isinstance(question, dict):
+        return question
+    metadata = question.get("metadata") or {}
+    delivery = metadata.get("delivery") if isinstance(metadata, dict) else {}
+    if isinstance(delivery, dict) and delivery.get("private_browser_value") is True and "answer" in question:
+        return {**question, "answer": {"private_input_provided": True}}
+    return question
+
+
+def public_answer_receipt(task: Any, receipt: Any) -> Any:
+    """Sanitize older receipts that predate private-answer redaction."""
+    if not isinstance(receipt, dict) or receipt.get("kind") != "authenticated_question_answer" or KEY not in task.metadata:
+        return receipt
+    result = receipt.get("result")
+    if not isinstance(result, dict):
+        return receipt
+    try:
+        private = any(event["kind"] == "requested" and event["source"] == result.get("question_id")
+                      for event in load(task)["events"])
+    except BrowserWorkflowError:
+        private = True
+    if private and "answer" in result:
+        return {**receipt, "result": {**result, "answer": {"private_input_provided": True}}}
+    return receipt
+
+
 def _id(value: Any) -> bool:
     return isinstance(value, str) and bool(_IDENTIFIER.fullmatch(value))
 

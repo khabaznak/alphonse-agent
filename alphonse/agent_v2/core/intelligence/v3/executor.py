@@ -45,6 +45,7 @@ ActionSelector = Callable[[TacticalState, PhaseSubgoal, tuple["ToolDescriptor", 
 TACTICAL_RETRY_BASE_SECONDS = 1.0
 MAX_UPDATE_INSPECTION_ACTIONS = 6
 MAX_UNCERTAIN_PROGRESS_ACTIONS = 6
+MAX_BROWSER_OBSERVATIONS_PER_SUBGOAL = 8
 MAX_INDEPENDENT_READ_ACTIONS = 3
 
 
@@ -114,6 +115,22 @@ class PhaseExecutor:
                 state.transition(PhaseStatus.BLOCKED)
                 self._checkpoint(task, state, context)
                 return self._outcome(state, "No valid tactical action was available.", blockers=("tactical_action_unavailable",))
+            # An outstanding fill has only one safe local recovery path: obtain
+            # a subsequent observation, then reconcile it. Selection remains
+            # subject to the ordinary reveal, phase, grant and cancellation checks.
+            required = _pending_browser_fill_recovery(task)
+            reacquire = False
+            if required and selected.get("tool_id") == "native.browser_workflow_reacquire":
+                try:
+                    service = context.browser_workflow_service
+                    reacquire = service is not None and not service.projection(task).get("session_available")
+                except Exception:
+                    reacquire = False
+            if required and selected.get("tool_id") != required and not reacquire:
+                state.transition(PhaseStatus.BLOCKED)
+                self._checkpoint(task, state, context)
+                return self._outcome(state, "The browser effect needs independent reconciliation.",
+                                     blockers=("browser_workflow_reconciliation_required",))
             is_sequence = "actions" in selected
             selected_id = selected.get("tool_id")
             sensitive_action = is_sequence or (isinstance(selected_id, str) and selected_id.startswith("native.browser_workflow_")) or any(
@@ -159,6 +176,14 @@ class PhaseExecutor:
             if sensitive_action:
                 action = TacticalAction(action_id=f"action-{uuid4()}", subgoal_id=action.subgoal_id,
                     tool_id=action.tool_id, arguments=action.arguments, acceptance_questions=action.acceptance_questions)
+            if (action.tool_id in {"native.browser_workflow_observe", "native.browser_workflow_observe_result"}
+                    and sum(prior.subgoal_id == action.subgoal_id and prior.tool_id in {
+                        "native.browser_workflow_observe", "native.browser_workflow_observe_result"}
+                            for prior in state.actions) >= MAX_BROWSER_OBSERVATIONS_PER_SUBGOAL):
+                state.transition(PhaseStatus.BLOCKED)
+                self._checkpoint(task, state, context)
+                return self._outcome(state, "Browser observation budget exhausted; review the existing evidence.",
+                                     blockers=("browser_observation_budget_exhausted",))
             recorded_arguments = {"redacted": True} if sensitive_action else action.arguments
             recorded_questions = [] if sensitive_action else action.acceptance_questions
             if _scheduled_delivery_may_repeat(task, state, action, context):
@@ -168,17 +193,20 @@ class PhaseExecutor:
                                      blockers=("scheduled_delivery_repetition_unresolved",))
             recovery = (task.metadata.get("act_directive") or {}).get("outcome_review") or {}
             verified_refs = set(recovery.get("verified_evidence_refs") or ())
-            if any(
+            repeated_verified = any(
                 entry.get("evidence_ref") in verified_refs and entry.get("tool_id") == action.tool_id
                 and (entry.get("arguments") or {}) == recorded_arguments
                 for entry in state.evidence.entries
-            ):
+            )
+            redacted_observation = action.tool_id in {"native.browser_workflow_observe", "native.browser_workflow_observe_result"}
+            if repeated_verified and not redacted_observation and not _browser_fill_has_protected_identity(task, action, context):
                 blocker = "act_recovery_repeats_verified_work"
                 state.transition(PhaseStatus.BLOCKED)
                 self._checkpoint(task, state, context)
                 return self._outcome(state, blocker, blockers=(blocker,))
             retry_count = 0
             retry_interrupted = False
+            reconciliation_step = False
             while True:
                 if retry_count:
                     interruption = self._interruption(task, state, context)
@@ -280,6 +308,13 @@ class PhaseExecutor:
                     state.transition(PhaseStatus.WAITING_USER)
                     self._checkpoint(task, state, context)
                     return self._outcome(state, "A tactical action requires user input.")
+                if completed.tool_id == "native.browser_workflow_fill" and completed.status == "success":
+                    # A return is only an attempt. Continue solely to the fenced
+                    # observation/reconciliation path, never to completion.
+                    if _pending_browser_fill_recovery(task) == "native.browser_workflow_observe":
+                        self._checkpoint(task, state, context)
+                        reconciliation_step = True
+                        break
                 if completed.tool_id in {"native.browser_workflow_fill", "native.browser_workflow_submit"}:
                     # A transport return cannot verify the form effect. Until a
                     # fresh-observation reconciliation exists, do not retry or
@@ -288,6 +323,20 @@ class PhaseExecutor:
                     self._checkpoint(task, state, context)
                     return self._outcome(state, "The browser effect needs independent reconciliation.",
                                          blockers=("browser_workflow_reconciliation_required",))
+                if completed.tool_id == "native.browser_workflow_observe" and required == completed.tool_id:
+                    if completed.status == "success":
+                        self._checkpoint(task, state, context)
+                        reconciliation_step = True
+                        break
+                    state.transition(PhaseStatus.BLOCKED)
+                    self._checkpoint(task, state, context)
+                    return self._outcome(state, "Browser reconciliation remains unavailable.",
+                                         blockers=("browser_workflow_reconciliation_required",))
+                if completed.tool_id == "native.browser_workflow_reconcile" and required == completed.tool_id and completed.status == "success":
+                    if not _pending_browser_fill_recovery(task):
+                        self._checkpoint(task, state, context)
+                        reconciliation_step = True
+                        break
                 if completed.tool_id in {"native.browser_workflow_reconcile", "native.browser_workflow_verify_submission"}:
                     state.transition(PhaseStatus.BLOCKED)
                     self._checkpoint(task, state, context)
@@ -390,6 +439,8 @@ class PhaseExecutor:
                     arguments=dict(action.arguments),
                     acceptance_questions=action.acceptance_questions,
                 )
+            if reconciliation_step:
+                continue
             if retry_interrupted:
                 interruption = self._interruption(task, state, context)
                 if interruption is not None:
@@ -974,8 +1025,52 @@ def _task_project_root(task: "TaskState", context: "CoreLoopContext") -> str:
         return ""
 
 
+def _browser_fill_has_protected_identity(task: "TaskState", action: TacticalAction, context: "CoreLoopContext") -> bool:
+    """Only the workflow service can compare redacted verified fill identities."""
+    if action.tool_id != "native.browser_workflow_fill" or context.browser_workflow_service is None:
+        return False
+    try:
+        from . import browser_workflow
+        events = browser_workflow.load(task)["events"]
+        attempts = {event["id"] for event in events if event["kind"] == "attempted" and event["field"] == "fill"}
+        return any(event["kind"] == "verified" and event["related"] in attempts for event in events)
+    except Exception:
+        return False
+
+
+def _pending_browser_fill_recovery(task: "TaskState") -> str | None:
+    from . import browser_workflow
+    if browser_workflow.KEY not in task.metadata:
+        return None
+    try:
+        workflow = browser_workflow.load(task)
+        events = workflow["events"]
+        resolved = {event["related"] for event in events if event["kind"] == "verified"}
+        pending = [(i, event) for i, event in enumerate(events)
+                   if event["kind"] == "attempted" and event["id"] not in resolved]
+        if not pending:
+            return None
+        if len(pending) != 1:
+            return "browser_reconciliation_unavailable"
+        if pending[0][1]["field"] != "fill" or pending[0][1]["session"] != workflow["session"]:
+            # Submission and cross-session recovery follow their existing
+            # strategic recovery paths, including explicit reacquisition.
+            return None
+        index = pending[0][0]
+        observed = any(event["kind"] == "observed" and event["field"] == "form"
+                       and event["session"] == workflow["session"] for event in events[index + 1:])
+        return "native.browser_workflow_reconcile" if observed else "native.browser_workflow_observe"
+    except Exception:
+        return "browser_reconciliation_unavailable"
+
+
 def _matching_prior_incomplete_result(state: TacticalState, completed: TacticalAction) -> str | None:
     """Find equivalent prior evidence that Jev already judged incomplete."""
+    if (completed.tool_id in {"native.browser_workflow_observe", "native.browser_workflow_observe_result"}
+            and completed.result == {"redacted": True}):
+        # Identical placeholders cannot establish identical page observations.
+        # A separate deterministic per-subgoal budget bounds repeated reads.
+        return None
     for evidence in reversed(state.evidence.entries[:-1]):
         review = evidence.get("progress_review")
         if not isinstance(review, dict) or review.get("complete") is not False:

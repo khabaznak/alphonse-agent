@@ -300,6 +300,51 @@ def test_reacquisition_cannot_clear_an_uncertain_old_effect(tmp_path):
     second.private_data.clear()
 
 
+def test_executor_allows_owned_session_reacquisition_after_uncertain_fill(tmp_path):
+    from types import SimpleNamespace
+    from alphonse.agent_v2.core.core import CoreLoopContext
+    from alphonse.agent_v2.core.intelligence.v3 import PhaseExecutor, PhasePlan, PhaseSubgoal, SideEffectClass, new_tactical_state
+    from alphonse.agent_v2.core.messages import InMemoryMessageQueue
+    from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry
+    from alphonse.agent_v2.core.tools.registry.native.browser_workflow import build_browser_workflow_tools
+    from alphonse.agent_v2.system_one import SystemOneTacticalReview
+
+    class AttachablePage(Page):
+        def attach_owned_session(self, actor, task):
+            return True
+    store, page = SQLiteQuestionStore(tmp_path / "db"), AttachablePage()
+    first = BrowserWorkflowService(checkpoint_store=store, transport=page,
+        authorized=lambda actor, task: "grant-1", cancelled=lambda: False, enabled=True)
+    task = _task()
+    first.begin(task)
+    first.supply(task, actor_id=task.user, field="name", value="PRIVATE_VALUE")
+    first.observe(task)
+    first.fill(task, field="name", target="field")
+    restored = store.load_task_checkpoint(task.task_id)
+    old_session = workflow.load(restored)["session"]
+    second = BrowserWorkflowService(checkpoint_store=store, transport=page,
+        authorized=lambda actor, task: "grant-2", cancelled=lambda: False, enabled=True)
+    phase = PhasePlan("recovery", "Recover session", (PhaseSubgoal("recover", "Recover", "result",
+        allowed_capabilities=("browser",), allowed_side_effects=(SideEffectClass.READ_ONLY,)),),
+        authorized_capabilities=("browser",))
+    state = new_tactical_state(phase)
+    state.revealed_tool_ids = ["native.browser_workflow_reacquire"]
+    registry = InMemoryToolRegistry()
+    for tool in build_browser_workflow_tools(enabled=True):
+        registry.register(tool)
+    choices = iter([{"tool_id": "native.browser_workflow_reacquire", "arguments": {}}, None])
+    system_one = SimpleNamespace(evaluate_tactical_progress=lambda **_: SystemOneTacticalReview(
+        False, .95, True, answers={"runtime_action_added_progress": .9}))
+    outcome = PhaseExecutor(action_selector=lambda *_: next(choices)).run(restored, state,
+        CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry, question_store=store,
+                        browser_workflow_service=second, system_one=system_one))
+    assert workflow.load(restored)["session"] != old_session
+    assert workflow.unresolved(workflow.load(restored))
+    assert len(page.calls) == 1 and outcome.status.value == "blocked"
+    first.private_data.clear()
+    second.private_data.clear()
+
+
 def test_default_disabled_and_legacy_fails_closed(tmp_path):
     service = BrowserWorkflowService(checkpoint_store=SQLiteQuestionStore(tmp_path / "db"), transport=Page(),
         authorized=lambda actor, task: "grant-1", cancelled=lambda: False)
@@ -492,6 +537,261 @@ def test_partial_fills_require_fresh_verified_observations(tmp_path):
     service.private_data.clear()
 
 
+def test_verified_private_fill_identity_is_compared_in_protected_storage(tmp_path):
+    from alphonse.agent_v2.core.intelligence.v3.processor import _verified_browser_effect_ids
+    class Form(Page):
+        def __init__(self):
+            self.values = {}
+            self.calls = []
+        def observe(self):
+            return {"targets": ["1_1", "1_2", "1_3"], "values": dict(self.values)}
+        def fill_if_unchanged(self, target, value, observed):
+            if observed != self.observe():
+                return False
+            self.calls.append(target)
+            self.values[target] = value
+            return True
+        def verify_fill(self, target, value, observation):
+            return observation == self.observe() and observation["values"].get(target) == value
+
+    store, page = SQLiteQuestionStore(tmp_path / "db"), Form()
+    service = BrowserWorkflowService(checkpoint_store=store, transport=page,
+        authorized=lambda actor, task: "grant-1", cancelled=lambda: False, enabled=True)
+    task = _task()
+    service.begin(task)
+    verified_before = set()
+    for field, value, target in (("name", "PRIVATE_A", "1_1"), ("number", "PRIVATE_B", "1_2"),
+                                 ("number", "PRIVATE_B", "1_3")):
+        service.supply(task, actor_id=task.user, field=field, value=value)
+        service.observe(task)
+        service.fill(task, field=field, target=target)
+        assert _verified_browser_effect_ids(task) == verified_before
+        service.observe(task)
+        service.reconcile_fill(task)
+        verified_after = _verified_browser_effect_ids(task)
+        assert len(verified_after - verified_before) == 1
+        verified_before = verified_after
+    with pytest.raises(workflow.BrowserWorkflowError, match="verified_fill_replay"):
+        service.fill(task, field="number", target="1_3")
+    assert page.calls == ["1_1", "1_2", "1_3"]
+    assert not workflow.unresolved(workflow.load(task))
+    rendered = json.dumps(store.load_task_checkpoint(task.task_id).to_checkpoint_dict())
+    assert "PRIVATE_A" not in rendered and "PRIVATE_B" not in rendered
+    assert "1_1" not in rendered and "1_2" not in rendered and "1_3" not in rendered
+    service.private_data.clear()
+
+
+def test_unverified_browser_action_returns_do_not_count_as_phase_progress():
+    from alphonse.agent_v2.core.intelligence.v3.processor import _successful_evidence_signatures
+    entries = [{"tool_id": "native.browser_workflow_" + operation, "status": "success",
+                "arguments": {"redacted": True}, "result": {"redacted": True}}
+               for operation in ("fill", "submit", "reconcile", "verify_submission")]
+    assert _successful_evidence_signatures([{"evidence": {"entries": entries}}]) == set()
+
+
+def test_redacted_observations_are_bounded_without_assuming_identical_pages(tmp_path):
+    from types import SimpleNamespace
+    from alphonse.agent_v2.core.core import CoreLoopContext
+    from alphonse.agent_v2.core.intelligence.v3 import PhaseExecutor, PhasePlan, PhaseSubgoal, PhaseStatus, new_tactical_state
+    from alphonse.agent_v2.core.intelligence.v3.executor import MAX_BROWSER_OBSERVATIONS_PER_SUBGOAL
+    from alphonse.agent_v2.core.messages import InMemoryMessageQueue
+    from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry
+    from alphonse.agent_v2.core.tools.registry.native.browser_workflow import build_browser_workflow_tools
+    from alphonse.agent_v2.system_one import SystemOneTacticalReview
+
+    class ChangingPage(Page):
+        def __init__(self):
+            self.count = 0
+        def observe(self):
+            self.count += 1
+            return {"targets": ["1_1"], "version": self.count, "private": "PRIVATE_PAGE_MARKER"}
+    store, page = SQLiteQuestionStore(tmp_path / "db"), ChangingPage()
+    service = BrowserWorkflowService(checkpoint_store=store, transport=page,
+        authorized=lambda actor, task: "grant-1", cancelled=lambda: False, enabled=True)
+    task = _task()
+    phase = PhasePlan("phase-1", "Inspect", (PhaseSubgoal("fill", "Inspect", "form",
+        allowed_capabilities=("browser",)),), authorized_capabilities=("browser",))
+    state = new_tactical_state(phase)
+    state.transition(PhaseStatus.RUNNING)
+    state.revealed_tool_ids = ["native.browser_workflow_observe"]
+    task.hierarchical_state = state.to_dict()
+    service.begin(task)
+    registry = InMemoryToolRegistry()
+    for tool in build_browser_workflow_tools(enabled=True):
+        registry.register(tool)
+    review = SimpleNamespace(evaluate_tactical_progress=lambda **_: SystemOneTacticalReview(
+        False, .95, True, answers={"runtime_action_added_progress": .99}))
+    def select(*_):
+        if state.evidence.entries:
+            task.metadata["act_directive"] = {"outcome_review": {
+                "verified_evidence_refs": [state.evidence.entries[0]["evidence_ref"]]}}
+        return {"tool_id": "native.browser_workflow_observe", "arguments": {}}
+    outcome = PhaseExecutor(action_selector=select).run(
+        task, state, CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry, question_store=store,
+                                     browser_workflow_service=service, system_one=review))
+    assert page.count == MAX_BROWSER_OBSERVATIONS_PER_SUBGOAL
+    assert "browser_observation_budget_exhausted" in outcome.blockers
+    assert not any(entry.get("semantic_duplicate_of") for entry in state.evidence.entries)
+    assert "PRIVATE_PAGE_MARKER" not in json.dumps(task.to_checkpoint_dict())
+    service.private_data.clear()
+
+
+def test_verified_fill_resets_phase_stall_despite_redacted_prior_fill(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from alphonse.agent_v2.core.core import CoreLoopContext
+    from alphonse.agent_v2.core.intelligence.v3 import PhasePlan, PhaseSubgoal, PhaseStatus, PhaseOutcome, SideEffectClass, MutationScope, new_tactical_state
+    from alphonse.agent_v2.core.intelligence.v3.processor import HierarchicalCAPDProcessor
+    from alphonse.agent_v2.core.intelligence.v3 import task_understanding
+    from alphonse.agent_v2.core.messages import InMemoryMessageQueue
+
+    class Form(Page):
+        def verify_fill(self, target, value, observed):
+            return observed == self.observe() and self.calls == [(target, value)]
+    store, page = SQLiteQuestionStore(tmp_path / "db"), Form()
+    service = BrowserWorkflowService(checkpoint_store=store, transport=page,
+        authorized=lambda actor, task: "grant-1", cancelled=lambda: False, enabled=True)
+    task = _task()
+    phase = PhasePlan("phase-1", "Fill form", (PhaseSubgoal("fill", "Fill", "form",
+        allowed_capabilities=("browser",), allowed_side_effects=(SideEffectClass.EXTERNAL_IRREVERSIBLE,)),),
+        authorized_capabilities=("browser",), mutation_scope=MutationScope(allow_external_effects=True))
+    state = new_tactical_state(phase)
+    state.transition(PhaseStatus.RUNNING)
+    task.hierarchical_state = state.to_dict()
+    service.begin(task)
+    service.supply(task, actor_id=task.user, field="name", value="PRIVATE_VALUE")
+    service.observe(task)
+    task.metadata["v3_no_progress_phase_count"] = 2
+    redacted = {"tool_id": "native.browser_workflow_fill", "status": "success",
+                "arguments": {"redacted": True}, "result": {"redacted": True}}
+    task.metadata["v3_phase_history"] = [{"evidence": {"entries": [{**redacted, "evidence_ref": "old"}]}}]
+    processor = HierarchicalCAPDProcessor()
+    monkeypatch.setattr(task_understanding, "ensure", lambda *_: None)
+    monkeypatch.setattr(processor, "_result", lambda *_: None)
+    def run(task, current, context):
+        service.fill(task, field="name", target="field")
+        service.observe(task)
+        service.reconcile_fill(task)
+        current.evidence.append({**redacted, "evidence_ref": "new", "phase_id": "phase-1", "subgoal_id": "fill"})
+        return PhaseOutcome("phase-1", PhaseStatus.BLOCKED, "fixture stop")
+    def review(task, *_):
+        task.status = "failed"
+        task.outcome = {"status": "failure", "reason": "fixture stop"}
+        return SimpleNamespace(status=SimpleNamespace(value="phase_blocked")), None
+    processor.executor = SimpleNamespace(run=run)
+    processor.outer = SimpleNamespace(review_and_route=review)
+    processor._process(task, CoreLoopContext(messages=InMemoryMessageQueue(), question_store=store,
+                                            browser_workflow_service=service))
+    assert not task.metadata.get("v3_no_progress_stop")
+    assert "v3_no_progress_phase_count" not in task.metadata
+    assert task.outcome["reason"] == "fixture stop"
+    service.private_data.clear()
+
+
+@pytest.mark.parametrize("scenario", ["normal", "repeated", "replay_verified", "failed_verify", "cancelled", "revoked"])
+def test_executor_reconciles_distinct_fills_in_same_phase(tmp_path, scenario):
+    from alphonse.agent_v2.core.core import CoreLoopContext
+    from alphonse.agent_v2.core.intelligence.v3 import PhaseExecutor, PhasePlan, PhaseSubgoal, PhaseStatus, SideEffectClass, MutationScope, new_tactical_state
+    from alphonse.agent_v2.core.messages import InMemoryMessageQueue
+    from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry
+    from alphonse.agent_v2.core.tools.registry.native.browser_workflow import build_browser_workflow_tools
+
+    grant = [True]
+    class Form(Page):
+        def __init__(self):
+            self.calls, self.values = [], {}
+        def observe(self):
+            return {"targets": ["1_1", "1_2"], "values": dict(self.values)}
+        def fill_if_unchanged(self, target, value, observed):
+            if observed != self.observe():
+                return False
+            self.calls.append(target)
+            self.values[target] = value
+            if scenario == "revoked":
+                grant[0] = False
+            return True
+        def verify_fill(self, target, value, observed):
+            return scenario != "failed_verify" and observed == self.observe() and observed["values"].get(target) == value
+
+    store, page = SQLiteQuestionStore(tmp_path / "db"), Form()
+    service = BrowserWorkflowService(checkpoint_store=store, transport=page,
+        authorized=lambda actor, task: "grant-1" if grant[0] else None, cancelled=lambda: False, enabled=True)
+    task = _task()
+    phase = PhasePlan("phase-1", "Fill form", (PhaseSubgoal("fill", "Fill form", "form",
+        allowed_capabilities=("browser",), allowed_side_effects=(SideEffectClass.READ_ONLY, SideEffectClass.EXTERNAL_IRREVERSIBLE)),),
+        authorized_capabilities=("browser",), mutation_scope=MutationScope(allow_external_effects=True))
+    state = new_tactical_state(phase)
+    state.transition(PhaseStatus.RUNNING)
+    task.hierarchical_state = state.to_dict()
+    service.begin(task)
+    service.supply(task, actor_id=task.user, field="name", value="PRIVATE_A")
+    service.supply(task, actor_id=task.user, field="number", value="PRIVATE_B")
+    service.observe(task)
+    actions = [
+        ("fill", {"field": "name", "target": "1_1"}), ("observe", {}), ("reconcile", {}),
+        ("fill", {"field": "number", "target": "1_2"}), ("observe", {}), ("reconcile", {}),
+    ]
+    if scenario == "repeated":
+        actions[1] = actions[0]
+    if scenario == "replay_verified":
+        actions[3] = actions[0]
+    operations = iter(actions)
+    registry = InMemoryToolRegistry()
+    for tool in build_browser_workflow_tools(enabled=True):
+        registry.register(tool)
+    state.revealed_tool_ids = ["native.browser_workflow_" + name for name in ("fill", "observe", "reconcile")]
+    selections = []
+    def select(*_):
+        item = next(operations, None)
+        selections.append(item)
+        if len(selections) == 4:
+            task.metadata["act_directive"] = {"outcome_review": {"verified_evidence_refs": [
+                state.evidence.entries[0]["evidence_ref"]]}}
+        return {"tool_id": "native.browser_workflow_" + item[0], "arguments": item[1]} if item else None
+    outcome = PhaseExecutor(action_selector=select).run(task, state,
+        CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry, question_store=store, browser_workflow_service=service,
+                        cancellation_checker=lambda: scenario == "cancelled" and bool(page.calls)))
+    saved = workflow.load(task)
+    if scenario == "normal":
+        assert page.calls == ["1_1", "1_2"]
+        assert not workflow.unresolved(saved)
+        assert [e["field"] for e in saved["events"] if e["kind"] == "verified"] == ["name", "number"]
+        assert "tactical_action_unavailable" in outcome.blockers  # no claim of task completion
+    elif scenario == "replay_verified":
+        assert page.calls == ["1_1"] and not workflow.unresolved(saved)
+        assert "browser_workflow_reconciliation_required" in outcome.blockers
+    else:
+        assert page.calls == ["1_1"] and workflow.unresolved(saved)
+        assert outcome.status in {PhaseStatus.BLOCKED, PhaseStatus.CANCELLED}
+    assert "PRIVATE_A" not in json.dumps(task.to_checkpoint_dict())
+    assert "PRIVATE_B" not in json.dumps(task.to_checkpoint_dict())
+    service.private_data.clear()
+
+
+def test_expired_verified_fill_identity_requires_reconciliation(tmp_path):
+    class Form(Page):
+        def verify_fill(self, target, value, observation):
+            return observation == self.observe() and self.calls == [(target, value)]
+    clock = [0.0]
+    private = BrowserPrivateData(clock=lambda: clock[0])
+    page = Form()
+    service = BrowserWorkflowService(checkpoint_store=SQLiteQuestionStore(tmp_path / "db"), transport=page,
+        authorized=lambda actor, task: "grant-1", cancelled=lambda: False, enabled=True, private_data=private)
+    task = _task()
+    service.begin(task)
+    service.supply(task, actor_id=task.user, field="name", value="PRIVATE_A")
+    service.observe(task)
+    service.fill(task, field="name", target="field")
+    service.observe(task)
+    service.reconcile_fill(task)
+    clock[0] = 301
+    service.supply(task, actor_id=task.user, field="number", value="PRIVATE_B")
+    service.observe(task)
+    with pytest.raises(workflow.BrowserWorkflowError, match="reconciliation_required"):
+        service.fill(task, field="number", target="123_456")
+    assert page.calls == [("field", "PRIVATE_A")]
+    private.clear()
+
+
 def test_unconfirmed_reconciliation_does_not_resolve_attempt(tmp_path):
     class UnverifiablePage(Page):
         def verify_fill(self, target, value, observation):
@@ -645,6 +945,144 @@ def test_private_question_rejects_raw_answers_and_records_question_provenance(tm
     service.private_data.clear()
 
 
+@pytest.mark.parametrize("scenario", ["live", "changed", "baseline", "missing_observation", "stale_session", "cancelled"])
+def test_private_answer_phase_continuation(tmp_path, monkeypatch, scenario):
+    from types import SimpleNamespace
+    from alphonse.agent_v2.core.core import CoreLoopContext
+    from alphonse.agent_v2.core.intelligence.v3 import PhasePlan, PhaseSubgoal, PhaseStatus, PhaseOutcome, SideEffectClass, MutationScope, PhaseExecutor, new_tactical_state
+    from alphonse.agent_v2.core.intelligence.v3.contracts import TacticalAction
+    from alphonse.agent_v2.core.intelligence.v3.processor import HierarchicalCAPDProcessor
+    from alphonse.agent_v2.core.messages import InMemoryMessageQueue
+    from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry
+    from alphonse.agent_v2.core.tools.registry.native.browser_workflow import build_browser_workflow_tools
+
+    store = SQLiteQuestionStore(tmp_path / "db")
+    page = Page()
+    service = BrowserWorkflowService(checkpoint_store=store, transport=page,
+        authorized=lambda actor, task: "grant-1", cancelled=lambda: False, enabled=True)
+    task = _task()
+    phase = PhasePlan("phase-1", "Complete form", (PhaseSubgoal("fill", "Fill fields", "form",
+        allowed_capabilities=("browser",), allowed_side_effects=(SideEffectClass.USER_RESPONSE, SideEffectClass.EXTERNAL_IRREVERSIBLE)),),
+        authorized_capabilities=("browser",), mutation_scope=MutationScope(allow_external_effects=True))
+    state = new_tactical_state(phase)
+    state.transition(PhaseStatus.RUNNING)
+    state.revealed_tool_ids = ["native.browser_workflow_fill"]
+    task.hierarchical_state = state.to_dict()
+    service.begin(task)
+    if scenario != "missing_observation":
+        service.observe(task)
+    state.actions.append(TacticalAction("request-1", "fill", "native.browser_workflow_request_value",
+        {"redacted": True}, status="waiting", result={"redacted": True}))
+    task.hierarchical_state = state.to_dict()
+    question = store.create_question(task=task, question="Enter a field privately.", kind="open_text",
+        respondent_user_id=task.user, delivery_metadata={"private_browser_value": True, "browser_private_field": "name"})
+    ref = service.store_pending_answer(task, actor_id=task.user, question_id=question.question_id, value="PRIVATE_TEST_VALUE")
+    answer = store.route_answer(respondent_user_id=task.user, question_id=question.question_id,
+        payload={"text": ref}, private_browser_ref=ref, private_ref_validator=service.validate_pending_answer)
+    resumed = answer.resumed_task
+    assert store.claim_browser_resumption(resumed)
+    seen = []
+    processor = HierarchicalCAPDProcessor()
+    from alphonse.agent_v2.core.intelligence.v3 import task_understanding, processor as processor_module
+    monkeypatch.setattr(task_understanding, "ensure", lambda *_: None)
+    plans = []
+    def replan(*_):
+        plans.append(1)
+        fresh = new_tactical_state(phase)
+        fresh.revealed_tool_ids = ["native.browser_workflow_fill"]
+        return fresh
+    monkeypatch.setattr(processor, "_new_state", replan)
+    monkeypatch.setattr(processor, "_result", lambda *_: None)
+    if scenario == "baseline":
+        monkeypatch.setattr(processor_module, "_can_resume_browser_phase", lambda *_: False)
+    if scenario == "stale_session":
+        service._sessions.clear()
+    if scenario == "changed":
+        page.observe = lambda: {"targets": ["123_456"], "version": "changed"}
+    def run(task, current, context):
+        seen.append(current.to_dict())
+        if scenario in {"live", "changed", "baseline"}:
+            executor = PhaseExecutor(action_selector=lambda *_: {"tool_id": "native.browser_workflow_fill",
+                                      "arguments": {"field": "name", "target": "123_456"}})
+            return executor.run(task, current, context)
+        return PhaseOutcome(current.phase.phase_id, PhaseStatus.BLOCKED, "fixture stop")
+    def review(task, state, outcome, context):
+        if scenario == "changed":
+            from alphonse.agent_v2.core.intelligence.v3.outer import V3OuterController
+            result = V3OuterController().review_and_route(task, state, outcome, context)
+            assert task.metadata.get("v3_route") == "strategic_replan"
+            task.status = "failed"
+            task.outcome = {"status": "failure", "reason": "fixture stop"}
+            return result
+        task.status = "failed"
+        task.outcome = {"status": "failure", "reason": "fixture stop"}
+        return SimpleNamespace(status=None), None
+    processor.executor = SimpleNamespace(run=run)
+    processor.outer = SimpleNamespace(review_and_route=review)
+    registry = InMemoryToolRegistry()
+    for definition in build_browser_workflow_tools(enabled=True):
+        registry.register(definition)
+    context = CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry, question_store=store, browser_workflow_service=service,
+                              cancellation_checker=lambda: scenario == "cancelled")
+    from alphonse.agent_v2.core.memory.continuity import active_task_continuity
+    from alphonse.agent_v2.core.intelligence.v3.projections import project
+    assert ref not in active_task_continuity(resumed)
+    if scenario != "cancelled":
+        assert ref not in str(project(resumed, context, purpose="execution", selected_context_ids=[]))
+    assert ref not in json.dumps(resumed.metadata["v3_resumption_evidence"])
+    if scenario == "live":
+        from alphonse.agent_v2.core.memory.clarification import authenticated_answers
+        # Checkpoints created before receipt redaction can still be resumed.
+        legacy = resumed.metadata["v3_resumption_evidence"][0]
+        legacy["result"]["answer"] = {"text": ref}
+        assert ref not in json.dumps(authenticated_answers(resumed))
+    processor._process(resumed, context)
+    if scenario == "cancelled":
+        assert not seen and not plans and resumed.status == "cancelled"
+        service.private_data.clear()
+        return
+    assert len(seen) == 1, resumed.outcome
+    if scenario == "baseline":
+        assert len(plans) == 1 and page.calls == [("123_456", "PRIVATE_TEST_VALUE")]
+        saved = workflow.load(resumed)
+        assert workflow.unresolved(saved)
+        assert sum(e["kind"] == "observed" for e in saved["events"]) == 1
+        service.private_data.clear()
+        return
+    if scenario not in {"live", "changed"}:
+        assert len(plans) == 1
+        service.private_data.clear()
+        return
+    assert not plans and seen[0]["status"] == "running"
+    assert page.calls == ([("123_456", "PRIVATE_TEST_VALUE")] if scenario == "live" else [])
+    saved = workflow.load(resumed)
+    assert workflow.unresolved(saved)
+    assert sum(e["kind"] == "observed" for e in saved["events"]) == 1
+    assert seen[0]["phase"]["phase_id"] == "phase-1"
+    assert any(e.get("kind") == "authenticated_question_answer" for e in seen[0]["evidence"]["entries"])
+    rendered = json.dumps(seen)
+    assert "PRIVATE_TEST_VALUE" not in rendered and ref not in rendered
+    service.private_data.clear()
+
+
+def test_cancelled_browser_task_is_persisted_before_planning(tmp_path):
+    from alphonse.agent_v2.core.core import CoreLoopContext, ProcessingStatus
+    from alphonse.agent_v2.core.intelligence.v3.processor import HierarchicalCAPDProcessor
+    from alphonse.agent_v2.core.messages import InMemoryMessageQueue
+    store, page = SQLiteQuestionStore(tmp_path / "db"), Page()
+    service = BrowserWorkflowService(checkpoint_store=store, transport=page,
+        authorized=lambda actor, task: "grant-1", cancelled=lambda: False, enabled=True)
+    task = _task()
+    service.begin(task)
+    context = CoreLoopContext(messages=InMemoryMessageQueue(), question_store=store,
+                              browser_workflow_service=service, cancellation_checker=lambda: True)
+    result = HierarchicalCAPDProcessor().process(task, context)
+    assert result.status == ProcessingStatus.CANCELLED
+    assert store.load_task_checkpoint(task.task_id).status == "cancelled"
+    assert not page.calls
+    service.private_data.clear()
+
+
 def test_native_private_question_and_daemon_answer_keep_value_out_of_history(tmp_path):
     from types import SimpleNamespace
     from alphonse.agent_v2.core.core import CoreLoopContext
@@ -706,6 +1144,9 @@ def test_native_private_question_and_daemon_answer_keep_value_out_of_history(tmp
     class Processor:
         def process(self, resumed, loop_context):
             seen.append(workflow.load(resumed))
+            assert resumed.hierarchical_state["status"] == "waiting_user"
+            assert resumed.hierarchical_state["actions"][-1]["status"] == "waiting"
+            assert resumed.hierarchical_state["actions"][-1]["tool_id"] == "native.browser_workflow_request_value"
             resumed.hierarchical_state["status"] = "running"
             loop_context.browser_workflow_service.record_answered_question(resumed, question_id=question_id)
             seen.append(workflow.load(resumed))
@@ -724,6 +1165,64 @@ def test_native_private_question_and_daemon_answer_keep_value_out_of_history(tmp
     assert step.error is None
     assert [e["kind"] for e in seen[0]["events"]] == ["requested"]
     assert [e["kind"] for e in seen[1]["events"]] == ["requested", "supplied"]
+    service.private_data.clear()
+
+
+def test_real_private_request_resumes_same_phase_and_uses_protected_answer(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from alphonse.agent_v2.core.core import CoreLoopContext
+    from alphonse.agent_v2.core.intelligence.v3 import PhaseExecutor, PhasePlan, PhaseSubgoal, PhaseStatus, SideEffectClass, MutationScope, new_tactical_state
+    from alphonse.agent_v2.core.intelligence.v3 import task_understanding
+    from alphonse.agent_v2.core.intelligence.v3.processor import HierarchicalCAPDProcessor
+    from alphonse.agent_v2.core.messages import InMemoryMessageQueue
+    from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry
+    from alphonse.agent_v2.core.tools.registry.native.browser_workflow import build_browser_workflow_tools
+
+    store, page = SQLiteQuestionStore(tmp_path / "db"), Page()
+    service = BrowserWorkflowService(checkpoint_store=store, transport=page,
+        authorized=lambda actor, task: "grant-1", cancelled=lambda: False, enabled=True)
+    phase = PhasePlan("phase-1", "Complete the form", (PhaseSubgoal("fill", "Fill field", "form",
+        allowed_capabilities=("browser",), allowed_side_effects=(SideEffectClass.USER_RESPONSE, SideEffectClass.EXTERNAL_IRREVERSIBLE)),),
+        authorized_capabilities=("browser",), mutation_scope=MutationScope(allow_external_effects=True))
+    state = new_tactical_state(phase)
+    state.transition(PhaseStatus.RUNNING)
+    state.revealed_tool_ids = ["native.browser_workflow_request_value", "native.browser_workflow_fill"]
+    task = _task()
+    task.hierarchical_state = state.to_dict()
+    task.metadata["channel"] = {"integration_id": "desktop"}
+    service.begin(task)
+    service.observe(task)
+    registry = InMemoryToolRegistry()
+    for tool in build_browser_workflow_tools(enabled=True):
+        registry.register(tool)
+    context = CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry, question_store=store,
+                              browser_workflow_service=service)
+    request = PhaseExecutor(action_selector=lambda *_: {"tool_id": "native.browser_workflow_request_value",
+                                                         "arguments": {"field": "name"}})
+    assert request.run(task, state, context).status == PhaseStatus.WAITING_USER
+    question_id = task.metadata["pending_question_id"]
+    handle = service.store_pending_answer(task, actor_id=task.user, question_id=question_id, value="PRIVATE_VALUE")
+    answered = store.route_answer(respondent_user_id=task.user, question_id=question_id,
+        payload={"text": handle}, private_browser_ref=handle, private_ref_validator=service.validate_pending_answer)
+    resumed = answered.resumed_task
+    assert store.claim_browser_resumption(resumed)
+    processor = HierarchicalCAPDProcessor()
+    monkeypatch.setattr(task_understanding, "ensure", lambda *_: None)
+    monkeypatch.setattr(processor, "_new_state", lambda *_: pytest.fail("unexpected replan"))
+    monkeypatch.setattr(processor, "_result", lambda *_: None)
+    processor.executor = PhaseExecutor(action_selector=lambda *_: {"tool_id": "native.browser_workflow_fill",
+                                                                   "arguments": {"field": "name", "target": "123_456"}})
+    def stop(task, *_):
+        task.status = "failed"
+        task.outcome = {"status": "failure", "reason": "fixture stop"}
+        return SimpleNamespace(status=None), None
+    processor.outer = SimpleNamespace(review_and_route=stop)
+    processor._process(resumed, context)
+    assert page.calls == [("123_456", "PRIVATE_VALUE")]
+    assert workflow.unresolved(workflow.load(resumed))
+    assert resumed.hierarchical_state["phase"]["phase_id"] == "phase-1"
+    serialized = json.dumps(resumed.hierarchical_state)
+    assert handle not in serialized and "PRIVATE_VALUE" not in serialized
     service.private_data.clear()
 
 
