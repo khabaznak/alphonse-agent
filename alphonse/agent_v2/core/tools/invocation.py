@@ -26,7 +26,10 @@ class ToolInvocationService:
 
     def execute_or_raise(self, tool_id: str, arguments: dict[str, Any]) -> Any:
         started = monotonic()
+        descriptor = _descriptor_for(self.context.tools, tool_id) if self.context.tools is not None else None
+        sensitive = bool(descriptor and descriptor.metadata.get("sensitive_content") is True)
         try:
+            _check_browser_effect_guard(self.task, descriptor, tool_id)
             retirement = _retirement_reason(tool_id, arguments)
             if retirement:
                 raise ValueError(retirement)
@@ -45,24 +48,26 @@ class ToolInvocationService:
             else:
                 result = execute(tool_id, dict(arguments))
         except Exception as exc:
-            self._emit_tool_telemetry(tool_id, arguments, None, started, "failed", f"{type(exc).__name__}: {exc}")
+            self._emit_tool_telemetry(tool_id, arguments, None, started, "failed", "sensitive_tool_failed" if sensitive else f"{type(exc).__name__}: {exc}", sensitive=sensitive)
+            if sensitive:
+                raise RuntimeError("sensitive_tool_failed") from None
             raise
-        self._emit_tool_telemetry(tool_id, arguments, result, started, "success", "")
+        self._emit_tool_telemetry(tool_id, arguments, result, started, "success", "", sensitive=sensitive)
         return result
 
     def _emit_tool_telemetry(
-        self, tool_id: str, arguments: dict[str, Any], result: Any, started: float, status: str, error: str
+        self, tool_id: str, arguments: dict[str, Any], result: Any, started: float, status: str, error: str, *, sensitive: bool = False
     ) -> None:
         self.context.emit_telemetry(ToolTelemetryEvent(
             tool_id=tool_id,
             task_id=str(self.task.task_id or ""),
             project_id=self.task.project_id,
-            argument_chars=json_chars(arguments),
-            result_chars=json_chars(result) if result is not None else 0,
+            argument_chars=0 if sensitive else json_chars(arguments),
+            result_chars=0 if sensitive else (json_chars(result) if result is not None else 0),
             duration_ms=max(0, round((monotonic() - started) * 1000)),
             status=status,
             error=str(safe_telemetry_value(error)),
-            metadata=_tool_result_metadata(result),
+            metadata={} if sensitive else _tool_result_metadata(result),
         ).to_dict())
 
     def invoke(self, tool_id: str, arguments: dict[str, Any], *, call_id: str | None = None, parallel: bool = False) -> dict[str, Any]:
@@ -73,15 +78,21 @@ class ToolInvocationService:
         descriptor = _descriptor_for(self.context.tools, tool_id) if self.context.tools is not None else None
         if descriptor is None:
             return _failure(call_id, tool_id, "tool_not_found", "The requested tool is not enabled.")
+        try:
+            _check_browser_effect_guard(self.task, descriptor, tool_id)
+        except PermissionError:
+            return _failure(call_id, tool_id, "browser_reconciliation_required", "Browser effects require reconciliation before another mutation.")
+        sensitive = descriptor.metadata.get("sensitive_content") is True
         if parallel and not descriptor.read_only:
             return _failure(call_id, tool_id, "tool_not_parallel_safe", "This tool may only be called sequentially in program mode.")
 
-        self.context.emit_ui_event("tool_call_started", {"tool_call_id": call_id, "tool_id": tool_id, "tool_name": descriptor.name, "arguments": dict(arguments), "programmatic": True})
-        self.context.record_memory_event(self.task, "Tool Call", {"tool_id": tool_id, "tool_name": descriptor.name, "arguments": arguments, "programmatic": True})
+        recorded_arguments = {"redacted": True} if sensitive else dict(arguments)
+        self.context.emit_ui_event("tool_call_started", {"tool_call_id": call_id, "tool_id": tool_id, "tool_name": descriptor.name, "arguments": recorded_arguments, "programmatic": True})
+        self.context.record_memory_event(self.task, "Tool Call", {"tool_id": tool_id, "tool_name": descriptor.name, "arguments": recorded_arguments, "programmatic": True})
         try:
             result = self.execute_or_raise(tool_id, arguments)
         except Exception as exc:
-            outcome = _failure(call_id, tool_id, type(exc).__name__, str(exc))
+            outcome = _failure(call_id, tool_id, "sensitive_tool_failed" if sensitive else type(exc).__name__, "sensitive_tool_failed" if sensitive else str(exc))
         else:
             waiting = isinstance(result, dict) and result.get("waiting_for_answer") is True
             bash_error = _bash_result_error(tool_id, result)
@@ -102,8 +113,13 @@ class ToolInvocationService:
                     "result": result,
                     "error": None,
                 }
-        self.context.emit_ui_event("tool_call_result", {"tool_call_id": call_id, "tool_id": tool_id, "tool_name": descriptor.name, **outcome, "programmatic": True})
-        self.context.record_memory_event(self.task, "Tool Result", {**outcome, "programmatic": True})
+        if sensitive:
+            outcome = {"call_id": call_id, "tool_id": tool_id, "status": outcome["status"],
+                       "result": {"redacted": True} if outcome["status"] != "failed" else None,
+                       "error": {"code": "sensitive_tool_failed", "message": "sensitive_tool_failed"} if outcome["status"] == "failed" else None}
+        event_outcome = {"call_id": call_id, "tool_id": tool_id, "status": outcome["status"], "redacted": True} if sensitive else outcome
+        self.context.emit_ui_event("tool_call_result", {"tool_call_id": call_id, "tool_id": tool_id, "tool_name": descriptor.name, **event_outcome, "programmatic": True})
+        self.context.record_memory_event(self.task, "Tool Result", {**event_outcome, "programmatic": True})
         return outcome
 
     @staticmethod
@@ -115,6 +131,24 @@ class ToolInvocationService:
         except ValidationError as exc:
             raise ValueError(f"tool_arguments_invalid: {exc.message}") from exc
 
+
+def _check_browser_effect_guard(task: Any, descriptor: Any, tool_id: str) -> None:
+    from alphonse.agent_v2.core.intelligence.v3 import browser_workflow
+    if browser_workflow.KEY not in task.metadata:
+        if browser_workflow._legacy_browser_state(task):
+            raise PermissionError("browser_reconciliation_required")
+        return
+    try:
+        state = browser_workflow.load(task)
+    except browser_workflow.BrowserWorkflowError:
+        raise PermissionError("browser_reconciliation_required") from None
+    if not browser_workflow.unresolved(state):
+        return
+    recovery = {"native.browser_workflow_reacquire", "native.browser_workflow_observe",
+                "native.browser_workflow_observe_result", "native.browser_workflow_reconcile",
+                "native.browser_workflow_verify_submission", "native.browser_workflow_request_value"}
+    if tool_id not in recovery and (descriptor is None or not descriptor.read_only):
+        raise PermissionError("browser_reconciliation_required")
 
 def _retirement_reason(tool_id: str, arguments: dict[str, Any]) -> str:
     if (tool_id.startswith("artifact.") or tool_id in {"native.skill_artifact_register", "native.artifact_metadata_update"}

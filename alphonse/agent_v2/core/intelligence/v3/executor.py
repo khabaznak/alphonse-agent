@@ -107,14 +107,17 @@ class PhaseExecutor:
                 state.transition(PhaseStatus.BLOCKED)
                 self._checkpoint(task, state, context)
                 return self._outcome(state, "No valid tactical action was available.", blockers=("tactical_action_unavailable",))
+            selected_id = selected.get("tool_id")
+            sensitive_action = (isinstance(selected_id, str) and selected_id.startswith("native.browser_workflow_")) or any(
+                tool.tool_id == selected_id and tool.metadata.get("sensitive_content") is True for tool in tools)
             try:
                 action = self._validate_action(state, subgoal, selected, tools)
             except (ValueError, PermissionError) as exc:
                 error = str(exc)
                 # IDs and acceptance-question wording do not change an invalid action.
                 fingerprint = hashlib.sha256(json.dumps({
-                    "tool_id": selected.get("tool_id"), "arguments": selected.get("arguments"),
-                    "error": error, "capabilities": sorted(subgoal.allowed_capabilities),
+                    "tool_id": "native.browser_workflow" if sensitive_action else selected.get("tool_id"), "arguments": {"redacted": True} if sensitive_action else selected.get("arguments"),
+                    "error": "sensitive_action_invalid" if sensitive_action else error, "capabilities": sorted(subgoal.allowed_capabilities),
                     "effects": sorted(item.value for item in subgoal.allowed_side_effects),
                     "scope": state.phase.mutation_scope.__dict__,
                 }, sort_keys=True, default=str).encode()).hexdigest()
@@ -127,7 +130,8 @@ class PhaseExecutor:
                 state.evidence.append({
                     "evidence_ref": f"tactical-rejection:{uuid4()}",
                     "phase_id": state.phase.phase_id, "subgoal_id": subgoal.subgoal_id,
-                    "status": "rejected", "error": error, "rejected_action": selected,
+                    "status": "rejected", "error": "sensitive_action_invalid" if sensitive_action else error,
+                    "rejected_action": {"tool_id": "native.browser_workflow", "arguments": {"redacted": True}} if sensitive_action else selected,
                     "validation_feedback": "No tool ran. Correct this action once using the same revealed tools, "
                         "capabilities, effects and mutation scope; preserve completed work. Do not broaden authorization.",
                     "fingerprint": fingerprint, "repeated": repeated,
@@ -137,8 +141,13 @@ class PhaseExecutor:
                     continue
                 state.transition(PhaseStatus.BLOCKED)
                 self._checkpoint(task, state, context)
-                reason = ("tactical_planning_error_repeated:" if repeated else "tactical_correction_exhausted:") + error
+                reason = ("tactical_planning_error_repeated:" if repeated else "tactical_correction_exhausted:") + ("sensitive_action_invalid" if sensitive_action else error)
                 return self._outcome(state, reason, blockers=(reason,))
+            if sensitive_action:
+                action = TacticalAction(action_id=f"action-{uuid4()}", subgoal_id=action.subgoal_id,
+                    tool_id=action.tool_id, arguments=action.arguments, acceptance_questions=action.acceptance_questions)
+            recorded_arguments = {"redacted": True} if sensitive_action else action.arguments
+            recorded_questions = [] if sensitive_action else action.acceptance_questions
             if _scheduled_delivery_may_repeat(task, state, action, context):
                 state.transition(PhaseStatus.BLOCKED)
                 self._checkpoint(task, state, context)
@@ -148,7 +157,7 @@ class PhaseExecutor:
             verified_refs = set(recovery.get("verified_evidence_refs") or ())
             if any(
                 entry.get("evidence_ref") in verified_refs and entry.get("tool_id") == action.tool_id
-                and (entry.get("arguments") or {}) == action.arguments
+                and (entry.get("arguments") or {}) == recorded_arguments
                 for entry in state.evidence.entries
             ):
                 blocker = "act_recovery_repeats_verified_work"
@@ -163,7 +172,8 @@ class PhaseExecutor:
                     if interruption is not None:
                         self._checkpoint(task, state, context)
                         return interruption
-                state.actions.append(action)
+                state.actions.append(TacticalAction(action_id=action.action_id, subgoal_id=action.subgoal_id,
+                    tool_id=action.tool_id, arguments=recorded_arguments, acceptance_questions=recorded_questions))
                 self._checkpoint(task, state, context)
                 context.emit_activity(
                     phase=ImprovementPhase.DO,
@@ -196,11 +206,11 @@ class PhaseExecutor:
                     action_id=action.action_id,
                     subgoal_id=action.subgoal_id,
                     tool_id=action.tool_id,
-                    arguments=action.arguments,
+                    arguments=recorded_arguments,
                     status=str(outcome.get("status") or "failed"),
-                    result=outcome.get("result"),
+                    result={"redacted": True} if sensitive_action else outcome.get("result"),
                     error=_error_message(outcome.get("error")),
-                    acceptance_questions=action.acceptance_questions,
+                    acceptance_questions=recorded_questions,
                 )
                 state.actions[-1] = completed
                 state.evidence.append(
@@ -257,6 +267,21 @@ class PhaseExecutor:
                     state.transition(PhaseStatus.WAITING_USER)
                     self._checkpoint(task, state, context)
                     return self._outcome(state, "A tactical action requires user input.")
+                if completed.tool_id in {"native.browser_workflow_fill", "native.browser_workflow_submit"}:
+                    # A transport return cannot verify the form effect. Until a
+                    # fresh-observation reconciliation exists, do not retry or
+                    # let semantic review promote this into phase completion.
+                    state.transition(PhaseStatus.BLOCKED)
+                    self._checkpoint(task, state, context)
+                    return self._outcome(state, "The browser effect needs independent reconciliation.",
+                                         blockers=("browser_workflow_reconciliation_required",))
+                if completed.tool_id in {"native.browser_workflow_reconcile", "native.browser_workflow_verify_submission"}:
+                    state.transition(PhaseStatus.BLOCKED)
+                    self._checkpoint(task, state, context)
+                    reason = ("Review the recorded browser reconciliation before continuing." if completed.status == "success"
+                              else "Browser reconciliation remains unavailable.")
+                    return self._outcome(state, reason,
+                                         blockers=("browser_workflow_reconciliation_review",))
                 self._checkpoint(task, state, context)
                 completion_met, retry_approved, progress_review = self._completion_review(
                     task, state, subgoal, completed, context
@@ -697,7 +722,14 @@ class PhaseExecutor:
         task.intelligence_schema_version = 3
         task.hierarchical_state = state.to_dict()
         if context.question_store is not None:
-            context.question_store.save_task_checkpoint(task, status=task.status)
+            if "v3_browser_workflow" in task.metadata:
+                if task.status == "running":
+                    context.question_store.save_active_browser_checkpoint(task, expected_workflow=task.metadata["v3_browser_workflow"])
+                else:
+                    status = "done" if task.status == "completed" else task.status
+                    context.question_store.save_browser_transition(task, status=status)
+            else:
+                context.question_store.save_task_checkpoint(task, status=task.status)
 
     @staticmethod
     def _outcome(state: TacticalState, reason: str, blockers: tuple[str, ...] = ()) -> PhaseOutcome:

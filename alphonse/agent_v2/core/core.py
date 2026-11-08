@@ -203,6 +203,7 @@ class ToolExecutionContext:
     skill_store: Any | None = None
     cancellation_checker: Callable[[], bool] | None = None
     skill_bindings: Any | None = None
+    browser_workflow_service: Any | None = None
 
     def record_memory_event(self, task: TaskState, heading: str, content: Any) -> None:
         """Record an event through the task's configured memory adapter."""
@@ -241,6 +242,7 @@ class CoreLoopContext:
     skill_bindings: Any | None = None
     event_store: Any | None = None
     asset_store: Any | None = None
+    browser_workflow_service: Any | None = None
     consumed_message_ids: list[str] = field(default_factory=list)
     scheduled_handoff_enabled: bool = False
 
@@ -294,6 +296,7 @@ class CoreLoopContext:
             skill_store=self.skill_store,
             cancellation_checker=self.cancellation_checker,
             skill_bindings=self.skill_bindings,
+            browser_workflow_service=self.browser_workflow_service,
         )
 
     def is_cancelled(self) -> bool:
@@ -547,6 +550,7 @@ class AlphonseCore:
     skill_bindings: Any | None = None
     event_store: Any | None = None
     asset_store: Any | None = None
+    browser_workflow_service: Any | None = None
     question_store: Any | None = None
     project_store: Any | None = None
     schedule_store: Any | None = None
@@ -630,6 +634,26 @@ class AlphonseCore:
             and isinstance(raw_task_state, dict)
             and bool(str(task.task_id or "").strip())
         )
+        question_id = str(queued.message.metadata.get("answered_question_id") or "")
+        question = self.question_store.get_question(question_id) if self.question_store is not None and question_id else None
+        authoritative = (self.question_store.load_task_checkpoint(question.task_id)
+                         if self.question_store is not None and question is not None else None)
+        browser_resume = (is_correlated_resume and "v3_browser_workflow" in task.metadata) or (
+            authoritative is not None and "v3_browser_workflow" in authoritative.metadata)
+        if browser_resume:
+            if (not is_correlated_resume or authoritative is None or question is None or question.status != "answered"
+                    or task.task_id != authoritative.task_id or question.task_id != authoritative.task_id
+                    or question.respondent_user_id != queued.message.user
+                    or question.originator_user_id != authoritative.user
+                    or "v3_browser_workflow" not in authoritative.metadata
+                    or not self.question_store.claim_browser_resumption(authoritative)):
+                snapshot = StateSnapshot(current_work="", metadata={"status": "failed", "reason": "browser_resumption_unavailable"})
+                self.state.update(snapshot)
+                return LoopStepResult(status=LoopStepStatus.FAILED, state_before=state_before,
+                    state_after=self._transition(PROCESSOR_FAILED), queued_message_id=queued.message_id,
+                    error="browser_resumption_unavailable")
+            task = authoritative
+            task.message_id = queued.message_id
         if queued_engine == "hierarchical_v3" and not is_correlated_resume and not handoff_task_id:
             # A queue delivery may be retried, but it is still the same V3 task.
             # Using the durable message id prevents a retry from silently creating
@@ -690,6 +714,7 @@ class AlphonseCore:
                 skill_bindings=self.skill_bindings,
                 event_store=self.event_store,
                 asset_store=self.asset_store,
+                browser_workflow_service=self.browser_workflow_service,
                 question_store=self.question_store,
                 project_store=self.project_store,
                 schedule_store=self.schedule_store,

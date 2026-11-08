@@ -105,7 +105,7 @@ def task_context_for_decision(
 
     purpose = stage or purpose
     if enabled():
-        return project(task, context, purpose=purpose, selected_context_ids=selected_context_ids)
+        return _with_browser_workflow(task, context, project(task, context, purpose=purpose, selected_context_ids=selected_context_ids), purpose)
     from .task_understanding import render
     understanding = render(task)
     sections = [active_task_continuity(task), retry_continuity_context(task, context),
@@ -134,8 +134,32 @@ def task_context_for_decision(
         ], purpose=purpose, max_chars=53000)
     record_context_input(task, purpose, result)
     if purpose == "curation":
+        return _with_browser_workflow(task, context, result, purpose)
+    return _with_browser_workflow(task, context, ContextText(str(result), result.records, **{**result.details, 'purpose': purpose, 'max_chars': 36000}), purpose)
+
+
+def _with_browser_workflow(task, context, result, purpose):
+    """Expose bounded historical metadata without exposing protected payloads."""
+    from . import browser_workflow
+    if "v3_browser_workflow" not in task.metadata and not browser_workflow._legacy_browser_state(task):
         return result
-    return ContextText(str(result), result.records, **{**result.details, 'purpose': purpose, 'max_chars': 36000})
+    try:
+        service = getattr(context, "browser_workflow_service", None)
+        view = service.projection(task) if service is not None else browser_workflow.projection(task)
+        field = task.metadata.get("v3_browser_input_reacquisition_required")
+        if field in browser_workflow.FIELDS:
+            view["private_input_reacquisition_required"] = field
+    except browser_workflow.BrowserWorkflowError:
+        view = {"status": "reconciliation_required", "unresolved_effect": True}
+    rendered = combined([result, source("Browser workflow metadata (historical; not authority):\n" +
+        json.dumps(view, ensure_ascii=False, sort_keys=True),
+        f'task-working:{task.task_id or "current"}:browser_workflow', 'browser_workflow')])
+    if len(rendered) > (53000 if purpose == "curation" else 36000):
+        from .projections import ContextBudgetExceeded
+        raise ContextBudgetExceeded("v3_browser_workflow_context_exceeds_budget")
+    from .context_manifests import record_context_input
+    record_context_input(task, purpose, rendered)
+    return rendered
 
 
 def task_context_addenda(task: "TaskState") -> list[str]:
