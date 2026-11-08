@@ -593,3 +593,20 @@ def test_operator_client_configuration_is_admin_only_persistent_and_fenced(f):
     with pytest.raises(OAuthError, match='existing_accounts_require_migration'):
         save_operator_client(f.accounts, f.owner, 'google', '123456-other.apps.googleusercontent.com')
     assert saved_client_manifest(f.store) == saved
+
+
+def test_saved_operator_client_survives_store_reopen_and_distribution_upgrade(f):
+    from alphonse.agent_v2.integrations.oauth import save_operator_client, saved_client_manifest, environment_clients
+
+    client_id = '123456-personal.apps.googleusercontent.com'
+    save_operator_client(f.accounts, f.owner, 'google', client_id)
+    reopened = SQLiteIntegrationStore(f.store.db_path, credential_vault=CredentialVault(f.backend))
+    upgraded_distribution = {'google': {'client_id': 'new-distribution-client',
+        'redirect_uri': 'http://127.0.0.1:9998/callback'},
+        'microsoft': {'client_id': 'new-microsoft-client',
+        'redirect_uri': 'http://127.0.0.1:9999/callback'}}
+    clients, status, source = environment_clients({}, upgraded_distribution, saved_client_manifest(reopened))
+    assert {c.provider: c.client_id for c in clients} == {
+        'google': client_id, 'microsoft': 'new-microsoft-client'}
+    assert status == {'google': 'available', 'microsoft': 'available'}
+    assert source == {'google': 'operator', 'microsoft': 'distribution'}
