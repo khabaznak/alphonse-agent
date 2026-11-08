@@ -12,6 +12,7 @@ from uuid import uuid4
 
 from alphonse.agent_v2.core.core import ImprovementPhase, ToolKind
 from alphonse.agent_v2.core.inference import InferencePurpose, InferenceRequest
+from alphonse.agent_v2.core.intelligence.v3.measurement import measured_span
 from alphonse.agent_v2.core.intelligence.v3.contracts import PhaseOutcome, FailurePolicy
 from alphonse.agent_v2.core.intelligence.v3.contracts import PhaseStatus
 from alphonse.agent_v2.core.intelligence.v3.contracts import PhaseSubgoal
@@ -98,7 +99,8 @@ class PhaseExecutor:
                         and retry.get("phase_id") == state.phase.phase_id
                         and retry.get("subgoal_id") == subgoal.subgoal_id else None)
             if not isinstance(selected, dict):
-                selected = self._select_action(task, state, subgoal, tools, context)
+                with measured_span(context, task, "tactical_composition"):
+                    selected = self._select_action(task, state, subgoal, tools, context)
             interruption = self._interruption(task, state, context)
             if interruption is not None:
                 self._checkpoint(task, state, context)
