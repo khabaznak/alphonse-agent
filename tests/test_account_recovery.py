@@ -4,7 +4,7 @@ import sqlite3
 
 import pytest
 
-from test_account_grants import f, resolve
+from test_account_grants import f, resolve, expiry
 from alphonse.agent_v2.account_recovery import fence_restored_accounts
 from alphonse.agent_v2.accounts import AccountService, AccountSession
 from alphonse.agent_v2.integrations.store import SQLiteIntegrationStore
@@ -68,6 +68,42 @@ def test_recovery_never_overwrites_preserved_credential_references(f):
         with pytest.raises(ValueError, match='already_fenced'):
             fence_restored_accounts(copy)
         assert copy.execute('SELECT * FROM v2_recovery_credential_references ORDER BY integration_id').fetchall() == before
+
+
+def test_reconsent_on_fenced_copy_preserves_live_credential_and_old_grant_revocation(f):
+    from alphonse.agent_v2.integrations.oauth import OAuthService
+
+    snapshot = f.tmp / 'synthetic-reconsent.sqlite'
+    with f.store._connect() as live, sqlite3.connect(snapshot) as copy:
+        live.backup(copy)
+        fence_restored_accounts(copy)
+        # Use a supported provider label only inside this disposable copy.
+        copy.execute("UPDATE v2_integrations SET provider_key='google' WHERE integration_id='one'")
+    restored = SQLiteIntegrationStore(snapshot, credential_vault=f.store.credential_vault)
+    accounts = AccountService(restored, f.users)
+    oauth = OAuthService(accounts, [])
+    owner = AccountSession('parent')
+    old_live = f.store.resolve_credentials(f.store.get('one'))
+    old_ref = f.store.get('one').credential_ref
+    # Simulate a successful provider response without provider I/O. Exercise the
+    # same persistence path used after a real consent flow on an isolated copy.
+    oauth._persist(owner, restored.get('one'), {
+        'access_token': 'synthetic-access', 'refresh_token': 'synthetic-refresh',
+        'token_type': 'Bearer', 'expires_at': '9999999999', 'scope': 'scope.read',
+    }, subject='subject-one', capabilities=['read'], scopes=['scope.read'])
+    assert f.store.get('one').credential_ref == old_ref
+    assert f.store.resolve_credentials(f.store.get('one')) == old_live
+    assert restored.get('one').credential_ref != old_ref
+    accounts.save_grant(owner, grant_id='new-grant', connection_id='one', expected_revision=0,
+                        beneficiary_user_id='child', operations=['read'], resources=['folder-a'],
+                        recipient_user_ids=['parent'], expires_at=expiry())
+    with pytest.raises(PermissionError):
+        accounts.authorize(AccountSession('child'), connection_id='one', grant_id='grant-one',
+                           operation='read', resources=['folder-a'], recipient_user_ids=['parent'],
+                           required_scopes=['scope.read'])
+    assert accounts.authorize(AccountSession('child'), connection_id='one', grant_id='new-grant',
+                              operation='read', resources=['folder-a'], recipient_user_ids=['parent'],
+                              required_scopes=['scope.read'])
 
 
 def test_staged_copy_is_private_fenced_and_never_overwrites(f):

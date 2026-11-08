@@ -259,7 +259,9 @@ for reconciliation, so ordinary replacement or deletion cannot inadvertently
 delete a credential still used by the live database. It does not alter the vault. The
 normal daemon refuses to start from a staged copy. Synthetic tests restore a
 pre-revocation snapshot and verify account binding, findings and pending delivery
-remain denied. Use an offline backup as SOURCE; never target a running household
+remain denied. A synthetic OAuth-persistence test also verifies that a new
+credential and grant in a fenced copy do not delete the live credential or revive
+an old grant. It does not authorize activating the copy. Use an offline backup as SOURCE; never target a running household
 database. Output still contains private data and needs protected storage.
 
 `alphonse inspect-account-recovery STAGED_COPY` inventories selected account,
