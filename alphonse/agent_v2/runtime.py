@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from alphonse.agent_v2.care_widgets import CareRecords
+from alphonse.agent_v2.transient_events import TransientEvents
 
 from alphonse.agent_v2.core.core import AlphonseCore
 from alphonse.agent_v2.core.core import CoreActivityEvent
@@ -139,8 +140,8 @@ class V2RuntimeHost:
     care_records: CareRecords | None = None
     integration_runtimes: list[Any] = field(default_factory=list)
     active_project_id: str = ""
-    ui_events: list[CoreUiEvent] = field(default_factory=list)
-    activity_events: list[CoreActivityEvent] = field(default_factory=list)
+    ui_events: TransientEvents = field(default_factory=TransientEvents)
+    activity_events: TransientEvents = field(default_factory=TransientEvents)
     telemetry_events: list[dict[str, Any]] = field(default_factory=list)
 
     def record_telemetry(self, event: dict[str, Any]) -> None:
@@ -366,8 +367,8 @@ def build_runtime_host(
             respondent_user_id=respondent_user_id,
         ),
     )
-    ui_events: list[CoreUiEvent] = []
-    activity_events: list[CoreActivityEvent] = []
+    ui_events = TransientEvents()
+    activity_events = TransientEvents()
     telemetry_events: list[dict[str, Any]] = []
     telemetry_sink = lambda event: _record_runtime_telemetry(telemetry_events, event)
     _append_router_telemetry_sink(inference, telemetry_sink)

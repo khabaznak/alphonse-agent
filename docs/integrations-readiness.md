@@ -223,9 +223,10 @@ event-input manifests in completed, failed and cancelled task checkpoints expire
 after 30 days, while active and waiting tasks retain recovery state. That test
 does not qualify other consumers, remote model sessions or filesystem copies of a
 manifest. Collected transient UI and activity journals now expire after 30 days;
-future timestamps are clamped and malformed ones are rejected. Events not yet
-collected are age-checked on collection but are not periodically removed from
-the shared producer queues, so their physical retention remains unqualified.
+future timestamps are clamped and malformed ones are rejected. Uncollected
+transient events are also pruned by the running daemon's daily maintenance;
+producers, pruning and collection share a lock to preserve fresh events. Cleanup
+is periodic, so an event can remain past its deadline until maintenance runs.
 Operational retention also deletes event history older than 30 days when no
 nonterminal execution depends on it and its independent replay receipt exists;
 unknown/missing replay state keeps the event. Receipts remain in place. The event

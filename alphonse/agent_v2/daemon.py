@@ -2230,8 +2230,7 @@ class V2Daemon:
         return record.to_dict()
 
     def _collect_activity_events(self) -> None:
-        events = list(self.runtime.activity_events)
-        self.runtime.activity_events.clear()
+        events = self.runtime.activity_events.drain()
         now = datetime.now(timezone.utc)
         self._activity_event_journal = [event for event in self._activity_event_journal
                                         if _journal_event_recent(event.get('occurred_at'), now)]
@@ -2320,8 +2319,7 @@ class V2Daemon:
             return [{k: v for k, v in event.items() if k != '_retained_at'} for event in matched], int(matched[-1]["sequence"]) if matched else cursor
 
     def _collect_ui_events(self) -> None:
-        events = list(self.runtime.ui_events)
-        self.runtime.ui_events.clear()
+        events = self.runtime.ui_events.drain()
         now = datetime.now(timezone.utc)
         self._ui_event_journal = [event for event in self._ui_event_journal
                                   if _journal_event_recent(event.get('_retained_at'), now)]
@@ -2827,9 +2825,10 @@ class V2Daemon:
         if db_path != ":memory:":
             deleted = prune_operational_data(db_path, now=now)
             logger.info("operational retention completed deleted=%s", deleted)
-        # Uncollected queues are shared with producers/TUI without a shared
-        # lock. Leave them intact here to avoid losing concurrent fresh events;
-        # the next collection rejects entries older than the retention window.
+        # Pruning and draining use the same lock as producers, so a fresh event
+        # arriving during maintenance is not lost.
+        self.runtime.activity_events.prune(now=now)
+        self.runtime.ui_events.prune(now=now)
         with self._event_lock:
             self._activity_event_journal[:] = [event for event in self._activity_event_journal
                                               if _journal_event_recent(event.get('occurred_at'), now)]

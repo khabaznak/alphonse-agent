@@ -1189,8 +1189,12 @@ def test_future_or_malformed_transient_event_times_cannot_extend_retention() -> 
 
 
 def test_retention_tick_does_not_drain_fresh_ui_or_activity_events() -> None:
+    from datetime import datetime, timedelta, timezone
     runtime = build_runtime_host(inference=_router(), schedule_store=ScheduledTaskStore(':memory:'))
     daemon = V2Daemon(runtime)
+    old = (datetime.now(timezone.utc) - timedelta(days=31)).isoformat()
+    runtime.activity_events.append(CoreActivityEvent(phase=ImprovementPhase.PLAN, label='old', message='old', occurred_at=old))
+    runtime.ui_events.append(CoreUiEvent('state_snapshot', {'status': 'old'}, occurred_at=old))
     runtime.activity_events.append(CoreActivityEvent(phase=ImprovementPhase.PLAN, label='new', message='new'))
     runtime.ui_events.append(CoreUiEvent('state_snapshot', {'status': 'new'}))
     daemon._run_retention_if_due(force=True)
