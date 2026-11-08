@@ -221,15 +221,20 @@ Do not enable a real-account pilot until a synthetic restore with current durabl
 tombstones has demonstrated denial/redaction and the actual backup expiry is
 verified. A copied database alone is not a safe restore procedure.
 
-The offline `account_recovery.fence_restored_accounts` primitive provides a
-conservative staging step: it disables all restored managed connections and
-revokes all restored grants in one transaction, requiring explicit reconciliation
-and preserving their IDs and credential references. Synthetic tests restore a
-pre-revocation snapshot and verify that normal account binding cannot use it.
-This is **not** an automatic restore detector or a complete restore procedure:
-queues, external copies, credentials, backup encryption/expiry and re-consent
-still require qualification. Never invoke it on the running household database;
-an offline staged copy must remain isolated until all recovery checks pass.
+The offline `alphonse prepare-account-recovery SOURCE DESTINATION` command creates
+an owner-only staged SQLite copy in an owner-only directory, refusing to overwrite
+an existing file. It fences all restored managed connections and revokes their
+grants transactionally, preserving their IDs and credential references. The
+normal daemon refuses to start from a staged copy. Synthetic tests restore a
+pre-revocation snapshot and verify account binding, findings and pending delivery
+remain denied. Use an offline backup as SOURCE; never target a running household
+database. Output still contains private data and needs protected storage.
+
+This is **not** an automatic detector for arbitrary database restores or a complete
+restore procedure: queues, external copies, credentials, backup encryption/expiry,
+reconciliation and re-consent remain unqualified. There is deliberately no command
+to activate or install this staged copy yet. Keep it isolated until a complete
+recovery procedure has been independently verified.
 
 ## Credentials and disconnect qualification
 

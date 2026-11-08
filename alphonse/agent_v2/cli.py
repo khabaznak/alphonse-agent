@@ -22,6 +22,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers.add_parser("status", help="Show v2 daemon health and queue status")
     subparsers.add_parser("stop", help="Gracefully stop the v2 daemon")
+    recovery = subparsers.add_parser("prepare-account-recovery", help="Prepare an isolated, fenced database copy; does not restore it")
+    recovery.add_argument("source", help="Offline SQLite backup")
+    recovery.add_argument("destination", help="New staging file in a private directory")
     return parser
 
 
@@ -35,6 +38,12 @@ def main(argv: list[str] | None = None) -> int:
         return show_status()
     if args.command == "stop":
         return stop_daemon()
+    if args.command == "prepare-account-recovery":
+        from alphonse.agent_v2.account_recovery import prepare_restored_database
+        result = prepare_restored_database(args.source, args.destination)
+        print(f"Isolated recovery copy prepared: {result['connections']} accounts fenced, {result['grants']} grants revoked.")
+        print("Do not start Alphonse from this copy; restore reconciliation is not yet supported.")
+        return 0
     return 2
 
 

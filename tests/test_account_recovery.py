@@ -52,3 +52,85 @@ def test_recovery_rejects_corrupt_grant_atomically(f):
         with pytest.raises(ValueError, match='invalid_grant'):
             fence_restored_accounts(copy)
         assert copy.execute("SELECT enabled, connection_json FROM v2_integrations WHERE integration_id='one'").fetchone() == before
+
+
+def test_staged_copy_is_private_fenced_and_never_overwrites(f):
+    import os
+    import stat
+    from alphonse.agent_v2.account_recovery import prepare_restored_database
+
+    destination = f.tmp / 'prepared.sqlite'
+    before = f.store.get('one')
+    assert prepare_restored_database(f.store.db_path, destination) == {'connections': 2, 'grants': 2}
+    assert stat.S_IMODE(os.stat(destination).st_mode) == 0o600
+    assert f.store.get('one') == before
+    with sqlite3.connect(destination) as copy:
+        assert copy.execute('SELECT state FROM v2_recovery_staging').fetchone()[0] == 'isolated'
+        assert copy.execute("SELECT enabled FROM v2_integrations WHERE integration_id='one'").fetchone()[0] == 0
+    with pytest.raises(ValueError, match='destination_unavailable'):
+        prepare_restored_database(f.store.db_path, destination)
+    assert not list(f.tmp.glob('.alphonse-recovery-*'))
+
+
+def test_staged_copy_rejects_bad_source_without_publishing(f):
+    from alphonse.agent_v2.account_recovery import prepare_restored_database
+
+    broken = f.tmp / 'bad.sqlite'
+    with sqlite3.connect(broken) as db:
+        db.execute('CREATE TABLE irrelevant (id INTEGER)')
+    destination = f.tmp / 'not-created.sqlite'
+    with pytest.raises(ValueError, match='missing_integrations'):
+        prepare_restored_database(broken, destination)
+    assert not destination.exists()
+    assert not list(f.tmp.glob('.alphonse-recovery-*'))
+    link = f.tmp / 'source-link.sqlite'
+    link.symlink_to(broken)
+    with pytest.raises(ValueError, match='source_invalid'):
+        prepare_restored_database(link, destination)
+
+
+def test_staging_marker_blocks_daemon_database_startup(f):
+    from alphonse.agent_v2.account_recovery import prepare_restored_database, reject_staged_database
+
+    destination = f.tmp / 'staged.sqlite'
+    reject_staged_database(f.store.db_path)
+    prepare_restored_database(f.store.db_path, destination)
+    with pytest.raises(RuntimeError, match='staged_database_not_activated'):
+        reject_staged_database(destination)
+
+
+def test_staged_copy_requires_private_destination_directory(f):
+    from alphonse.agent_v2.account_recovery import prepare_restored_database
+
+    public = f.tmp / 'public'
+    public.mkdir(mode=0o755)
+    public.chmod(0o755)
+    with pytest.raises(ValueError, match='directory_unprotected'):
+        prepare_restored_database(f.store.db_path, public / 'restore.sqlite')
+    assert not list(public.iterdir())
+
+
+def test_daemon_refuses_staged_database_before_migration(f, monkeypatch):
+    from alphonse.agent_v2.account_recovery import prepare_restored_database
+    from alphonse.agent_v2 import daemon
+
+    destination = f.tmp / 'staged-start.sqlite'
+    prepare_restored_database(f.store.db_path, destination)
+    monkeypatch.setenv('ALPHONSE_V2_DB_PATH', str(destination))
+    monkeypatch.setattr(daemon, 'migrate_legacy_databases', lambda: pytest.fail('must not migrate staged recovery'))
+    monkeypatch.setattr(daemon, '_claim_single_instance_lock', lambda *args: pytest.fail('must not start staged recovery'))
+    with pytest.raises(RuntimeError, match='staged_database_not_activated'):
+        daemon.main()
+
+
+def test_cli_prepares_staged_copy_without_starting_daemon(f, capsys):
+    from alphonse.agent_v2.cli import main
+    from alphonse.agent_v2.account_recovery import reject_staged_database
+
+    destination = f.tmp / 'cli-stage.sqlite'
+    assert main(['prepare-account-recovery', f.store.db_path, str(destination)]) == 0
+    message = capsys.readouterr().out
+    assert '2 accounts fenced' in message and 'Do not start' in message
+    assert 'disposable-' not in message
+    with pytest.raises(RuntimeError, match='staged_database_not_activated'):
+        reject_staged_database(destination)

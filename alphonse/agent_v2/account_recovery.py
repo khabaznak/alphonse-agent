@@ -67,3 +67,84 @@ def fence_restored_accounts(connection, *, now=None):
         connection.rollback()
         raise
     return counts
+
+
+def prepare_restored_database(source, destination):
+    """Create an offline, account-fenced SQLite copy; never activate it.
+
+    Destination must not already exist. The copy is made in a private staging
+    file in the destination directory, verified and fenced before it is made
+    visible at the requested path. This is not a complete household restore:
+    queues, backup retention, credential reconciliation and consent remain
+    separate requirements. Both paths are trusted operator inputs.
+    """
+    import os
+    from pathlib import Path
+    import sqlite3
+    import stat
+    import tempfile
+
+    source_path = Path(source).expanduser().absolute()
+    destination_path = Path(destination).expanduser().absolute()
+    if source_path.is_symlink() or not source_path.is_file():
+        raise ValueError('account_recovery_source_invalid')
+    if not destination_path.parent.is_dir() or os.path.lexists(destination_path):
+        raise ValueError('account_recovery_destination_unavailable')
+    parent_info = destination_path.parent.stat()
+    if (parent_info.st_uid != os.getuid() or stat.S_IMODE(parent_info.st_mode) & 0o077):
+        raise ValueError('account_recovery_destination_directory_unprotected')
+    descriptor, stage_name = tempfile.mkstemp(prefix='.alphonse-recovery-', suffix='.sqlite', dir=destination_path.parent)
+    os.close(descriptor)
+    stage = Path(stage_name)
+    try:
+        source_db = sqlite3.connect(source_path.as_uri() + '?mode=ro', uri=True)
+        try:
+            stage_db = sqlite3.connect(stage)
+            try:
+                source_db.backup(stage_db)
+                if stage_db.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
+                    raise ValueError('account_recovery_database_invalid')
+                result = fence_restored_accounts(stage_db)
+                stage_db.execute("CREATE TABLE IF NOT EXISTS v2_recovery_staging (state TEXT NOT NULL CHECK(state='isolated'))")
+                stage_db.execute("INSERT INTO v2_recovery_staging VALUES ('isolated')")
+                stage_db.commit()
+                if stage_db.execute('PRAGMA journal_mode=DELETE').fetchone()[0] != 'delete':
+                    raise ValueError('account_recovery_journal_unavailable')
+            finally:
+                stage_db.close()
+        finally:
+            source_db.close()
+        fd = os.open(stage, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        # Hard-link publication is atomic and fails rather than overwriting an
+        # existing destination, including a symlink created during staging.
+        os.link(stage, destination_path)
+        parent_fd = os.open(destination_path.parent, os.O_RDONLY)
+        try:
+            os.fsync(parent_fd)
+        finally:
+            os.close(parent_fd)
+        return result
+    finally:
+        stage.unlink(missing_ok=True)
+        for suffix in ('-journal', '-wal', '-shm'):
+            Path(str(stage) + suffix).unlink(missing_ok=True)
+        # Once linked, the completed destination is deliberately retained even
+        # if directory sync fails: it must not be mistaken for an activated DB.
+
+
+def reject_staged_database(path):
+    """Fail closed before startup if an isolated recovery copy is selected."""
+    from pathlib import Path
+    import sqlite3
+
+    candidate = Path(path).expanduser().absolute()
+    if not candidate.exists():
+        return
+    with sqlite3.connect(candidate.as_uri() + '?mode=ro', uri=True) as conn:
+        marker = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_recovery_staging'").fetchone()
+        if marker:
+            raise RuntimeError('account_recovery_staged_database_not_activated')

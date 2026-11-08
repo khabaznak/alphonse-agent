@@ -3278,6 +3278,9 @@ def _question_answer_text(payload: dict[str, Any] | None) -> str:
 
 
 def main() -> None:
+    from alphonse.agent_v2.account_recovery import reject_staged_database
+    from alphonse.agent_v2.database import default_database_path
+    reject_staged_database(default_database_path())
     daemon_id = f"daemon-{uuid4().hex[:12]}"
     startup_lock = _claim_single_instance_lock(daemon_id)
     try:
