@@ -245,7 +245,10 @@ verified. A copied database alone is not a safe restore procedure.
 The offline `alphonse prepare-account-recovery SOURCE DESTINATION` command creates
 an owner-only staged SQLite copy in an owner-only directory, refusing to overwrite
 an existing file. It fences all restored managed connections and revokes their
-grants transactionally, preserving their IDs and credential references. The
+grants transactionally, preserving their IDs. It detaches credential references
+from managed connections and preserves them separately in the isolated database
+for reconciliation, so ordinary replacement or deletion cannot inadvertently
+delete a credential still used by the live database. It does not alter the vault. The
 normal daemon refuses to start from a staged copy. Synthetic tests restore a
 pre-revocation snapshot and verify account binding, findings and pending delivery
 remain denied. Use an offline backup as SOURCE; never target a running household

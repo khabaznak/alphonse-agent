@@ -28,9 +28,16 @@ def fence_restored_accounts(connection, *, now=None):
         tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         if 'v2_integrations' not in tables:
             raise ValueError('account_recovery_missing_integrations')
-        rows = connection.execute('SELECT integration_id, connection_json FROM v2_integrations').fetchall()
+        if 'v2_recovery_credential_references' in tables:
+            raise ValueError('account_recovery_already_fenced')
+        connection.execute('''CREATE TABLE v2_recovery_credential_references (
+            integration_id TEXT PRIMARY KEY, credential_ref TEXT NOT NULL,
+            credential_generation INTEGER NOT NULL, credential_deletion_pending INTEGER NOT NULL
+        ) STRICT''')
+        rows = connection.execute('''SELECT integration_id, connection_json, credential_ref,
+            credential_generation, credential_deletion_pending FROM v2_integrations''').fetchall()
         managed = set()
-        for integration_id, raw in rows:
+        for integration_id, raw, credential_ref, generation, deletion_pending in rows:
             value = json.loads(raw or '{}')
             if not isinstance(value, dict):
                 raise ValueError('account_recovery_invalid_connection')
@@ -40,9 +47,18 @@ def fence_restored_accounts(connection, *, now=None):
                     or not isinstance(value.get('owner_user_id'), str) or not value['owner_user_id']):
                 raise ValueError('account_recovery_invalid_connection')
             managed.add(integration_id)
+            # A restored reference can point at the live host's current Keychain
+            # entry. Preserve it for reconciliation, but detach it from normal
+            # credential replacement/deletion paths in this isolated copy.
+            if (not isinstance(credential_ref, str) or type(generation) is not int
+                    or type(deletion_pending) is not int or deletion_pending not in (0, 1)):
+                raise ValueError('account_recovery_invalid_credential_reference')
+            connection.execute('INSERT INTO v2_recovery_credential_references VALUES (?, ?, ?, ?)',
+                               (integration_id, credential_ref, generation, deletion_pending))
             value.update(status='reauth_required', health_code='restore_reconciliation_required',
                          revision=value['revision'] + 1, updated_at=timestamp)
-            connection.execute('UPDATE v2_integrations SET enabled=0, connection_json=?, updated_at=? WHERE integration_id=?',
+            connection.execute('''UPDATE v2_integrations SET enabled=0, connection_json=?, updated_at=?,
+                               credential_ref='', credential_deletion_pending=0 WHERE integration_id=?''',
                                (json.dumps(value, sort_keys=True), timestamp, integration_id))
             counts['connections'] += 1
         if managed and 'v2_account_grants' not in tables:

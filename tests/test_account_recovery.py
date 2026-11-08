@@ -25,9 +25,13 @@ def test_restored_pre_revocation_snapshot_is_fenced_before_use(f):
     bindings = SkillBindings(restored, f.users, f.skills)
     assert not restored.get('one').enabled
     assert restored.get('one').connection['health_code'] == 'restore_reconciliation_required'
-    # IDs, account ownership, credential references and original scopes remain
-    # recoverable; neither the stored token nor current vault is touched.
-    assert restored.get('one').credential_ref == f.store.get('one').credential_ref
+    # A restored reference must not be used by ordinary reconnect/deletion paths:
+    # it can still identify a credential used by the live database. Preserve it
+    # separately for reconciliation without touching the shared vault.
+    assert restored.get('one').credential_ref == ''
+    with restored._connect() as db:
+        escrow = db.execute("SELECT credential_ref, credential_generation FROM v2_recovery_credential_references WHERE integration_id='one'").fetchone()
+    assert tuple(escrow) == (f.store.get('one').credential_ref, f.store.get('one').credential_generation)
     with pytest.raises(PermissionError):
         bindings.resolve_account(AccountSession('child'), skill_id='skill:fixture', name='mail',
             operation='read', resources=['folder-a'], recipient_user_ids=[])
@@ -52,6 +56,18 @@ def test_recovery_rejects_corrupt_grant_atomically(f):
         with pytest.raises(ValueError, match='invalid_grant'):
             fence_restored_accounts(copy)
         assert copy.execute("SELECT enabled, connection_json FROM v2_integrations WHERE integration_id='one'").fetchone() == before
+        assert not copy.execute("SELECT 1 FROM sqlite_master WHERE name='v2_recovery_credential_references'").fetchone()
+
+
+def test_recovery_never_overwrites_preserved_credential_references(f):
+    snapshot = f.tmp / 'already-fenced.sqlite'
+    with f.store._connect() as live, sqlite3.connect(snapshot) as copy:
+        live.backup(copy)
+        fence_restored_accounts(copy)
+        before = copy.execute('SELECT * FROM v2_recovery_credential_references ORDER BY integration_id').fetchall()
+        with pytest.raises(ValueError, match='already_fenced'):
+            fence_restored_accounts(copy)
+        assert copy.execute('SELECT * FROM v2_recovery_credential_references ORDER BY integration_id').fetchall() == before
 
 
 def test_staged_copy_is_private_fenced_and_never_overwrites(f):
