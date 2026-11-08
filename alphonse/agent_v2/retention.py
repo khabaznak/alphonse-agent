@@ -37,6 +37,22 @@ def prune_operational_data(
                 (cutoff,),
             )
             deleted["task_dependencies"] = int(cursor.rowcount)
+        if {"v2_event_history", "v2_automation_executions", "v2_event_receipts"} <= tables:
+            # History is diagnostic content. Keep any event still needed for
+            # dispatch/recovery and retain its independent replay receipt.
+            cursor = connection.execute(
+                """DELETE FROM v2_event_history
+                   WHERE julianday(created_at) < julianday(?)
+                   AND NOT EXISTS (SELECT 1 FROM v2_automation_executions x
+                       WHERE x.event_key=v2_event_history.event_key
+                       AND x.status NOT IN ('completed','cancelled','failed','denied'))
+                   AND EXISTS (SELECT 1 FROM v2_event_receipts r
+                       WHERE r.worker_id=v2_event_history.worker_id
+                       AND r.source_event_id=v2_event_history.source_event_id
+                       AND r.event_key=v2_event_history.event_key)""",
+                (cutoff,),
+            )
+            deleted["event_history"] = int(cursor.rowcount)
         statements = (
             (
                 "questions",

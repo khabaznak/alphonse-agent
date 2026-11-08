@@ -434,3 +434,37 @@ def test_tick_preserves_current_daemon_long_running_model_call(tmp_path):
     worker.run_once(now=datetime.now(timezone.utc) + timedelta(seconds=120))
     assert queue.status_for(queued.message_id) == "processing"
     assert queue.size() == 0
+
+
+def test_time_retention_keeps_active_event_and_durable_replay_receipt(tmp_path):
+    path = tmp_path / 'events.db'
+    store = setup_store(path)
+    old = publish(store, 'terminal')
+    pending = publish(store, 'pending')
+    cutoff_time = datetime.now(timezone.utc) - timedelta(days=31)
+    with connect_database(path) as conn:
+        conn.execute('UPDATE v2_event_history SET created_at=?', (cutoff_time.isoformat(),))
+        conn.execute("UPDATE v2_automation_executions SET status='completed' WHERE event_key=?", (old['event_key'],))
+    deleted = prune_operational_data(path)
+    assert deleted['event_history'] == 1
+    with connect_database(path) as conn:
+        assert [row[0] for row in conn.execute('SELECT event_key FROM v2_event_history')] == [pending['event_key']]
+        assert conn.execute('SELECT COUNT(*) FROM v2_event_receipts').fetchone()[0] == 2
+    assert publish(store, 'terminal')['duplicate']
+    assert not publish(store, 'terminal')['matches']
+    queue = SQLiteMessageQueue(path)
+    result = dispatcher(store, queue).run_once()
+    assert len(result) == 1 and queue.size() == 1
+
+
+def test_time_retention_fails_safe_without_replay_receipt(tmp_path):
+    path = tmp_path / 'events.db'
+    store = setup_store(path)
+    event = publish(store)
+    with connect_database(path) as conn:
+        conn.execute('UPDATE v2_event_history SET created_at=?', ((datetime.now(timezone.utc) - timedelta(days=31)).isoformat(),))
+        conn.execute("UPDATE v2_automation_executions SET status='completed'")
+        conn.execute('DELETE FROM v2_event_receipts')
+    assert prune_operational_data(path)['event_history'] == 0
+    with connect_database(path) as conn:
+        assert conn.execute('SELECT event_key FROM v2_event_history').fetchone()[0] == event['event_key']

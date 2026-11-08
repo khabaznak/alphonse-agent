@@ -205,8 +205,10 @@ any run is active, and cursors without reliable page timestamps remain; expiry
 records a content-free scope marker so the next bounded baseline reports a coverage
 gap. This is not a complete 30-day retention guarantee. Processing checkpoints,
 terminal run receipts and event/input manifests remain unqualified.
-Event history is count-bounded. The event receipt table rejects duplicates older
-than 90 days but keeps acceptance tombstones indefinitely; pruning these would
+Operational retention also deletes event history older than 30 days when no
+nonterminal execution depends on it and its independent replay receipt exists;
+unknown/missing replay state keeps the event. Receipts remain in place. The event
+receipt table rejects duplicates older than 90 days but keeps acceptance tombstones indefinitely; pruning these would
 allow unseen old IDs to become new without a trusted original-age fence. Keep
 those content-free receipts until such a fence is implemented. This review does
 not relabel that behavior as a qualified 90-day physical deletion policy.
@@ -218,6 +220,16 @@ A pre-deletion backup can resurrect content if it also restores old authority.
 Do not enable a real-account pilot until a synthetic restore with current durable
 tombstones has demonstrated denial/redaction and the actual backup expiry is
 verified. A copied database alone is not a safe restore procedure.
+
+The offline `account_recovery.fence_restored_accounts` primitive provides a
+conservative staging step: it disables all restored managed connections and
+revokes all restored grants in one transaction, requiring explicit reconciliation
+and preserving their IDs and credential references. Synthetic tests restore a
+pre-revocation snapshot and verify that normal account binding cannot use it.
+This is **not** an automatic restore detector or a complete restore procedure:
+queues, external copies, credentials, backup encryption/expiry and re-consent
+still require qualification. Never invoke it on the running household database;
+an offline staged copy must remain isolated until all recovery checks pass.
 
 ## Credentials and disconnect qualification
 
