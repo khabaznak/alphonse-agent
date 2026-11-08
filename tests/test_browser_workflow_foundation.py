@@ -957,6 +957,13 @@ def test_private_answer_phase_continuation(tmp_path, monkeypatch, scenario):
             return executor.run(task, current, context)
         return PhaseOutcome(current.phase.phase_id, PhaseStatus.BLOCKED, "fixture stop")
     def review(task, state, outcome, context):
+        if scenario == "changed":
+            from alphonse.agent_v2.core.intelligence.v3.outer import V3OuterController
+            result = V3OuterController().review_and_route(task, state, outcome, context)
+            assert task.metadata.get("v3_route") == "strategic_replan"
+            task.status = "failed"
+            task.outcome = {"status": "failure", "reason": "fixture stop"}
+            return result
         task.status = "failed"
         task.outcome = {"status": "failure", "reason": "fixture stop"}
         return SimpleNamespace(status=None), None
@@ -1090,6 +1097,64 @@ def test_native_private_question_and_daemon_answer_keep_value_out_of_history(tmp
     assert step.error is None
     assert [e["kind"] for e in seen[0]["events"]] == ["requested"]
     assert [e["kind"] for e in seen[1]["events"]] == ["requested", "supplied"]
+    service.private_data.clear()
+
+
+def test_real_private_request_resumes_same_phase_and_uses_protected_answer(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from alphonse.agent_v2.core.core import CoreLoopContext
+    from alphonse.agent_v2.core.intelligence.v3 import PhaseExecutor, PhasePlan, PhaseSubgoal, PhaseStatus, SideEffectClass, MutationScope, new_tactical_state
+    from alphonse.agent_v2.core.intelligence.v3 import task_understanding
+    from alphonse.agent_v2.core.intelligence.v3.processor import HierarchicalCAPDProcessor
+    from alphonse.agent_v2.core.messages import InMemoryMessageQueue
+    from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry
+    from alphonse.agent_v2.core.tools.registry.native.browser_workflow import build_browser_workflow_tools
+
+    store, page = SQLiteQuestionStore(tmp_path / "db"), Page()
+    service = BrowserWorkflowService(checkpoint_store=store, transport=page,
+        authorized=lambda actor, task: "grant-1", cancelled=lambda: False, enabled=True)
+    phase = PhasePlan("phase-1", "Complete the form", (PhaseSubgoal("fill", "Fill field", "form",
+        allowed_capabilities=("browser",), allowed_side_effects=(SideEffectClass.USER_RESPONSE, SideEffectClass.EXTERNAL_IRREVERSIBLE)),),
+        authorized_capabilities=("browser",), mutation_scope=MutationScope(allow_external_effects=True))
+    state = new_tactical_state(phase)
+    state.transition(PhaseStatus.RUNNING)
+    state.revealed_tool_ids = ["native.browser_workflow_request_value", "native.browser_workflow_fill"]
+    task = _task()
+    task.hierarchical_state = state.to_dict()
+    task.metadata["channel"] = {"integration_id": "desktop"}
+    service.begin(task)
+    service.observe(task)
+    registry = InMemoryToolRegistry()
+    for tool in build_browser_workflow_tools(enabled=True):
+        registry.register(tool)
+    context = CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry, question_store=store,
+                              browser_workflow_service=service)
+    request = PhaseExecutor(action_selector=lambda *_: {"tool_id": "native.browser_workflow_request_value",
+                                                         "arguments": {"field": "name"}})
+    assert request.run(task, state, context).status == PhaseStatus.WAITING_USER
+    question_id = task.metadata["pending_question_id"]
+    handle = service.store_pending_answer(task, actor_id=task.user, question_id=question_id, value="PRIVATE_VALUE")
+    answered = store.route_answer(respondent_user_id=task.user, question_id=question_id,
+        payload={"text": handle}, private_browser_ref=handle, private_ref_validator=service.validate_pending_answer)
+    resumed = answered.resumed_task
+    assert store.claim_browser_resumption(resumed)
+    processor = HierarchicalCAPDProcessor()
+    monkeypatch.setattr(task_understanding, "ensure", lambda *_: None)
+    monkeypatch.setattr(processor, "_new_state", lambda *_: pytest.fail("unexpected replan"))
+    monkeypatch.setattr(processor, "_result", lambda *_: None)
+    processor.executor = PhaseExecutor(action_selector=lambda *_: {"tool_id": "native.browser_workflow_fill",
+                                                                   "arguments": {"field": "name", "target": "123_456"}})
+    def stop(task, *_):
+        task.status = "failed"
+        task.outcome = {"status": "failure", "reason": "fixture stop"}
+        return SimpleNamespace(status=None), None
+    processor.outer = SimpleNamespace(review_and_route=stop)
+    processor._process(resumed, context)
+    assert page.calls == [("123_456", "PRIVATE_VALUE")]
+    assert workflow.unresolved(workflow.load(resumed))
+    assert resumed.hierarchical_state["phase"]["phase_id"] == "phase-1"
+    serialized = json.dumps(resumed.hierarchical_state)
+    assert handle not in serialized and "PRIVATE_VALUE" not in serialized
     service.private_data.clear()
 
 
