@@ -1,0 +1,96 @@
+{
+  "version": "multifield-live-exploratory-v1",
+  "model": "gpt-6-luna",
+  "jev_model": "jev-1.14.0",
+  "provider_setup": "ChatGPT subscription; CLI shell, apps, MCP and browser features disabled; synthetic fixture tools only",
+  "typesafe_budget_charge_usd": "0.000757638",
+  "typesafe_limit_usd": "0.05",
+  "limitations": [
+    "Two exploratory trials per configuration; not a statistical comparison.",
+    "First per-action failure did not retain its detailed error code.",
+    "No multi-field run completed; fixture batch is not a production browser tool.",
+    "Subscription usage is not measured in dollars. No household data was included in fixture tasks."
+  ],
+  "results": [
+    {
+      "variant": "per_action",
+      "error_type": "ValueError",
+      "elapsed_seconds": 18.94040895893704,
+      "typesafe_budget_charge_usd": "0.000080388",
+      "repeat": 1
+    },
+    {
+      "scenario": "normal",
+      "variant": "fixture_batch",
+      "outcome": "blocked",
+      "independent_oracle_pass": false,
+      "verified": false,
+      "submission_count": 0,
+      "composition_calls": 3,
+      "jev_reviews": 3,
+      "tool_calls": 3,
+      "operations": [
+        "inspect",
+        "verify",
+        "verify"
+      ],
+      "elapsed_seconds": 40.68120129092131,
+      "provider_cost_usd": 0,
+      "typesafe_budget_charge_usd": "0.000336084",
+      "repeat": 1
+    },
+    {
+      "scenario": "normal",
+      "variant": "per_action",
+      "outcome": "error",
+      "failure_type": "ValueError",
+      "failure_code": "openai_codex_invalid_json",
+      "independent_oracle_pass": false,
+      "verified": false,
+      "submission_count": 0,
+      "composition_calls": 3,
+      "jev_reviews": 2,
+      "tool_calls": 2,
+      "selected_operations": [
+        "inspect",
+        "fill"
+      ],
+      "operations": [
+        "inspect",
+        "fill"
+      ],
+      "elapsed_seconds": 22.939069958985783,
+      "provider_cost_usd": null,
+      "cost_basis": "ChatGPT subscription; Jev charge recorded separately",
+      "typesafe_budget_charge_usd": "0.000502530",
+      "repeat": 2
+    },
+    {
+      "scenario": "normal",
+      "variant": "fixture_batch",
+      "outcome": "blocked",
+      "failure_type": null,
+      "failure_code": null,
+      "independent_oracle_pass": false,
+      "verified": false,
+      "submission_count": 0,
+      "composition_calls": 3,
+      "jev_reviews": 3,
+      "tool_calls": 3,
+      "selected_operations": [
+        "inspect",
+        "verify",
+        "batch"
+      ],
+      "operations": [
+        "inspect",
+        "verify"
+      ],
+      "elapsed_seconds": 47.678766540950164,
+      "provider_cost_usd": null,
+      "cost_basis": "ChatGPT subscription; Jev charge recorded separately",
+      "typesafe_budget_charge_usd": "0.000757638",
+      "repeat": 2
+    }
+  ]
+}

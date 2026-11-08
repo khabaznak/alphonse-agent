@@ -272,3 +272,94 @@ See [TypeSafe state](https://docs.typesafe.ai/concepts/state) and
 [Noul](https://docs.typesafe.ai/primitives/noul) for the provider's state and
 probability semantics; [model pricing](https://docs.typesafe.ai/models) was
 checked before the budgeted probe.
+
+## Two-field fixture and exploratory live runs
+
+The new `planning_multifield` comparison uses the real tactical executor and an
+in-memory two-field fixture with a separate post-submission readback oracle. A
+scripted fixture-only batch checks the actor, grant, cancellation, version and
+prerequisites for each internal operation. It is not a production browser tool
+and does not prove that the harness can enforce per-action checks inside an
+arbitrary Bash command. Thirty-six scripted trials (two runs for each of nine
+scenarios and both shapes) passed their fixture oracles. Normal per-action and
+batch trials used five and three action-composition/review calls respectively,
+with identical fixture operations: inspect, two fills, submit, and verify. Changed
+forms, denial and cancellation, including changes during a batch, stopped without
+submission. An uncertain submission was read back without a duplicate submit. A
+simulated checkpoint restart preserved the inspection without replay. The models
+were scripted; latency is local execution time, and no browser, model accuracy,
+provider cost or production permission enforcement is established.
+
+Two exploratory live trials per shape used the configured ChatGPT subscription
+and Jev 1.14 against the synthetic in-memory fixture. The model-only CLI was run
+with shell, connected apps, browser and MCP access disabled, and the executor
+could dispatch only the synthetic fixture tool. None completed: the per-action
+trials hit an error (the second was `openai_codex_invalid_json` after an inspect
+and fill), and both batch trials blocked without submission. These are individual
+failure observations, not evidence that batching is worse or that a live workflow
+is reliable. Jev's budgeted charge for these four trials was US$0.000757638;
+ChatGPT subscription usage was not priced per call. The first per-action error
+was retained without an error code, so its precise cause remains unknown.
+
+A subsequent synthetic structured-output probe failed with the provider's schema
+error: a free-form object for `arguments` lacks required object properties in the
+strict response schema. This demonstrates that simply adding a generic object
+schema is not a complete fix. Tool-specific argument contracts, correct provider
+fallback, privacy-safe error handling and a frozen reliability evaluation remain
+tracked by #192. The fixture tool description was subsequently improved to state
+that batch and submit require a version; future trials using that revised schema
+must not be pooled with these initial runs as equivalent samples.
+
+A later paired exploratory run used the revised operation-specific schema. Each
+shape produced one independently verified submission but the tactical stage still
+ended blocked after repeated verification. The per-action run made seven
+composition calls and seven tactical reviews, including two post-submit
+verifications; the fixture batch made four of each, also including two
+post-submit verifications. Their single-run elapsed times were about 65 and 43
+seconds, respectively. This observation is not a reliable estimate of a
+performance difference and neither blocked stage is a completed workflow. It
+shows that useful verified evidence can coexist with an incomplete stage and
+that the current uncertainty prompt alone does not resolve this case. The
+cumulative Jev charge for all six live multi-field trials was US$0.001782018;
+this excludes the earlier separate three-case Jev probe and unpriced subscription
+usage. Both live result artifacts retain failures and separate the schema versions.
+
+Reproduce the scripted fixture comparison with
+`python -m alphonse.agent_v2.evaluation.planning_multifield --output REPORT.json`.
+The tool-disabled live runner is
+`python -m alphonse.agent_v2.evaluation.planning_multifield_live --codex-cli CODEX --ledger LEDGER.json --output REPORT.json`.
+It reads only provider settings from the configured database, uses the synthetic
+in-memory fixture and reserves a US$0.05 Jev budget in the supplied ledger. Reuse
+the ledger across runs; a new ledger starts a new cap. ChatGPT subscription usage
+is bounded by action count and timeout but is not priced per call. Review current
+provider pricing before running it. The CLI wrapper is a model-only experiment,
+not an OS containment or production authorization boundary.
+
+Inspection of the previous Jev payloads found no omitted tactical context, but
+found a plausible fixture mismatch: the declared required output type was a
+receipt while the readback returned submitted fields without a receipt ID. The
+fixture was revised to return an explicit synthetic receipt. A separate live pair
+using that revision produced one independently verified submission per shape.
+The per-action stage completed after six calls and two readbacks; the batch stage
+remained blocked after four calls and two readbacks, with
+`tactical_action_repeated_without_progress`. The latter's independently verified
+effect is retained even though stage completion was not achieved. These two runs
+cannot establish that the receipt caused the outcome, nor establish a model
+failure rate or production improvement. The receipt-bearing runs are recorded in
+a separate artifact and must not be pooled with the earlier fixture revisions.
+The combined Jev charge across all multi-field live runs in the shared ledger was
+US$0.003614268, plus US$0.000150948 for the earlier independent Jev probe;
+ChatGPT subscription cost was not measured.
+
+A second receipt-bearing pair, recorded against the frozen source hashes, also
+verified one submission per shape but both tactical stages stopped on the repeated
+action guard after a second readback. For the per-action run, Jev received complete
+context and assigned 0.72 to the declared stage completion question after each
+readback. Earlier in that same run an action-specific acceptance question about a
+field fill was uncertain, so the existing one-per-stage targeted recovery budget
+had already been consumed before the later stage-level uncertainty. This is a
+specific observed budget-allocation failure shape, not proof that another model
+call or a higher threshold would improve outcomes. Across all multi-field live
+runs the Jev ledger charged US$0.004534740; the separate three-case diagnostic
+charged US$0.000150948, for US$0.004685688 total. ChatGPT subscription usage is
+not priced per call. All these runs used synthetic data.
