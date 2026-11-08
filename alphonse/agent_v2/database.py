@@ -52,6 +52,9 @@ def configure_connection(connection: sqlite3.Connection, *, persistent: bool) ->
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
     connection.execute(f"PRAGMA busy_timeout = {DEFAULT_BUSY_TIMEOUT_MS}")
+    # Scrub deleted content from ordinary database pages. WAL frames,
+    # filesystem snapshots, backups and remote copies need separate treatment.
+    connection.execute("PRAGMA secure_delete = ON")
     if persistent:
         connection.execute("PRAGMA journal_mode = WAL")
         connection.execute("PRAGMA synchronous = NORMAL")

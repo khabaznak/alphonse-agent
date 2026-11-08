@@ -238,8 +238,10 @@ those content-free receipts until such a fence is implemented. This review does
 not relabel that behavior as a qualified 90-day physical deletion policy.
 
 **R2 — BLOCKED, operator/engineering:** no encrypted deployment backup/restore or
-private export pipeline was supplied for qualification. Live-row redaction does
-not erase WAL, freed SQLite pages, filesystem snapshots or independent backups.
+private export pipeline was supplied for qualification. Alphonse connections now
+explicitly enable SQLite `secure_delete` for ordinary deleted database content;
+that is not complete secure erasure. Redaction does not guarantee removal from
+WAL frames, virtual-table shadow storage, filesystem snapshots or independent backups.
 A pre-deletion backup can resurrect content if it also restores old authority.
 Do not enable a real-account pilot until a synthetic restore with current durable
 tombstones has demonstrated denial/redaction and the actual backup expiry is

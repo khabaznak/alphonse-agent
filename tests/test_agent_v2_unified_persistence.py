@@ -17,6 +17,17 @@ from alphonse.agent_v2.storage_migration import migrate_legacy_databases
 from alphonse.agent_v2.users import V2UserStore
 
 
+def test_database_connections_enable_secure_delete(tmp_path):
+    database = tmp_path / 'private.sqlite'
+    with connect_database(database) as connection:
+        assert connection.execute('PRAGMA secure_delete').fetchone()[0] == 1
+    # Do not rely on SQLite compile-time defaults or other connections.
+    with sqlite3.connect(database) as connection:
+        connection.execute('PRAGMA secure_delete=OFF')
+    with connect_database(database) as connection:
+        assert connection.execute('PRAGMA secure_delete').fetchone()[0] == 1
+
+
 def test_shared_database_configuration_and_defaults(monkeypatch, tmp_path) -> None:
     database = tmp_path / "alphonse-v2.sqlite3"
     monkeypatch.setenv("ALPHONSE_V2_DB_PATH", str(database))
