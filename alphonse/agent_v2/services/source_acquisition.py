@@ -276,6 +276,9 @@ class SourceAcquisition:
                 FROM v2_source_evidence
                 WHERE json_extract(definition, '$.deleted')=1
                    OR json_extract(definition, '$.state')='deleted'""")}
+            if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_recovery_source_tombstones'").fetchone():
+                deleted_keys.update(tuple(row) for row in conn.execute(
+                    'SELECT connection_id,resource,source_id FROM v2_recovery_source_tombstones'))
             for record in records:
                 identity = (record['connection_id'], record['resource'], record['source_id'])
                 if not record['deleted'] and identity in deleted_keys:

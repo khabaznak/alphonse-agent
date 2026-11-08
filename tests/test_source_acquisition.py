@@ -336,6 +336,22 @@ def test_later_stale_version_cannot_resurrect_deleted_source(acquisition):
     assert 'source_deletion_reconciliation_required' in result['coverage']['gaps']
 
 
+def test_recovery_marker_blocks_replayed_source_absent_from_old_snapshot(acquisition):
+    f = acquisition
+    with f.schedules._connect() as conn:
+        conn.execute('''CREATE TABLE v2_recovery_source_tombstones (
+            connection_id TEXT NOT NULL, resource TEXT NOT NULL, source_id TEXT NOT NULL,
+            PRIMARY KEY(connection_id,resource,source_id)) STRICT''')
+        conn.execute("INSERT INTO v2_recovery_source_tombstones VALUES ('one','folder-a','message-1')")
+    f.adapter.pages = [SourcePage((record(f),), 'history', True)]
+    result = f.process()
+    with f.schedules._connect() as conn:
+        value = json.loads(conn.execute('SELECT definition FROM v2_source_evidence').fetchone()[0])
+    assert value['state'] == 'deleted' and value['content'] == {}
+    assert result['outcome'] == 'partial'
+    assert 'source_deletion_reconciliation_required' in result['coverage']['gaps']
+
+
 def test_folder_change_uses_new_bounded_baseline(acquisition):
     from test_account_grants import expiry
     f = acquisition

@@ -277,6 +277,14 @@ absent table is reported as unknown. Counts include terminal as well as pending
 rows; they do not certify fencing, completeness or readiness, and do not inspect
 independent stores or external copies. The command never activates the copy.
 
+`alphonse apply-recovery-deletions STAGED_COPY CURRENT_SNAPSHOT` applies source
+deletion markers from a trusted, current offline snapshot to an isolated copy.
+It records markers even for sources absent from the older copy, redacts matching
+cached evidence and finding versions, and redacts matching outbox rows when that
+table shares the staged database. The changes are transactional and repeatable.
+This does not prove the supplied snapshot is current or complete, reconcile
+separate databases or backups, or authorize activation. Keep both files protected.
+
 This is **not** an automatic detector for arbitrary database restores or a complete
 restore procedure: queues, external copies, credentials, backup encryption/expiry,
 reconciliation and re-consent remain unqualified. There is deliberately no command

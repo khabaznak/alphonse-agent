@@ -221,3 +221,85 @@ def test_inspection_rejects_live_unstaged_and_symlinked_databases(f):
     link.symlink_to(destination)
     with pytest.raises(ValueError, match='source_invalid'):
         inspect_staged_database(link)
+
+
+def _recovery_deletion_fixture(f):
+    from alphonse.agent_v2.account_recovery import prepare_restored_database
+
+    evidence = {'connection_id': 'one', 'resource': 'folder-a', 'source_id': 'fixture-source',
+                'state': 'available', 'deleted': False, 'content': {'text': 'synthetic private'}}
+    finding = {'finding_id': 'f1', 'version': 1, 'policy_id': 'p', 'policy_revision': 1,
+               'project_id': 'project', 'executing_user_id': 'child', 'audience_user_ids': ['parent'],
+               'state': 'open', 'source_refs': [{'evidence_id': 'e1'}], 'summary': 'synthetic private'}
+    with f.store._connect() as db:
+        db.executescript('''CREATE TABLE v2_source_evidence(evidence_id TEXT PRIMARY KEY,definition TEXT);
+            CREATE TABLE v2_findings(finding_id TEXT PRIMARY KEY,definition TEXT);
+            CREATE TABLE v2_finding_versions(finding_id TEXT,version INTEGER,definition TEXT);
+            CREATE TABLE v2_outbox(kind TEXT,message TEXT,status TEXT,metadata_json TEXT,
+                last_error TEXT,lease_owner TEXT,lease_expires_at TEXT);''')
+        db.execute('INSERT INTO v2_source_evidence VALUES (?,?)', ('e1', json.dumps(evidence)))
+        db.execute('INSERT INTO v2_findings VALUES (?,?)', ('f1', json.dumps(finding)))
+        db.execute('INSERT INTO v2_finding_versions VALUES (?,?,?)', ('f1', 1, json.dumps(finding)))
+        db.execute('INSERT INTO v2_outbox VALUES (?,?,?,?,?,?,?)',
+                   ('finding', 'synthetic private', 'pending', '{"finding_id":"f1"}', '', '', ''))
+    stage = f.tmp / 'restore.sqlite'
+    prepare_restored_database(f.store.db_path, stage)
+    current = f.tmp / 'current-snapshot.sqlite'
+    with f.store._connect() as live, sqlite3.connect(current) as copy:
+        live.backup(copy)
+        evidence.update(state='deleted', deleted=True, content={})
+        copy.execute('UPDATE v2_source_evidence SET definition=?', (json.dumps(evidence),))
+        # An item absent in the old backup needs a durable marker as well.
+        evidence['source_id'] = 'newer-deletion'
+        copy.execute('INSERT INTO v2_source_evidence VALUES (?,?)', ('e2', json.dumps(evidence)))
+    return stage, current
+
+
+def test_current_deletion_reconciles_staged_evidence_findings_and_outbox(f, capsys):
+    from alphonse.agent_v2.account_recovery import apply_current_source_deletions, reject_staged_database
+    from alphonse.agent_v2.cli import main
+
+    stage, current = _recovery_deletion_fixture(f)
+    assert main(['apply-recovery-deletions', str(stage), str(current)]) == 0
+    output = capsys.readouterr().out
+    assert '2 deletion markers' in output and 'synthetic private' not in output
+    with sqlite3.connect(stage) as db:
+        evidence = json.loads(db.execute('SELECT definition FROM v2_source_evidence').fetchone()[0])
+        finding = json.loads(db.execute('SELECT definition FROM v2_findings').fetchone()[0])
+        assert evidence['state'] == 'deleted' and evidence['content'] == {}
+        assert finding['state'] == 'redacted' and 'summary' not in finding
+        assert db.execute('SELECT COUNT(*) FROM v2_finding_versions').fetchone()[0] == 0
+        assert db.execute('SELECT message,status FROM v2_outbox').fetchone() == ('[Finding unavailable]', 'failed')
+        assert db.execute('SELECT COUNT(*) FROM v2_recovery_source_tombstones').fetchone()[0] == 2
+    assert apply_current_source_deletions(stage, current)['source_tombstones'] == 2
+    with pytest.raises(RuntimeError, match='staged_database_not_activated'):
+        reject_staged_database(stage)
+
+
+def test_recovery_deletion_rejects_incomplete_data_without_partial_writes(f):
+    from alphonse.agent_v2.account_recovery import apply_current_source_deletions
+
+    stage, current = _recovery_deletion_fixture(f)
+    with sqlite3.connect(stage) as db:
+        db.execute("UPDATE v2_findings SET definition='{}'")
+    with pytest.raises(ValueError, match='invalid_finding'):
+        apply_current_source_deletions(stage, current)
+    with sqlite3.connect(stage) as db:
+        assert json.loads(db.execute('SELECT definition FROM v2_source_evidence').fetchone()[0])['state'] == 'available'
+        assert not db.execute("SELECT 1 FROM sqlite_master WHERE name='v2_recovery_source_tombstones'").fetchone()
+    with pytest.raises(ValueError, match='current_matches_stage'):
+        apply_current_source_deletions(stage, stage)
+
+
+def test_recovery_deletion_also_checks_historical_finding_versions(f):
+    from alphonse.agent_v2.account_recovery import apply_current_source_deletions
+
+    stage, current = _recovery_deletion_fixture(f)
+    with sqlite3.connect(stage) as db:
+        finding = json.loads(db.execute('SELECT definition FROM v2_findings').fetchone()[0])
+        finding['source_refs'] = []
+        db.execute('UPDATE v2_findings SET definition=?', (json.dumps(finding),))
+    assert apply_current_source_deletions(stage, current)['findings_redacted'] == 1
+    with sqlite3.connect(stage) as db:
+        assert json.loads(db.execute('SELECT definition FROM v2_findings').fetchone()[0])['state'] == 'redacted'
+        assert db.execute('SELECT COUNT(*) FROM v2_finding_versions').fetchone()[0] == 0

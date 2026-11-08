@@ -202,3 +202,123 @@ def inspect_staged_database(path):
         return {label: (conn.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0]
                         if table in existing else None)
                 for label, table in tables_to_count.items()}
+
+
+def apply_current_source_deletions(staged, current):
+    """Apply a trusted current snapshot's deletion tombstones to an isolated copy.
+
+    Both paths must be offline, protected operator inputs. This copies no source
+    content from current. It does not establish that the snapshot is current or
+    complete, cover separate databases/backups, or authorize activation.
+    """
+    import os
+    from pathlib import Path
+    import sqlite3
+    import stat
+
+    stage_path = Path(staged).expanduser().absolute()
+    current_path = Path(current).expanduser().absolute()
+    if any(path.is_symlink() or not path.is_file() for path in (stage_path, current_path)):
+        raise ValueError('account_recovery_source_invalid')
+    info = stage_path.stat()
+    if info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) & 0o077:
+        raise ValueError('account_recovery_stage_unprotected')
+    if os.path.samefile(stage_path, current_path):
+        raise ValueError('account_recovery_current_matches_stage')
+    source = sqlite3.connect(current_path.as_uri() + '?mode=ro', uri=True)
+    target = sqlite3.connect(stage_path.as_uri() + '?mode=rw', uri=True)
+    try:
+        source.execute('BEGIN')
+        source_tables = {r[0] for r in source.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if 'v2_source_evidence' not in source_tables:
+            raise ValueError('account_recovery_current_tombstones_missing')
+        tombstones = set()
+        for (raw,) in source.execute('SELECT definition FROM v2_source_evidence'):
+            evidence = json.loads(raw)
+            if (not isinstance(evidence, dict) or type(evidence.get('deleted')) is not bool
+                    or evidence.get('state') not in {'available', 'expired', 'deleted', 'revoked'}):
+                raise ValueError('account_recovery_invalid_evidence')
+            if evidence.get('deleted') is True or evidence.get('state') == 'deleted':
+                key = tuple(evidence.get(k) for k in ('connection_id', 'resource', 'source_id'))
+                if any(not isinstance(v, str) or not v for v in key):
+                    raise ValueError('account_recovery_invalid_evidence')
+                tombstones.add(key)
+        target.execute('PRAGMA secure_delete=ON')
+        target.execute('BEGIN IMMEDIATE')
+        tables = {r[0] for r in target.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if ('v2_recovery_staging' not in tables or target.execute(
+                "SELECT COUNT(*) FROM v2_recovery_staging WHERE state='isolated'").fetchone()[0] != 1):
+            raise ValueError('account_recovery_not_staged')
+        if 'v2_source_evidence' not in tables:
+            raise ValueError('account_recovery_staged_evidence_missing')
+        if ('v2_findings' in tables) != ('v2_finding_versions' in tables):
+            raise ValueError('account_recovery_findings_incomplete')
+        target.execute('''CREATE TABLE IF NOT EXISTS v2_recovery_source_tombstones (
+            connection_id TEXT NOT NULL, resource TEXT NOT NULL, source_id TEXT NOT NULL,
+            PRIMARY KEY(connection_id,resource,source_id)) STRICT''')
+        target.executemany('INSERT OR IGNORE INTO v2_recovery_source_tombstones VALUES (?,?,?)', tombstones)
+        # Reapply all prior tombstones as well, so retries are monotonic.
+        tombstones = set(target.execute('SELECT connection_id,resource,source_id FROM v2_recovery_source_tombstones'))
+        evidence_ids = set()
+        for evidence_id, raw in target.execute('SELECT evidence_id,definition FROM v2_source_evidence').fetchall():
+            evidence = json.loads(raw)
+            if (not isinstance(evidence, dict) or type(evidence.get('deleted')) is not bool
+                    or evidence.get('state') not in {'available', 'expired', 'deleted', 'revoked'}):
+                raise ValueError('account_recovery_invalid_evidence')
+            key = tuple(evidence.get(k) for k in ('connection_id', 'resource', 'source_id'))
+            if any(not isinstance(v, str) or not v for v in key):
+                raise ValueError('account_recovery_invalid_evidence')
+            if key in tombstones:
+                evidence.update(content={}, state='deleted', deleted=True)
+                target.execute('UPDATE v2_source_evidence SET definition=? WHERE evidence_id=?',
+                               (json.dumps(evidence), evidence_id))
+                evidence_ids.add(evidence_id)
+        redacted = 0
+        if 'v2_findings' in tables:
+            findings = {}
+            affected = set()
+            def references_deleted(value):
+                if not isinstance(value, dict) or not isinstance(value.get('source_refs'), list):
+                    raise ValueError('account_recovery_invalid_finding')
+                refs = value['source_refs']
+                if any(not isinstance(ref, dict) or not isinstance(ref.get('evidence_id'), str) for ref in refs):
+                    raise ValueError('account_recovery_invalid_finding')
+                return any(ref['evidence_id'] in evidence_ids for ref in refs)
+
+            for finding_id, raw in target.execute('SELECT finding_id,definition FROM v2_findings').fetchall():
+                finding = json.loads(raw)
+                if references_deleted(finding):
+                    affected.add(finding_id)
+                findings[finding_id] = finding
+            for finding_id, raw in target.execute('SELECT finding_id,definition FROM v2_finding_versions'):
+                if finding_id not in findings:
+                    raise ValueError('account_recovery_invalid_finding')
+                if references_deleted(json.loads(raw)):
+                    affected.add(finding_id)
+            for finding_id in affected:
+                finding = findings[finding_id]
+                keys = ('finding_id', 'version', 'policy_id', 'policy_revision', 'project_id',
+                        'executing_user_id', 'audience_user_ids')
+                if any(key not in finding for key in keys) or finding['finding_id'] != finding_id:
+                    raise ValueError('account_recovery_invalid_finding')
+                tombstone = {key: finding[key] for key in keys}
+                tombstone.update(state='redacted', source_refs=[])
+                target.execute('UPDATE v2_findings SET definition=? WHERE finding_id=?',
+                               (json.dumps(tombstone), finding_id))
+                target.execute('DELETE FROM v2_finding_versions WHERE finding_id=?', (finding_id,))
+                if 'v2_outbox' in tables:
+                    target.execute("""UPDATE v2_outbox SET message='[Finding unavailable]',
+                        status=CASE WHEN status='delivered' THEN status ELSE 'failed' END,
+                        metadata_json=json_set(metadata_json, '$.finding_delivery_state', 'revoked'),
+                        last_error='', lease_owner='', lease_expires_at=''
+                        WHERE kind='finding' AND json_extract(metadata_json, '$.finding_id')=?""", (finding_id,))
+                redacted += 1
+        target.commit()
+        return {'source_tombstones': len(tombstones), 'evidence_redacted': len(evidence_ids),
+                'findings_redacted': redacted, 'outbox_inspected': 'v2_outbox' in tables}
+    except Exception:
+        target.rollback()
+        raise
+    finally:
+        target.close()
+        source.close()

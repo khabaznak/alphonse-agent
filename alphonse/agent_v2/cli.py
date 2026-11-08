@@ -27,6 +27,9 @@ def build_parser() -> argparse.ArgumentParser:
     recovery.add_argument("destination", help="New staging file in a private directory")
     inspect_recovery = subparsers.add_parser("inspect-account-recovery", help="Count work in an isolated recovery copy without activating it")
     inspect_recovery.add_argument("source", help="Already prepared isolated recovery copy")
+    deletion_recovery = subparsers.add_parser("apply-recovery-deletions", help="Apply current source deletion markers to an isolated copy")
+    deletion_recovery.add_argument("staged", help="Already prepared isolated recovery copy")
+    deletion_recovery.add_argument("current", help="Trusted current offline SQLite snapshot")
     return parser
 
 
@@ -52,6 +55,13 @@ def main(argv: list[str] | None = None) -> int:
         for label, count in counts.items():
             print(f"{label.replace('_', ' ')}: {count if count is not None else 'unknown (table absent)'}")
         print("Inventory only; this copy remains isolated and is not ready to activate.")
+        return 0
+    if args.command == "apply-recovery-deletions":
+        from alphonse.agent_v2.account_recovery import apply_current_source_deletions
+        counts = apply_current_source_deletions(args.staged, args.current)
+        print(f"Applied {counts['source_tombstones']} deletion markers; redacted {counts['evidence_redacted']} evidence records and {counts['findings_redacted']} findings.")
+        print("Outbox table inspected." if counts['outbox_inspected'] else "Outbox table absent; independent deliveries remain unqualified.")
+        print("This copy remains isolated and is not ready to activate.")
         return 0
     return 2
 
