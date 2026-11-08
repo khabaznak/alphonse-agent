@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import replace
 from alphonse.agent_v2.core.context_inventory import source, prompt_receipt
 
 import json
@@ -132,11 +133,15 @@ class PhaseExecutor:
                 return self._outcome(state, "The browser effect needs independent reconciliation.",
                                      blockers=("browser_workflow_reconciliation_required",))
             is_sequence = "actions" in selected
+            is_browser_sequence = "browser_fill_sequence" in selected
             selected_id = selected.get("tool_id")
-            sensitive_action = is_sequence or (isinstance(selected_id, str) and selected_id.startswith("native.browser_workflow_")) or any(
+            sensitive_action = is_sequence or is_browser_sequence or (isinstance(selected_id, str) and selected_id.startswith("native.browser_workflow_")) or any(
                 tool.tool_id == selected_id and tool.metadata.get("sensitive_content") is True for tool in tools)
             try:
-                if is_sequence:
+                if is_browser_sequence:
+                    proposed = _validate_browser_fill_sequence(self, state, subgoal, selected, tools)
+                    selected, pending_reads = proposed[0], proposed[1:]
+                elif is_sequence:
                     proposed = _validate_independent_reads(self, state, subgoal, selected, tools)
                     selected, pending_reads = proposed[0], proposed[1:]
                     sensitive_action = False
@@ -144,10 +149,17 @@ class PhaseExecutor:
             except (ValueError, PermissionError) as exc:
                 pending_reads.clear()
                 error = str(exc)
+                # Malformed responses may hide browser arguments in an
+                # unexpected wrapper. Treat the whole rejection as sensitive
+                # whenever this task has a browser workflow, even if no valid
+                # top-level browser tool identifier was supplied.
+                from . import browser_workflow
+                sensitive_rejection = (sensitive_action or browser_workflow.KEY in task.metadata
+                                       or browser_workflow._legacy_browser_state(task))
                 # IDs and acceptance-question wording do not change an invalid action.
                 fingerprint = hashlib.sha256(json.dumps({
-                    "tool_id": "native.browser_workflow" if sensitive_action else selected.get("tool_id"), "arguments": {"redacted": True} if sensitive_action else selected.get("arguments"),
-                    "error": "sensitive_action_invalid" if sensitive_action else error, "capabilities": sorted(subgoal.allowed_capabilities),
+                    "tool_id": "native.browser_workflow" if sensitive_rejection else selected.get("tool_id"), "arguments": {"redacted": True} if sensitive_rejection else selected.get("arguments"),
+                    "error": "sensitive_action_invalid" if sensitive_rejection else error, "capabilities": sorted(subgoal.allowed_capabilities),
                     "effects": sorted(item.value for item in subgoal.allowed_side_effects),
                     "scope": state.phase.mutation_scope.__dict__,
                 }, sort_keys=True, default=str).encode()).hexdigest()
@@ -160,8 +172,8 @@ class PhaseExecutor:
                 state.evidence.append({
                     "evidence_ref": f"tactical-rejection:{uuid4()}",
                     "phase_id": state.phase.phase_id, "subgoal_id": subgoal.subgoal_id,
-                    "status": "rejected", "error": "sensitive_action_invalid" if sensitive_action else error,
-                    "rejected_action": {"tool_id": "native.browser_workflow", "arguments": {"redacted": True}} if sensitive_action else selected,
+                    "status": "rejected", "error": "sensitive_action_invalid" if sensitive_rejection else error,
+                    "rejected_action": {"tool_id": "native.browser_workflow", "arguments": {"redacted": True}} if sensitive_rejection else selected,
                     "validation_feedback": "No tool ran. Correct this action once using the same revealed tools, "
                         "capabilities, effects and mutation scope; preserve completed work. Do not broaden authorization.",
                     "fingerprint": fingerprint, "repeated": repeated,
@@ -171,7 +183,7 @@ class PhaseExecutor:
                     continue
                 state.transition(PhaseStatus.BLOCKED)
                 self._checkpoint(task, state, context)
-                reason = ("tactical_planning_error_repeated:" if repeated else "tactical_correction_exhausted:") + ("sensitive_action_invalid" if sensitive_action else error)
+                reason = ("tactical_planning_error_repeated:" if repeated else "tactical_correction_exhausted:") + ("sensitive_action_invalid" if sensitive_rejection else error)
                 return self._outcome(state, reason, blockers=(reason,))
             if sensitive_action:
                 action = TacticalAction(action_id=f"action-{uuid4()}", subgoal_id=action.subgoal_id,
@@ -496,7 +508,7 @@ class PhaseExecutor:
         skill_guidance, loaded_skill_ids = selected_skill_guidance(task, context)
         if self._action_selector is not None:
             selected = self._action_selector(state, subgoal, tools)
-            if isinstance(selected, dict) and not selected.get("acceptance_questions"):
+            if isinstance(selected, dict) and not selected.get("acceptance_questions") and "browser_fill_sequence" not in selected:
                 selected = dict(selected)
                 selected["acceptance_questions"] = [{
                     "question_id": "stage_result_satisfies_completion",
@@ -536,6 +548,14 @@ class PhaseExecutor:
                 'task:' + str(task.task_id) + ':inspection_handoff', 'inspection_handoff',
             )
         skill_guidance = skill_guidance + "\n" + MEMORY_WORKFLOW
+        required_browser_step = _pending_browser_fill_recovery(task)
+        if required_browser_step in {"native.browser_workflow_observe", "native.browser_workflow_reconcile"}:
+            skill_guidance += source(
+                "\nA previous browser fill has an unresolved effect. The next permitted local recovery step is "
+                + required_browser_step + " with empty arguments. Do not repeat the fill or perform another "
+                "mutation until the independent reconciliation succeeds. Normal authorization and cancellation checks apply.",
+                'task:' + str(task.task_id) + ':browser_reconciliation', 'browser_reconciliation',
+            )
         selection = task.metadata.get("v3_context_selection") or {}
         task_context = task_context_for_decision(task, context, purpose="execution",
                                                 selected_context_ids=selection.get("selected_context_ids", []))
@@ -570,25 +590,40 @@ class PhaseExecutor:
         )
         from .context_manifests import event_input_metadata
         images = context.image_inputs(task)
-        result = context.inference.generate_json(
-            InferenceRequest(
-                prompt=prompt,
-                purpose=InferencePurpose.TACTICAL_ACTION,
-                context_manifests=prompt_receipt(prompt, [task_context, skill_guidance,
-                    source('Strategic plan: ' + json.dumps(state.phase.to_dict(), ensure_ascii=False), 'phase:' + state.phase.phase_id, 'strategic_plan'),
-                    source('Complete tool execution log (every entry, no omissions or truncation):\n' + state.prompt_projection(max_evidence_entries=None, max_chars=None), 'phase:' + state.phase.phase_id + ':execution', 'execution_evidence'),
-                    *([source('Goal: ' + task.goal, 'request:' + str(task.message_id or task.task_id), 'current_request')] if not projections_enabled() else []),
-                ], purpose='execution'),
-                project_id=task.project_id,
-                user=task.user,
-                task_id=task.task_id,
-                images=images,
-                tools=tools,
-                metadata={"phase_id": state.phase.phase_id, "subgoal_id": subgoal.subgoal_id,
-                          **event_input_metadata(task, "execution")},
-                cancel_checker=context.is_cancelled if context.cancellation_checker is not None else None,
-            )
+        request = InferenceRequest(
+            prompt=prompt,
+            purpose=InferencePurpose.TACTICAL_ACTION,
+            context_manifests=prompt_receipt(prompt, [task_context, skill_guidance,
+                source('Strategic plan: ' + json.dumps(state.phase.to_dict(), ensure_ascii=False), 'phase:' + state.phase.phase_id, 'strategic_plan'),
+                source('Complete tool execution log (every entry, no omissions or truncation):\n' + state.prompt_projection(max_evidence_entries=None, max_chars=None), 'phase:' + state.phase.phase_id + ':execution', 'execution_evidence'),
+                *([source('Goal: ' + task.goal, 'request:' + str(task.message_id or task.task_id), 'current_request')] if not projections_enabled() else []),
+            ], purpose='execution'),
+            project_id=task.project_id,
+            user=task.user,
+            task_id=task.task_id,
+            images=images,
+            tools=tools,
+            metadata={"phase_id": state.phase.phase_id, "subgoal_id": subgoal.subgoal_id,
+                      **event_input_metadata(task, "execution")},
+            cancel_checker=context.is_cancelled if context.cancellation_checker is not None else None,
         )
+        try:
+            result = context.inference.generate_json(request)
+        except ValueError as exc:
+            # A malformed provider response contains no executable action. A
+            # single fresh attempt can recover without replaying that response,
+            # any browser mutation, or sensitive output into the next prompt.
+            if "v3_browser_workflow" not in task.metadata or str(exc) != "openai_codex_invalid_json":
+                raise
+            if context.is_cancelled():
+                return None
+            try:
+                result = context.inference.generate_json(replace(request, prompt=request.prompt +
+                    "\nThe previous response could not be parsed. Return one valid JSON object using the action contract."))
+            except ValueError as retry_exc:
+                if str(retry_exc) != "openai_codex_invalid_json":
+                    raise
+                return None
         if recovery is not None:
             _record_uncertainty_assessment(state, recovery, result.json_value)
         if not isinstance(result.json_value, dict):
@@ -959,7 +994,11 @@ def _tactical_prompt(
         "Select one concrete tactical action for the current subgoal and define acceptance questions for its result. "
         "For a read-only subgoal only, you may instead return {actions:[...]} with two or three independent read-only "
         "actions, each in the same format, only when all arguments are already known and none depends on another result. "
-        "Never sequence writes, private or browser actions, user interaction, or actions needing a new observation. "
+        "For a browser fill whose field, target and private input are already known, you may instead return "
+        "{browser_fill_sequence:[fill, observe, reconcile]} with those three native browser workflow actions in that "
+        "exact order and the normal action format. The sequence stops on failure, uncertainty, cancellation, or changed "
+        "authorization; it does not establish task completion. Do not sequence any other write, browser action, "
+        "private input request, or user interaction. "
         "The runtime rechecks every action and stops the sequence on failure, uncertainty or completion. "
         "Do not change the objective, acceptance criteria, or mutation scope. "
         "Each action has tool_id, arguments, and a non-empty acceptance_questions array. Each question must be a Noul "
@@ -1105,6 +1144,28 @@ def _is_update_inspection(state: TacticalState, subgoal: PhaseSubgoal, answers: 
         }
         for item in state.phase.subgoals
     )
+
+
+def _validate_browser_fill_sequence(executor: PhaseExecutor, state: TacticalState, subgoal: PhaseSubgoal,
+                                    selected: dict[str, Any], tools: tuple["ToolDescriptor", ...]) -> list[dict[str, Any]]:
+    """Accept only one fill and its mandatory independent recovery steps.
+
+    The ephemeral proposal confers no authority and is discarded on restart.
+    Each member still passes the normal reveal, phase and invocation checks.
+    """
+    items = selected.get("browser_fill_sequence")
+    expected = ["native.browser_workflow_fill", "native.browser_workflow_observe",
+                "native.browser_workflow_reconcile"]
+    if (set(selected) - {"browser_fill_sequence", "uncertainty_assessment"} or not isinstance(items, list)
+            or len(items) != len(expected)
+            or any(not isinstance(item, dict) or item.get("tool_id") != name
+                   for item, name in zip(items, expected))):
+        raise ValueError("browser_fill_sequence_invalid")
+    for item in items:
+        action = executor._validate_action(state, subgoal, item, tools)
+        descriptor = next(tool for tool in tools if tool.tool_id == action.tool_id)
+        ToolInvocationService._validate(descriptor.argument_schema, action.arguments)
+    return [{key: value for key, value in item.items() if key != "action_id"} for item in items]
 
 
 def _validate_independent_reads(executor: PhaseExecutor, state: TacticalState, subgoal: PhaseSubgoal,

@@ -1,0 +1,75 @@
+{
+  "version": "browser-sequence-live-v1",
+  "model": "gpt-6-luna",
+  "executor_sha256": "f36e204f2e4db2556dc83abd83e301b65a433a1237fd3b500a67f21d64f1cf3f",
+  "harness_sha256": "602b00dbee077fde80222817e40a9e46024dddf6c6959603048dee40b341fe23",
+  "limitations": [
+    "Synthetic target IDs are given in the task; this does not qualify real browser grounding.",
+    "The backend is disposable and in-memory, not Chrome.",
+    "System One reviews are scripted and no Jev API is called.",
+    "The single-action control forbids sequences in its prompt and rejects them if returned.",
+    "At most 12 compositions per arm; subscription cost is not measured.",
+    "One run per arm is exploratory, not a reliability estimate."
+  ],
+  "results": [
+    {
+      "variant": "continued_phase",
+      "changed": false,
+      "composition_calls": 2,
+      "recovery_guidance_calls": 1,
+      "sequence_proposals": 0,
+      "tool_ids": [
+        "native.browser_workflow_fill"
+      ],
+      "provider_mode": "live",
+      "failure_type": null,
+      "failure_code": null,
+      "scripted_phase_replans": 0,
+      "phase_count": 1,
+      "tool_calls": 1,
+      "observations": 1,
+      "repeated_observations": 0,
+      "verified_fields": 0,
+      "effect_oracle_pass": false,
+      "scenario_expectation_met": false,
+      "unresolved_effect": true,
+      "phase_outcomes": [
+        "blocked"
+      ],
+      "elapsed_seconds": 17.808234874974005,
+      "task_completion": "not_qualified"
+    },
+    {
+      "variant": "fill_sequence",
+      "changed": false,
+      "composition_calls": 6,
+      "recovery_guidance_calls": 2,
+      "sequence_proposals": 1,
+      "tool_ids": [
+        "native.browser_workflow_fill",
+        "native.browser_workflow_observe",
+        "native.browser_workflow_reconcile",
+        "native.browser_workflow_fill",
+        "native.browser_workflow_observe",
+        "native.browser_workflow_reconcile"
+      ],
+      "provider_mode": "live",
+      "failure_type": null,
+      "failure_code": null,
+      "scripted_phase_replans": 0,
+      "phase_count": 1,
+      "tool_calls": 6,
+      "observations": 3,
+      "repeated_observations": 0,
+      "verified_fields": 2,
+      "effect_oracle_pass": true,
+      "scenario_expectation_met": true,
+      "unresolved_effect": false,
+      "phase_outcomes": [
+        "blocked"
+      ],
+      "elapsed_seconds": 66.61808566597756,
+      "task_completion": "not_qualified"
+    }
+  ]
+}
