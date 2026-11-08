@@ -186,6 +186,7 @@ class HierarchicalCAPDProcessor:
                 self._persist(task, context)
                 break
             try:
+                browser_verified_before = _verified_browser_effect_ids(task)
                 outcome = (
                     PhaseOutcome(state.phase.phase_id, PhaseStatus.PHASE_COMPLETE,
                                  "Resumed completed phase with recorded evidence.")
@@ -248,13 +249,14 @@ class HierarchicalCAPDProcessor:
             new_evidence = bool(evidence_after - evidence_before)
             if new_evidence and _phase_observations_report_no_progress(state, refs_before, context):
                 new_evidence = False
-            evidence_progress = new_evidence or bool(_satisfied_criterion_ids(task) - satisfied_before)
+            verified_browser_progress = bool(_verified_browser_effect_ids(task) - browser_verified_before)
+            evidence_progress = new_evidence or verified_browser_progress or bool(_satisfied_criterion_ids(task) - satisfied_before)
             review_status = str(getattr(getattr(review, "status", None), "value", ""))
             inspection_handoff = (
                 (task.metadata.get("v3_inspection_resolution") or {}).get("phase_id") == state.phase.phase_id
                 and any(blocker.startswith("inspection_") for blocker in outcome.blockers)
             )
-            if "tactical_stage_no_new_progress" in set(outcome.blockers):
+            if "tactical_stage_no_new_progress" in set(outcome.blockers) and not verified_browser_progress:
                 evidence_progress = False
             retrieval_handoff = (
                 (task.metadata.get("act_directive", {}).get("retrieval_resolution") or {}).get("phase_id")
@@ -910,13 +912,27 @@ def _successful_evidence_refs(raw_history: object) -> set[str]:
     }
 
 
+def _verified_browser_effect_ids(task: "TaskState") -> set[str]:
+    """Count independently verified effects, never attempts or transport returns."""
+    from . import browser_workflow
+    if browser_workflow.KEY not in task.metadata:
+        return set()
+    try:
+        return {event["id"] for event in browser_workflow.load(task)["events"] if event["kind"] == "verified"}
+    except browser_workflow.BrowserWorkflowError:
+        return set()
+
+
 def _successful_evidence_signatures(raw_history: object) -> set[str]:
     """New action IDs and phase names do not turn repeated results into progress."""
     return {
         json.dumps({key: item.get(key) for key in ("tool_id", "arguments", "result")},
                    ensure_ascii=False, sort_keys=True, default=str)
         for item in _deduplicated_history_evidence(raw_history)
-        if item.get("status") == "success" and item.get("tool_id") != "native.respond"
+        if item.get("status") == "success" and item.get("tool_id") not in {
+            "native.respond", "native.browser_workflow_fill", "native.browser_workflow_submit",
+            "native.browser_workflow_reconcile", "native.browser_workflow_verify_submission",
+        }
     }
 
 

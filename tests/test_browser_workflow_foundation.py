@@ -538,6 +538,7 @@ def test_partial_fills_require_fresh_verified_observations(tmp_path):
 
 
 def test_verified_private_fill_identity_is_compared_in_protected_storage(tmp_path):
+    from alphonse.agent_v2.core.intelligence.v3.processor import _verified_browser_effect_ids
     class Form(Page):
         def __init__(self):
             self.values = {}
@@ -558,13 +559,18 @@ def test_verified_private_fill_identity_is_compared_in_protected_storage(tmp_pat
         authorized=lambda actor, task: "grant-1", cancelled=lambda: False, enabled=True)
     task = _task()
     service.begin(task)
+    verified_before = set()
     for field, value, target in (("name", "PRIVATE_A", "1_1"), ("number", "PRIVATE_B", "1_2"),
                                  ("number", "PRIVATE_B", "1_3")):
         service.supply(task, actor_id=task.user, field=field, value=value)
         service.observe(task)
         service.fill(task, field=field, target=target)
+        assert _verified_browser_effect_ids(task) == verified_before
         service.observe(task)
         service.reconcile_fill(task)
+        verified_after = _verified_browser_effect_ids(task)
+        assert len(verified_after - verified_before) == 1
+        verified_before = verified_after
     with pytest.raises(workflow.BrowserWorkflowError, match="verified_fill_replay"):
         service.fill(task, field="number", target="1_3")
     assert page.calls == ["1_1", "1_2", "1_3"]
@@ -572,6 +578,65 @@ def test_verified_private_fill_identity_is_compared_in_protected_storage(tmp_pat
     rendered = json.dumps(store.load_task_checkpoint(task.task_id).to_checkpoint_dict())
     assert "PRIVATE_A" not in rendered and "PRIVATE_B" not in rendered
     assert "1_1" not in rendered and "1_2" not in rendered and "1_3" not in rendered
+    service.private_data.clear()
+
+
+def test_unverified_browser_action_returns_do_not_count_as_phase_progress():
+    from alphonse.agent_v2.core.intelligence.v3.processor import _successful_evidence_signatures
+    entries = [{"tool_id": "native.browser_workflow_" + operation, "status": "success",
+                "arguments": {"redacted": True}, "result": {"redacted": True}}
+               for operation in ("fill", "submit", "reconcile", "verify_submission")]
+    assert _successful_evidence_signatures([{"evidence": {"entries": entries}}]) == set()
+
+
+def test_verified_fill_resets_phase_stall_despite_redacted_prior_fill(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from alphonse.agent_v2.core.core import CoreLoopContext
+    from alphonse.agent_v2.core.intelligence.v3 import PhasePlan, PhaseSubgoal, PhaseStatus, PhaseOutcome, SideEffectClass, MutationScope, new_tactical_state
+    from alphonse.agent_v2.core.intelligence.v3.processor import HierarchicalCAPDProcessor
+    from alphonse.agent_v2.core.intelligence.v3 import task_understanding
+    from alphonse.agent_v2.core.messages import InMemoryMessageQueue
+
+    class Form(Page):
+        def verify_fill(self, target, value, observed):
+            return observed == self.observe() and self.calls == [(target, value)]
+    store, page = SQLiteQuestionStore(tmp_path / "db"), Form()
+    service = BrowserWorkflowService(checkpoint_store=store, transport=page,
+        authorized=lambda actor, task: "grant-1", cancelled=lambda: False, enabled=True)
+    task = _task()
+    phase = PhasePlan("phase-1", "Fill form", (PhaseSubgoal("fill", "Fill", "form",
+        allowed_capabilities=("browser",), allowed_side_effects=(SideEffectClass.EXTERNAL_IRREVERSIBLE,)),),
+        authorized_capabilities=("browser",), mutation_scope=MutationScope(allow_external_effects=True))
+    state = new_tactical_state(phase)
+    state.transition(PhaseStatus.RUNNING)
+    task.hierarchical_state = state.to_dict()
+    service.begin(task)
+    service.supply(task, actor_id=task.user, field="name", value="PRIVATE_VALUE")
+    service.observe(task)
+    task.metadata["v3_no_progress_phase_count"] = 2
+    redacted = {"tool_id": "native.browser_workflow_fill", "status": "success",
+                "arguments": {"redacted": True}, "result": {"redacted": True}}
+    task.metadata["v3_phase_history"] = [{"evidence": {"entries": [{**redacted, "evidence_ref": "old"}]}}]
+    processor = HierarchicalCAPDProcessor()
+    monkeypatch.setattr(task_understanding, "ensure", lambda *_: None)
+    monkeypatch.setattr(processor, "_result", lambda *_: None)
+    def run(task, current, context):
+        service.fill(task, field="name", target="field")
+        service.observe(task)
+        service.reconcile_fill(task)
+        current.evidence.append({**redacted, "evidence_ref": "new", "phase_id": "phase-1", "subgoal_id": "fill"})
+        return PhaseOutcome("phase-1", PhaseStatus.BLOCKED, "fixture stop")
+    def review(task, *_):
+        task.status = "failed"
+        task.outcome = {"status": "failure", "reason": "fixture stop"}
+        return SimpleNamespace(status=SimpleNamespace(value="phase_blocked")), None
+    processor.executor = SimpleNamespace(run=run)
+    processor.outer = SimpleNamespace(review_and_route=review)
+    processor._process(task, CoreLoopContext(messages=InMemoryMessageQueue(), question_store=store,
+                                            browser_workflow_service=service))
+    assert not task.metadata.get("v3_no_progress_stop")
+    assert "v3_no_progress_phase_count" not in task.metadata
+    assert task.outcome["reason"] == "fixture stop"
     service.private_data.clear()
 
 
@@ -1004,6 +1069,9 @@ def test_native_private_question_and_daemon_answer_keep_value_out_of_history(tmp
     class Processor:
         def process(self, resumed, loop_context):
             seen.append(workflow.load(resumed))
+            assert resumed.hierarchical_state["status"] == "waiting_user"
+            assert resumed.hierarchical_state["actions"][-1]["status"] == "waiting"
+            assert resumed.hierarchical_state["actions"][-1]["tool_id"] == "native.browser_workflow_request_value"
             resumed.hierarchical_state["status"] = "running"
             loop_context.browser_workflow_service.record_answered_question(resumed, question_id=question_id)
             seen.append(workflow.load(resumed))
