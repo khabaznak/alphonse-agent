@@ -530,6 +530,73 @@ def test_verified_private_fill_identity_is_compared_in_protected_storage(tmp_pat
     service.private_data.clear()
 
 
+@pytest.mark.parametrize("scenario", ["normal", "repeated", "failed_verify", "cancelled"])
+def test_executor_reconciles_distinct_fills_in_same_phase(tmp_path, scenario):
+    from alphonse.agent_v2.core.core import CoreLoopContext
+    from alphonse.agent_v2.core.intelligence.v3 import PhaseExecutor, PhasePlan, PhaseSubgoal, PhaseStatus, SideEffectClass, MutationScope, new_tactical_state
+    from alphonse.agent_v2.core.messages import InMemoryMessageQueue
+    from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry
+    from alphonse.agent_v2.core.tools.registry.native.browser_workflow import build_browser_workflow_tools
+
+    class Form(Page):
+        def __init__(self):
+            self.calls, self.values = [], {}
+        def observe(self):
+            return {"targets": ["1_1", "1_2"], "values": dict(self.values)}
+        def fill_if_unchanged(self, target, value, observed):
+            if observed != self.observe():
+                return False
+            self.calls.append(target)
+            self.values[target] = value
+            return True
+        def verify_fill(self, target, value, observed):
+            return scenario != "failed_verify" and observed == self.observe() and observed["values"].get(target) == value
+
+    store, page = SQLiteQuestionStore(tmp_path / "db"), Form()
+    service = BrowserWorkflowService(checkpoint_store=store, transport=page,
+        authorized=lambda actor, task: "grant-1", cancelled=lambda: False, enabled=True)
+    task = _task()
+    phase = PhasePlan("phase-1", "Fill form", (PhaseSubgoal("fill", "Fill form", "form",
+        allowed_capabilities=("browser",), allowed_side_effects=(SideEffectClass.READ_ONLY, SideEffectClass.EXTERNAL_IRREVERSIBLE)),),
+        authorized_capabilities=("browser",), mutation_scope=MutationScope(allow_external_effects=True))
+    state = new_tactical_state(phase)
+    state.transition(PhaseStatus.RUNNING)
+    task.hierarchical_state = state.to_dict()
+    service.begin(task)
+    service.supply(task, actor_id=task.user, field="name", value="PRIVATE_A")
+    service.supply(task, actor_id=task.user, field="number", value="PRIVATE_B")
+    service.observe(task)
+    actions = [
+        ("fill", {"field": "name", "target": "1_1"}), ("observe", {}), ("reconcile", {}),
+        ("fill", {"field": "number", "target": "1_2"}), ("observe", {}), ("reconcile", {}),
+    ]
+    if scenario == "repeated":
+        actions[1] = actions[0]
+    operations = iter(actions)
+    registry = InMemoryToolRegistry()
+    for tool in build_browser_workflow_tools(enabled=True):
+        registry.register(tool)
+    state.revealed_tool_ids = ["native.browser_workflow_" + name for name in ("fill", "observe", "reconcile")]
+    def select(*_):
+        item = next(operations, None)
+        return {"tool_id": "native.browser_workflow_" + item[0], "arguments": item[1]} if item else None
+    outcome = PhaseExecutor(action_selector=select).run(task, state,
+        CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry, question_store=store, browser_workflow_service=service,
+                        cancellation_checker=lambda: scenario == "cancelled" and bool(page.calls)))
+    saved = workflow.load(task)
+    if scenario == "normal":
+        assert page.calls == ["1_1", "1_2"]
+        assert not workflow.unresolved(saved)
+        assert [e["field"] for e in saved["events"] if e["kind"] == "verified"] == ["name", "number"]
+        assert "tactical_action_unavailable" in outcome.blockers  # no claim of task completion
+    else:
+        assert page.calls == ["1_1"] and workflow.unresolved(saved)
+        assert outcome.status in {PhaseStatus.BLOCKED, PhaseStatus.CANCELLED}
+    assert "PRIVATE_A" not in json.dumps(task.to_checkpoint_dict())
+    assert "PRIVATE_B" not in json.dumps(task.to_checkpoint_dict())
+    service.private_data.clear()
+
+
 def test_expired_verified_fill_identity_requires_reconciliation(tmp_path):
     class Form(Page):
         def verify_fill(self, target, value, observation):

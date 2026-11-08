@@ -114,6 +114,15 @@ class PhaseExecutor:
                 state.transition(PhaseStatus.BLOCKED)
                 self._checkpoint(task, state, context)
                 return self._outcome(state, "No valid tactical action was available.", blockers=("tactical_action_unavailable",))
+            # An outstanding fill has only one safe local recovery path: obtain
+            # a subsequent observation, then reconcile it. Selection remains
+            # subject to the ordinary reveal, phase, grant and cancellation checks.
+            required = _pending_browser_fill_recovery(task)
+            if required and selected.get("tool_id") != required:
+                state.transition(PhaseStatus.BLOCKED)
+                self._checkpoint(task, state, context)
+                return self._outcome(state, "The browser effect needs independent reconciliation.",
+                                     blockers=("browser_workflow_reconciliation_required",))
             is_sequence = "actions" in selected
             selected_id = selected.get("tool_id")
             sensitive_action = is_sequence or (isinstance(selected_id, str) and selected_id.startswith("native.browser_workflow_")) or any(
@@ -179,6 +188,7 @@ class PhaseExecutor:
                 return self._outcome(state, blocker, blockers=(blocker,))
             retry_count = 0
             retry_interrupted = False
+            reconciliation_step = False
             while True:
                 if retry_count:
                     interruption = self._interruption(task, state, context)
@@ -280,6 +290,13 @@ class PhaseExecutor:
                     state.transition(PhaseStatus.WAITING_USER)
                     self._checkpoint(task, state, context)
                     return self._outcome(state, "A tactical action requires user input.")
+                if completed.tool_id == "native.browser_workflow_fill" and completed.status == "success":
+                    # A return is only an attempt. Continue solely to the fenced
+                    # observation/reconciliation path, never to completion.
+                    if _pending_browser_fill_recovery(task) == "native.browser_workflow_observe":
+                        self._checkpoint(task, state, context)
+                        reconciliation_step = True
+                        break
                 if completed.tool_id in {"native.browser_workflow_fill", "native.browser_workflow_submit"}:
                     # A transport return cannot verify the form effect. Until a
                     # fresh-observation reconciliation exists, do not retry or
@@ -288,6 +305,20 @@ class PhaseExecutor:
                     self._checkpoint(task, state, context)
                     return self._outcome(state, "The browser effect needs independent reconciliation.",
                                          blockers=("browser_workflow_reconciliation_required",))
+                if completed.tool_id == "native.browser_workflow_observe" and required == completed.tool_id:
+                    if completed.status == "success":
+                        self._checkpoint(task, state, context)
+                        reconciliation_step = True
+                        break
+                    state.transition(PhaseStatus.BLOCKED)
+                    self._checkpoint(task, state, context)
+                    return self._outcome(state, "Browser reconciliation remains unavailable.",
+                                         blockers=("browser_workflow_reconciliation_required",))
+                if completed.tool_id == "native.browser_workflow_reconcile" and required == completed.tool_id and completed.status == "success":
+                    if not _pending_browser_fill_recovery(task):
+                        self._checkpoint(task, state, context)
+                        reconciliation_step = True
+                        break
                 if completed.tool_id in {"native.browser_workflow_reconcile", "native.browser_workflow_verify_submission"}:
                     state.transition(PhaseStatus.BLOCKED)
                     self._checkpoint(task, state, context)
@@ -390,6 +421,8 @@ class PhaseExecutor:
                     arguments=dict(action.arguments),
                     acceptance_questions=action.acceptance_questions,
                 )
+            if reconciliation_step:
+                continue
             if retry_interrupted:
                 interruption = self._interruption(task, state, context)
                 if interruption is not None:
@@ -972,6 +1005,32 @@ def _task_project_root(task: "TaskState", context: "CoreLoopContext") -> str:
         return str(project.root_path)
     except (KeyError, OSError, PermissionError):
         return ""
+
+
+def _pending_browser_fill_recovery(task: "TaskState") -> str | None:
+    from . import browser_workflow
+    if browser_workflow.KEY not in task.metadata:
+        return None
+    try:
+        workflow = browser_workflow.load(task)
+        events = workflow["events"]
+        resolved = {event["related"] for event in events if event["kind"] == "verified"}
+        pending = [(i, event) for i, event in enumerate(events)
+                   if event["kind"] == "attempted" and event["id"] not in resolved]
+        if not pending:
+            return None
+        if len(pending) != 1:
+            return "browser_reconciliation_unavailable"
+        if pending[0][1]["field"] != "fill" or pending[0][1]["session"] != workflow["session"]:
+            # Submission and cross-session recovery follow their existing
+            # strategic recovery paths, including explicit reacquisition.
+            return None
+        index = pending[0][0]
+        observed = any(event["kind"] == "observed" and event["field"] == "form"
+                       and event["session"] == workflow["session"] for event in events[index + 1:])
+        return "native.browser_workflow_reconcile" if observed else "native.browser_workflow_observe"
+    except Exception:
+        return "browser_reconciliation_unavailable"
 
 
 def _matching_prior_incomplete_result(state: TacticalState, completed: TacticalAction) -> str | None:
