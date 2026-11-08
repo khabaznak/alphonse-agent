@@ -14,13 +14,13 @@ from types import SimpleNamespace
 from dataclasses import replace
 
 from alphonse.agent_v2.browser_workflow_service import BrowserWorkflowService
-from alphonse.agent_v2.core.core import CoreLoopContext
+from alphonse.agent_v2.core.core import CoreLoopContext, ToolDescriptor, ToolKind
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.intelligence.v3 import MutationScope, PhaseExecutor, PhasePlan, PhaseSubgoal, PhaseStatus, SideEffectClass, new_tactical_state
 from alphonse.agent_v2.core.intelligence.v3 import browser_workflow
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
 from alphonse.agent_v2.core.questions import SQLiteQuestionStore
-from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry
+from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry, ToolDefinition
 from alphonse.agent_v2.core.tools.registry.native.browser_workflow import build_browser_workflow_tools
 from alphonse.agent_v2.system_one import SystemOneTacticalReview
 
@@ -55,7 +55,7 @@ class _Form:
 
 
 def run_case(*, control: bool, changed: bool = False, sequence: bool = False, inference=None,
-             scenario: str = "normal") -> dict:
+             scenario: str = "normal", qualify: bool = False) -> dict:
     """Return counts and a content-free independent oracle for one frozen case."""
     if changed:
         if scenario != "normal":
@@ -71,6 +71,21 @@ def run_case(*, control: bool, changed: bool = False, sequence: bool = False, in
         registry = InMemoryToolRegistry()
         for tool in build_browser_workflow_tools(enabled=True):
             registry.register(tool)
+        if qualify:
+            def verify_fixture(_):
+                service._live(task)
+                observations.append(json.dumps(form.snapshot(), sort_keys=True))
+                state = browser_workflow.load(task)
+                verified = [e["field"] for e in state["events"] if e["kind"] == "verified"]
+                result = {"verified": form.values == {"1_1": "SYNTHETIC_NAME", "1_2": "SYNTHETIC_NUMBER"}
+                          and verified == ["name", "number"] and not browser_workflow.unresolved(state)}
+                service._live(task)
+                return result
+            descriptor = ToolDescriptor("native.fixture_verify", "fixture_verify", ToolKind.NATIVE,
+                description="Independently check whether both synthetic fields were filled and reconciled.",
+                read_only=True, capabilities=("browser",), metadata={"v3_capabilities": ["browser"]}, argument_schema={"type": "object", "properties": {},
+                                                                            "additionalProperties": False})
+            registry.register(ToolDefinition(descriptor, verify_fixture))
         def make_state(number):
             phase = PhasePlan(f"phase-{number}", "Complete the synthetic fields", (PhaseSubgoal(
                 "fill", "Fill and verify fields", "form", allowed_capabilities=("browser",),
@@ -78,12 +93,15 @@ def run_case(*, control: bool, changed: bool = False, sequence: bool = False, in
                 authorized_capabilities=("browser",), mutation_scope=MutationScope(allow_external_effects=scenario != "denied"))
             state = new_tactical_state(phase)
             state.revealed_tool_ids = ["native.browser_workflow_" + name for name in ("fill", "observe", "reconcile")]
+            if qualify:
+                state.revealed_tool_ids.append("native.fixture_verify")
             return state
         state = make_state(0)
         state.transition(PhaseStatus.RUNNING)
         task = TaskState(task_id="fixture-task", user="fixture-owner", intelligence_engine="hierarchical_v3",
                          goal="Fill the synthetic name field at target 1_1 and number field at target 1_2. "
-                              "Both private inputs are already supplied. Independently reconcile each fill.",
+                              "Both private inputs are already supplied. Independently reconcile each fill."
+                              + (" Then call native.fixture_verify to check both fields." if qualify else ""),
                          hierarchical_state=state.to_dict())
         service.begin(task)
         service.supply(task, actor_id=task.user, field="name", value="SYNTHETIC_NAME")
@@ -128,8 +146,12 @@ def run_case(*, control: bool, changed: bool = False, sequence: bool = False, in
                         if item and sequence:
                             sequence_proposals += 1
                             response = {"browser_fill_sequence": [action(step) for step in (item, next(selected), next(selected))]}
-                        else:
+                        elif item:
                             response = action(item) if item else None
+                        elif qualify:
+                            response = {"tool_id": "native.fixture_verify", "arguments": {}, "acceptance_questions": [question]}
+                        else:
+                            response = None
                         return SimpleNamespace(json_value=response)
                 class MeasuredProvider:
                     def generate_json(self, request):
@@ -159,15 +181,18 @@ def run_case(*, control: bool, changed: bool = False, sequence: bool = False, in
                             tool_id = result.json_value.get("tool_id")
                             allowed_ids = {"native.browser_workflow_" + operation for operation in
                                            ("fill", "observe", "reconcile", "submit", "observe_result", "verify_submission")}
+                            allowed_ids.add("native.fixture_verify")
                             provider_choices.append(tool_id if isinstance(tool_id, str) and tool_id in allowed_ids else "other_or_invalid")
                         else:
                             provider_choices.append("other_or_invalid")
                         if not sequence and isinstance(result.json_value, dict) and "browser_fill_sequence" in result.json_value:
                             return SimpleNamespace(json_value=None)
                         return result
-                def review(**_):
-                    return SystemOneTacticalReview(False, .99, True, answers={
-                        "runtime_action_added_progress": .99, "runtime_declared_subgoal_complete": .01})
+                def review(**kwargs):
+                    action = kwargs.get("action") or {}
+                    done = qualify and action.get("tool_id") == "native.fixture_verify" and (action.get("result") or {}).get("verified") is True
+                    return SystemOneTacticalReview(done, .99, True, answers={
+                        "runtime_action_added_progress": .99, "runtime_declared_subgoal_complete": .99 if done else .01})
                 try:
                     outcome = PhaseExecutor().run(task, state,
                         CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry, question_store=store,
@@ -194,7 +219,7 @@ def run_case(*, control: bool, changed: bool = False, sequence: bool = False, in
                 phases += 1
                 actions += len(state.actions)
                 tool_ids.extend(action.tool_id for action in state.actions
-                                if action.tool_id.startswith('native.browser_workflow_'))
+                                if action.tool_id.startswith('native.browser_workflow_') or action.tool_id == 'native.fixture_verify')
                 outcomes.append(outcome_status)
                 # A failed action, unknown effect or changed form is not a
                 # completed control segment and must never be replayed.
@@ -214,8 +239,9 @@ def run_case(*, control: bool, changed: bool = False, sequence: bool = False, in
                 expected = not form.calls and not browser_workflow.unresolved(workflow) and not verified
             else:
                 expected = oracle and verified == ["name", "number"] and not browser_workflow.unresolved(workflow)
-            expected = expected and failure_type is None and bool(outcomes) and outcomes[-1] == (
-                "cancelled" if scenario in {"cancelled", "malformed_cancelled"} else "blocked")
+            expected_status = ("cancelled" if scenario in {"cancelled", "malformed_cancelled"} else
+                               "phase_complete" if qualify and scenario in {"normal", "malformed_once"} else "blocked")
+            expected = expected and failure_type is None and bool(outcomes) and outcomes[-1] == expected_status
             return {"variant": "fill_sequence" if sequence else "forced_phase_breaks" if control else "continued_phase", "changed": scenario == "changed", "scenario": scenario,
                     "composition_calls": compositions,
                     "recovery_guidance_calls": recovery_guidance_calls,
@@ -231,7 +257,9 @@ def run_case(*, control: bool, changed: bool = False, sequence: bool = False, in
                     "verified_fields": len(verified), "effect_oracle_pass": oracle and verified == ["name", "number"],
                     "scenario_expectation_met": expected,
                     "unresolved_effect": browser_workflow.unresolved(workflow), "phase_outcomes": outcomes,
-                    "elapsed_seconds": perf_counter() - start, "task_completion": "not_qualified"}
+                    "elapsed_seconds": perf_counter() - start,
+                    "phase_completion": "qualified" if qualify and expected and outcomes[-1] == "phase_complete" else "not_qualified",
+                    "task_completion": "not_qualified"}
         finally:
             service.private_data.clear()
 
@@ -244,14 +272,18 @@ def report(repeats: int = 3) -> dict:
                      for control in (True, False) for _ in range(repeats)]}
 
 
-def sequence_report(repeats: int = 3) -> dict:
+def sequence_report(repeats: int = 3, *, qualify: bool = False) -> dict:
     """Compare the current loop and sequence on identical disposable cases."""
+    import hashlib
+    from alphonse.agent_v2.core.intelligence.v3 import executor
     if type(repeats) is not int or not 1 <= repeats <= 100:
         raise ValueError("invalid_repeats")
-    runs = [run_case(control=False, sequence=sequence, scenario=scenario)
+    runs = [run_case(control=False, sequence=sequence, scenario=scenario, qualify=qualify)
             for scenario in ("normal", "changed", "stale", "denied", "cancelled", "retry")
             for sequence in (False, True) for _ in range(repeats)]
     return {"scope": "scripted inference through real executor and disposable browser service; no submission",
+            "executor_sha256": hashlib.sha256(Path(executor.__file__).read_bytes()).hexdigest(),
+            "harness_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
             "limitations": ["Provider responses and tactical reviews are scripted.",
                 "Retry scenario tests that failed verification does not replay a possibly effective fill.",
                 "Independent field oracle is not task-completion or real-browser qualification."],

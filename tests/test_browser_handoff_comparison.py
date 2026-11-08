@@ -46,11 +46,22 @@ def test_fill_sequence_comparison_preserves_verified_effects():
 
 
 def test_sequence_comparison_retains_each_safety_outcome():
-    value = sequence_report(repeats=1)
-    assert len(value["runs"]) == 12 and value["safety_oracle_failures"] == 0
-    assert all(row["scenario_expectation_met"] for row in value["runs"])
-    assert "SYNTHETIC_NAME" not in json.dumps(value)
-    assert "SYNTHETIC_NUMBER" not in json.dumps(value)
+    for qualify in (False, True):
+        value = sequence_report(repeats=1, qualify=qualify)
+        assert len(value["runs"]) == 12 and value["safety_oracle_failures"] == 0
+        assert all(row["scenario_expectation_met"] for row in value["runs"])
+        assert "SYNTHETIC_NAME" not in json.dumps(value)
+        assert "SYNTHETIC_NUMBER" not in json.dumps(value)
+
+
+@pytest.mark.parametrize("sequence", [False, True])
+def test_verified_field_phase_can_complete_without_claiming_task_completion(sequence):
+    normal = run_case(control=False, sequence=sequence, qualify=True)
+    assert normal["scenario_expectation_met"] and normal["effect_oracle_pass"]
+    assert normal["phase_completion"] == "qualified" and normal["task_completion"] == "not_qualified"
+    assert normal["observations"] == 4  # includes the independent fixture check
+    changed = run_case(control=False, sequence=sequence, qualify=True, scenario="changed")
+    assert changed["scenario_expectation_met"] and changed["phase_completion"] == "not_qualified"
 
 
 @pytest.mark.parametrize("sequence", [False, True])

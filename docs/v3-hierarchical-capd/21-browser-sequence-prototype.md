@@ -106,3 +106,31 @@ addresses one response failure and does not complete the broader structured-outp
 work in #192. The sequence validator also permits the existing bounded uncertainty
 assessment alongside the sequence. Regression fixtures cover successful retry,
 exhaustion, and cancellation before retry.
+
+A first paired trial of the retry revision is retained as `retry-pair-1.json`.
+The control stopped after one verified field; the sequence verified both after
+three model calls. Both remained blocked and the CLI correctly returned a
+nonzero status because task completion was not qualified. The malformed-response
+retry did not fire in this pair, so this is not a live test of that recovery.
+
+The comparison now offers `qualify=True` (or `--qualify-phase` in the live
+runner). It adds a disposable, read-only fixture verifier that independently
+checks both synthetic field values, the verified events, and absence of unresolved
+effects. Scripted tactical review may complete the *field phase* only when that
+verifier returns true. The fixture-verifier read is counted as an observation.
+This qualifies neither a submitted form nor an entire task, and does not test a
+live Jev judgment. Changed forms and failed verification cannot satisfy it.
+
+The retained `qualified-scripted.json` contains three repetitions per arm of
+six scenarios with that verifier enabled. Both normal arms completed the field
+phase and independently verified both effects: the control made seven scripted
+inference calls, seven native calls and four observations; the sequence made
+three, seven and four. Median local elapsed times were 23.41 ms and 17.31 ms.
+The fourth observation is the independent fixture verifier and is counted in
+both arms. Changed form, stale session, denied mutation, failed reconciliation
+and cancellation retained their expected blocked or cancelled outcomes; all 36
+scenario-oracle checks passed. These are scripted decisions, not actual LLM
+calls or real-browser qualification, and the task remains unqualified. Run
+`python -c 'from alphonse.agent_v2.evaluation.browser_handoff_comparison import sequence_report; import json; print(json.dumps(sequence_report(3, qualify=True), indent=2))'`
+to reproduce the matrix. Actual model trials and their failed outcomes are
+reported separately above.

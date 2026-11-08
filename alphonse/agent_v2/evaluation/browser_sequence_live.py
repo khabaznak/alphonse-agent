@@ -26,6 +26,8 @@ def main():
     parser.add_argument('--settings-db', type=Path, default=default_database_path())
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--arm', choices=('both', 'single', 'sequence'), default='both')
+    parser.add_argument('--qualify-phase', action='store_true',
+                        help='Include an independent disposable fixture tool that can qualify the field phase.')
     args = parser.parse_args()
     llm_settings, _ = read_settings(args.settings_db)
     if llm_settings.provider_key != 'openai_codex' or not llm_settings.model_id:
@@ -50,14 +52,15 @@ def main():
                                          profile_id='synthetic-browser-sequence'))
         arms = (False, True) if args.arm == 'both' else (args.arm == 'sequence',)
         for sequence in arms:
-            row = browser_handoff_comparison.run_case(control=False, sequence=sequence, inference=llm)
+            row = browser_handoff_comparison.run_case(control=False, sequence=sequence, inference=llm,
+                                                       qualify=args.qualify_phase)
             report['results'].append(row)
             args.output.write_text(json.dumps(report, indent=2) + '\n')
             print(json.dumps(row), flush=True)
-    # Field verification alone is partial progress: this fixture does not
-    # qualify task completion, so blocked or errored runs must not exit as a pass.
+    # The optional independent oracle qualifies only the synthetic field phase.
+    # Blocked or errored phases must not exit as a pass.
     return 0 if len(report['results']) == len(arms) and all(
-        row.get('task_completion') == 'qualified' and row.get('effect_oracle_pass') for row in report['results']) else 1
+        row.get('phase_completion') == 'qualified' and row.get('effect_oracle_pass') for row in report['results']) else 1
 
 
 if __name__ == '__main__':
