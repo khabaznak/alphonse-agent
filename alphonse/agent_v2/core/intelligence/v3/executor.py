@@ -1026,7 +1026,7 @@ def _validate_independent_reads(executor: PhaseExecutor, state: TacticalState, s
     reserved.update(question["question_id"] for question in _TACTICAL_RETRY_FUSE_QUESTIONS)
     seen: set[str] = set()
     for item in items:
-        if not isinstance(item, dict):
+        if not isinstance(item, dict) or "actions" in item:
             raise ValueError("independent_reads_invalid_action")
         descriptor = next((tool for tool in tools if tool.tool_id == item.get("tool_id")), None)
         if (descriptor is None or not descriptor.read_only or descriptor.metadata.get("sensitive_content") is True

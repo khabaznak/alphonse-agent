@@ -537,3 +537,82 @@ one pair on one synthetic task, not a reliability rate or a general architecture
 comparison. The cumulative multi-field/read Jev ledger charge was US$0.007585998;
 with the independent Jev probe, total Jev usage was US$0.007736946, excluding
 unpriced ChatGPT subscription usage.
+
+## Architecture comparison and decision
+
+The v4 frozen comparison runs six labeled variants over the same 13 synthetic
+cases twice (156 recorded trials). It reports completion, false stalls,
+unnecessary questions, repeated observations, tool and composition calls, local
+elapsed time and the scripted-provider cost basis. The historical-rule emulation
+passed 22/26, with four known false stalls. The uncertainty-aware, targeted
+fallback, fixture-combined and independent-read variants each passed 26/26.
+The evaluation-only flat-phase prototype passed 20/26: all 12 tactical-only
+trials shared the real tactical executor, while only 8/14 full-processor fixture
+trials met the independent oracle. Its six failures were the two repetitions each
+of access denial, invalid action planning and missing-input continuation. It
+uses real native dispatch and outer verification, but has no general replanning
+or authenticated-answer continuation; its lower call count therefore does not
+represent equivalent behavior.
+
+Across all 26 trials per variant, recorded composition/tool calls were 126/62
+for the historical emulation, 132/68 for uncertainty-aware and targeted recovery,
+128/64 for fixture-combined, 126/68 for independent reads, and 82/58 for the
+incomplete flat prototype. Identical-endpoint observations repeated 8, 8, 8, 4,
+8 and 6 times respectively; those counts do not establish that every repeated
+observation was unnecessary. All scripted provider charges were US$0; local
+latencies are fixture measurements, not model latency. Actual Jev charges and
+the limited live read pairs are documented above, while ChatGPT subscription
+cost per call is unavailable. The report is complete as a comparison of these
+specified prototypes, not as a qualification of a general flat runtime or live
+household behavior.
+
+**Decision:** retain the hierarchical loop for now. The flat prototype is not an
+acceptable replacement because it does not satisfy the recovery and question
+cases. Keep the narrowly bounded independent-read optimization, and revisit
+broader simplification when #188 and #190 have equivalent handoff, per-action
+authorization and verification evidence. This is a conservative design decision,
+not a claim that the current hierarchy is optimal.
+
+The v3 comparison harness before the reporting additions can be reconstructed by
+applying `planning-comparison-v3-harness.patch` to commit `7b5e197a` with
+`git apply --unidiff-zero`; the reconstructed file matches the recorded v3 hash.
+The v4 harness can likewise be reconstructed by applying
+`planning-comparison-v4-harness.patch` to commit `7b5e197a` with
+`git apply --unidiff-zero`; the resulting file matches its recorded hash. The
+later source change only clarifies that the flat-phase prototype is not a general
+runtime.
+
+A subsequent independence audit found that the reused v4 scripted Check read the
+fixture's effect oracle directly. Although the final score was based on the actual
+fixture state, this made the scripted judgment oracle-informed, so v4 alone is not
+a clean independent comparison. The v5 harness instead derives the scripted
+Check only from recorded successful verification evidence and reserves the
+fixture oracle for outcome scoring. Both versions and their failures are retained.
+
+The v5 rerun separates the scripted Check from the outcome oracle: Check consumes
+recorded verification evidence, and the independent fixture state is used only
+for scoring. Its 156 outcomes retained the same counts: four historical false
+stalls and six flat-prototype failures, with all other fixture oracles passing.
+The flat prototype's full-processor cases still lack the required error and
+question recovery; the 12 tactical-only trials do not test that distinction.
+The conservative decision remains to retain the hierarchy, not to infer that a
+flat architecture is inherently unsafe or that scripted success predicts live
+household reliability.
+
+The final v7 report records all 156 comparisons with evidence-only scripted
+judgments and an independent fixture oracle. It retained the same four historical
+false stalls and six flat-prototype failures. Its completion flag means that all
+specified trial measurements were recorded, not that every trial passed or that
+the flat prototype is production-ready. The decision is conditional on the
+observed flat failures and remains conservative even if a later small fixture
+set happens to pass. The latest separately measured live read pair used the same
+nested-sequence-safe executor hash: both shapes completed three reads, using
+three versus one composition calls. Cumulative Jev charges across the shared
+multi-field/read ledger were US$0.007981428; including the independent Jev probe,
+US$0.008132376. ChatGPT subscription usage is not priced per call. One live
+pair on this revision is not a live household reliability or latency claim.
+
+The v5 and v6 comparison harnesses are also preserved as their respective
+`planning-comparison-v5-harness.patch` and `planning-comparison-v6-harness.patch`
+against `7b5e197a`. Their reconstructed hashes match the reports. The final v7
+report records the current harness, corpus, fixture-adapter and executor hashes.

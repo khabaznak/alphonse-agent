@@ -47,15 +47,18 @@ def run_case(scenario: str, sequence: bool, *, inference=None, system_one=None) 
     class Provider:
         def generate_json(self, request):
             compositions.append(1)
-            remaining = [key for key in RECORDS if key not in {key for key, _ in observed}]
+            seen = {entry.get('arguments', {}).get('key') for entry in state.evidence.entries
+                    if entry.get('status') == 'success'}
+            remaining = [key for key in RECORDS if key not in seen]
             if not remaining:
                 return SimpleNamespace(json_value=None)
             result = {'actions': [action(key) for key in remaining]} if sequence and len(compositions) == 1 else action(remaining[0])
             return SimpleNamespace(json_value=result)
-    def review(**_):
+    def review(**kwargs):
         reviews.append(1)
-        done = len(observed) == len(RECORDS)
-        progress = .5 if scenario == 'uncertain' and len(observed) == 1 else .99
+        successful = [entry for entry in kwargs.get('execution_log', []) if entry.get('status') == 'success']
+        done = len(successful) == len(RECORDS)
+        progress = .5 if scenario == 'uncertain' and len(successful) == 1 else .99
         return SystemOneTacticalReview(done, .99, True, answers={
             'runtime_action_added_progress': progress, 'runtime_declared_subgoal_complete': .99 if done else .01})
     class LiveProvider:

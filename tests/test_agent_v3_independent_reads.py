@@ -216,3 +216,24 @@ def test_later_reserved_jev_question_rejects_the_whole_sequence():
     outcome = PhaseExecutor().run(TaskState(user='fixture'), state, context)
     assert outcome.status.value == 'blocked'
     assert calls == []
+
+
+def test_nested_sequences_are_rejected_before_any_read():
+    nested = dict(action('b'), actions=[action('c'), action('d')])
+    seq = Inference({'actions': [action('a'), nested]}, None)
+    calls, _, state, context = setup(inference=seq)
+    outcome = PhaseExecutor().run(TaskState(user='fixture'), state, context)
+    assert outcome.status.value == 'blocked'
+    assert calls == []
+
+
+def test_failed_first_read_stops_the_remaining_sequence():
+    def fail(_registry, _calls):
+        raise RuntimeError('synthetic source unavailable')
+    seq = Inference({'actions': [action('a'), action('b'), action('c')]})
+    calls, _, state, context = setup(inference=seq, callback=fail)
+    outcome = PhaseExecutor().run(TaskState(user='fixture'), state, context)
+    assert outcome.status.value == 'blocked'
+    assert calls == ['a']
+    assert state.evidence.entries[-1]['status'] == 'failed'
+    assert not state.completed_subgoal_ids
