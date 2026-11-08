@@ -45,6 +45,7 @@ ActionSelector = Callable[[TacticalState, PhaseSubgoal, tuple["ToolDescriptor", 
 TACTICAL_RETRY_BASE_SECONDS = 1.0
 MAX_UPDATE_INSPECTION_ACTIONS = 6
 MAX_UNCERTAIN_PROGRESS_ACTIONS = 6
+MAX_INDEPENDENT_READ_ACTIONS = 3
 
 
 class ScheduledHandoff(Exception):
@@ -82,6 +83,8 @@ class PhaseExecutor:
                 self._checkpoint(task, state, context)
                 return self._outcome(state, "The scheduled delivery outcome is unconfirmed.",
                                      blockers=("scheduled_delivery_outcome_unavailable",))
+        # Ephemeral only: a restart discards proposals that have not run.
+        pending_reads: list[dict[str, Any]] = []
         while state.status == PhaseStatus.RUNNING:
             interruption = self._interruption(task, state, context)
             if interruption is not None:
@@ -97,7 +100,11 @@ class PhaseExecutor:
             selected = (retry.get("action") if isinstance(retry, dict)
                         and retry.get("phase_id") == state.phase.phase_id
                         and retry.get("subgoal_id") == subgoal.subgoal_id else None)
-            if not isinstance(selected, dict):
+            if isinstance(selected, dict):
+                pending_reads.clear()
+            elif pending_reads:
+                selected = pending_reads.pop(0)
+            else:
                 selected = self._select_action(task, state, subgoal, tools, context)
             interruption = self._interruption(task, state, context)
             if interruption is not None:
@@ -107,12 +114,18 @@ class PhaseExecutor:
                 state.transition(PhaseStatus.BLOCKED)
                 self._checkpoint(task, state, context)
                 return self._outcome(state, "No valid tactical action was available.", blockers=("tactical_action_unavailable",))
+            is_sequence = "actions" in selected
             selected_id = selected.get("tool_id")
-            sensitive_action = (isinstance(selected_id, str) and selected_id.startswith("native.browser_workflow_")) or any(
+            sensitive_action = is_sequence or (isinstance(selected_id, str) and selected_id.startswith("native.browser_workflow_")) or any(
                 tool.tool_id == selected_id and tool.metadata.get("sensitive_content") is True for tool in tools)
             try:
+                if is_sequence:
+                    proposed = _validate_independent_reads(self, state, subgoal, selected, tools)
+                    selected, pending_reads = proposed[0], proposed[1:]
+                    sensitive_action = False
                 action = self._validate_action(state, subgoal, selected, tools)
             except (ValueError, PermissionError) as exc:
+                pending_reads.clear()
                 error = str(exc)
                 # IDs and acceptance-question wording do not change an invalid action.
                 fingerprint = hashlib.sha256(json.dumps({
@@ -296,6 +309,8 @@ class PhaseExecutor:
                     "context_coverage": progress_review.get("context_coverage", {}),
                     "answers": dict(progress_review.get("answers") or {}),
                 }
+                if not completion_met and completed.status == "success":
+                    _queue_uncertainty_recovery(state, subgoal, context)
                 if not completion_met and _is_update_inspection(state, subgoal, progress_review.get("answers") or {},
                     float(getattr(getattr(context.system_one, "settings", None), "yes_threshold", 0.8))):
                     count = int(task.metadata.get("v3_update_inspection_actions") or 0) + 1
@@ -326,6 +341,9 @@ class PhaseExecutor:
                 settings = getattr(context.system_one, "settings", None)
                 yes_threshold = float(getattr(settings, "yes_threshold", 0.8))
                 no_threshold = float(getattr(settings, "no_threshold", 0.2))
+                if pending_reads and (completion_met or completed.status != "success"
+                                      or not _independent_read_can_continue(progress_review, yes_threshold)):
+                    pending_reads.clear()
                 if not completion_met and _consecutive_no_progress(state, subgoal.subgoal_id, no_threshold) >= 3:
                     blocker = "tactical_stage_no_new_progress"
                     state.evidence.entries[-1]["no_progress_blocker"] = blocker
@@ -470,6 +488,25 @@ class PhaseExecutor:
         selection = task.metadata.get("v3_context_selection") or {}
         task_context = task_context_for_decision(task, context, purpose="execution",
                                                 selected_context_ids=selection.get("selected_context_ids", []))
+        recovery = _consume_uncertainty_recovery(state, subgoal)
+        if recovery is not None:
+            # Reserve this bounded recovery opportunity before inference so a
+            # restart cannot repeatedly spend it. The next ordinary action-composition
+            # call carries the question and evidence; it cannot declare success.
+            self._checkpoint(task, state, context)
+            context.emit_telemetry({"event": "v3_tactical_uncertainty_recovery", "task_id": task.task_id,
+                                    "phase_id": state.phase.phase_id, "subgoal_id": subgoal.subgoal_id,
+                                    "evidence_ref": recovery["evidence_ref"], "reason": recovery["reason"]})
+            skill_guidance += source(
+                "\nTargeted uncertainty recovery: " + json.dumps(recovery, ensure_ascii=False)
+                + "\nUse the referenced execution evidence and coverage gaps to select the next safe action. "
+                  "Alongside the action, include uncertainty_assessment with question_id, answer "
+                  "(supported, not_supported, or uncertain), and evidence_refs referencing only successful "
+                  "execution-log entries. Use uncertain if the evidence does not resolve the question. "
+                  "The assessment is advisory and cannot establish completion; obtain a targeted observation when needed. "
+                  "Do not repeat a mutation with an uncertain effect. All normal authorization and verification apply.",
+                'phase:' + state.phase.phase_id + ':uncertainty_recovery', 'uncertainty_recovery',
+            )
         prompt = _tactical_prompt(
             state,
             subgoal,
@@ -501,6 +538,8 @@ class PhaseExecutor:
                 cancel_checker=context.is_cancelled if context.cancellation_checker is not None else None,
             )
         )
+        if recovery is not None:
+            _record_uncertainty_assessment(state, recovery, result.json_value)
         if not isinstance(result.json_value, dict):
             return None
         if images:
@@ -866,9 +905,13 @@ def _tactical_prompt(
     ]
     return (
         FEASIBILITY_GUIDANCE + ROUTINE_AUTONOMY_GUIDANCE +
-        "Select exactly one concrete tactical action for the current subgoal and define acceptance questions for its result. "
+        "Select one concrete tactical action for the current subgoal and define acceptance questions for its result. "
+        "For a read-only subgoal only, you may instead return {actions:[...]} with two or three independent read-only "
+        "actions, each in the same format, only when all arguments are already known and none depends on another result. "
+        "Never sequence writes, private or browser actions, user interaction, or actions needing a new observation. "
+        "The runtime rechecks every action and stops the sequence on failure, uncertainty or completion. "
         "Do not change the objective, acceptance criteria, or mutation scope. "
-        "Return JSON with tool_id, arguments, and a non-empty acceptance_questions array. Each item must be a Noul question "
+        "Each action has tool_id, arguments, and a non-empty acceptance_questions array. Each question must be a Noul "
         "shaped as {question_id, type:'noul', instructions, criteria:{true, false}}. Questions must evaluate the tool result "
         "against the stage goal and relevant acceptance criteria. Treat successful prior action results as authoritative inputs "
         "for the next action even when they did not complete the subgoal. Do not repeat a successful discovery/list action when "
@@ -879,9 +922,11 @@ def _tactical_prompt(
         "If progress_review.context_complete is false, the current result exceeded the bounded judgment view. "
         "The original result remains below. Obtain a targeted source expansion or narrower observation to verify the "
         "stage; do not repeat the broad search or re-execute a mutation whose effects may already exist. "
-        "Every completed execution-log entry includes progress_review.complete from Jev. When it is false, the call "
-        "executed but did not make semantic progress. Do not select the same tool with the same arguments again; "
-        "choose different arguments or another revealed tool. For a CLI-backed artifact that returns an unexpected "
+        "progress_review.complete indicates whether the stage completion condition was met, not whether an action "
+        "made progress. Use the action result, progress answers and context coverage together; an incomplete or "
+        "uncertain review does not erase useful evidence. Avoid repeating an observation that already supplies the "
+        "needed information, and reconcile any uncertain effect before considering another mutation. "
+        "For a CLI-backed artifact that returns an unexpected "
         "result shape, use native.bash to inspect or invoke the underlying CLI when Bash is revealed. "
         "Task images are attached directly to this inference request and mapped to asset IDs. Inspect them using your "
         "vision capabilities and follow the selected skill guidance for what to extract or describe. Use the observations "
@@ -965,6 +1010,142 @@ def _is_update_inspection(state: TacticalState, subgoal: PhaseSubgoal, answers: 
         }
         for item in state.phase.subgoals
     )
+
+
+def _validate_independent_reads(executor: PhaseExecutor, state: TacticalState, subgoal: PhaseSubgoal,
+                                selected: dict[str, Any], tools: tuple["ToolDescriptor", ...]) -> list[dict[str, Any]]:
+    """Validate the entire ephemeral sequence before any action can run."""
+    items = selected.get("actions")
+    if set(subgoal.allowed_side_effects) != {SideEffectClass.READ_ONLY}:
+        raise ValueError("independent_reads_require_read_only_subgoal")
+    if not isinstance(items, list) or not 2 <= len(items) <= MAX_INDEPENDENT_READ_ACTIONS:
+        raise ValueError("independent_reads_invalid_count")
+    from alphonse.agent_v2.system_one import _TACTICAL_RETRY_FUSE_QUESTIONS
+    reserved = {"runtime_declared_subgoal_complete", "runtime_action_added_progress", "runtime_action_is_inspection",
+                "runtime_inspection_ready_for_action", "runtime_inspection_requires_user_input"}
+    reserved.update(question["question_id"] for question in _TACTICAL_RETRY_FUSE_QUESTIONS)
+    seen: set[str] = set()
+    for item in items:
+        if not isinstance(item, dict) or "actions" in item:
+            raise ValueError("independent_reads_invalid_action")
+        descriptor = next((tool for tool in tools if tool.tool_id == item.get("tool_id")), None)
+        if (descriptor is None or not descriptor.read_only or descriptor.metadata.get("sensitive_content") is True
+                or descriptor.tool_id.startswith("native.browser_workflow_")
+                or descriptor.tool_id in {"native.ask_question", "native.respond"}
+                or descriptor.metadata.get("side_effect_class") not in {None, "read_only"}):
+            raise ValueError("independent_reads_tool_not_allowed")
+        executor._validate_action(state, subgoal, item, tools)
+        ToolInvocationService._validate(descriptor.argument_schema, item["arguments"])
+        if any(str(question.get("question_id") or "").strip() in reserved for question in item["acceptance_questions"]):
+            raise ValueError("independent_reads_reserved_question")
+        signature = json.dumps([item.get("tool_id"), item.get("arguments")], sort_keys=True, default=str)
+        if signature in seen:
+            raise ValueError("independent_reads_duplicate")
+        seen.add(signature)
+    # Action IDs are runtime-owned; a repeated model-authored ID would alias
+    # distinct evidence entries. Generate a fresh one at each actual dispatch.
+    return [{key: value for key, value in item.items() if key != "action_id"} for item in items]
+
+
+def _independent_read_can_continue(review: dict[str, Any], yes_threshold: float) -> bool:
+    coverage = review.get("context_coverage") or {}
+    return (review.get("confident") is True and review.get("context_complete") is not False
+            and not coverage.get("omitted_prior_count", 0)
+            and not coverage.get("omitted_prior_result_count", 0) and not coverage.get("omitted_prior_refs")
+            and _confident_probability((review.get("answers") or {}).get("runtime_action_added_progress"), yes_threshold))
+
+
+def _queue_uncertainty_recovery(state: TacticalState, subgoal: PhaseSubgoal, context: "CoreLoopContext") -> None:
+    """Queue at most one stage and one other recovery per phase/subgoal."""
+    import math
+    relevant = [entry for entry in state.evidence.entries
+                if entry.get("phase_id") == state.phase.phase_id and entry.get("subgoal_id") == subgoal.subgoal_id]
+    if not relevant:
+        return
+    review = relevant[-1].get("progress_review") or {}
+    if review.get("uncertainty_recovery"):
+        return
+    settings = getattr(context.system_one, "settings", None)
+    no = float(getattr(settings, "no_threshold", .2))
+    yes = float(getattr(settings, "yes_threshold", .8))
+    answers = review.get("answers") or {}
+    coverage = review.get("context_coverage") or {}
+    incomplete = (review.get("context_complete") is False or coverage.get("omitted_prior_count", 0)
+                  or coverage.get("omitted_prior_result_count", 0) or coverage.get("omitted_prior_refs"))
+    # Stable question IDs let System Two find the exact question and evidence in
+    # the execution log. Give the runtime stage/progress questions precedence.
+    keys = [key for key in ("runtime_declared_subgoal_complete", "runtime_action_added_progress") if key in answers]
+    authored_ids = {item.get("question_id") for item in relevant[-1].get("acceptance_questions", [])
+                    if isinstance(item, dict) and isinstance(item.get("question_id"), str)}
+    keys.extend(sorted(key for key in authored_ids if key in answers and key not in keys))
+    uncertain = next((key for key in keys if type(answers[key]) in {int, float}
+                      and math.isfinite(answers[key]) and no < answers[key] < yes), None)
+    if not incomplete and uncertain is None:
+        return
+    budget_class = "stage" if uncertain == "runtime_declared_subgoal_complete" else "other"
+    for entry in relevant:
+        previous = (entry.get("progress_review") or {}).get("uncertainty_recovery") or {}
+        # Older checkpoints have no budget_class. Derive it from their question.
+        previous_class = previous.get("budget_class") or (
+            "stage" if previous.get("question_id") == "runtime_declared_subgoal_complete" else "other")
+        if previous and previous_class == budget_class:
+            return
+    review["uncertainty_recovery"] = {"status": "pending", "reason": "incomplete_context" if incomplete else "ambiguous_judgment",
+                                      "question_id": uncertain, "budget_class": budget_class}
+
+
+def _consume_uncertainty_recovery(state: TacticalState, subgoal: PhaseSubgoal) -> dict[str, Any] | None:
+    for entry in reversed(state.evidence.entries):
+        if entry.get("phase_id") != state.phase.phase_id or entry.get("subgoal_id") != subgoal.subgoal_id:
+            continue
+        review = entry.get("progress_review") or {}
+        recovery = review.get("uncertainty_recovery") or {}
+        if recovery.get("status") != "pending":
+            continue
+        recovery["status"] = "consumed"
+        question_id = recovery.get("question_id")
+        runtime_questions = {
+            "runtime_declared_subgoal_complete": "Does the current action and execution log establish the declared stage goal and completion condition?",
+            "runtime_action_added_progress": "Did the latest action add meaningful evidence or enable a concrete next step compared with earlier entries?",
+            "runtime_action_is_inspection": "Was the latest action only read-only inspection?",
+            "runtime_inspection_ready_for_action": "Does the authorized evidence resolve the details needed to plan the requested operation?",
+            "runtime_inspection_requires_user_input": "Is a specific essential missing or conflicting detail dependent on a user answer?",
+        }
+        authored = next((item.get("instructions") for item in entry.get("acceptance_questions", [])
+                         if isinstance(item, dict) and item.get("question_id") == question_id), None)
+        return {
+            "question": authored or runtime_questions.get(question_id) or "Which targeted observation can resolve the recorded evidence gap?",
+            "question_id": question_id,
+            "evidence_ref": entry.get("evidence_ref"), "reason": recovery["reason"],
+            "probability": (review.get("answers") or {}).get(recovery.get("question_id")),
+            "context_complete": review.get("context_complete"),
+            "context_coverage": review.get("context_coverage") or {},
+        }
+    return None
+
+
+def _record_uncertainty_assessment(state: TacticalState, recovery: dict[str, Any], selected: Any) -> None:
+    """Record only a bounded advisory and references to existing successful evidence."""
+    target = next((entry for entry in state.evidence.entries
+                   if entry.get("evidence_ref") == recovery.get("evidence_ref")), None)
+    marker = ((target or {}).get("progress_review") or {}).get("uncertainty_recovery") or {}
+    if not marker or marker.get("status") != "consumed":
+        return
+    assessment = selected.get("uncertainty_assessment") if isinstance(selected, dict) else None
+    valid_refs = {entry.get("evidence_ref") for entry in state.evidence.entries
+                  if entry.get("status") == "success" and isinstance(entry.get("evidence_ref"), str)}
+    if not isinstance(assessment, dict):
+        marker["assessment"] = {"status": "unavailable"}
+        return
+    answer, refs = assessment.get("answer"), assessment.get("evidence_refs")
+    if (assessment.get("question_id") != recovery.get("question_id")
+            or not isinstance(answer, str) or answer not in {"supported", "not_supported", "uncertain"}
+            or not isinstance(refs, list) or len(refs) > 20
+            or any(not isinstance(ref, str) or ref not in valid_refs for ref in refs)
+            or (answer != "uncertain" and not refs)):
+        marker["assessment"] = {"status": "invalid"}
+        return
+    marker["assessment"] = {"status": "recorded", "answer": answer, "evidence_refs": list(dict.fromkeys(refs))}
 
 
 def _consecutive_no_progress(state: TacticalState, subgoal_id: str, threshold: float = 0.2) -> int:

@@ -917,3 +917,138 @@ def test_dc1_cross_channel_checkpoint_does_not_repeat_completed_mutation():
     assert outcome.status == PhaseStatus.PHASE_COMPLETE
     assert calls == ['edit', 'read']
     assert restored.evidence.entries[0]['evidence_ref'] == 'tactical-action:prior-edit'
+
+
+def test_tactical_prompt_preserves_incomplete_but_useful_evidence():
+    from alphonse.agent_v2.core.intelligence.v3.executor import _tactical_prompt
+
+    subgoal = PhaseSubgoal('stage', 'Find and use the record', 'result')
+    state = new_tactical_state(PhasePlan('phase', 'Find and use the record', (subgoal,)))
+    state.evidence.append({
+        'phase_id': 'phase', 'subgoal_id': 'stage', 'status': 'success',
+        'result': {'record_id': 'synthetic-42'},
+        'progress_review': {'complete': False, 'context_complete': True,
+                            'answers': {'runtime_action_added_progress': .95}},
+    })
+    prompt = _tactical_prompt(state, subgoal, ())
+    assert 'synthetic-42' in prompt
+    assert 'not whether an action made progress' in prompt
+    assert 'executed but did not make semantic progress' not in prompt
+
+
+def test_uncertainty_recovery_is_bounded_and_preserves_coverage_across_restart():
+    from alphonse.agent_v2.core.intelligence.v3.executor import (
+        _queue_uncertainty_recovery, _consume_uncertainty_recovery,
+    )
+    subgoal = PhaseSubgoal('stage', 'Find the record', 'result')
+    state = new_tactical_state(PhasePlan('phase', 'Find the record', (subgoal,)))
+    state.evidence.append({
+        'evidence_ref': 'fixture:1', 'phase_id': 'phase', 'subgoal_id': 'stage',
+        'progress_review': {'complete': False, 'context_complete': False,
+                            'context_coverage': {'omitted_prior_result_count': 1},
+                            'answers': {'runtime_action_added_progress': .6}},
+    })
+    context = CoreLoopContext(messages=InMemoryMessageQueue())
+    _queue_uncertainty_recovery(state, subgoal, context)
+    state = TacticalState.from_dict(state.to_dict())
+    recovery = _consume_uncertainty_recovery(state, subgoal)
+    assert recovery['evidence_ref'] == 'fixture:1'
+    assert recovery['reason'] == 'incomplete_context'
+    assert recovery['context_coverage']['omitted_prior_result_count'] == 1
+    state = TacticalState.from_dict(state.to_dict())
+    _queue_uncertainty_recovery(state, subgoal, context)
+    assert _consume_uncertainty_recovery(state, subgoal) is None
+    assert not state.completed_subgoal_ids
+
+
+def test_uncertainty_recovery_ignores_confident_negative_and_invalid_probability():
+    from alphonse.agent_v2.core.intelligence.v3.executor import (
+        _queue_uncertainty_recovery, _consume_uncertainty_recovery,
+    )
+    subgoal = PhaseSubgoal('stage', 'Find the record', 'result')
+    context = CoreLoopContext(messages=InMemoryMessageQueue())
+    for probability in (.1, .9, float('nan'), None):
+        state = new_tactical_state(PhasePlan('phase', 'Find the record', (subgoal,)))
+        state.evidence.append({'phase_id': 'phase', 'subgoal_id': 'stage', 'progress_review': {
+            'context_complete': True, 'answers': {'runtime_action_added_progress': probability}}})
+        _queue_uncertainty_recovery(state, subgoal, context)
+        assert _consume_uncertainty_recovery(state, subgoal) is None
+
+
+def test_uncertainty_recovery_names_uncertain_action_question_not_retry_fuse():
+    from alphonse.agent_v2.core.intelligence.v3.executor import (
+        _queue_uncertainty_recovery, _consume_uncertainty_recovery,
+    )
+    subgoal = PhaseSubgoal('stage', 'Find the record', 'result')
+    state = new_tactical_state(PhasePlan('phase', 'Find the record', (subgoal,)))
+    state.evidence.append({'evidence_ref': 'fixture:1', 'phase_id': 'phase', 'subgoal_id': 'stage',
+        'acceptance_questions': [{'question_id': 'correct_record', 'instructions': 'Is this the requested record?'}],
+        'progress_review': {'context_complete': True, 'answers': {
+            'runtime_declared_subgoal_complete': .1, 'runtime_action_added_progress': .9,
+            'correct_record': .5, 'retry_fuse_repeat_is_safe': .5}}})
+    _queue_uncertainty_recovery(state, subgoal, CoreLoopContext(messages=InMemoryMessageQueue()))
+    recovery = _consume_uncertainty_recovery(state, subgoal)
+    assert recovery['question_id'] == 'correct_record'
+    assert recovery['question'] == 'Is this the requested record?'
+    assert recovery['probability'] == .5
+
+
+def test_stage_uncertainty_keeps_one_recovery_after_an_earlier_action_question():
+    from alphonse.agent_v2.core.intelligence.v3.executor import _queue_uncertainty_recovery, _consume_uncertainty_recovery
+    subgoal = PhaseSubgoal('stage', 'Finish and verify', 'receipt')
+    state = new_tactical_state(PhasePlan('phase', 'Finish and verify', (subgoal,)))
+    context = CoreLoopContext(messages=InMemoryMessageQueue())
+    state.evidence.append({'evidence_ref': 'fill', 'phase_id': 'phase', 'subgoal_id': 'stage',
+        'acceptance_questions': [{'question_id': 'field_filled', 'instructions': 'Was the field filled?'}],
+        'progress_review': {'context_complete': True, 'answers': {'field_filled': .4,
+            'runtime_declared_subgoal_complete': .02, 'runtime_action_added_progress': .91}}})
+    _queue_uncertainty_recovery(state, subgoal, context)
+    assert _consume_uncertainty_recovery(state, subgoal)['question_id'] == 'field_filled'
+    state.evidence.append({'evidence_ref': 'readback', 'phase_id': 'phase', 'subgoal_id': 'stage',
+        'progress_review': {'context_complete': True, 'answers': {
+            'runtime_declared_subgoal_complete': .72, 'runtime_action_added_progress': .96}}})
+    _queue_uncertainty_recovery(state, subgoal, context)
+    state = TacticalState.from_dict(state.to_dict())
+    assert _consume_uncertainty_recovery(state, subgoal)['question_id'] == 'runtime_declared_subgoal_complete'
+    state.evidence.append({'evidence_ref': 'repeat', 'phase_id': 'phase', 'subgoal_id': 'stage',
+        'progress_review': {'context_complete': True, 'answers': {'runtime_declared_subgoal_complete': .72}}})
+    _queue_uncertainty_recovery(state, subgoal, context)
+    assert _consume_uncertainty_recovery(state, subgoal) is None
+    assert not state.completed_subgoal_ids
+
+
+def test_legacy_recovery_checkpoint_does_not_reset_stage_budget():
+    from alphonse.agent_v2.core.intelligence.v3.executor import _queue_uncertainty_recovery, _consume_uncertainty_recovery
+    subgoal = PhaseSubgoal('stage', 'Verify', 'receipt')
+    state = new_tactical_state(PhasePlan('phase', 'Verify', (subgoal,)))
+    state.evidence.append({'phase_id': 'phase', 'subgoal_id': 'stage', 'progress_review': {
+        'uncertainty_recovery': {'status': 'consumed', 'reason': 'ambiguous_judgment',
+                                 'question_id': 'runtime_declared_subgoal_complete'}}})
+    state.evidence.append({'phase_id': 'phase', 'subgoal_id': 'stage', 'progress_review': {
+        'context_complete': True, 'answers': {'runtime_declared_subgoal_complete': .6}}})
+    _queue_uncertainty_recovery(state, subgoal, CoreLoopContext(messages=InMemoryMessageQueue()))
+    assert _consume_uncertainty_recovery(state, subgoal) is None
+
+
+def test_uncertainty_assessment_is_advisory_and_requires_real_successful_evidence():
+    from alphonse.agent_v2.core.intelligence.v3.executor import _record_uncertainty_assessment
+    subgoal = PhaseSubgoal('stage', 'Verify', 'receipt')
+    state = new_tactical_state(PhasePlan('phase', 'Verify', (subgoal,)))
+    state.evidence.append({'evidence_ref': 'readback', 'status': 'success', 'progress_review': {
+        'uncertainty_recovery': {'status': 'consumed', 'question_id': 'stage_question'}}})
+    state.evidence.append({'evidence_ref': 'failed', 'status': 'failed'})
+    recovery = {'evidence_ref': 'readback', 'question_id': 'stage_question'}
+    marker = state.evidence.entries[0]['progress_review']['uncertainty_recovery']
+    for value in [
+        {'question_id': 'stage_question', 'answer': 'supported', 'evidence_refs': ['made-up']},
+        {'question_id': 'stage_question', 'answer': 'supported', 'evidence_refs': ['failed']},
+        {'question_id': 'stage_question', 'answer': 'supported', 'evidence_refs': []},
+        {'question_id': 'wrong', 'answer': 'supported', 'evidence_refs': ['readback']},
+        {'question_id': 'stage_question', 'answer': [], 'evidence_refs': ['readback']},
+    ]:
+        _record_uncertainty_assessment(state, recovery, {'uncertainty_assessment': value})
+        assert marker['assessment'] == {'status': 'invalid'}
+    _record_uncertainty_assessment(state, recovery, {'uncertainty_assessment': {
+        'question_id': 'stage_question', 'answer': 'supported', 'evidence_refs': ['readback']}})
+    assert marker['assessment'] == {'status': 'recorded', 'answer': 'supported', 'evidence_refs': ['readback']}
+    assert not state.completed_subgoal_ids

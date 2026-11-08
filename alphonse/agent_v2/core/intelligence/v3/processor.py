@@ -40,6 +40,10 @@ if TYPE_CHECKING:
 
 _MAX_CONSECUTIVE_NO_PROGRESS_PHASES = 3
 _SCHEDULED_DELIVERY_WAIT_SECONDS = 300
+_SAFE_INFERENCE_ERROR_CODES = frozenset({
+    "openai_codex_invalid_json", "openai_codex_invalid_tool_json", "openai_codex_empty_response",
+    "openai_codex_timeout", "openai_codex_auth_required", "openai_codex_cli_missing",
+})
 
 
 class HierarchicalCAPDProcessor:
@@ -62,7 +66,14 @@ class HierarchicalCAPDProcessor:
             # action composition. Persist an honest terminal state and retain
             # completed evidence rather than leaking a still-running checkpoint.
             task.status = "cancelled" if context.is_cancelled() else "failed"
-            reason = str(exc) if isinstance(exc, SystemOneUnavailableError) else "v3_runtime_error:" + type(exc).__name__
+            if isinstance(exc, SystemOneUnavailableError):
+                reason = str(exc)
+            elif type(exc) is ValueError and str(exc) in _SAFE_INFERENCE_ERROR_CODES:
+                # Only exact provider-owned codes are safe to persist. Arbitrary
+                # provider messages can contain private prompts or tool output.
+                reason = "v3_runtime_error:" + str(exc)
+            else:
+                reason = "v3_runtime_error:" + type(exc).__name__
             task.outcome = {"status": task.status, "reason": reason}
             task.metadata["v3_terminal_error_type"] = type(exc).__name__
             task.metadata["v3_route"] = "end"
