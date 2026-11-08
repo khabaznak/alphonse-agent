@@ -2825,6 +2825,9 @@ class V2Daemon:
         if db_path != ":memory:":
             deleted = prune_operational_data(db_path, now=now)
             logger.info("operational retention completed deleted=%s", deleted)
+            from alphonse.agent_v2.retention import truncate_wal_if_idle
+            if not truncate_wal_if_idle(db_path):
+                logger.info("operational retention WAL cleanup deferred")
         # Pruning and draining use the same lock as producers, so a fresh event
         # arriving during maintenance is not lost.
         self.runtime.activity_events.prune(now=now)

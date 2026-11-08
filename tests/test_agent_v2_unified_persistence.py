@@ -12,7 +12,7 @@ from alphonse.agent_v2.core.io.channels import ChannelAddress
 from alphonse.agent_v2.core.io.outbox import SQLiteOutboundStore
 from alphonse.agent_v2.core.questions import SQLiteQuestionStore
 from alphonse.agent_v2.database import DEFAULT_BUSY_TIMEOUT_MS, connect_database, default_database_path
-from alphonse.agent_v2.retention import prune_operational_data
+from alphonse.agent_v2.retention import prune_operational_data, truncate_wal_if_idle
 from alphonse.agent_v2.storage_migration import migrate_legacy_databases
 from alphonse.agent_v2.users import V2UserStore
 
@@ -26,6 +26,48 @@ def test_database_connections_enable_secure_delete(tmp_path):
         connection.execute('PRAGMA secure_delete=OFF')
     with connect_database(database) as connection:
         assert connection.execute('PRAGMA secure_delete').fetchone()[0] == 1
+
+
+def test_wal_cleanup_defers_for_active_reader_and_retries(tmp_path):
+    database = tmp_path / 'wal.sqlite'
+    writer = connect_database(database)
+    reader = connect_database(database)
+    try:
+        writer.execute('CREATE TABLE example (content TEXT)')
+        writer.execute("INSERT INTO example VALUES ('first')")
+        writer.commit()
+        assert truncate_wal_if_idle(database)
+        reader.execute('BEGIN')
+        assert reader.execute('SELECT COUNT(*) FROM example').fetchone()[0] == 1
+        writer.execute("INSERT INTO example VALUES ('second')")
+        writer.commit()
+        assert not truncate_wal_if_idle(database)
+        assert reader.execute('SELECT COUNT(*) FROM example').fetchone()[0] == 1
+        reader.rollback()
+        assert truncate_wal_if_idle(database)
+        assert writer.execute('SELECT COUNT(*) FROM example').fetchone()[0] == 2
+    finally:
+        reader.close()
+        writer.close()
+
+
+def test_wal_cleanup_removes_synthetic_deleted_content_from_idle_wal(tmp_path):
+    database = tmp_path / 'wal-private.sqlite'
+    writer = connect_database(database)
+    marker = 'synthetic-deleted-' + 'x' * 200
+    try:
+        writer.execute('CREATE TABLE example (content TEXT)')
+        writer.execute('INSERT INTO example VALUES (?)', (marker,))
+        writer.commit()
+        writer.execute('DELETE FROM example')
+        writer.commit()
+        wal = database.with_name(database.name + '-wal')
+        assert marker.encode() in wal.read_bytes()
+        assert truncate_wal_if_idle(database)
+        assert not wal.exists() or marker.encode() not in wal.read_bytes()
+        assert marker.encode() not in database.read_bytes()
+    finally:
+        writer.close()
 
 
 def test_shared_database_configuration_and_defaults(monkeypatch, tmp_path) -> None:

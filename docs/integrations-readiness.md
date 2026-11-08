@@ -240,8 +240,11 @@ not relabel that behavior as a qualified 90-day physical deletion policy.
 **R2 — BLOCKED, operator/engineering:** no encrypted deployment backup/restore or
 private export pipeline was supplied for qualification. Alphonse connections now
 explicitly enable SQLite `secure_delete` for ordinary deleted database content;
-that is not complete secure erasure. Redaction does not guarantee removal from
-WAL frames, virtual-table shadow storage, filesystem snapshots or independent backups.
+that is not complete secure erasure. Daily daemon maintenance attempts a nonblocking
+WAL checkpoint and truncation after operational pruning, and defers it if another
+reader or writer prevents completion. WAL frames may remain or be created again;
+redaction does not guarantee removal from WAL, virtual-table shadow storage,
+filesystem snapshots or independent backups.
 A pre-deletion backup can resurrect content if it also restores old authority.
 Do not enable a real-account pilot until a synthetic restore with current durable
 tombstones has demonstrated denial/redaction and the actual backup expiry is

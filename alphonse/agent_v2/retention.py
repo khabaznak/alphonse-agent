@@ -12,6 +12,25 @@ from alphonse.agent_v2.database import DEFAULT_BUSY_TIMEOUT_MS, connect_database
 DEFAULT_OPERATIONAL_RETENTION_DAYS = 30
 
 
+def truncate_wal_if_idle(db_path: str | Path) -> bool:
+    """Checkpoint and truncate a WAL without waiting on other readers/writers.
+
+    This is best effort, not secure erasure: the WAL can contain new frames
+    immediately afterward and filesystem snapshots or other copies may remain.
+    Callers should retry on a later maintenance tick if False is returned.
+    """
+    path = Path(db_path).expanduser().absolute()
+    try:
+        connection = sqlite3.connect(path.as_uri() + '?mode=rw', uri=True, timeout=0)
+        try:
+            row = connection.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchone()
+            return bool(row is not None and row[0] == 0)
+        finally:
+            connection.close()
+    except sqlite3.OperationalError:
+        return False
+
+
 def prune_operational_data(
     db_path: str | Path,
     *,
