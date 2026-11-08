@@ -36,3 +36,28 @@ reconciliation, within one phase; it stops without claiming task completion.
 Repeated fill proposals, failed verification and cancellation stop with the
 first effect unresolved. This test uses scripted action choices and is not an
 end-to-end submission or a replacement for the #200 baseline.
+
+## Reproducible two-field comparison
+
+Run `python -m alphonse.agent_v2.evaluation.browser_handoff_comparison` for
+three repetitions per arm and form state. The control reconstructs the former
+forced phase boundaries after each fill and reconciliation; scripted phase
+creation stands in for planning, so these are **not measured model calls**.
+Both arms use the real executor, checkpoint store, protected input service and
+the same disposable backend. The oracle checks the backend's independent field
+state and the workflow's verification events.
+
+In three local normal runs per arm, the forced-boundary control used three
+scripted replans and the continuation used zero. Both used six native tool
+calls, recorded three observations (zero repeats), and independently verified
+both synthetic fields. All phase outcomes remained blocked because neither arm
+performs submission or result qualification. In all six changed-form runs, the
+first fill was not dispatched, no field was verified, and the attempted effect
+remained unresolved. No timing or model-cost conclusion follows from these
+short, scripted local runs. Counts alone are not a correctness oracle; the
+separate effect and changed-form checks are essential.
+
+This comparison measures a reconstructed control, not an execution of the
+historical model or the completed synthetic end-to-end baseline in #200. It
+does not establish a real-browser outcome, result delivery, submission safety,
+or full task completion. Those remain open under #185, #191 and #200.
