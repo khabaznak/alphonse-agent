@@ -300,6 +300,51 @@ def test_reacquisition_cannot_clear_an_uncertain_old_effect(tmp_path):
     second.private_data.clear()
 
 
+def test_executor_allows_owned_session_reacquisition_after_uncertain_fill(tmp_path):
+    from types import SimpleNamespace
+    from alphonse.agent_v2.core.core import CoreLoopContext
+    from alphonse.agent_v2.core.intelligence.v3 import PhaseExecutor, PhasePlan, PhaseSubgoal, SideEffectClass, new_tactical_state
+    from alphonse.agent_v2.core.messages import InMemoryMessageQueue
+    from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry
+    from alphonse.agent_v2.core.tools.registry.native.browser_workflow import build_browser_workflow_tools
+    from alphonse.agent_v2.system_one import SystemOneTacticalReview
+
+    class AttachablePage(Page):
+        def attach_owned_session(self, actor, task):
+            return True
+    store, page = SQLiteQuestionStore(tmp_path / "db"), AttachablePage()
+    first = BrowserWorkflowService(checkpoint_store=store, transport=page,
+        authorized=lambda actor, task: "grant-1", cancelled=lambda: False, enabled=True)
+    task = _task()
+    first.begin(task)
+    first.supply(task, actor_id=task.user, field="name", value="PRIVATE_VALUE")
+    first.observe(task)
+    first.fill(task, field="name", target="field")
+    restored = store.load_task_checkpoint(task.task_id)
+    old_session = workflow.load(restored)["session"]
+    second = BrowserWorkflowService(checkpoint_store=store, transport=page,
+        authorized=lambda actor, task: "grant-2", cancelled=lambda: False, enabled=True)
+    phase = PhasePlan("recovery", "Recover session", (PhaseSubgoal("recover", "Recover", "result",
+        allowed_capabilities=("browser",), allowed_side_effects=(SideEffectClass.READ_ONLY,)),),
+        authorized_capabilities=("browser",))
+    state = new_tactical_state(phase)
+    state.revealed_tool_ids = ["native.browser_workflow_reacquire"]
+    registry = InMemoryToolRegistry()
+    for tool in build_browser_workflow_tools(enabled=True):
+        registry.register(tool)
+    choices = iter([{"tool_id": "native.browser_workflow_reacquire", "arguments": {}}, None])
+    system_one = SimpleNamespace(evaluate_tactical_progress=lambda **_: SystemOneTacticalReview(
+        False, .95, True, answers={"runtime_action_added_progress": .9}))
+    outcome = PhaseExecutor(action_selector=lambda *_: next(choices)).run(restored, state,
+        CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry, question_store=store,
+                        browser_workflow_service=second, system_one=system_one))
+    assert workflow.load(restored)["session"] != old_session
+    assert workflow.unresolved(workflow.load(restored))
+    assert len(page.calls) == 1 and outcome.status.value == "blocked"
+    first.private_data.clear()
+    second.private_data.clear()
+
+
 def test_default_disabled_and_legacy_fails_closed(tmp_path):
     service = BrowserWorkflowService(checkpoint_store=SQLiteQuestionStore(tmp_path / "db"), transport=Page(),
         authorized=lambda actor, task: "grant-1", cancelled=lambda: False)

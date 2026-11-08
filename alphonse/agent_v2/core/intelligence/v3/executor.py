@@ -118,7 +118,14 @@ class PhaseExecutor:
             # a subsequent observation, then reconcile it. Selection remains
             # subject to the ordinary reveal, phase, grant and cancellation checks.
             required = _pending_browser_fill_recovery(task)
-            if required and selected.get("tool_id") != required:
+            reacquire = False
+            if required and selected.get("tool_id") == "native.browser_workflow_reacquire":
+                try:
+                    service = context.browser_workflow_service
+                    reacquire = service is not None and not service.projection(task).get("session_available")
+                except Exception:
+                    reacquire = False
+            if required and selected.get("tool_id") != required and not reacquire:
                 state.transition(PhaseStatus.BLOCKED)
                 self._checkpoint(task, state, context)
                 return self._outcome(state, "The browser effect needs independent reconciliation.",
