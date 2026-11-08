@@ -158,7 +158,7 @@ def test_failed_tactical_correction_is_bounded_even_with_changed_ids(changed_err
 
     outcome = PhaseExecutor(action_selector=select, reveal_policy=ToolRevealPolicy()).run(task, state, context)
     assert outcome.status == PhaseStatus.BLOCKED
-    assert ('tactical_correction_exhausted' if changed_error else 'tactical_planning_error_repeated') in outcome.reason
+    assert 'tactical_planning_error_repeated' in outcome.reason
     assert n == 2
     assert calls == []
     # The same rejected call is recognized after serialization and a renamed phase.
@@ -270,3 +270,126 @@ def test_failed_correction_preserves_actual_completed_subgoal_after_checkpoint(t
 
 
 pytestmark = pytest.mark.usefixtures("task_understanding_provider")
+
+
+def test_tactical_uncertainty_uses_next_composition_call_with_evidence_and_no_extra_calls():
+    task, context, calls = fixture()
+    state = new_tactical_state(phase())
+    question = {'question_id': 'result', 'type': 'noul', 'instructions': 'Does the result satisfy the stage?',
+                'criteria': {'true': 'The result satisfies it.', 'false': 'The result does not satisfy it.'}}
+    context.inference = Inference(
+        {'tool_id': 'native.lookup', 'arguments': {'key': 'first'}, 'acceptance_questions': [question]},
+        {'tool_id': 'native.lookup', 'arguments': {'key': 'second'}, 'acceptance_questions': [question]},
+    )
+    reviews = iter([
+        SystemOneTacticalReview(False, .6, False, answers={'runtime_action_added_progress': .6,
+                                                           'runtime_declared_subgoal_complete': .1}),
+        SystemOneTacticalReview(True, .99, True, answers={'runtime_action_added_progress': .99,
+                                                          'runtime_declared_subgoal_complete': .99}),
+    ])
+    context.system_one.evaluate_tactical_progress = lambda **kwargs: next(reviews)
+    outcome = PhaseExecutor(reveal_policy=ToolRevealPolicy()).run(task, state, context)
+    assert outcome.status == PhaseStatus.PHASE_COMPLETE
+    assert calls == [{'key': 'first'}, {'key': 'second'}]
+    assert len(context.inference.requests) == 2
+    prompt = context.inference.requests[1].prompt
+    assert 'Targeted uncertainty recovery' in prompt
+    assert state.evidence.entries[0]['evidence_ref'] in prompt
+    assert 'synthetic' in prompt
+    assert state.evidence.entries[0]['progress_review']['uncertainty_recovery']['status'] == 'consumed'
+
+
+def test_uncertainty_recovery_cannot_authorize_unrevealed_action():
+    task, context, calls = fixture()
+    state = new_tactical_state(phase())
+    question = {'question_id': 'result', 'type': 'noul', 'instructions': 'Does this satisfy the stage?',
+                'criteria': {'true': 'The result satisfies it.', 'false': 'It does not satisfy it.'}}
+    first = {'tool_id': 'native.lookup', 'arguments': {'key': 'first'}, 'acceptance_questions': [question]}
+    forbidden = {'tool_id': 'native.respond', 'arguments': {'message': 'done'}, 'acceptance_questions': [question]}
+    context.inference = Inference(first, forbidden, forbidden)
+    context.system_one.evaluate_tactical_progress = lambda **kwargs: SystemOneTacticalReview(
+        False, .6, False, answers={'runtime_action_added_progress': .6, 'runtime_declared_subgoal_complete': .1})
+    outcome = PhaseExecutor(reveal_policy=ToolRevealPolicy()).run(task, state, context)
+    assert outcome.status == PhaseStatus.BLOCKED
+    assert calls == [{'key': 'first'}]
+    assert not state.completed_subgoal_ids
+    assert 'tactical_tool_not_revealed' in outcome.reason
+
+
+def test_stage_review_recovery_remains_available_after_action_uncertainty():
+    task, context, calls = fixture()
+    state = new_tactical_state(phase())
+    question = {'question_id': 'action_result', 'type': 'noul', 'instructions': 'Is this action result sufficient?',
+                'criteria': {'true': 'The result is sufficient.', 'false': 'The result is insufficient.'}}
+    context.inference = Inference(*[
+        {'tool_id': 'native.lookup', 'arguments': {'key': key}, 'acceptance_questions': [question]}
+        for key in ('first', 'second', 'third')])
+    reviews = iter([
+        SystemOneTacticalReview(False, .6, False, answers={'action_result': .6,
+            'runtime_action_added_progress': .9, 'runtime_declared_subgoal_complete': .1}),
+        SystemOneTacticalReview(False, .6, False, answers={'action_result': .9,
+            'runtime_action_added_progress': .9, 'runtime_declared_subgoal_complete': .6}),
+        SystemOneTacticalReview(True, .99, True, answers={'action_result': .99,
+            'runtime_action_added_progress': .99, 'runtime_declared_subgoal_complete': .99}),
+    ])
+    context.system_one.evaluate_tactical_progress = lambda **kwargs: next(reviews)
+    outcome = PhaseExecutor(reveal_policy=ToolRevealPolicy()).run(task, state, context)
+    assert outcome.status == PhaseStatus.PHASE_COMPLETE
+    assert len(calls) == len(context.inference.requests) == 3
+    assert 'action_result' in context.inference.requests[1].prompt
+    assert 'runtime_declared_subgoal_complete' in context.inference.requests[2].prompt
+    markers = [e['progress_review']['uncertainty_recovery']['budget_class'] for e in state.evidence.entries
+               if (e.get('progress_review') or {}).get('uncertainty_recovery')]
+    assert markers == ['other', 'stage']
+
+
+def test_system_two_assessment_is_recorded_but_cannot_complete_a_stage():
+    task, context, calls = fixture()
+    state = new_tactical_state(phase())
+    question = {'question_id': 'result', 'type': 'noul', 'instructions': 'Does the action satisfy the stage?',
+                'criteria': {'true': 'It satisfies the stage.', 'false': 'It does not satisfy the stage.'}}
+    class Provider:
+        def __init__(self): self.requests = []
+        def generate_json(self, request):
+            self.requests.append(request)
+            n = len(self.requests)
+            if n == 3:
+                return SimpleNamespace(json_value=None)
+            value = {'tool_id': 'native.lookup', 'arguments': {'key': str(n)}, 'acceptance_questions': [question]}
+            if n == 2:
+                value['uncertainty_assessment'] = {'question_id': 'runtime_action_added_progress',
+                    'answer': 'supported', 'evidence_refs': [state.evidence.entries[0]['evidence_ref']]}
+            return SimpleNamespace(json_value=value)
+    context.inference = Provider()
+    context.system_one.evaluate_tactical_progress = lambda **kwargs: SystemOneTacticalReview(
+        False, .6, False, answers={'runtime_action_added_progress': .6, 'runtime_declared_subgoal_complete': .1})
+    outcome = PhaseExecutor(reveal_policy=ToolRevealPolicy()).run(task, state, context)
+    assert outcome.status == PhaseStatus.BLOCKED
+    assert len(calls) == 2
+    assert not state.completed_subgoal_ids
+    recorded = state.evidence.entries[0]['progress_review']['uncertainty_recovery']['assessment']
+    assert recorded == {'status': 'recorded', 'answer': 'supported',
+                        'evidence_refs': [state.evidence.entries[0]['evidence_ref']]}
+
+
+@pytest.mark.parametrize('message,expected', [
+    ('openai_codex_invalid_json', 'v3_runtime_error:openai_codex_invalid_json'),
+    ('synthetic-private-output', 'v3_runtime_error:ValueError'),
+])
+def test_tactical_provider_error_has_safe_diagnostic_and_preserves_prior_evidence(message, expected):
+    task, context, calls = fixture()
+    task.hierarchical_state = new_tactical_state(phase()).to_dict()
+    task.metadata['v3_phase_history'] = [{'phase_id': 'prior', 'evidence': {'entries': [
+        {'evidence_ref': 'verified-prior', 'status': 'success', 'result': {'value': 42}}]}}]
+    class BrokenInference:
+        def generate_json(self, _request):
+            raise ValueError(message)
+    context.inference = BrokenInference()
+    processor = HierarchicalCAPDProcessor()
+    processor.executor = PhaseExecutor(reveal_policy=ToolRevealPolicy())
+    processor.process(task, context)
+    assert task.status == 'failed'
+    assert task.outcome['reason'] == expected
+    assert task.metadata['v3_phase_history'][0]['evidence']['entries'][0]['evidence_ref'] == 'verified-prior'
+    assert 'synthetic-private-output' not in json.dumps(task.to_dict())
+    assert calls == []

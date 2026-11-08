@@ -424,3 +424,16 @@ sources use one persisted `native.ask_question` and authenticated resumption.
 Source reads retain current access checks, and historical content supplies neither
 authorization nor verified current state/effects. See
 [conversation continuity](11-conversation-continuity.md#system-two-native-memory-workflow-166).
+
+### Bounded independent reads
+
+Within a read-only subgoal, action composition may propose two or three
+independent reads with arguments already determined from current evidence. The
+executor validates the complete proposal against the current revealed descriptors,
+argument schemas and decision-question rules before dispatch. It rechecks each
+individual action and tool exposure before invocation. It discards unexecuted
+proposals on uncertainty, incomplete evidence, failure, cancellation, stage
+completion or restart. Sequences are ephemeral and do not grant access; writes,
+browser workflow actions, user interactions and tools marked as sensitive are
+excluded. See the [planning comparison](19-planning-friction-investigation.md)
+for the synthetic evidence and live-test limitations.

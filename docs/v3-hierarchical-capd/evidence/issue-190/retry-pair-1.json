@@ -1,0 +1,127 @@
+{
+  "version": "browser-sequence-live-v1",
+  "model": "gpt-6-luna",
+  "executor_sha256": "6b572a5bd6a299f403b481ed558a0c6a19c6abea8ea7f44c0b92913267400582",
+  "harness_sha256": "f8ded7e80a762ffbdf16600a17822e136574b6757251a0a4639191df356571ee",
+  "limitations": [
+    "Synthetic target IDs are given in the task; this does not qualify real browser grounding.",
+    "The backend is disposable and in-memory, not Chrome.",
+    "System One reviews are scripted and no Jev API is called.",
+    "The single-action control forbids sequences in its prompt and rejects them if returned.",
+    "At most 12 compositions per arm; subscription cost is not measured.",
+    "One run per arm is exploratory, not a reliability estimate."
+  ],
+  "results": [
+    {
+      "variant": "continued_phase",
+      "changed": false,
+      "scenario": "normal",
+      "composition_calls": 4,
+      "recovery_guidance_calls": 2,
+      "sequence_proposals": 0,
+      "provider_choices": [
+        "native.browser_workflow_fill",
+        "native.browser_workflow_observe",
+        "native.browser_workflow_reconcile",
+        "native.browser_workflow_reconcile"
+      ],
+      "provider_shapes": [
+        [
+          "acceptance_questions",
+          "arguments",
+          "tool_id"
+        ],
+        [
+          "acceptance_questions",
+          "arguments",
+          "tool_id"
+        ],
+        [
+          "acceptance_questions",
+          "arguments",
+          "tool_id"
+        ],
+        [
+          "acceptance_questions",
+          "arguments",
+          "tool_id"
+        ]
+      ],
+      "tool_ids": [
+        "native.browser_workflow_fill",
+        "native.browser_workflow_observe",
+        "native.browser_workflow_reconcile",
+        "native.browser_workflow_reconcile"
+      ],
+      "provider_mode": "live",
+      "failure_type": null,
+      "failure_code": null,
+      "scripted_phase_replans": 0,
+      "phase_count": 1,
+      "tool_calls": 4,
+      "observations": 2,
+      "repeated_observations": 0,
+      "verified_fields": 1,
+      "effect_oracle_pass": false,
+      "scenario_expectation_met": false,
+      "unresolved_effect": false,
+      "phase_outcomes": [
+        "blocked"
+      ],
+      "elapsed_seconds": 46.6261231249664,
+      "task_completion": "not_qualified"
+    },
+    {
+      "variant": "fill_sequence",
+      "changed": false,
+      "scenario": "normal",
+      "composition_calls": 3,
+      "recovery_guidance_calls": 0,
+      "sequence_proposals": 2,
+      "provider_choices": [
+        "browser_fill_sequence",
+        "browser_fill_sequence",
+        "native.browser_workflow_reconcile"
+      ],
+      "provider_shapes": [
+        [
+          "browser_fill_sequence"
+        ],
+        [
+          "browser_fill_sequence"
+        ],
+        [
+          "acceptance_questions",
+          "arguments",
+          "tool_id"
+        ]
+      ],
+      "tool_ids": [
+        "native.browser_workflow_fill",
+        "native.browser_workflow_observe",
+        "native.browser_workflow_reconcile",
+        "native.browser_workflow_fill",
+        "native.browser_workflow_observe",
+        "native.browser_workflow_reconcile",
+        "native.browser_workflow_reconcile"
+      ],
+      "provider_mode": "live",
+      "failure_type": null,
+      "failure_code": null,
+      "scripted_phase_replans": 0,
+      "phase_count": 1,
+      "tool_calls": 7,
+      "observations": 3,
+      "repeated_observations": 0,
+      "verified_fields": 2,
+      "effect_oracle_pass": true,
+      "scenario_expectation_met": true,
+      "unresolved_effect": false,
+      "phase_outcomes": [
+        "blocked"
+      ],
+      "elapsed_seconds": 48.37841691705398,
+      "task_completion": "not_qualified"
+    }
+  ]
+}

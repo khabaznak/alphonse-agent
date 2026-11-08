@@ -62,7 +62,11 @@ def test_missing_corrupt_or_unregistered_images_fail_explicitly(tmp_path):
         task_image_inputs(task, store)
 
 
-@pytest.mark.parametrize('method,output', [('generate_markdown', 'visible text'), ('generate_json', '{"text":"visible text"}'), ('plan_tool_call', '{"tool_id":"native.respond"}')])
+_TACTICAL_RESPONSE = json.dumps({'action': {'tool_id': 'native.bash', 'arguments_json': '{"command":"pwd"}',
+    'acceptance_questions': []}, 'actions': [], 'browser_fill_sequence': [], 'uncertainty_assessment': None})
+
+
+@pytest.mark.parametrize('method,output', [('generate_markdown', 'visible text'), ('generate_json', _TACTICAL_RESPONSE), ('plan_tool_call', '{"tool_id":"native.respond"}')])
 @pytest.mark.parametrize('interruptible', [False, True])
 def test_selected_model_receives_image_bytes_and_cli_files_are_cleaned(tmp_path, monkeypatch, method, output, interruptible):
     store, image, task = _fixture(tmp_path)
@@ -160,7 +164,7 @@ def test_inference_transport_directory_is_not_presented_as_task_working_director
     captured = {}
     def run(command, **kwargs):
         captured.update(json.loads(kwargs['input']))
-        return SimpleNamespace(returncode=0, stdout='{"tool_id":"native.bash","arguments":{"command":"pwd"}}', stderr='')
+        return SimpleNamespace(returncode=0, stdout=_TACTICAL_RESPONSE, stderr='')
     monkeypatch.setattr('alphonse.agent_v2.core.inference.openai_codex.shutil.which', lambda _: '/bin/codex')
     monkeypatch.setattr('alphonse.agent_v2.core.inference.openai_codex.subprocess.run', run)
     OpenAICodexProvider().generate_json(InferenceRequest(prompt='Compose an authorized action', purpose=InferencePurpose.TACTICAL_ACTION))

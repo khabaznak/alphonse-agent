@@ -1,0 +1,63 @@
+{
+  "version": "independent-reads-live-v1",
+  "model": "gpt-6-luna",
+  "jev_model": "jev-1.14.0",
+  "harness_sha256": "4e80d4a6b2f878c5fccd98bc59cb334586a0885d40f3cb9bd47294fdc49b267b",
+  "executor_sha256": "a2c3e9bfd827f20c0910d6b1b2f691081ca83c0642dfec2120355b4caf2601bf",
+  "limitations": [
+    "One trial per shape; this is not a statistical comparison.",
+    "Synthetic in-memory reads do not qualify browser, mutation or real household workflows.",
+    "ChatGPT subscription usage has no measured per-call dollar cost.",
+    "Single-action control changes the composition prompt and rejects a sequence if returned.",
+    "The Jev ledger is capped at US$0.05; reuse the same ledger for repeated runs."
+  ],
+  "results": [
+    {
+      "scenario": "normal",
+      "variant": "single_action",
+      "outcome": "phase_complete",
+      "failure_type": null,
+      "failure_code": null,
+      "oracle_pass": true,
+      "observed_keys": [
+        "a",
+        "b",
+        "c"
+      ],
+      "composition_calls": 3,
+      "jev_reviews": 3,
+      "tool_calls": 3,
+      "baseline_sequence_rejected": false,
+      "targeted_recoveries": [],
+      "elapsed_seconds": 30.511633833055384,
+      "provider_cost_usd": null,
+      "cost_basis": "ChatGPT subscription; Jev charge recorded separately",
+      "typesafe_trial_charge_usd": "0.000197988",
+      "typesafe_cumulative_charge_usd": "0.007783986"
+    },
+    {
+      "scenario": "normal",
+      "variant": "independent_sequence",
+      "outcome": "phase_complete",
+      "failure_type": null,
+      "failure_code": null,
+      "oracle_pass": true,
+      "observed_keys": [
+        "a",
+        "b",
+        "c"
+      ],
+      "composition_calls": 1,
+      "jev_reviews": 3,
+      "tool_calls": 3,
+      "baseline_sequence_rejected": false,
+      "targeted_recoveries": [],
+      "elapsed_seconds": 10.326076625031419,
+      "provider_cost_usd": null,
+      "cost_basis": "ChatGPT subscription; Jev charge recorded separately",
+      "typesafe_trial_charge_usd": "0.000197442",
+      "typesafe_cumulative_charge_usd": "0.007981428"
+    }
+  ],
+  "typesafe_cumulative_charge_usd": "0.007981428"
+}

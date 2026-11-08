@@ -1,0 +1,19 @@
+{
+  "version": "multifield-live-receipt-v3",
+  "model": "gpt-6-luna",
+  "jev_model": "jev-1.14.0",
+  "harness_sha256": "aefc0e1528e5f7d661342038b887a9357b9a322fe24345ff165869882c3d96a9",
+  "fixture_sha256": "042b57b1667acf6f4c51fb13f42955f5c361db8c672e2ed196b9b4a7f2edfafe",
+  "limitations": [
+    "One trial per shape; not a statistical comparison.",
+    "In-memory fixture checks do not qualify real browser or external effects.",
+    "ChatGPT subscription usage has no measured per-call dollar cost.",
+    "The Jev ledger is capped at US$0.05; reuse the same ledger for repeated runs.",
+    "One pair with a new receipt-bearing fixture; do not pool with earlier revisions."
+  ],
+  "typesafe_cumulative_charge_usd": "0.003614268",
+  "results": [
+    {"scenario":"normal","variant":"per_action","outcome":"phase_complete","failure_type":null,"failure_code":null,"blockers":[],"independent_oracle_pass":true,"verified":true,"submission_count":1,"composition_calls":6,"jev_reviews":6,"tool_calls":6,"selected_operations":["inspect","fill","fill","submit","verify","verify"],"action_statuses":["success","success","success","success","success","success"],"argument_keys":[["operation"],["field","operation","value","version"],["field","operation","value","version"],["operation","version"],["operation"],["operation"]],"operations":["inspect","fill","fill","submit","verify","verify"],"elapsed_seconds":54.19955487502739,"provider_cost_usd":null,"cost_basis":"ChatGPT subscription; Jev charge recorded separately","typesafe_cumulative_charge_usd":"0.003258024"},
+    {"scenario":"normal","variant":"fixture_batch","outcome":"blocked","failure_type":null,"failure_code":null,"blockers":["tactical_action_repeated_without_progress"],"independent_oracle_pass":false,"verified":true,"submission_count":1,"composition_calls":4,"jev_reviews":4,"tool_calls":4,"selected_operations":["inspect","batch","verify","verify"],"action_statuses":["success","success","success","success"],"argument_keys":[["operation"],["operation","version"],["operation"],["operation"]],"operations":["inspect","fill","fill","submit","verify","verify"],"elapsed_seconds":46.390944833052345,"provider_cost_usd":null,"cost_basis":"ChatGPT subscription; Jev charge recorded separately","typesafe_cumulative_charge_usd":"0.003614268"}
+  ]
+}
