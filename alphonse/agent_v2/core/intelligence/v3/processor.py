@@ -94,6 +94,11 @@ class HierarchicalCAPDProcessor:
             task.metadata["v3_failure_response"] = {"source": "browser_recovery", "communication_reviewed": True,
                 "message": "The earlier browser activity needs reconciliation before it can continue."}
             return self._result(task, context)
+        if context.is_cancelled():
+            task.status = "cancelled"
+            task.outcome = {"status": "cancelled", "reason": "Task cancelled."}
+            self._persist(task, context)
+            return self._result(task, context)
         context.emit_ui_event("run_started", {"task": task.to_dict(), "engine": "hierarchical_v3"})
         task.intelligence_engine = "hierarchical_v3"
         task.intelligence_schema_version = 3

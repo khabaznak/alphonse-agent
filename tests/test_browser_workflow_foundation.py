@@ -1065,6 +1065,24 @@ def test_private_answer_phase_continuation(tmp_path, monkeypatch, scenario):
     service.private_data.clear()
 
 
+def test_cancelled_browser_task_is_persisted_before_planning(tmp_path):
+    from alphonse.agent_v2.core.core import CoreLoopContext, ProcessingStatus
+    from alphonse.agent_v2.core.intelligence.v3.processor import HierarchicalCAPDProcessor
+    from alphonse.agent_v2.core.messages import InMemoryMessageQueue
+    store, page = SQLiteQuestionStore(tmp_path / "db"), Page()
+    service = BrowserWorkflowService(checkpoint_store=store, transport=page,
+        authorized=lambda actor, task: "grant-1", cancelled=lambda: False, enabled=True)
+    task = _task()
+    service.begin(task)
+    context = CoreLoopContext(messages=InMemoryMessageQueue(), question_store=store,
+                              browser_workflow_service=service, cancellation_checker=lambda: True)
+    result = HierarchicalCAPDProcessor().process(task, context)
+    assert result.status == ProcessingStatus.CANCELLED
+    assert store.load_task_checkpoint(task.task_id).status == "cancelled"
+    assert not page.calls
+    service.private_data.clear()
+
+
 def test_native_private_question_and_daemon_answer_keep_value_out_of_history(tmp_path):
     from types import SimpleNamespace
     from alphonse.agent_v2.core.core import CoreLoopContext
