@@ -199,6 +199,12 @@ language in the original #105 contract.
 **R1 — BLOCKED, engineering:** the inspected runtime enforces seven-day source
 reads/cleanup and finding deadlines, but has no complete time-based 30-day cleanup
 for source streams/pages, terminal run receipts and all event/input manifests.
+A partial cleanup now removes terminal source page receipts and source cursors
+whose newest known page is older than 30 days. Cursor eviction is deferred while
+any run is active, and cursors without reliable page timestamps remain; expiry
+records a content-free scope marker so the next bounded baseline reports a coverage
+gap. This is not a complete 30-day retention guarantee. Processing checkpoints,
+terminal run receipts and event/input manifests remain unqualified.
 Event history is count-bounded. The event receipt table rejects duplicates older
 than 90 days but keeps acceptance tombstones indefinitely; pruning these would
 allow unseen old IDs to become new without a trusted original-age fence. Keep

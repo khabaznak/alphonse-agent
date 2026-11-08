@@ -40,6 +40,8 @@ class SourceAcquisition:
                     PRIMARY KEY(check_run_id,scope_key,request_key));
                 CREATE TABLE IF NOT EXISTS v2_source_streams (
                     scope_key TEXT PRIMARY KEY, definition TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS v2_source_expired_streams (
+                    scope_key TEXT PRIMARY KEY);
                 CREATE TABLE IF NOT EXISTS v2_source_processing (
                     check_run_id TEXT NOT NULL, stage TEXT NOT NULL,
                     definition TEXT NOT NULL, PRIMARY KEY(check_run_id,stage));
@@ -107,6 +109,9 @@ class SourceAcquisition:
         if progress is None:
             with self.dispatcher.store._connect() as conn:
                 row = conn.execute('SELECT definition FROM v2_source_streams WHERE scope_key=?', (key,)).fetchone()
+                expired = conn.execute('SELECT 1 FROM v2_source_expired_streams WHERE scope_key=?', (key,)).fetchone()
+            if not row and expired and 'cursor_expired_bounded_resync' not in ctx.run['coverage']['gaps']:
+                ctx.run['coverage']['gaps'].append('cursor_expired_bounded_resync')
             progress = json.loads(row[0]) if row else dict(mode='baseline', cursor=None,
                 since=(instant(ctx.run['scheduled_for']) - timedelta(days=policy['initial_lookback_days'])).isoformat())
         query = self._query(policy, source)
@@ -280,6 +285,7 @@ class SourceAcquisition:
                 conn.execute('INSERT OR IGNORE INTO v2_source_evidence VALUES(?,?,?,?)',
                              (record['evidence_id'], ctx.run['check_run_id'], key, json.dumps(record)))
             conn.execute('INSERT OR REPLACE INTO v2_source_streams VALUES(?,?)', (key, json.dumps(next_progress)))
+            conn.execute('DELETE FROM v2_source_expired_streams WHERE scope_key=?', (key,))
         # The evidence transaction already accounts for bytes/items; perform
         # must not add them again. A crash now recovers the persisted receipt.
         ctx.run.update(acquisition_checkpoint=checkpoint, coverage=coverage,
@@ -389,9 +395,44 @@ class SourceAcquisition:
         if findings is not None:
             findings.purge()
 
+    def purge_source_metadata(self):
+        """Expire old terminal page receipts and their unreferenced cursors.
+
+        The cursor table predates timestamps, so age comes from its page receipts.
+        Unknown-age cursors are retained rather than guessed old. A live run may
+        need an old cursor before it has written its checkpoint: defer cursor
+        eviction while any run is active. Receipt deletion and cursor selection
+        share the writer transaction with page acceptance.
+        """
+        cutoff = (self.clock() - timedelta(days=30)).isoformat()
+        with self.dispatcher.store._connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            active = conn.execute("SELECT 1 FROM v2_project_check_runs WHERE state != 'terminal' LIMIT 1").fetchone()
+            if not active:
+                conn.execute("""INSERT OR IGNORE INTO v2_source_expired_streams
+                    SELECT s.scope_key FROM v2_source_streams s JOIN v2_source_pages p ON p.scope_key=s.scope_key
+                    GROUP BY s.scope_key
+                    HAVING COUNT(*) = COUNT(julianday(json_extract(p.definition, '$.observed_at')))
+                       AND MAX(julianday(json_extract(p.definition, '$.observed_at'))) < julianday(?)""", (cutoff,))
+                conn.execute("""DELETE FROM v2_source_streams WHERE scope_key IN (
+                    SELECT p.scope_key FROM v2_source_pages p GROUP BY p.scope_key
+                    HAVING COUNT(*) = COUNT(julianday(json_extract(p.definition, '$.observed_at')))
+                       AND MAX(julianday(json_extract(p.definition, '$.observed_at'))) < julianday(?)
+                )""", (cutoff,))
+            # Keep at least one recent age witness for a cursor that remains.
+            conn.execute("""DELETE FROM v2_source_pages WHERE
+                julianday(json_extract(definition, '$.observed_at')) < julianday(?)
+                AND (NOT EXISTS (SELECT 1 FROM v2_source_streams s WHERE s.scope_key=v2_source_pages.scope_key)
+                     OR EXISTS (SELECT 1 FROM v2_source_pages newer
+                                WHERE newer.scope_key=v2_source_pages.scope_key
+                                AND julianday(json_extract(newer.definition, '$.observed_at')) >= julianday(?)))
+                AND EXISTS (SELECT 1 FROM v2_project_check_runs r
+                            WHERE r.check_run_id=v2_source_pages.check_run_id AND r.state='terminal')""", (cutoff, cutoff))
+
     def publish_ready(self):
         """Crash-safe retry via existing durable event receipts; no second queue."""
         self.purge_content()
+        self.purge_source_metadata()
         with self.dispatcher.store._connect() as conn:
             rows = conn.execute("""SELECT r.check_run_id FROM v2_project_check_runs r
                 LEFT JOIN v2_source_publish_attempts a ON a.check_run_id=r.check_run_id

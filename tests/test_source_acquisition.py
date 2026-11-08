@@ -350,3 +350,72 @@ def test_subscription_before_first_result_routes_existing_event_execution(acquis
         rows = conn.execute('SELECT automation_id FROM v2_automation_executions').fetchall()
     assert [r[0] for r in rows] == [automation.automation_id]
     assert f.events.visible_automations(actor_user_id='child')[0].automation_id == automation.automation_id
+
+
+def test_cursor_and_page_retention_preserves_active_and_recent_recovery(acquisition):
+    f = acquisition
+    f.adapter.pages = [SourcePage((record(f),), 'opaque-history', True)]
+    assert f.process()['outcome'] == 'complete'
+    with f.schedules._connect() as db:
+        scope = db.execute('SELECT scope_key FROM v2_source_streams').fetchone()[0]
+        assert db.execute('SELECT COUNT(*) FROM v2_source_pages').fetchone()[0] == 1
+    f.now += timedelta(days=31)
+    # A still-active run may use this cursor before persisting its checkpoint.
+    with f.schedules._connect() as db:
+        db.execute("UPDATE v2_project_check_runs SET state='pending' WHERE check_run_id=?", (f.run_id,))
+    f.acquisition.purge_source_metadata()
+    with f.schedules._connect() as db:
+        assert db.execute('SELECT COUNT(*) FROM v2_source_streams').fetchone()[0] == 1
+        assert db.execute('SELECT COUNT(*) FROM v2_source_pages').fetchone()[0] == 1
+        db.execute("UPDATE v2_project_check_runs SET state='terminal' WHERE check_run_id=?", (f.run_id,))
+    f.acquisition.purge_source_metadata()
+    with f.schedules._connect() as db:
+        assert db.execute('SELECT COUNT(*) FROM v2_source_streams').fetchone()[0] == 0
+        assert db.execute('SELECT scope_key FROM v2_source_expired_streams').fetchone()[0] == scope
+        assert db.execute('SELECT COUNT(*) FROM v2_source_pages').fetchone()[0] == 0
+        assert db.execute('SELECT COUNT(*) FROM v2_source_evidence').fetchone()[0] == 1
+        # A cursor without age evidence is retained rather than incorrectly expired.
+        db.execute('INSERT INTO v2_source_streams VALUES(?, ?)', ('unknown-age', '{}'))
+    f.acquisition.purge_source_metadata()
+    with f.schedules._connect() as db:
+        assert db.execute('SELECT scope_key FROM v2_source_streams').fetchone()[0] == 'unknown-age'
+
+
+def test_cursor_retention_uses_most_recent_page(acquisition):
+    f = acquisition
+    f.adapter.pages = [SourcePage((record(f),), 'opaque-history', True)]
+    f.process()
+    with f.schedules._connect() as db:
+        scope = db.execute('SELECT scope_key FROM v2_source_streams').fetchone()[0]
+        db.execute('INSERT INTO v2_source_pages VALUES (?, ?, ?, ?)',
+                   (f.run_id, scope, 'newer-page', json.dumps({'observed_at': (f.now + timedelta(days=20)).isoformat()})))
+    f.now += timedelta(days=31)
+    f.acquisition.purge_source_metadata()
+    with f.schedules._connect() as db:
+        assert db.execute('SELECT COUNT(*) FROM v2_source_streams').fetchone()[0] == 1
+        assert db.execute('SELECT COUNT(*) FROM v2_source_pages').fetchone()[0] == 1
+
+
+def test_expired_cursor_forces_bounded_resync_and_reports_gap(acquisition):
+    f = acquisition
+    f.adapter.pages = [SourcePage((record(f),), 'old-history', True), SourcePage((), 'new-history', True)]
+    assert f.process()['outcome'] == 'complete'
+    with f.schedules._connect() as db:
+        row = db.execute('SELECT scope_key, request_key, definition FROM v2_source_pages').fetchone()
+        page = json.loads(row['definition'])
+        page['observed_at'] = (f.now - timedelta(days=31)).isoformat()
+        db.execute('UPDATE v2_source_pages SET definition=? WHERE scope_key=? AND request_key=?',
+                   (json.dumps(page), row['scope_key'], row['request_key']))
+    f.acquisition.purge_source_metadata()
+    f.now += timedelta(days=7)
+    f.dispatcher.sync(now=f.now)
+    task = f.schedules.list_tasks()[0]
+    f.schedules._save_task(replace(task, next_run_at=f.now.isoformat()))
+    f.scheduler.run_once(now=f.now)
+    result = f.process()
+    assert f.adapter.calls[-1][0] == 'search'
+    assert f.adapter.calls[-1][2]['cursor'] is None
+    assert result['outcome'] == 'partial'
+    assert 'cursor_expired_bounded_resync' in result['coverage']['gaps']
+    with f.schedules._connect() as db:
+        assert db.execute('SELECT COUNT(*) FROM v2_source_expired_streams').fetchone()[0] == 0
