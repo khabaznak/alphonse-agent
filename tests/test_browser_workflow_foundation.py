@@ -492,6 +492,69 @@ def test_partial_fills_require_fresh_verified_observations(tmp_path):
     service.private_data.clear()
 
 
+def test_verified_private_fill_identity_is_compared_in_protected_storage(tmp_path):
+    class Form(Page):
+        def __init__(self):
+            self.values = {}
+            self.calls = []
+        def observe(self):
+            return {"targets": ["1_1", "1_2", "1_3"], "values": dict(self.values)}
+        def fill_if_unchanged(self, target, value, observed):
+            if observed != self.observe():
+                return False
+            self.calls.append(target)
+            self.values[target] = value
+            return True
+        def verify_fill(self, target, value, observation):
+            return observation == self.observe() and observation["values"].get(target) == value
+
+    store, page = SQLiteQuestionStore(tmp_path / "db"), Form()
+    service = BrowserWorkflowService(checkpoint_store=store, transport=page,
+        authorized=lambda actor, task: "grant-1", cancelled=lambda: False, enabled=True)
+    task = _task()
+    service.begin(task)
+    for field, value, target in (("name", "PRIVATE_A", "1_1"), ("number", "PRIVATE_B", "1_2"),
+                                 ("number", "PRIVATE_B", "1_3")):
+        service.supply(task, actor_id=task.user, field=field, value=value)
+        service.observe(task)
+        service.fill(task, field=field, target=target)
+        service.observe(task)
+        service.reconcile_fill(task)
+    with pytest.raises(workflow.BrowserWorkflowError, match="verified_fill_replay"):
+        service.fill(task, field="number", target="1_3")
+    assert page.calls == ["1_1", "1_2", "1_3"]
+    assert not workflow.unresolved(workflow.load(task))
+    rendered = json.dumps(store.load_task_checkpoint(task.task_id).to_checkpoint_dict())
+    assert "PRIVATE_A" not in rendered and "PRIVATE_B" not in rendered
+    assert "1_1" not in rendered and "1_2" not in rendered and "1_3" not in rendered
+    service.private_data.clear()
+
+
+def test_expired_verified_fill_identity_requires_reconciliation(tmp_path):
+    class Form(Page):
+        def verify_fill(self, target, value, observation):
+            return observation == self.observe() and self.calls == [(target, value)]
+    clock = [0.0]
+    private = BrowserPrivateData(clock=lambda: clock[0])
+    page = Form()
+    service = BrowserWorkflowService(checkpoint_store=SQLiteQuestionStore(tmp_path / "db"), transport=page,
+        authorized=lambda actor, task: "grant-1", cancelled=lambda: False, enabled=True, private_data=private)
+    task = _task()
+    service.begin(task)
+    service.supply(task, actor_id=task.user, field="name", value="PRIVATE_A")
+    service.observe(task)
+    service.fill(task, field="name", target="field")
+    service.observe(task)
+    service.reconcile_fill(task)
+    clock[0] = 301
+    service.supply(task, actor_id=task.user, field="number", value="PRIVATE_B")
+    service.observe(task)
+    with pytest.raises(workflow.BrowserWorkflowError, match="reconciliation_required"):
+        service.fill(task, field="number", target="123_456")
+    assert page.calls == [("field", "PRIVATE_A")]
+    private.clear()
+
+
 def test_unconfirmed_reconciliation_does_not_resolve_attempt(tmp_path):
     class UnverifiablePage(Page):
         def verify_fill(self, target, value, observation):
@@ -645,24 +708,28 @@ def test_private_question_rejects_raw_answers_and_records_question_provenance(tm
     service.private_data.clear()
 
 
-@pytest.mark.parametrize("scenario", ["live", "baseline", "missing_observation", "stale_session", "cancelled"])
+@pytest.mark.parametrize("scenario", ["live", "changed", "baseline", "missing_observation", "stale_session", "cancelled"])
 def test_private_answer_phase_continuation(tmp_path, monkeypatch, scenario):
     from types import SimpleNamespace
     from alphonse.agent_v2.core.core import CoreLoopContext
-    from alphonse.agent_v2.core.intelligence.v3 import PhasePlan, PhaseSubgoal, PhaseStatus, PhaseOutcome, SideEffectClass, new_tactical_state
+    from alphonse.agent_v2.core.intelligence.v3 import PhasePlan, PhaseSubgoal, PhaseStatus, PhaseOutcome, SideEffectClass, MutationScope, PhaseExecutor, new_tactical_state
     from alphonse.agent_v2.core.intelligence.v3.contracts import TacticalAction
     from alphonse.agent_v2.core.intelligence.v3.processor import HierarchicalCAPDProcessor
     from alphonse.agent_v2.core.messages import InMemoryMessageQueue
+    from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry
+    from alphonse.agent_v2.core.tools.registry.native.browser_workflow import build_browser_workflow_tools
 
     store = SQLiteQuestionStore(tmp_path / "db")
-    service = BrowserWorkflowService(checkpoint_store=store, transport=Page(),
+    page = Page()
+    service = BrowserWorkflowService(checkpoint_store=store, transport=page,
         authorized=lambda actor, task: "grant-1", cancelled=lambda: False, enabled=True)
     task = _task()
     phase = PhasePlan("phase-1", "Complete form", (PhaseSubgoal("fill", "Fill fields", "form",
-        allowed_capabilities=("browser",), allowed_side_effects=(SideEffectClass.USER_RESPONSE,)),),
-        authorized_capabilities=("browser",))
+        allowed_capabilities=("browser",), allowed_side_effects=(SideEffectClass.USER_RESPONSE, SideEffectClass.EXTERNAL_IRREVERSIBLE)),),
+        authorized_capabilities=("browser",), mutation_scope=MutationScope(allow_external_effects=True))
     state = new_tactical_state(phase)
     state.transition(PhaseStatus.RUNNING)
+    state.revealed_tool_ids = ["native.browser_workflow_fill"]
     task.hierarchical_state = state.to_dict()
     service.begin(task)
     if scenario != "missing_observation":
@@ -684,15 +751,23 @@ def test_private_answer_phase_continuation(tmp_path, monkeypatch, scenario):
     plans = []
     def replan(*_):
         plans.append(1)
-        return new_tactical_state(phase)
+        fresh = new_tactical_state(phase)
+        fresh.revealed_tool_ids = ["native.browser_workflow_fill"]
+        return fresh
     monkeypatch.setattr(processor, "_new_state", replan)
     monkeypatch.setattr(processor, "_result", lambda *_: None)
     if scenario == "baseline":
         monkeypatch.setattr(processor_module, "_can_resume_browser_phase", lambda *_: False)
     if scenario == "stale_session":
         service._sessions.clear()
+    if scenario == "changed":
+        page.observe = lambda: {"targets": ["123_456"], "version": "changed"}
     def run(task, current, context):
         seen.append(current.to_dict())
+        if scenario in {"live", "changed", "baseline"}:
+            executor = PhaseExecutor(action_selector=lambda *_: {"tool_id": "native.browser_workflow_fill",
+                                      "arguments": {"field": "name", "target": "123_456"}})
+            return executor.run(task, current, context)
         return PhaseOutcome(current.phase.phase_id, PhaseStatus.BLOCKED, "fixture stop")
     def review(task, state, outcome, context):
         task.status = "failed"
@@ -700,7 +775,10 @@ def test_private_answer_phase_continuation(tmp_path, monkeypatch, scenario):
         return SimpleNamespace(status=None), None
     processor.executor = SimpleNamespace(run=run)
     processor.outer = SimpleNamespace(review_and_route=review)
-    context = CoreLoopContext(messages=InMemoryMessageQueue(), question_store=store, browser_workflow_service=service,
+    registry = InMemoryToolRegistry()
+    for definition in build_browser_workflow_tools(enabled=True):
+        registry.register(definition)
+    context = CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry, question_store=store, browser_workflow_service=service,
                               cancellation_checker=lambda: scenario == "cancelled")
     processor._process(resumed, context)
     if scenario == "cancelled":
@@ -708,11 +786,22 @@ def test_private_answer_phase_continuation(tmp_path, monkeypatch, scenario):
         service.private_data.clear()
         return
     assert len(seen) == 1, resumed.outcome
-    if scenario != "live":
+    if scenario == "baseline":
+        assert len(plans) == 1 and page.calls == [("123_456", "PRIVATE_TEST_VALUE")]
+        saved = workflow.load(resumed)
+        assert workflow.unresolved(saved)
+        assert sum(e["kind"] == "observed" for e in saved["events"]) == 1
+        service.private_data.clear()
+        return
+    if scenario not in {"live", "changed"}:
         assert len(plans) == 1
         service.private_data.clear()
         return
     assert not plans and seen[0]["status"] == "running"
+    assert page.calls == ([("123_456", "PRIVATE_TEST_VALUE")] if scenario == "live" else [])
+    saved = workflow.load(resumed)
+    assert workflow.unresolved(saved)
+    assert sum(e["kind"] == "observed" for e in saved["events"]) == 1
     assert seen[0]["phase"]["phase_id"] == "phase-1"
     assert any(e.get("kind") == "authenticated_question_answer" for e in seen[0]["evidence"]["entries"])
     rendered = json.dumps(seen)

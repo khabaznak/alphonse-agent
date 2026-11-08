@@ -284,6 +284,7 @@ class BrowserWorkflowService:
                 value = value.get("value")
             if not isinstance(value, str) or not value:
                 raise workflow.BrowserWorkflowError("browser_workflow_input_unavailable")
+            self._reject_verified_fill_replay(task, state, field=field, target=target, value=value, authorized=check)
             page = self.private_data.get(actor=task.user, task=task.task_id, grant_id=state["session"],
                                          handle=observed["ref"], authorized=check)
             if not isinstance(page, dict) or not isinstance(page.get("targets"), list) or target not in page["targets"]:
@@ -306,6 +307,31 @@ class BrowserWorkflowService:
             before_return = workflow.load(task)
             workflow.append(task, kind="returned", field="fill", phase=phase, related=attempt)
             self.checkpoints.save_active_browser_checkpoint(task, expected_workflow=before_return)
+
+    def _reject_verified_fill_replay(self, task: Any, state: dict[str, Any], *, field: str,
+                                     target: str, value: str, authorized: Callable[[], bool]) -> None:
+        """Compare identities in protected storage; never infer equality from redaction."""
+        events = state["events"]
+        attempts = {e["id"]: e for e in events if e["kind"] == "attempted" and e["field"] == "fill"}
+        for event in events:
+            if event["kind"] != "verified" or event["related"] not in attempts:
+                continue
+            attempt = attempts[event["related"]]
+            if attempt["session"] != state["session"]:
+                raise workflow.BrowserWorkflowError("browser_workflow_reconciliation_required")
+            try:
+                binding = self.private_data.get(actor=task.user, task=task.task_id, grant_id=state["session"],
+                                                handle=attempt["ref"], authorized=authorized)
+                prior = self.private_data.get(actor=task.user, task=task.task_id, grant_id=state["session"],
+                                              handle=binding["value_ref"], authorized=authorized)
+                prior_value = prior.get("value") if isinstance(prior, dict) else prior
+                if (not isinstance(binding, dict) or binding.get("field") not in workflow.FIELDS
+                        or not isinstance(binding.get("target"), str) or not isinstance(prior_value, str)):
+                    raise ValueError("invalid_binding")
+            except Exception:
+                raise workflow.BrowserWorkflowError("browser_workflow_reconciliation_required") from None
+            if (binding["field"], binding["target"], prior_value) == (field, target, value):
+                raise workflow.BrowserWorkflowError("browser_workflow_verified_fill_replay")
 
     def submit(self, task: Any, *, target: str) -> None:
         """Write ahead of a submission and retain uncertainty until verified."""
