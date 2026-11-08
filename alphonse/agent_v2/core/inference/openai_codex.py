@@ -9,7 +9,7 @@ import shutil
 import subprocess
 import tempfile
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -43,11 +43,26 @@ class OpenAICodexProvider:
         return InferenceResult(content=output, model_profile=request.model_profile, raw_response=output)
 
     def generate_json(self, request: InferenceRequest) -> InferenceResult:
+        tactical = request.purpose.value == "tactical_action"
+        if tactical:
+            from .tactical_wire import SCHEMA, INSTRUCTIONS
+            request = replace(request, output_schema=SCHEMA, prompt=request.prompt + "\n" + INSTRUCTIONS)
         output = self._run_codex(_json_envelope(request), request)
-        parsed = _try_parse_json_object(output)
-        if parsed is None:
-            raise ValueError("openai_codex_invalid_json")
-        return InferenceResult(json_value=parsed, model_profile=request.model_profile, raw_response=output)
+        if tactical:
+            try:
+                parsed = json.loads(output)
+            except (ValueError, TypeError):
+                raise ValueError("openai_codex_invalid_json") from None
+            if not isinstance(parsed, dict):
+                raise ValueError("openai_codex_invalid_tactical_schema")
+            from .tactical_wire import decode
+            parsed = decode(parsed)
+        else:
+            parsed = _try_parse_json_object(output)
+            if parsed is None:
+                raise ValueError("openai_codex_invalid_json")
+        return InferenceResult(json_value=parsed, model_profile=request.model_profile,
+                               raw_response=None if tactical else output)
 
     def plan_tool_call(self, request: InferenceRequest) -> InferenceResult:
         output = self._run_codex(_tool_planning_envelope(request), request)

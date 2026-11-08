@@ -11,6 +11,9 @@ import time
 from typing import TYPE_CHECKING, Any, Callable
 from uuid import uuid4
 
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import SchemaError
+
 from alphonse.agent_v2.core.core import ImprovementPhase, ToolKind
 from alphonse.agent_v2.core.inference import InferencePurpose, InferenceRequest
 from alphonse.agent_v2.core.intelligence.v3.contracts import PhaseOutcome, FailurePolicy
@@ -35,6 +38,7 @@ from alphonse.agent_v2.core.intelligence.v3.task_understanding import receipt as
 from alphonse.agent_v2.core.tools.registry import ToolExposurePolicy
 from alphonse.agent_v2.core.memory.workflow import MEMORY_WORKFLOW
 from alphonse.agent_v2.core.memory.retry_context import retry_continuity_context
+from .tactical_contract import TACTICAL_SCHEMA, valid_tactical_response
 from .feasibility import FEASIBILITY_GUIDANCE
 from ..routine_autonomy import ROUTINE_AUTONOMY_GUIDANCE, ordinary_workspace_context
 
@@ -102,12 +106,14 @@ class PhaseExecutor:
             selected = (retry.get("action") if isinstance(retry, dict)
                         and retry.get("phase_id") == state.phase.phase_id
                         and retry.get("subgoal_id") == subgoal.subgoal_id else None)
+            from_inference = False
             if isinstance(selected, dict):
                 pending_reads.clear()
             elif pending_reads:
                 selected = pending_reads.pop(0)
             else:
                 selected = self._select_action(task, state, subgoal, tools, context)
+                from_inference = self._action_selector is None
             interruption = self._interruption(task, state, context)
             if interruption is not None:
                 self._checkpoint(task, state, context)
@@ -138,6 +144,8 @@ class PhaseExecutor:
             sensitive_action = is_sequence or is_browser_sequence or (isinstance(selected_id, str) and selected_id.startswith("native.browser_workflow_")) or any(
                 tool.tool_id == selected_id and tool.metadata.get("sensitive_content") is True for tool in tools)
             try:
+                if from_inference and not valid_tactical_response(selected):
+                    raise ValueError("tactical_response_schema_invalid")
                 if is_browser_sequence:
                     proposed = _validate_browser_fill_sequence(self, state, subgoal, selected, tools)
                     selected, pending_reads = proposed[0], proposed[1:]
@@ -149,20 +157,21 @@ class PhaseExecutor:
             except (ValueError, PermissionError) as exc:
                 pending_reads.clear()
                 error = str(exc)
-                # Malformed responses may hide browser arguments in an
-                # unexpected wrapper. Treat the whole rejection as sensitive
-                # whenever this task has a browser workflow, even if no valid
-                # top-level browser tool identifier was supplied.
+                context.emit_telemetry({"event": "v3_tactical_response_failure", "category":
+                    "schema" if error == "tactical_response_schema_invalid" else "action_validation"})
+                # All rejected provider output can contain sensitive content,
+                # including under unknown keys or a forged tool identifier.
+                safe_error = error.split(":", 1)[0]
+                if not safe_error.startswith(("tactical_", "browser_fill_sequence_", "independent_reads_", "legacy_")):
+                    safe_error = "tactical_action_invalid"
                 from . import browser_workflow
                 sensitive_rejection = (sensitive_action or browser_workflow.KEY in task.metadata
                                        or browser_workflow._legacy_browser_state(task))
-                # IDs and acceptance-question wording do not change an invalid action.
                 fingerprint = hashlib.sha256(json.dumps({
-                    "tool_id": "native.browser_workflow" if sensitive_rejection else selected.get("tool_id"), "arguments": {"redacted": True} if sensitive_rejection else selected.get("arguments"),
-                    "error": "sensitive_action_invalid" if sensitive_rejection else error, "capabilities": sorted(subgoal.allowed_capabilities),
+                    "error": "sensitive_action_invalid" if sensitive_rejection else safe_error,
+                    "capabilities": sorted(subgoal.allowed_capabilities),
                     "effects": sorted(item.value for item in subgoal.allowed_side_effects),
-                    "scope": state.phase.mutation_scope.__dict__,
-                }, sort_keys=True, default=str).encode()).hexdigest()
+                }, sort_keys=True).encode()).hexdigest()
                 seen = task.metadata.setdefault("v3_rejected_action_fingerprints", [])
                 repeated = fingerprint in seen
                 exhausted = any(item.get("status") == "rejected" and
@@ -172,8 +181,8 @@ class PhaseExecutor:
                 state.evidence.append({
                     "evidence_ref": f"tactical-rejection:{uuid4()}",
                     "phase_id": state.phase.phase_id, "subgoal_id": subgoal.subgoal_id,
-                    "status": "rejected", "error": "sensitive_action_invalid" if sensitive_rejection else error,
-                    "rejected_action": {"tool_id": "native.browser_workflow", "arguments": {"redacted": True}} if sensitive_rejection else selected,
+                    "status": "rejected", "error": "sensitive_action_invalid" if sensitive_rejection else safe_error,
+                    "rejected_action": {"tool_id": "native.browser_workflow" if sensitive_rejection else "redacted", "arguments": {"redacted": True}},
                     "validation_feedback": "No tool ran. Correct this action once using the same revealed tools, "
                         "capabilities, effects and mutation scope; preserve completed work. Do not broaden authorization.",
                     "fingerprint": fingerprint, "repeated": repeated,
@@ -183,7 +192,7 @@ class PhaseExecutor:
                     continue
                 state.transition(PhaseStatus.BLOCKED)
                 self._checkpoint(task, state, context)
-                reason = ("tactical_planning_error_repeated:" if repeated else "tactical_correction_exhausted:") + ("sensitive_action_invalid" if sensitive_rejection else error)
+                reason = ("tactical_planning_error_repeated:" if repeated else "tactical_correction_exhausted:") + ("sensitive_action_invalid" if sensitive_rejection else safe_error)
                 return self._outcome(state, reason, blockers=(reason,))
             if sensitive_action:
                 action = TacticalAction(action_id=f"action-{uuid4()}", subgoal_id=action.subgoal_id,
@@ -588,6 +597,9 @@ class PhaseExecutor:
             skill_guidance=skill_guidance,
             task_context=task_context + "\n" + ordinary_workspace_context(task, context),
         )
+        # Providers which cannot enforce an output schema still receive the
+        # identical contract in the prompt; local validation is authoritative.
+        prompt += "\nTactical response JSON Schema: " + json.dumps(TACTICAL_SCHEMA, sort_keys=True)
         from .context_manifests import event_input_metadata
         images = context.image_inputs(task)
         request = InferenceRequest(
@@ -608,25 +620,29 @@ class PhaseExecutor:
             cancel_checker=context.is_cancelled if context.cancellation_checker is not None else None,
         )
         try:
-            result = context.inference.generate_json(request)
+            result = _safe_tactical_generate(context.inference, request)
         except ValueError as exc:
             # A malformed provider response contains no executable action. A
             # single fresh attempt can recover without replaying that response,
             # any browser mutation, or sensitive output into the next prompt.
-            if "v3_browser_workflow" not in task.metadata or str(exc) != "openai_codex_invalid_json":
+            category = {"openai_codex_invalid_json": "encoding",
+                        "openai_codex_invalid_tactical_schema": "schema"}.get(str(exc), "provider")
+            context.emit_telemetry({"event": "v3_tactical_response_failure", "category": category})
+            if "v3_browser_workflow" not in task.metadata or str(exc) not in {"openai_codex_invalid_json", "openai_codex_invalid_tactical_schema"}:
                 raise
             if context.is_cancelled():
                 return None
             try:
-                result = context.inference.generate_json(replace(request, prompt=request.prompt +
+                result = _safe_tactical_generate(context.inference, replace(request, prompt=request.prompt +
                     "\nThe previous response could not be parsed. Return one valid JSON object using the action contract."))
             except ValueError as retry_exc:
-                if str(retry_exc) != "openai_codex_invalid_json":
+                if str(retry_exc) not in {"openai_codex_invalid_json", "openai_codex_invalid_tactical_schema"}:
                     raise
                 return None
-        if recovery is not None:
+        if recovery is not None and valid_tactical_response(result.json_value):
             _record_uncertainty_assessment(state, recovery, result.json_value)
         if not isinstance(result.json_value, dict):
+            context.emit_telemetry({"event": "v3_tactical_response_failure", "category": "schema"})
             return None
         if images:
             state.evidence.append({
@@ -765,6 +781,15 @@ class PhaseExecutor:
             raise ValueError(f"tactical_tool_not_revealed:{tool_id or '(missing)'}")
         if not isinstance(arguments, dict):
             raise ValueError("tactical_tool_arguments_invalid")
+        try:
+            Draft202012Validator.check_schema(descriptor.argument_schema or {})
+        except SchemaError:
+            raise ValueError("tactical_tool_schema_invalid") from None
+        try:
+            ToolInvocationService._validate(descriptor.argument_schema, arguments)
+        except ValueError:
+            # Validation messages may contain private argument values.
+            raise ValueError("tactical_tool_arguments_schema_invalid") from None
         compatibility_error = action_compatibility_error(subgoal, descriptor)
         if compatibility_error:
             raise PermissionError(compatibility_error)
@@ -1412,3 +1437,15 @@ def _record_system_one_tactical_review(
     })
     if len(history) > 50:
         del history[:-50]
+
+
+def _safe_tactical_generate(inference: Any, request: InferenceRequest) -> Any:
+    """Keep provider-supplied exception text out of terminal errors and traces."""
+    try:
+        return inference.generate_json(request)
+    except Exception as exc:
+        if isinstance(exc, ValueError) and str(exc) in {"openai_codex_invalid_json", "openai_codex_invalid_tactical_schema", "inference_cancelled"}:
+            raise ValueError(str(exc)) from None
+        if isinstance(exc, ValueError):
+            raise ValueError("tactical_provider_error") from None
+        raise RuntimeError("tactical_provider_error") from None
