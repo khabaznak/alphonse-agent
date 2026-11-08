@@ -2232,7 +2232,12 @@ class V2Daemon:
     def _collect_activity_events(self) -> None:
         events = list(self.runtime.activity_events)
         self.runtime.activity_events.clear()
+        now = datetime.now(timezone.utc)
+        self._activity_event_journal = [event for event in self._activity_event_journal
+                                        if _journal_event_recent(event.get('occurred_at'), now)]
         for event in events:
+            if not _journal_event_recent(event.occurred_at, now):
+                continue
             self._activity_event_sequence += 1
             self._activity_event_journal.append(
                 {
@@ -2247,7 +2252,7 @@ class V2Daemon:
                     "integration_id": event.integration_id,
                     "channel_target": event.channel_target,
                     "progress": dict(event.progress),
-                    "occurred_at": event.occurred_at,
+                    "occurred_at": min(datetime.fromisoformat(event.occurred_at.replace('Z', '+00:00')).astimezone(timezone.utc), now).isoformat(),
                 }
             )
         if len(self._activity_event_journal) > 2000:
@@ -2312,17 +2317,23 @@ class V2Daemon:
                 for event in self._ui_event_journal
                 if int(event["sequence"]) > cursor and (not event["user"] or event["user"] == user)
             ][: max(1, min(int(limit or 100), 500))]
-            return matched, int(matched[-1]["sequence"]) if matched else cursor
+            return [{k: v for k, v in event.items() if k != '_retained_at'} for event in matched], int(matched[-1]["sequence"]) if matched else cursor
 
     def _collect_ui_events(self) -> None:
         events = list(self.runtime.ui_events)
         self.runtime.ui_events.clear()
+        now = datetime.now(timezone.utc)
+        self._ui_event_journal = [event for event in self._ui_event_journal
+                                  if _journal_event_recent(event.get('_retained_at'), now)]
         for core_event in events:
+            if not _journal_event_recent(core_event.occurred_at, now):
+                continue
             for event in self._ag_ui.map_event(core_event):
                 self._ui_event_sequence += 1
                 self._ui_event_journal.append(
                     {
                         "sequence": self._ui_event_sequence,
+                        "_retained_at": min(datetime.fromisoformat(core_event.occurred_at.replace('Z', '+00:00')).astimezone(timezone.utc), now).isoformat(),
                         "user": _ui_event_user(core_event),
                         "event": event,
                     }
@@ -2816,6 +2827,15 @@ class V2Daemon:
         if db_path != ":memory:":
             deleted = prune_operational_data(db_path, now=now)
             logger.info("operational retention completed deleted=%s", deleted)
+        # Uncollected queues are shared with producers/TUI without a shared
+        # lock. Leave them intact here to avoid losing concurrent fresh events;
+        # the next collection rejects entries older than the retention window.
+        with self._event_lock:
+            self._activity_event_journal[:] = [event for event in self._activity_event_journal
+                                              if _journal_event_recent(event.get('occurred_at'), now)]
+        with self._ui_event_lock:
+            self._ui_event_journal[:] = [event for event in self._ui_event_journal
+                                        if _journal_event_recent(event.get('_retained_at'), now)]
         self._last_retention_at = now
 
     def _mark_snapshot_checkpoint_terminal(self, snapshot: Any, *, status: str) -> None:
@@ -3039,6 +3059,19 @@ class V2Daemon:
             self.runtime.schedule_store.mark_occurrence_failed(occurrence_key, error=error)
             if isinstance(metadata, dict) and metadata.get("scheduled_task_id"):
                 self._notify_scheduled_task_failure(metadata, error=error)
+
+
+def _journal_event_recent(value: Any, now: datetime) -> bool:
+    """Bound transient UI evidence; malformed timestamps fail closed."""
+    try:
+        if not isinstance(value, str):
+            return False
+        stamp = datetime.fromisoformat(value.replace('Z', '+00:00'))
+        if stamp.tzinfo is None or stamp.utcoffset() is None:
+            return False
+        return now - min(stamp.astimezone(timezone.utc), now) < timedelta(days=30)
+    except (TypeError, ValueError, OverflowError):
+        return False
 
 
 def _without_sequence(event: dict[str, Any]) -> dict[str, Any]:

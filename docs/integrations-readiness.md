@@ -221,8 +221,11 @@ a complete 30-day retention guarantee: input manifests remain unqualified, and
 safety deferrals can exceed 30 days. Synthetic tests confirm decision and
 event-input manifests in completed, failed and cancelled task checkpoints expire
 after 30 days, while active and waiting tasks retain recovery state. That test
-does not qualify other consumers, remote model sessions, in-memory UI projections
-or filesystem copies of a manifest.
+does not qualify other consumers, remote model sessions or filesystem copies of a
+manifest. Collected transient UI and activity journals now expire after 30 days;
+future timestamps are clamped and malformed ones are rejected. Events not yet
+collected are age-checked on collection but are not periodically removed from
+the shared producer queues, so their physical retention remains unqualified.
 Operational retention also deletes event history older than 30 days when no
 nonterminal execution depends on it and its independent replay receipt exists;
 unknown/missing replay state keeps the event. Receipts remain in place. The event

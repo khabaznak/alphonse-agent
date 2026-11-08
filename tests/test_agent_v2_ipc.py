@@ -1146,3 +1146,53 @@ def test_desktop_progress_retry_wait_and_non_desktop_terminal_guard(tmp_path):
     task.metadata["channel"]["integration_id"] = "telegram"
     daemon._publish_task_progress(StateSnapshot(metadata={"task_state": task.to_dict()}), status="failed")
     assert not runtime.activity_events
+
+
+def test_transient_activity_and_ui_events_expire_by_age() -> None:
+    from datetime import datetime, timedelta, timezone
+    runtime = build_runtime_host(inference=_router(), schedule_store=ScheduledTaskStore(':memory:'))
+    daemon = V2Daemon(runtime)
+    old = (datetime.now(timezone.utc) - timedelta(days=31)).isoformat()
+    recent = datetime.now(timezone.utc).isoformat()
+    runtime.activity_events.extend([
+        CoreActivityEvent(phase=ImprovementPhase.PLAN, label='old', message='synthetic-old', occurred_at=old),
+        CoreActivityEvent(phase=ImprovementPhase.PLAN, label='new', message='synthetic-new', occurred_at=recent),
+    ])
+    runtime.ui_events.extend([
+        CoreUiEvent('state_snapshot', {'status': 'old'}, occurred_at=old),
+        CoreUiEvent('state_snapshot', {'status': 'new'}, occurred_at=recent),
+    ])
+    activity, _ = daemon.activity_events_since()
+    ui, _ = daemon.ui_events_since(user='alex')
+    assert [event['label'] for event in activity] == ['new']
+    assert len(ui) == 1 and '_retained_at' not in ui[0]
+    # Once an already collected record ages, a retention tick removes it.
+    daemon._activity_event_journal[0]['occurred_at'] = old
+    daemon._ui_event_journal[0]['_retained_at'] = old
+    daemon._run_retention_if_due(force=True)
+    assert daemon._activity_event_journal == [] and daemon._ui_event_journal == []
+
+
+def test_future_or_malformed_transient_event_times_cannot_extend_retention() -> None:
+    from datetime import datetime, timedelta, timezone
+    runtime = build_runtime_host(inference=_router(), schedule_store=ScheduledTaskStore(':memory:'))
+    daemon = V2Daemon(runtime)
+    future = (datetime.now(timezone.utc) + timedelta(days=365)).isoformat()
+    runtime.activity_events.append(CoreActivityEvent(phase=ImprovementPhase.PLAN, label='future', message='future', occurred_at=future))
+    runtime.ui_events.extend([CoreUiEvent('state_snapshot', {'status': 'future'}, occurred_at=future),
+                              CoreUiEvent('state_snapshot', {'status': 'invalid'}, occurred_at='not-a-time')])
+    activity, _ = daemon.activity_events_since()
+    ui, _ = daemon.ui_events_since(user='alex')
+    assert datetime.fromisoformat(activity[0]['occurred_at']) < datetime.now(timezone.utc) + timedelta(minutes=1)
+    assert len(ui) == 1
+    assert datetime.fromisoformat(daemon._ui_event_journal[0]['_retained_at']) < datetime.now(timezone.utc) + timedelta(minutes=1)
+
+
+def test_retention_tick_does_not_drain_fresh_ui_or_activity_events() -> None:
+    runtime = build_runtime_host(inference=_router(), schedule_store=ScheduledTaskStore(':memory:'))
+    daemon = V2Daemon(runtime)
+    runtime.activity_events.append(CoreActivityEvent(phase=ImprovementPhase.PLAN, label='new', message='new'))
+    runtime.ui_events.append(CoreUiEvent('state_snapshot', {'status': 'new'}))
+    daemon._run_retention_if_due(force=True)
+    assert len(runtime.activity_events) == len(runtime.ui_events) == 1
+    assert len(daemon.activity_events_since()[0]) == len(daemon.ui_events_since(user='alex')[0]) == 1
