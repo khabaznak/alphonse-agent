@@ -483,3 +483,25 @@ def test_published_processing_expires_without_manufacturing_run_success(acquisit
         assert db.execute('SELECT COUNT(*) FROM v2_event_receipts').fetchone()[0] == 1
         receipt = json.loads(db.execute('SELECT receipt FROM v2_project_check_runs WHERE check_run_id=?', (f.run_id,)).fetchone()[0])
         assert receipt['processing_details_expired'] is True and receipt['outcome'] == 'complete'
+
+
+def test_expired_run_diagnostics_drop_checkpoints_without_losing_outcome(acquisition):
+    f = acquisition
+    f.adapter.pages = [SourcePage(complete=True)]
+    assert f.process()['outcome'] == 'no_match'
+    f.acquisition.events = EventAutomationStore(f.schedules.db_path)
+    with f.schedules._connect() as db:
+        row = db.execute('SELECT receipt FROM v2_project_check_runs WHERE check_run_id=?', (f.run_id,)).fetchone()
+        receipt = json.loads(row['receipt'])
+        receipt['acquisition_checkpoint'] = {'cursor': 'synthetic-sensitive-cursor'}
+        receipt['analysis_checkpoint'] = {'input': 'synthetic-sensitive-manifest'}
+        receipt['coverage']['sources'] = {'synthetic-source': {'resources': ['synthetic-folder']}}
+        db.execute('UPDATE v2_project_check_runs SET receipt=? WHERE check_run_id=?', (json.dumps(receipt), f.run_id))
+    f.now += timedelta(days=31)
+    f.acquisition.purge_source_metadata()
+    run = f.dispatcher.get(f.run_id)
+    assert run['outcome'] == 'no_match' and run['diagnostics_expired'] is True
+    assert run['coverage']['details_expired'] is True
+    assert run['acquisition_checkpoint'] == run['analysis_checkpoint'] == {}
+    assert 'synthetic-sensitive' not in json.dumps(run) and 'synthetic-folder' not in json.dumps(run)
+    assert run['policy_id'] == f.policy['policy_id'] and run['executing_user_id'] == 'child'

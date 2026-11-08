@@ -23,7 +23,7 @@ function RecipientPicker({ members, selected, onChange, allowed }: { members: Me
 function Coverage({ value }: { value: Record<string, unknown> }) {
   const sources = Object.values((value.sources || {}) as Record<string, { resources?: string[]; coverage_complete?: boolean; observed_at?: string }>);
   const gaps = Array.isArray(value.gaps) ? value.gaps.filter((g): g is string => typeof g === 'string') : [];
-  return <div><p>{value.acquisition_complete === true ? 'Acquisition finished for this run.' : 'Acquisition coverage is not yet complete.'}</p>{sources.map((s, n) => <p key={n}>{s.resources?.join(', ') || `Source ${n + 1}`}: {s.coverage_complete === true ? 'Selected source covered' : 'Partial source coverage'}{s.observed_at && ` · observed ${s.observed_at}`}</p>)}{gaps.map(g => <p key={g}>Coverage gap: {friendly(g)}</p>)}</div>;
+  return <div><p>{value.acquisition_complete === true ? 'Acquisition finished for this run.' : 'Acquisition coverage is not yet complete.'}</p>{value.details_expired === true && <p>Source coverage details have expired.</p>}{sources.map((s, n) => <p key={n}>{s.resources?.join(', ') || `Source ${n + 1}`}: {s.coverage_complete === true ? 'Selected source covered' : 'Partial source coverage'}{s.observed_at && ` · observed ${s.observed_at}`}</p>)}{gaps.map(g => <p key={g}>Coverage gap: {friendly(g)}</p>)}</div>;
 }
 function StatusText({ children }: { children: React.ReactNode }) { return <p role="status" aria-live="polite">{children}</p>; }
 function clientSetupError(cause: unknown): string {

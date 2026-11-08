@@ -448,11 +448,26 @@ class SourceAcquisition:
                     count = conn.execute('DELETE FROM v2_source_processing WHERE check_run_id=?', (row['check_run_id'],)).rowcount
                     if 'v2_project_triage' in tables:
                         count += conn.execute('DELETE FROM v2_project_triage WHERE check_run_id=?', (row['check_run_id'],)).rowcount
-                    if count:
-                        receipt = json.loads(row['receipt'])
-                        receipt['processing_details_expired'] = True
+                    receipt = json.loads(row['receipt'])
+                    if count or not receipt.get('diagnostics_expired'):
+                        # Retain the small identity and outcome envelope needed
+                        # for event scope, replay, and historical finding checks.
+                        # Do not retain checkpoints, source IDs, cursors, grants,
+                        # or provider-specific coverage beyond this deadline.
+                        keep = ('check_run_id', 'policy_id', 'policy_revision', 'occurrence_key',
+                                'scheduled_for', 'executing_user_id', 'project_id',
+                                'window_start', 'window_end', 'pages', 'items', 'bytes_read',
+                                'model_calls', 'attempts', 'runtime_seconds', 'started_at',
+                                'finished_at', 'outcome', 'error_code', 'publication_id')
+                        compact = {key: receipt[key] for key in keep if key in receipt}
+                        coverage = receipt.get('coverage') if isinstance(receipt.get('coverage'), dict) else {}
+                        compact['coverage'] = {key: coverage[key] for key in
+                            ('acquisition_complete', 'processing', 'triage_no_match') if key in coverage}
+                        compact['coverage']['details_expired'] = True
+                        compact.update(acquisition_checkpoint={}, analysis_checkpoint={},
+                                       processing_details_expired=True, diagnostics_expired=True)
                         conn.execute("UPDATE v2_project_check_runs SET receipt=? WHERE check_run_id=? AND state='terminal'",
-                                     (json.dumps(receipt), row['check_run_id']))
+                                     (json.dumps(compact), row['check_run_id']))
             # Keep at least one recent age witness for a cursor that remains.
             conn.execute("""DELETE FROM v2_source_pages WHERE
                 julianday(json_extract(definition, '$.observed_at')) < julianday(?)

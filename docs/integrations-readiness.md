@@ -207,9 +207,12 @@ gap. Terminal processing and triage details are also expired after 30 days
 when acquisition and event recovery share a database, no run or event execution is
 active, and publication is confirmed or the run was quiet/cancelled. Desktop
 reports expired analysis details as unknown rather than complete. Unknown storage
-topology, unconfirmed publication and active work keep the details. This is not a
-complete 30-day retention guarantee: terminal run receipts and input manifests
-remain unqualified, and safety deferrals can exceed 30 days.
+topology, unconfirmed publication and active work keep the details. Eligible
+terminal run receipts are reduced to identity, timing and outcome needed by event
+scope, replay and historical finding checks; checkpoints, grants and source-specific
+coverage are removed. The UI indicates that coverage details expired. This is not
+a complete 30-day retention guarantee: input manifests remain unqualified, and
+safety deferrals can exceed 30 days.
 Operational retention also deletes event history older than 30 days when no
 nonterminal execution depends on it and its independent replay receipt exists;
 unknown/missing replay state keeps the event. Receipts remain in place. The event
