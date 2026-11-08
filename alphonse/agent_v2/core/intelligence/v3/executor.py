@@ -148,10 +148,17 @@ class PhaseExecutor:
             except (ValueError, PermissionError) as exc:
                 pending_reads.clear()
                 error = str(exc)
+                # Malformed responses may hide browser arguments in an
+                # unexpected wrapper. Treat the whole rejection as sensitive
+                # whenever this task has a browser workflow, even if no valid
+                # top-level browser tool identifier was supplied.
+                from . import browser_workflow
+                sensitive_rejection = (sensitive_action or browser_workflow.KEY in task.metadata
+                                       or browser_workflow._legacy_browser_state(task))
                 # IDs and acceptance-question wording do not change an invalid action.
                 fingerprint = hashlib.sha256(json.dumps({
-                    "tool_id": "native.browser_workflow" if sensitive_action else selected.get("tool_id"), "arguments": {"redacted": True} if sensitive_action else selected.get("arguments"),
-                    "error": "sensitive_action_invalid" if sensitive_action else error, "capabilities": sorted(subgoal.allowed_capabilities),
+                    "tool_id": "native.browser_workflow" if sensitive_rejection else selected.get("tool_id"), "arguments": {"redacted": True} if sensitive_rejection else selected.get("arguments"),
+                    "error": "sensitive_action_invalid" if sensitive_rejection else error, "capabilities": sorted(subgoal.allowed_capabilities),
                     "effects": sorted(item.value for item in subgoal.allowed_side_effects),
                     "scope": state.phase.mutation_scope.__dict__,
                 }, sort_keys=True, default=str).encode()).hexdigest()
@@ -164,8 +171,8 @@ class PhaseExecutor:
                 state.evidence.append({
                     "evidence_ref": f"tactical-rejection:{uuid4()}",
                     "phase_id": state.phase.phase_id, "subgoal_id": subgoal.subgoal_id,
-                    "status": "rejected", "error": "sensitive_action_invalid" if sensitive_action else error,
-                    "rejected_action": {"tool_id": "native.browser_workflow", "arguments": {"redacted": True}} if sensitive_action else selected,
+                    "status": "rejected", "error": "sensitive_action_invalid" if sensitive_rejection else error,
+                    "rejected_action": {"tool_id": "native.browser_workflow", "arguments": {"redacted": True}} if sensitive_rejection else selected,
                     "validation_feedback": "No tool ran. Correct this action once using the same revealed tools, "
                         "capabilities, effects and mutation scope; preserve completed work. Do not broaden authorization.",
                     "fingerprint": fingerprint, "repeated": repeated,
@@ -175,7 +182,7 @@ class PhaseExecutor:
                     continue
                 state.transition(PhaseStatus.BLOCKED)
                 self._checkpoint(task, state, context)
-                reason = ("tactical_planning_error_repeated:" if repeated else "tactical_correction_exhausted:") + ("sensitive_action_invalid" if sensitive_action else error)
+                reason = ("tactical_planning_error_repeated:" if repeated else "tactical_correction_exhausted:") + ("sensitive_action_invalid" if sensitive_rejection else error)
                 return self._outcome(state, reason, blockers=(reason,))
             if sensitive_action:
                 action = TacticalAction(action_id=f"action-{uuid4()}", subgoal_id=action.subgoal_id,
@@ -540,6 +547,14 @@ class PhaseExecutor:
                 'task:' + str(task.task_id) + ':inspection_handoff', 'inspection_handoff',
             )
         skill_guidance = skill_guidance + "\n" + MEMORY_WORKFLOW
+        required_browser_step = _pending_browser_fill_recovery(task)
+        if required_browser_step in {"native.browser_workflow_observe", "native.browser_workflow_reconcile"}:
+            skill_guidance += source(
+                "\nA previous browser fill has an unresolved effect. The next permitted local recovery step is "
+                + required_browser_step + " with empty arguments. Do not repeat the fill or perform another "
+                "mutation until the independent reconciliation succeeds. Normal authorization and cancellation checks apply.",
+                'task:' + str(task.task_id) + ':browser_reconciliation', 'browser_reconciliation',
+            )
         selection = task.metadata.get("v3_context_selection") or {}
         task_context = task_context_for_decision(task, context, purpose="execution",
                                                 selected_context_ids=selection.get("selected_context_ids", []))

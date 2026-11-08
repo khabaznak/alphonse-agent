@@ -687,7 +687,7 @@ def test_verified_fill_resets_phase_stall_despite_redacted_prior_fill(tmp_path, 
     service.private_data.clear()
 
 
-@pytest.mark.parametrize("scenario", ["normal", "sequence", "sequence_failed_verify", "sequence_cancelled", "sequence_revoked", "sequence_changed", "sequence_denied", "sequence_invalid", "repeated", "replay_verified", "failed_verify", "cancelled", "revoked"])
+@pytest.mark.parametrize("scenario", ["normal", "sequence", "sequence_failed_verify", "sequence_cancelled", "sequence_revoked", "sequence_stale", "sequence_changed", "sequence_denied", "sequence_invalid", "sequence_invalid_wrapper", "repeated", "replay_verified", "failed_verify", "cancelled", "revoked"])
 def test_executor_reconciles_distinct_fills_in_same_phase(tmp_path, scenario):
     from alphonse.agent_v2.core.core import CoreLoopContext
     from alphonse.agent_v2.core.intelligence.v3 import PhaseExecutor, PhasePlan, PhaseSubgoal, PhaseStatus, SideEffectClass, MutationScope, new_tactical_state
@@ -699,6 +699,10 @@ def test_executor_reconciles_distinct_fills_in_same_phase(tmp_path, scenario):
     class Form(Page):
         def __init__(self):
             self.calls, self.values, self.changed = [], {}, False
+        def session_identity(self, actor, task):
+            if scenario == "sequence_stale" and self.calls:
+                return "changed-session"
+            return super().session_identity(actor, task)
         def observe(self):
             return {"targets": ["1_1", "1_2"], "values": dict(self.values), "changed": self.changed}
         def fill_if_unchanged(self, target, value, observed):
@@ -746,6 +750,8 @@ def test_executor_reconciles_distinct_fills_in_same_phase(tmp_path, scenario):
     state.revealed_tool_ids = ["native.browser_workflow_" + name for name in ("fill", "observe", "reconcile")]
     selections = []
     def select(*_):
+        if scenario == "sequence_invalid_wrapper":
+            return {"action": {"tool_id": "native.browser_workflow_fill", "arguments": {"target": "PRIVATE_WRAPPED"}}}
         if scenario.startswith("sequence"):
             item = next(operations, None)
             selections.append(item)
@@ -778,7 +784,7 @@ def test_executor_reconciles_distinct_fills_in_same_phase(tmp_path, scenario):
     elif scenario == "replay_verified":
         assert page.calls == ["1_1"] and not workflow.unresolved(saved)
         assert "browser_workflow_reconciliation_required" in outcome.blockers
-    elif scenario in {"sequence_changed", "sequence_denied", "sequence_invalid"}:
+    elif scenario in {"sequence_changed", "sequence_denied", "sequence_invalid", "sequence_invalid_wrapper"}:
         assert not page.calls
         assert outcome.status == PhaseStatus.BLOCKED
     else:
@@ -786,6 +792,8 @@ def test_executor_reconciles_distinct_fills_in_same_phase(tmp_path, scenario):
         assert outcome.status in {PhaseStatus.BLOCKED, PhaseStatus.CANCELLED}
     assert "PRIVATE_A" not in json.dumps(task.to_checkpoint_dict())
     assert "PRIVATE_B" not in json.dumps(task.to_checkpoint_dict())
+    assert "PRIVATE_WRAPPED" not in json.dumps(task.to_checkpoint_dict())
+    assert b"PRIVATE_WRAPPED" not in (tmp_path / "db").read_bytes()
     service.private_data.clear()
 
 

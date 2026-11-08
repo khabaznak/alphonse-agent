@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from alphonse.agent_v2.evaluation.browser_handoff_comparison import report, run_case
+from alphonse.agent_v2.evaluation.browser_handoff_comparison import report, run_case, sequence_report
 
 
 def test_control_and_continuation_preserve_verified_partial_effects():
@@ -38,7 +38,16 @@ def test_fill_sequence_comparison_preserves_verified_effects():
     control = run_case(control=False)
     sequence = run_case(control=False, sequence=True)
     assert control["effect_oracle_pass"] and sequence["effect_oracle_pass"]
-    assert (control["scripted_compositions"], sequence["scripted_compositions"]) == (7, 3)
+    assert (control["composition_calls"], sequence["composition_calls"]) == (7, 3)
+    assert (control["recovery_guidance_calls"], sequence["recovery_guidance_calls"]) == (4, 0)
     assert control["observations"] == sequence["observations"] == 3
     changed = run_case(control=False, changed=True, sequence=True)
     assert changed["scenario_expectation_met"] and changed["unresolved_effect"]
+
+
+def test_sequence_comparison_retains_each_safety_outcome():
+    value = sequence_report(repeats=1)
+    assert len(value["runs"]) == 12 and value["safety_oracle_failures"] == 0
+    assert all(row["scenario_expectation_met"] for row in value["runs"])
+    assert "SYNTHETIC_NAME" not in json.dumps(value)
+    assert "SYNTHETIC_NUMBER" not in json.dumps(value)

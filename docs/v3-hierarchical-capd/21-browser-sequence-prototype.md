@@ -31,3 +31,58 @@ The comparison also does not yet cover retries, submission/result qualification,
 or a real browser. Do not check off issue 190 or merge this prototype on the
 strength of these results. A broader matched evaluation and review of the plan's
 state-change and recovery semantics remain necessary.
+
+## Expanded paired fixture and exploratory model run
+
+Run `python -c 'import json; from alphonse.agent_v2.evaluation.browser_handoff_comparison import sequence_report; print(json.dumps(sequence_report(3), indent=2))'`.
+This now calls the actual tactical inference interface with a scripted provider,
+rechecks the real browser service and uses independent form state as the oracle.
+In 36 runs (three repetitions of six scenarios in each arm), the safety oracle
+recorded zero failures. On the normal case the control and sequence respectively
+made 7 and 3 scripted inference-interface calls, six native calls each, and three
+observations each, verifying both fields. Local median elapsed time was 23.82 ms
+and 15.75 ms, respectively; this excludes provider latency. Both phases remain
+blocked because no submission or result qualification is performed.
+
+Changed-form and denied-effect cases dispatched no fill. Stale-session and
+cancellation cases dispatched one fill and left it unresolved. The retry case
+simulates failed independent verification: neither arm replayed the potentially
+effective fill, and both left it unresolved. Those negative cases are expected
+blocked or cancelled outcomes, not completed tasks. The matrix tests one failure
+shape per scenario and is not a proof of production safety.
+
+A separate exploratory model-only pair used `gpt-6-luna`, synthetic target IDs
+in the task, the same disposable backend, and scripted tactical reviews. The
+control made two model calls and stopped after one unresolved fill (17.81 s); the
+sequence arm made six model calls, proposed one sequence, verified both fills,
+and stopped blocked without a completion claim (66.62 s). It made six native
+calls and three observations. Because the control and sequence reached different
+states, these are not a matched performance comparison or evidence of lower
+latency, fewer model calls, or fewer observations. No live Jev call was made.
+The initially configured npm Codex wrapper had a missing binary; those two runs
+failed before executing actions and are excluded from the model result above.
+The working binary was `/opt/homebrew/bin/codex`.
+
+The executor now gives an explicit recovery instruction when a fill requires a
+fresh observation or reconciliation. This is only guidance; code and the service
+continue to enforce the required step and all authority checks independently.
+The model runner can be reproduced with
+`python -m alphonse.agent_v2.evaluation.browser_sequence_live --codex-cli /opt/homebrew/bin/codex --output /private/tmp/browser-sequence-live.json`.
+It calls the configured model, restricts the CLI's tools, sends synthetic content,
+and caps each arm at twelve compositions. Review provider costs before running.
+
+A later exploratory control used a stricter single-action prompt after the model
+returned an `actions` array and then a nested `action` object in a diagnostic
+trial. This control verified both fields in nine model calls with five observations
+(two repeated) in 97.87 s; it still ended blocked without task completion. The
+earlier sequence arm verified both in six calls and three observations. These
+runs use different harness revisions and single samples, so this is a lead for a
+frozen paired comparison, not a reliability or latency conclusion. Content-free
+results and source hashes are retained under `evidence/issue-190/`. No raw model
+response or private field values are saved.
+
+The malformed response investigation also found that an invalid action wrapper
+could bypass browser-specific rejection redaction. Rejections in active or
+legacy browser workflow contexts now redact the entire proposed action, even
+when no valid top-level tool ID is present. This does not make malformed actions
+executable; they still follow normal validation and recovery.
