@@ -132,11 +132,15 @@ class PhaseExecutor:
                 return self._outcome(state, "The browser effect needs independent reconciliation.",
                                      blockers=("browser_workflow_reconciliation_required",))
             is_sequence = "actions" in selected
+            is_browser_sequence = "browser_fill_sequence" in selected
             selected_id = selected.get("tool_id")
-            sensitive_action = is_sequence or (isinstance(selected_id, str) and selected_id.startswith("native.browser_workflow_")) or any(
+            sensitive_action = is_sequence or is_browser_sequence or (isinstance(selected_id, str) and selected_id.startswith("native.browser_workflow_")) or any(
                 tool.tool_id == selected_id and tool.metadata.get("sensitive_content") is True for tool in tools)
             try:
-                if is_sequence:
+                if is_browser_sequence:
+                    proposed = _validate_browser_fill_sequence(self, state, subgoal, selected, tools)
+                    selected, pending_reads = proposed[0], proposed[1:]
+                elif is_sequence:
                     proposed = _validate_independent_reads(self, state, subgoal, selected, tools)
                     selected, pending_reads = proposed[0], proposed[1:]
                     sensitive_action = False
@@ -496,7 +500,7 @@ class PhaseExecutor:
         skill_guidance, loaded_skill_ids = selected_skill_guidance(task, context)
         if self._action_selector is not None:
             selected = self._action_selector(state, subgoal, tools)
-            if isinstance(selected, dict) and not selected.get("acceptance_questions"):
+            if isinstance(selected, dict) and not selected.get("acceptance_questions") and "browser_fill_sequence" not in selected:
                 selected = dict(selected)
                 selected["acceptance_questions"] = [{
                     "question_id": "stage_result_satisfies_completion",
@@ -959,7 +963,11 @@ def _tactical_prompt(
         "Select one concrete tactical action for the current subgoal and define acceptance questions for its result. "
         "For a read-only subgoal only, you may instead return {actions:[...]} with two or three independent read-only "
         "actions, each in the same format, only when all arguments are already known and none depends on another result. "
-        "Never sequence writes, private or browser actions, user interaction, or actions needing a new observation. "
+        "For a browser fill whose field, target and private input are already known, you may instead return "
+        "{browser_fill_sequence:[fill, observe, reconcile]} with those three native browser workflow actions in that "
+        "exact order and the normal action format. The sequence stops on failure, uncertainty, cancellation, or changed "
+        "authorization; it does not establish task completion. Do not sequence any other write, browser action, "
+        "private input request, or user interaction. "
         "The runtime rechecks every action and stops the sequence on failure, uncertainty or completion. "
         "Do not change the objective, acceptance criteria, or mutation scope. "
         "Each action has tool_id, arguments, and a non-empty acceptance_questions array. Each question must be a Noul "
@@ -1105,6 +1113,28 @@ def _is_update_inspection(state: TacticalState, subgoal: PhaseSubgoal, answers: 
         }
         for item in state.phase.subgoals
     )
+
+
+def _validate_browser_fill_sequence(executor: PhaseExecutor, state: TacticalState, subgoal: PhaseSubgoal,
+                                    selected: dict[str, Any], tools: tuple["ToolDescriptor", ...]) -> list[dict[str, Any]]:
+    """Accept only one fill and its mandatory independent recovery steps.
+
+    The ephemeral proposal confers no authority and is discarded on restart.
+    Each member still passes the normal reveal, phase and invocation checks.
+    """
+    items = selected.get("browser_fill_sequence")
+    expected = ["native.browser_workflow_fill", "native.browser_workflow_observe",
+                "native.browser_workflow_reconcile"]
+    if (set(selected) != {"browser_fill_sequence"} or not isinstance(items, list)
+            or len(items) != len(expected)
+            or any(not isinstance(item, dict) or item.get("tool_id") != name
+                   for item, name in zip(items, expected))):
+        raise ValueError("browser_fill_sequence_invalid")
+    for item in items:
+        action = executor._validate_action(state, subgoal, item, tools)
+        descriptor = next(tool for tool in tools if tool.tool_id == action.tool_id)
+        ToolInvocationService._validate(descriptor.argument_schema, action.arguments)
+    return [{key: value for key, value in item.items() if key != "action_id"} for item in items]
 
 
 def _validate_independent_reads(executor: PhaseExecutor, state: TacticalState, subgoal: PhaseSubgoal,

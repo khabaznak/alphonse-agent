@@ -687,7 +687,7 @@ def test_verified_fill_resets_phase_stall_despite_redacted_prior_fill(tmp_path, 
     service.private_data.clear()
 
 
-@pytest.mark.parametrize("scenario", ["normal", "repeated", "replay_verified", "failed_verify", "cancelled", "revoked"])
+@pytest.mark.parametrize("scenario", ["normal", "sequence", "sequence_failed_verify", "sequence_cancelled", "sequence_revoked", "sequence_changed", "sequence_denied", "sequence_invalid", "repeated", "replay_verified", "failed_verify", "cancelled", "revoked"])
 def test_executor_reconciles_distinct_fills_in_same_phase(tmp_path, scenario):
     from alphonse.agent_v2.core.core import CoreLoopContext
     from alphonse.agent_v2.core.intelligence.v3 import PhaseExecutor, PhasePlan, PhaseSubgoal, PhaseStatus, SideEffectClass, MutationScope, new_tactical_state
@@ -698,19 +698,19 @@ def test_executor_reconciles_distinct_fills_in_same_phase(tmp_path, scenario):
     grant = [True]
     class Form(Page):
         def __init__(self):
-            self.calls, self.values = [], {}
+            self.calls, self.values, self.changed = [], {}, False
         def observe(self):
-            return {"targets": ["1_1", "1_2"], "values": dict(self.values)}
+            return {"targets": ["1_1", "1_2"], "values": dict(self.values), "changed": self.changed}
         def fill_if_unchanged(self, target, value, observed):
             if observed != self.observe():
                 return False
             self.calls.append(target)
             self.values[target] = value
-            if scenario == "revoked":
+            if scenario in {"revoked", "sequence_revoked"}:
                 grant[0] = False
             return True
         def verify_fill(self, target, value, observed):
-            return scenario != "failed_verify" and observed == self.observe() and observed["values"].get(target) == value
+            return scenario not in {"failed_verify", "sequence_failed_verify"} and observed == self.observe() and observed["values"].get(target) == value
 
     store, page = SQLiteQuestionStore(tmp_path / "db"), Form()
     service = BrowserWorkflowService(checkpoint_store=store, transport=page,
@@ -726,6 +726,11 @@ def test_executor_reconciles_distinct_fills_in_same_phase(tmp_path, scenario):
     service.supply(task, actor_id=task.user, field="name", value="PRIVATE_A")
     service.supply(task, actor_id=task.user, field="number", value="PRIVATE_B")
     service.observe(task)
+    if scenario == "sequence_changed":
+        page.changed = True
+    if scenario == "sequence_denied":
+        from dataclasses import replace
+        state.phase = replace(state.phase, mutation_scope=MutationScope(allow_external_effects=False))
     actions = [
         ("fill", {"field": "name", "target": "1_1"}), ("observe", {}), ("reconcile", {}),
         ("fill", {"field": "number", "target": "1_2"}), ("observe", {}), ("reconcile", {}),
@@ -741,6 +746,18 @@ def test_executor_reconciles_distinct_fills_in_same_phase(tmp_path, scenario):
     state.revealed_tool_ids = ["native.browser_workflow_" + name for name in ("fill", "observe", "reconcile")]
     selections = []
     def select(*_):
+        if scenario.startswith("sequence"):
+            item = next(operations, None)
+            selections.append(item)
+            if item is None:
+                return None
+            question = {"question_id": "result", "type": "noul", "instructions": "Was the step completed?",
+                        "criteria": {"true": "The step was completed.", "false": "The step was not completed."}}
+            steps = [item, next(operations), next(operations)]
+            if scenario == "sequence_invalid":
+                steps[1] = ("submit", {"target": "1_1"})
+            return {"browser_fill_sequence": [{"tool_id": "native.browser_workflow_" + name,
+                    "arguments": args, "acceptance_questions": [question]} for name, args in steps]}
         item = next(operations, None)
         selections.append(item)
         if len(selections) == 4:
@@ -749,16 +766,21 @@ def test_executor_reconciles_distinct_fills_in_same_phase(tmp_path, scenario):
         return {"tool_id": "native.browser_workflow_" + item[0], "arguments": item[1]} if item else None
     outcome = PhaseExecutor(action_selector=select).run(task, state,
         CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry, question_store=store, browser_workflow_service=service,
-                        cancellation_checker=lambda: scenario == "cancelled" and bool(page.calls)))
+                        cancellation_checker=lambda: scenario in {"cancelled", "sequence_cancelled"} and bool(page.calls)))
     saved = workflow.load(task)
-    if scenario == "normal":
+    if scenario in {"normal", "sequence"}:
         assert page.calls == ["1_1", "1_2"]
         assert not workflow.unresolved(saved)
         assert [e["field"] for e in saved["events"] if e["kind"] == "verified"] == ["name", "number"]
         assert "tactical_action_unavailable" in outcome.blockers  # no claim of task completion
+        if scenario == "sequence":
+            assert len(selections) == 3  # two compositions, then no further action
     elif scenario == "replay_verified":
         assert page.calls == ["1_1"] and not workflow.unresolved(saved)
         assert "browser_workflow_reconciliation_required" in outcome.blockers
+    elif scenario in {"sequence_changed", "sequence_denied", "sequence_invalid"}:
+        assert not page.calls
+        assert outcome.status == PhaseStatus.BLOCKED
     else:
         assert page.calls == ["1_1"] and workflow.unresolved(saved)
         assert outcome.status in {PhaseStatus.BLOCKED, PhaseStatus.CANCELLED}

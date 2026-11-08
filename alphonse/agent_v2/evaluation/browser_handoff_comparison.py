@@ -48,7 +48,7 @@ class _Form:
         return observation == self.snapshot() and observation["values"].get(target) == value
 
 
-def run_case(*, control: bool, changed: bool = False) -> dict:
+def run_case(*, control: bool, changed: bool = False, sequence: bool = False) -> dict:
     """Return counts and a content-free independent oracle for one frozen case."""
     with TemporaryDirectory(prefix="alphonse-browser-comparison-") as directory:
         form = _Form()
@@ -86,7 +86,7 @@ def run_case(*, control: bool, changed: bool = False) -> dict:
         fills = [("fill", {"field": "name", "target": "1_1"}), ("observe", {}), ("reconcile", {}),
                  ("fill", {"field": "number", "target": "1_2"}), ("observe", {}), ("reconcile", {})]
         segments = [fills] if not control else [fills[0:1], fills[1:3], fills[3:4], fills[4:6]]
-        phases, actions, outcomes = 0, 0, []
+        phases, actions, outcomes, compositions = 0, 0, [], 0
         start = perf_counter()
         try:
             for index, segment in enumerate(segments):
@@ -94,7 +94,15 @@ def run_case(*, control: bool, changed: bool = False) -> dict:
                     state = make_state(index)
                 selected = iter(segment)
                 def choose(*_):
+                    nonlocal compositions
+                    compositions += 1
                     item = next(selected, None)
+                    if item and sequence:
+                        question = {"question_id": "result", "type": "noul", "instructions": "Was the step completed?",
+                                    "criteria": {"true": "The step was completed.", "false": "The step was not completed."}}
+                        steps = [item, next(selected), next(selected)]
+                        return {"browser_fill_sequence": [{"tool_id": "native.browser_workflow_" + name,
+                                "arguments": args, "acceptance_questions": [question]} for name, args in steps]}
                     return {"tool_id": "native.browser_workflow_" + item[0], "arguments": item[1]} if item else None
                 outcome = PhaseExecutor(action_selector=choose).run(task, state,
                     CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry, question_store=store,
@@ -111,7 +119,8 @@ def run_case(*, control: bool, changed: bool = False) -> dict:
             oracle = form.values == {"1_1": "SYNTHETIC_NAME", "1_2": "SYNTHETIC_NUMBER"}
             expected = (not form.calls and browser_workflow.unresolved(workflow) and not verified
                         if changed else oracle and verified == ["name", "number"] and not browser_workflow.unresolved(workflow))
-            return {"variant": "forced_phase_breaks" if control else "continued_phase", "changed": changed,
+            return {"variant": "fill_sequence" if sequence else "forced_phase_breaks" if control else "continued_phase", "changed": changed,
+                    "scripted_compositions": compositions,
                     "scripted_phase_replans": max(0, phases - 1), "phase_count": phases, "tool_calls": actions,
                     "observations": len(observations), "repeated_observations": len(observations) - len(set(observations)),
                     "verified_fields": len(verified), "effect_oracle_pass": oracle and verified == ["name", "number"],

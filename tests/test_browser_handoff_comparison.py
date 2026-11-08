@@ -32,3 +32,13 @@ def test_report_is_bounded_and_does_not_expose_fixture_values():
     for invalid in (0, 101, True):
         with pytest.raises(ValueError, match="invalid_repeats"):
             report(repeats=invalid)
+
+
+def test_fill_sequence_comparison_preserves_verified_effects():
+    control = run_case(control=False)
+    sequence = run_case(control=False, sequence=True)
+    assert control["effect_oracle_pass"] and sequence["effect_oracle_pass"]
+    assert (control["scripted_compositions"], sequence["scripted_compositions"]) == (7, 3)
+    assert control["observations"] == sequence["observations"] == 3
+    changed = run_case(control=False, changed=True, sequence=True)
+    assert changed["scenario_expectation_met"] and changed["unresolved_effect"]
