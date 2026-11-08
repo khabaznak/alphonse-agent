@@ -12,6 +12,7 @@ import base64
 import json
 import logging
 import math
+import re
 import secrets
 import threading
 import time
@@ -86,16 +87,57 @@ def packaged_client_manifest():
         return None
 
 
-def environment_clients(environ, packaged=None):
+
+def saved_client_manifest(store):
+    """Load public operator registrations from the existing household database."""
+    with store._connect() as db:
+        db.execute("CREATE TABLE IF NOT EXISTS v2_oauth_client_config (provider TEXT PRIMARY KEY, client_id TEXT NOT NULL, redirect_uri TEXT NOT NULL)")
+        return {row['provider']: {'client_id': row['client_id'], 'redirect_uri': row['redirect_uri']}
+                for row in db.execute('SELECT provider, client_id, redirect_uri FROM v2_oauth_client_config')}
+
+
+def save_operator_client(accounts, session, provider, client_id):
+    """Desktop-only setup; never expose this mutation as a conversation tool."""
+    accounts._active(session.actor_user_id)
+    if not accounts.users.is_admin(session.actor_user_id):
+        raise PermissionError('oauth_configuration_admin_required')
+    callbacks = {'google': 'http://127.0.0.1:8765/google',
+                 'microsoft': 'http://127.0.0.1:8766/microsoft'}
+    if provider not in callbacks or not isinstance(client_id, str) or len(client_id) > 255:
+        raise OAuthError('oauth_client_configuration_invalid')
+    patterns = {'google': r'[0-9]+-[A-Za-z0-9_-]+\.apps\.googleusercontent\.com',
+                'microsoft': r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'}
+    if not re.fullmatch(patterns[provider], client_id):
+        raise OAuthError('oauth_client_configuration_invalid')
+    config = ClientConfig(provider, client_id, callbacks[provider])
+    store = accounts.integrations
+    saved_client_manifest(store)
+    with store._connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        # Client identities cannot be swapped under existing managed credentials.
+        for row in db.execute('SELECT connection_json, credential_generation FROM v2_integrations WHERE provider_key=?', (provider,)):
+            if row['credential_generation'] or json.loads(row['connection_json'] or '{}'):
+                raise OAuthError('oauth_client_existing_accounts_require_migration')
+        db.execute('INSERT OR REPLACE INTO v2_oauth_client_config VALUES (?, ?, ?)',
+                   (provider, config.client_id, config.redirect_uri))
+    return {'saved': True, 'restart_required': True}
+
+def environment_clients(environ, packaged=None, saved=None):
     """Resolve operator overrides over bundled public clients, independently."""
     clients, status, sources = [], {}, {}
     for provider in SCOPES:
         prefix = 'ALPHONSE_' + provider.upper() + '_OAUTH_'
         overridden = prefix + 'CLIENT_ID' in environ or prefix + 'REDIRECT_URI' in environ
-        sources[provider] = 'operator' if overridden else 'distribution'
+        sources[provider] = 'operator' if overridden or provider in (saved or {}) else 'distribution'
         if overridden:
             client_id = environ.get(prefix + 'CLIENT_ID', '')
             redirect = environ.get(prefix + 'REDIRECT_URI', '')
+        elif provider in (saved or {}):
+            entry = saved[provider]
+            if not isinstance(entry, dict) or set(entry) != {'client_id', 'redirect_uri'}:
+                status[provider] = 'invalid_configuration'
+                continue
+            client_id, redirect = entry['client_id'], entry['redirect_uri']
         elif packaged is None:
             status[provider] = 'invalid_configuration'
             continue

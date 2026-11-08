@@ -32,13 +32,26 @@ can invalidate existing tokens or change the provider-scoped identity; migration
 reconsent for such a change are not yet qualified. Do not silently replace a client
 in a release with existing connections. Back up and test an explicit transition.
 
-For development or a personal pilot, an operator may instead install the
-`accounts-oauth` extra and the deployment's secure credential backend, then set
+For development or a personal pilot, a household administrator can use
+Integrations → Optional accounts → **Configure a personal test client** and enter
+only the public client ID. The saved ID and fixed loopback callback are in the
+household database and survive daemon restarts and package upgrades. The action is
+available only through authenticated local Desktop IPC, not conversation tools.
+Use `/stop` to stop the daemon, then reopen Desktop; an already-running daemon
+continues using its previous configuration. Existing account records and a different
+active client block replacement until an explicit migration is implemented. The
+Google callback is `http://127.0.0.1:8765/google`; Microsoft uses
+`http://127.0.0.1:8766/microsoft`. These values are not claims that a provider has
+qualified the corresponding registration.
+
+An advanced operator may instead install the `accounts-oauth` extra and the
+deployment's secure credential backend, then set
 `ALPHONSE_GOOGLE_OAUTH_CLIENT_ID` and `ALPHONSE_GOOGLE_OAUTH_REDIRECT_URI`, or
 the corresponding `MICROSOFT` variables, in the daemon's environment. Either
 variable selects the override for that provider, and both are required: an incomplete
 override fails closed rather than falling back to a distribution client. Overrides
-are distinct per provider and take precedence over the manifest. Configuration is
+are distinct per provider. Environment values take precedence over saved operator
+clients, which take precedence over the distribution manifest. Configuration is
 fixed for the daemon lifetime; restart after changing it. A packaged household user
 should receive qualified distribution configuration, not edit environment variables.
 The current empty manifest means that path is not yet provisioned.

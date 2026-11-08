@@ -55,7 +55,7 @@ class IntegrationManagement:
                           status=status.get(p, 'available' if p in clients else 'unconfigured'),
                           source=sources.get(p, 'distribution'))
                      for p in SCOPES]
-        return dict(actor_user_id=actor, connections=owned, grants=grants, members=members,
+        return dict(actor_user_id=actor, can_configure_oauth=self.runtime.user_store.is_admin(actor), connections=owned, grants=grants, members=members,
                     providers=providers, sources=self.sources(session), skills=[dict(skill_id=s.skill_id, name=s.name)
                         for s in self.runtime.skill_store.list_skills() if self.runtime.skill_store.can_use(s.skill_id, actor)],
                     bindings=self.binding_options(session), projects=[dict(project_id=p.project_id, name=p.name)

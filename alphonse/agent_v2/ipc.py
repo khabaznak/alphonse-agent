@@ -399,6 +399,13 @@ class V2DaemonServer:
         oauth = self.daemon.optional_accounts(session)
         management = self.daemon.runtime.integration_management
         management.oauth = oauth
+        if params.get('action') == 'configure_oauth_client':
+            from alphonse.agent_v2.integrations.oauth import save_operator_client, OAuthError
+            values = params.get('values', {})
+            existing = oauth.clients.get(values.get('provider')) if oauth else None
+            if existing and existing.config.client_id != values.get('client_id'):
+                raise OAuthError('oauth_client_existing_configuration_requires_migration')
+            return save_operator_client(management.accounts, session, **values)
         if params.get('action') == 'begin':
             from alphonse.agent_v2.integrations.oauth_loopback import OAuthLoopback
             if not hasattr(self, '_oauth_loopback'):

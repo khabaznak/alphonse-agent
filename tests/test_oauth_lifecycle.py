@@ -571,3 +571,25 @@ def test_restart_with_same_distribution_client_preserves_connection_and_revocati
     f.service.disconnect(f.owner, 'one', revision(f))
     with pytest.raises((PermissionError, ValueError)):
         f.service.token(f.owner, authorization=grant)
+
+
+def test_operator_client_configuration_is_admin_only_persistent_and_fenced(f):
+    from alphonse.agent_v2.integrations.oauth import save_operator_client, saved_client_manifest, environment_clients
+
+    with pytest.raises(PermissionError, match='admin_required'):
+        save_operator_client(f.accounts, f.other, 'google', '123456-synthetic.apps.googleusercontent.com')
+    with pytest.raises(OAuthError, match='configuration_invalid'):
+        save_operator_client(f.accounts, f.owner, 'google', 'not a valid id')
+    assert save_operator_client(f.accounts, f.owner, 'google', '123456-synthetic.apps.googleusercontent.com')['restart_required']
+    saved = saved_client_manifest(f.store)
+    assert saved['google'] == {'client_id': '123456-synthetic.apps.googleusercontent.com', 'redirect_uri': 'http://127.0.0.1:8765/google'}
+    configs, status, sources = environment_clients({}, {}, saved_client_manifest(f.store))
+    assert configs[0].client_id == '123456-synthetic.apps.googleusercontent.com'
+    assert status['google'] == 'available' and sources['google'] == 'operator'
+    configs, _, _ = environment_clients({'ALPHONSE_GOOGLE_OAUTH_CLIENT_ID': 'synthetic-override',
+        'ALPHONSE_GOOGLE_OAUTH_REDIRECT_URI': 'http://127.0.0.1:9999/callback'}, {}, saved)
+    assert configs[0].client_id == 'synthetic-override'
+    connect(f)
+    with pytest.raises(OAuthError, match='existing_accounts_require_migration'):
+        save_operator_client(f.accounts, f.owner, 'google', '123456-other.apps.googleusercontent.com')
+    assert saved_client_manifest(f.store) == saved

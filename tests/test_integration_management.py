@@ -211,3 +211,19 @@ def test_catalog_reports_provider_readiness_without_exposing_configuration(manag
     assert [(p['provider'], p['status']) for p in providers] == [
         ('google', 'available'), ('microsoft', 'invalid_configuration')]
     assert 'client_id' not in json.dumps(providers)
+
+
+def test_client_configuration_is_desktop_only_and_admin_required(management):
+    import os
+    f = management
+    f.runtime.user = 'child'
+    server = V2DaemonServer(SimpleNamespace(runtime=f.runtime, optional_accounts=lambda session: None))
+    request = {'version': PROTOCOL_VERSION, 'params': {'action': 'configure_oauth_client',
+        'values': {'provider': 'google', 'client_id': '123456-synthetic.apps.googleusercontent.com'}}}
+    peer = SimpleNamespace(getpeereid=lambda: (os.getuid(), 0))
+    with pytest.raises(PermissionError, match='admin_required'):
+        server._optional_management(peer, request)
+    with pytest.raises(ValueError, match='action_invalid'):
+        f.management.request(AccountSession('parent'), 'configure_oauth_client', request['params']['values'], channel='conversation')
+    f.runtime.user = 'parent'
+    assert server._optional_management(peer, request)['restart_required']

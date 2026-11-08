@@ -2132,14 +2132,14 @@ class V2Daemon:
         this service or its token API.
         """
         from alphonse.agent_v2.accounts import AccountService, AccountSession
-        from alphonse.agent_v2.integrations.oauth import environment_clients, packaged_client_manifest, OAuthService
+        from alphonse.agent_v2.integrations.oauth import environment_clients, packaged_client_manifest, saved_client_manifest, OAuthService
         if not isinstance(session, AccountSession):
             raise PermissionError("account_trusted_session_required")
         accounts = AccountService(self.runtime.integration_store, self.runtime.user_store)
         accounts._active(session.actor_user_id)
         with self._lifecycle_lock:
             if self._optional_account_service is None:
-                clients, status, sources = environment_clients(os.environ, packaged_client_manifest())
+                clients, status, sources = environment_clients(os.environ, packaged_client_manifest(), saved_client_manifest(accounts.integrations))
                 self._optional_account_service = OAuthService(accounts, clients)
                 self._optional_account_service.provider_status = status
                 self._optional_account_service.provider_sources = sources
