@@ -298,3 +298,14 @@ def test_fresh_read_can_verify_an_already_satisfied_idempotent_update_without_a_
 
 # Existing scripted providers delegate the shared interpretation call explicitly.
 pytestmark = pytest.mark.usefixtures("task_understanding_provider")
+
+
+def test_unresolved_inspection_handoff_rejects_even_a_targeted_read_only_phase():
+    """Document current validation limitation; issue 188 tracks safe resumption."""
+    from alphonse.agent_v2.core.intelligence.v3.planner import _validate_inspection_handoff
+    from alphonse.agent_v2.core.intelligence.v3.contracts import PhasePlan, PhaseSubgoal
+    phase = PhasePlan('targeted-read', 'Resolve the missing source field', (
+        PhaseSubgoal('targeted', 'Read only the missing field from the source', 'field',
+                     allowed_capabilities=('native.bash',)),), authorized_capabilities=('native.bash',))
+    with pytest.raises(ValueError, match='inspection_handoff_requires_action_or_question'):
+        _validate_inspection_handoff(phase, {'inspection_resolution': {'route': 'decision_required'}})

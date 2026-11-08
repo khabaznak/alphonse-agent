@@ -481,3 +481,59 @@ and denied operations, changed forms, uncertain effects, cancellation and
 simulated restart (`test_planning_multifield` and `test_planning_form_fixture`).
 These are fixture and runtime checks, not qualification of the live browser or
 of arbitrary external services.
+
+### Handoff and runtime diagnosis
+
+The disposable inspection tests distinguish four cases. Repeating a broad
+inspection after a handoff is rejected and receives one bounded plan correction;
+when a specific field is genuinely missing, the question route parks without a
+write; when a plan asks for an unauthorized effect, deterministic validation
+blocks dispatch. Separately, `test_unresolved_inspection_handoff_rejects_even_a_targeted_read_only_phase`
+reproduces a limitation: `decision_required` also rejects a narrow read that
+could resolve a missing source. That is not proof the historical private plan
+had this exact cause; safe stale/changed-state resumption is tracked by #188.
+
+The live synthetic tactical action reproduced `openai_codex_invalid_json`. The
+processor now retains that exact provider-owned diagnostic rather than collapsing
+it into `v3_runtime_error:ValueError`; arbitrary exception messages are still
+redacted and earlier evidence remains intact. Provider-side structured-output
+and retry work remains in #192. The historical `ValueError` did not retain its
+underlying detail, so its exact source cannot be reconstructed from the available
+record and is not claimed to be fixed by this diagnostic change.
+
+### Decision-question audit
+
+- Tactical completion combines model-authored action questions with the
+  runtime-owned declared-stage question. All completion answers must clear the
+  yes threshold, so a narrow action can be complete while the declared stage is
+  not; adding correlated or compound questions can introduce uncertainty. The
+  advisory fallback names the actual unresolved question instead of treating an
+  incomplete stage as no progress. It does not rewrite the original acceptance
+  contract or lower the thresholds.
+- `runtime_action_added_progress` compares the current action with history. A
+  confident negative counts toward the no-progress bound; an uncertain answer
+  uses a separate bounded route. The held-out scripted fragments reproduce the
+  old false-stall shape, and the live pairs retain both successful and blocked
+  outcomes. Their fixture variations are not held-out live model qualification.
+- `tactical_review_state` withholds an oversized current result and records
+  omitted prior references or prior large results. The executor blocks completion
+  for an incomplete current result, and the read-sequence path also stops when
+  prior coverage is incomplete. Prior-result omission is recorded rather than a
+  blanket stage-completion veto because a later targeted observation may be
+  sufficient; which omitted evidence is actually necessary remains a limitation
+  to assess in the full comparison. No omitted result is represented as content.
+- Strategic planning, tactical selection, per-action review, phase Check and Act
+  remain separate gates. The independent-read change removes repeated tactical
+  composition calls only when the same phase has already-authorized, independent
+  read-only actions; it does not remove Check, Act, Jev review, effect checks, or
+  establish that a single-loop replacement is safe.
+
+The fully prevalidated read-sequence revision was evaluated in a further frozen
+live pair: both shapes read all three records; the single-action shape used three
+composition calls, while the sequence used one. Each used three native fixture
+calls and three Jev reviews. The separately retained `planning-independent-reads-live-v3.json`
+records the exact executor and harness hashes and per-trial Jev charges. This is
+one pair on one synthetic task, not a reliability rate or a general architecture
+comparison. The cumulative multi-field/read Jev ledger charge was US$0.007585998;
+with the independent Jev probe, total Jev usage was US$0.007736946, excluding
+unpriced ChatGPT subscription usage.

@@ -370,3 +370,26 @@ def test_system_two_assessment_is_recorded_but_cannot_complete_a_stage():
     recorded = state.evidence.entries[0]['progress_review']['uncertainty_recovery']['assessment']
     assert recorded == {'status': 'recorded', 'answer': 'supported',
                         'evidence_refs': [state.evidence.entries[0]['evidence_ref']]}
+
+
+@pytest.mark.parametrize('message,expected', [
+    ('openai_codex_invalid_json', 'v3_runtime_error:openai_codex_invalid_json'),
+    ('synthetic-private-output', 'v3_runtime_error:ValueError'),
+])
+def test_tactical_provider_error_has_safe_diagnostic_and_preserves_prior_evidence(message, expected):
+    task, context, calls = fixture()
+    task.hierarchical_state = new_tactical_state(phase()).to_dict()
+    task.metadata['v3_phase_history'] = [{'phase_id': 'prior', 'evidence': {'entries': [
+        {'evidence_ref': 'verified-prior', 'status': 'success', 'result': {'value': 42}}]}}]
+    class BrokenInference:
+        def generate_json(self, _request):
+            raise ValueError(message)
+    context.inference = BrokenInference()
+    processor = HierarchicalCAPDProcessor()
+    processor.executor = PhaseExecutor(reveal_policy=ToolRevealPolicy())
+    processor.process(task, context)
+    assert task.status == 'failed'
+    assert task.outcome['reason'] == expected
+    assert task.metadata['v3_phase_history'][0]['evidence']['entries'][0]['evidence_ref'] == 'verified-prior'
+    assert 'synthetic-private-output' not in json.dumps(task.to_dict())
+    assert calls == []
