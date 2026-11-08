@@ -56,6 +56,11 @@ fixed for the daemon lifetime; restart after changing it. A packaged household u
 should receive qualified distribution configuration, not edit environment variables.
 The current empty manifest means that path is not yet provisioned.
 
+Desktop presents a general data-processing notice and asks the person launching
+consent to acknowledge it. This UI acknowledgement is not a persistent consent
+record or a substitute for the deployment-specific processor disclosure and pilot
+readiness requirements in [#123 readiness](integrations-readiness.md).
+
 The catalog reports missing, invalid and configured clients per provider. Configured
 means local syntax and Desktop transport are acceptable, **not** that the client is
 registered, approved, dependencies work or provider consent will succeed. HTTPS

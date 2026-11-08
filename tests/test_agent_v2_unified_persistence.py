@@ -241,3 +241,23 @@ def test_concurrent_store_writers_share_wal_database(tmp_path) -> None:
     with connect_database(database) as connection:
         assert connection.execute("SELECT COUNT(*) FROM v2_conversation_events").fetchone()[0] == 40
         assert connection.execute("SELECT COUNT(*) FROM v2_outbox").fetchone()[0] == 40
+
+
+def test_terminal_input_manifests_expire_without_discarding_active_recovery(tmp_path) -> None:
+    database = tmp_path / 'retention.sqlite3'
+    questions = SQLiteQuestionStore(database)
+    for status in ('done', 'failed', 'cancelled', 'running', 'waiting_user'):
+        task = TaskState(task_id=f'synthetic-{status}', user='fixture', goal='synthetic')
+        task.metadata['decision_context_manifests'] = [{'source_id': f'synthetic-manifest-{status}'}]
+        task.metadata['v3_event_input_manifests'] = {'review': {'source_id': f'synthetic-event-{status}'}}
+        questions.save_task_checkpoint(task, status=status)
+    old = (datetime.now(timezone.utc) - timedelta(days=31)).isoformat()
+    with connect_database(database) as db:
+        db.execute('UPDATE v2_task_checkpoints SET updated_at=?', (old,))
+    deleted = prune_operational_data(database)
+    assert deleted['task_checkpoints'] == 3
+    for status in ('done', 'failed', 'cancelled'):
+        assert questions.load_task_checkpoint(f'synthetic-{status}') is None
+    for status in ('running', 'waiting_user'):
+        task = questions.load_task_checkpoint(f'synthetic-{status}')
+        assert task.metadata['decision_context_manifests'][0]['source_id'] == f'synthetic-manifest-{status}'

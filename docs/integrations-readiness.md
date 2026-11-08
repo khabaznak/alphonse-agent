@@ -218,7 +218,11 @@ terminal run receipts are reduced to identity, timing and outcome needed by even
 scope, replay and historical finding checks; checkpoints, grants and source-specific
 coverage are removed. The UI indicates that coverage details expired. This is not
 a complete 30-day retention guarantee: input manifests remain unqualified, and
-safety deferrals can exceed 30 days.
+safety deferrals can exceed 30 days. Synthetic tests confirm decision and
+event-input manifests in completed, failed and cancelled task checkpoints expire
+after 30 days, while active and waiting tasks retain recovery state. That test
+does not qualify other consumers, remote model sessions, in-memory UI projections
+or filesystem copies of a manifest.
 Operational retention also deletes event history older than 30 days when no
 nonterminal execution depends on it and its independent replay receipt exists;
 unknown/missing replay state keeps the event. Receipts remain in place. The event
