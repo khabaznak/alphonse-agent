@@ -90,3 +90,53 @@ therefore does not satisfy #200 or #187's completed baseline, and it is not a
 production or Jalisco result. The direct-assistant comparison still needs the
 same operable complete fixture and independent result oracle; it has not been
 performed. Integrated and live comparisons remain pending #185.
+
+## Submission and direct-assistant comparison, 2026-11-08
+
+The [submission probe](../../alphonse/agent_v2/evaluation/browser_submission_probe.py)
+uses the actual V3 phase executor, browser service, actor grant checks and SQLite
+checkpoints with a disposable backend. It fills and reconciles two synthetic
+fields, submits once, observes a fresh result and verifies the submission. The
+fixture's separate oracle requires the exact two expected fields, exactly one
+submission and an accepted result. It exposes that oracle without exposing
+field values. The harness starts a second executor phase after the submit phase
+blocks; this is scripted recovery, not evidence that the full V3 processor can
+plan and complete the recovery autonomously.
+
+For an initial comparison, both arms used the **same loopback-only synthetic
+site** and oracle, with separate fresh fixture sessions. The direct assistant used
+the in-app browser to fill the two displayed fields and submit. V3 used scripted
+choices and scripted tactical review through a local HTTP adapter to the same
+fixture, not a browser or a real model. Both received the same synthetic inputs
+and objective. Success requires the oracle's accepted result and an agent
+completion; an independently confirmed external effect alone is not task success.
+No household data or human input was involved.
+
+- V3: three runs, 52.186, 41.499 and 43.264 ms including local setup through
+  oracle and completion-guard check (median 43.264 ms). Each independently
+  verified both fields and submission, made nine compositions and nine native
+  browser calls, and recorded four observations with no repeated observations.
+  Every task remained **blocked** by the current completion guard. No provider
+  call or human wait was measured. See [V3 records](evidence/issue-187/v3-synthetic-submission.json).
+- Direct assistant: three runs, 7,847, 2,906 and 2,795 ms from browser navigation
+  start through the visible accepted result (median 2,906 ms). A later independent
+  oracle check confirmed exactly one correct submission in each run. The first
+  opened a new tab in an existing browser and included tool setup/documentation;
+  the others reused the tab with fresh fixture sessions. Each used two assistant
+  tool invocations, two page observations, two field fills and one submit;
+  interaction-and-result-observation portions were 179, 145 and 140 ms. See
+  [direct records](evidence/issue-187/direct-synthetic-submission.json).
+
+This is a measured **diagnostic comparison**, not a valid production or Jalisco
+baseline and not a performance ranking: the timing boundaries and tool stacks
+are different, V3 uses a scripted provider and direct HTTP transport, while the
+direct assistant uses a real browser and model-driven tool calls. Full browser
+navigation time and direct-assistant provider/orchestration time were not measured
+separately; do not derive them by subtracting unrelated intervals. The V3 guard
+prevents a verified task-completion baseline despite the independently verified
+fixture result. The site was run before adding a duplicate-form-POST guard; that
+later change does not alter a first submission. Failure tests cover changed pages,
+a bad result and cancellation without promoting them to success. The complete
+baseline, timing categories, privacy review and matched direct comparison remain
+open, as do integrated and live comparisons under #185. Related work: #184,
+#185, #187, #195–#200.
