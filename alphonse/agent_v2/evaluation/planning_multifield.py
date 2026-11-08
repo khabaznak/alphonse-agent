@@ -165,6 +165,9 @@ def run_case(scenario: str, batch: bool, *, inference=None, system_one=None) -> 
             'restarted': restarted,
             'selected_operations': [item.arguments.get('operation') for item in state.actions],
             'action_statuses': [item.status for item in state.actions],
+            'targeted_recoveries': [dict((entry.get('progress_review') or {}).get('uncertainty_recovery') or {})
+                                    for entry in state.evidence.entries
+                                    if (entry.get('progress_review') or {}).get('uncertainty_recovery')],
             'argument_keys': [sorted(item.arguments) for item in state.actions],
             'operations': [event['operation'] for event in fixture.events], 'elapsed_seconds': perf_counter() - started,
             'provider_cost_usd': 0 if inference is None else None,
@@ -175,6 +178,7 @@ def report(repeats: int = 2) -> dict:
     import hashlib
     from pathlib import Path
     from alphonse.agent_v2.evaluation import planning_form_fixture
+    from alphonse.agent_v2.core.intelligence.v3 import executor
     scenarios = ('normal', 'changed', 'denied', 'cancel', 'uncertain', 'cancel_during', 'changed_during', 'denied_during', 'restart')
     rows = []
     for repeat in range(repeats):
@@ -190,6 +194,7 @@ def report(repeats: int = 2) -> dict:
     return {'version': 'multifield-v1', 'mode': 'scripted-decisions-real-tactical-executor',
             'harness_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
             'fixture_sha256': hashlib.sha256(Path(planning_form_fixture.__file__).read_bytes()).hexdigest(),
+            'executor_sha256': hashlib.sha256(Path(executor.__file__).read_bytes()).hexdigest(),
             'limitations': ['The batch is a fixture-only prototype, not a production browser capability.',
                 'Provider outputs and task actions are scripted; live model behavior and provider costs are not measured.',
                 'In-memory fixture checks do not qualify real authorization, browser sessions or external websites.',

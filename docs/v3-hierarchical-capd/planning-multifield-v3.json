@@ -1,0 +1,1672 @@
+{
+  "version": "multifield-v1",
+  "mode": "scripted-decisions-real-tactical-executor",
+  "harness_sha256": "277778e9bbe09965e3404f2391dbbbb50a340a7ba2c3a9e388f2b9bb26cc0f00",
+  "fixture_sha256": "042b57b1667acf6f4c51fb13f42955f5c361db8c672e2ed196b9b4a7f2edfafe",
+  "executor_sha256": "6140b83ca22c967380896aeb8433ef3b5a577b1e1c3b5f6fcf1fe554529ec4e4",
+  "limitations": [
+    "The batch is a fixture-only prototype, not a production browser capability.",
+    "Provider outputs and task actions are scripted; live model behavior and provider costs are not measured.",
+    "In-memory fixture checks do not qualify real authorization, browser sessions or external websites.",
+    "A fixture readback verifies only the in-memory fixture; it is not a general external-effect verifier.",
+    "Wall time measures local test execution only."
+  ],
+  "results": [
+    {
+      "scenario": "normal",
+      "variant": "per_action",
+      "outcome": "phase_complete",
+      "failure_type": null,
+      "failure_code": null,
+      "blockers": [],
+      "independent_oracle_pass": true,
+      "verified": true,
+      "submission_count": 1,
+      "composition_calls": 5,
+      "jev_reviews": 5,
+      "tool_calls": 5,
+      "restarted": false,
+      "selected_operations": [
+        "inspect",
+        "fill",
+        "fill",
+        "submit",
+        "verify"
+      ],
+      "action_statuses": [
+        "success",
+        "success",
+        "success",
+        "success",
+        "success"
+      ],
+      "targeted_recoveries": [],
+      "argument_keys": [
+        [
+          "operation"
+        ],
+        [
+          "field",
+          "operation",
+          "value",
+          "version"
+        ],
+        [
+          "field",
+          "operation",
+          "value",
+          "version"
+        ],
+        [
+          "operation",
+          "version"
+        ],
+        [
+          "operation"
+        ]
+      ],
+      "operations": [
+        "inspect",
+        "fill",
+        "fill",
+        "submit",
+        "verify"
+      ],
+      "elapsed_seconds": 0.005767249967902899,
+      "provider_cost_usd": 0,
+      "cost_basis": "scripted providers",
+      "repeat": 1
+    },
+    {
+      "scenario": "normal",
+      "variant": "fixture_batch",
+      "outcome": "phase_complete",
+      "failure_type": null,
+      "failure_code": null,
+      "blockers": [],
+      "independent_oracle_pass": true,
+      "verified": true,
+      "submission_count": 1,
+      "composition_calls": 3,
+      "jev_reviews": 3,
+      "tool_calls": 3,
+      "restarted": false,
+      "selected_operations": [
+        "inspect",
+        "batch",
+        "verify"
+      ],
+      "action_statuses": [
+        "success",
+        "success",
+        "success"
+      ],
+      "targeted_recoveries": [],
+      "argument_keys": [
+        [
+          "operation"
+        ],
+        [
+          "operation",
+          "version"
+        ],
+        [
+          "operation"
+        ]
+      ],
+      "operations": [
+        "inspect",
+        "fill",
+        "fill",
+        "submit",
+        "verify"
+      ],
+      "elapsed_seconds": 0.002057707984931767,
+      "provider_cost_usd": 0,
+      "cost_basis": "scripted providers",
+      "repeat": 1
+    },
+    {
+      "scenario": "changed",
+      "variant": "per_action",
+      "outcome": "blocked",
+      "failure_type": null,
+      "failure_code": null,
+      "blockers": [],
+      "independent_oracle_pass": true,
+      "verified": false,
+      "submission_count": 0,
+      "composition_calls": 2,
+      "jev_reviews": 2,
+      "tool_calls": 2,
+      "restarted": false,
+      "selected_operations": [
+        "inspect",
+        "fill"
+      ],
+      "action_statuses": [
+        "success",
+        "failed"
+      ],
+      "targeted_recoveries": [],
+      "argument_keys": [
+        [
+          "operation"
+        ],
+        [
+          "field",
+          "operation",
+          "value",
+          "version"
+        ]
+      ],
+      "operations": [
+        "inspect",
+        "change"
+      ],
+      "elapsed_seconds": 0.0012942500179633498,
+      "provider_cost_usd": 0,
+      "cost_basis": "scripted providers",
+      "repeat": 1
+    },
+    {
+      "scenario": "changed",
+      "variant": "fixture_batch",
+      "outcome": "blocked",
+      "failure_type": null,
+      "failure_code": null,
+      "blockers": [],
+      "independent_oracle_pass": true,
+      "verified": false,
+      "submission_count": 0,
+      "composition_calls": 2,
+      "jev_reviews": 2,
+      "tool_calls": 2,
+      "restarted": false,
+      "selected_operations": [
+        "inspect",
+        "batch"
+      ],
+      "action_statuses": [
+        "success",
+        "failed"
+      ],
+      "targeted_recoveries": [],
+      "argument_keys": [
+        [
+          "operation"
+        ],
+        [
+          "operation",
+          "version"
+        ]
+      ],
+      "operations": [
+        "inspect",
+        "change"
+      ],
+      "elapsed_seconds": 0.001371124992147088,
+      "provider_cost_usd": 0,
+      "cost_basis": "scripted providers",
+      "repeat": 1
+    },
+    {
+      "scenario": "denied",
+      "variant": "per_action",
+      "outcome": "blocked",
+      "failure_type": null,
+      "failure_code": null,
+      "blockers": [],
+      "independent_oracle_pass": true,
+      "verified": false,
+      "submission_count": 0,
+      "composition_calls": 1,
+      "jev_reviews": 1,
+      "tool_calls": 1,
+      "restarted": false,
+      "selected_operations": [
+        "inspect"
+      ],
+      "action_statuses": [
+        "failed"
+      ],
+      "targeted_recoveries": [],
+      "argument_keys": [
+        [
+          "operation"
+        ]
+      ],
+      "operations": [],
+      "elapsed_seconds": 0.000635584001429379,
+      "provider_cost_usd": 0,
+      "cost_basis": "scripted providers",
+      "repeat": 1
+    },
+    {
+      "scenario": "denied",
+      "variant": "fixture_batch",
+      "outcome": "blocked",
+      "failure_type": null,
+      "failure_code": null,
+      "blockers": [],
+      "independent_oracle_pass": true,
+      "verified": false,
+      "submission_count": 0,
+      "composition_calls": 1,
+      "jev_reviews": 1,
+      "tool_calls": 1,
+      "restarted": false,
+      "selected_operations": [
+        "inspect"
+      ],
+      "action_statuses": [
+        "failed"
+      ],
+      "targeted_recoveries": [],
+      "argument_keys": [
+        [
+          "operation"
+        ]
+      ],
+      "operations": [],
+      "elapsed_seconds": 0.0006286660209298134,
+      "provider_cost_usd": 0,
+      "cost_basis": "scripted providers",
+      "repeat": 1
+    },
+    {
+      "scenario": "cancel",
+      "variant": "per_action",
+      "outcome": "cancelled",
+      "failure_type": null,
+      "failure_code": null,
+      "blockers": [],
+      "independent_oracle_pass": true,
+      "verified": false,
+      "submission_count": 0,
+      "composition_calls": 1,
+      "jev_reviews": 0,
+      "tool_calls": 1,
+      "restarted": false,
+      "selected_operations": [
+        "inspect"
+      ],
+      "action_statuses": [
+        "success"
+      ],
+      "targeted_recoveries": [],
+      "argument_keys": [
+        [
+          "operation"
+        ]
+      ],
+      "operations": [
+        "inspect"
+      ],
+      "elapsed_seconds": 0.0002202920150011778,
+      "provider_cost_usd": 0,
+      "cost_basis": "scripted providers",
+      "repeat": 1
+    },
+    {
+      "scenario": "cancel",
+      "variant": "fixture_batch",
+      "outcome": "cancelled",
+      "failure_type": null,
+      "failure_code": null,
+      "blockers": [],
+      "independent_oracle_pass": true,
+      "verified": false,
+      "submission_count": 0,
+      "composition_calls": 1,
+      "jev_reviews": 0,
+      "tool_calls": 1,
+      "restarted": false,
+      "selected_operations": [
+        "inspect"
+      ],
+      "action_statuses": [
+        "success"
+      ],
+      "targeted_recoveries": [],
+      "argument_keys": [
+        [
+          "operation"
+        ]
+      ],
+      "operations": [
+        "inspect"
+      ],
+      "elapsed_seconds": 0.00022908300161361694,
+      "provider_cost_usd": 0,
+      "cost_basis": "scripted providers",
+      "repeat": 1
+    },
+    {
+      "scenario": "uncertain",
+      "variant": "per_action",
+      "outcome": "phase_complete",
+      "failure_type": null,
+      "failure_code": null,
+      "blockers": [],
+      "independent_oracle_pass": true,
+      "verified": true,
+      "submission_count": 1,
+      "composition_calls": 5,
+      "jev_reviews": 5,
+      "tool_calls": 5,
+      "restarted": false,
+      "selected_operations": [
+        "inspect",
+        "fill",
+        "fill",
+        "submit",
+        "verify"
+      ],
+      "action_statuses": [
+        "success",
+        "success",
+        "success",
+        "success",
+        "success"
+      ],
+      "targeted_recoveries": [],
+      "argument_keys": [
+        [
+          "operation"
+        ],
+        [
+          "field",
+          "operation",
+          "value",
+          "version"
+        ],
+        [
+          "field",
+          "operation",
+          "value",
+          "version"
+        ],
+        [
+          "operation",
+          "version"
+        ],
+        [
+          "operation"
+        ]
+      ],
+      "operations": [
+        "inspect",
+        "fill",
+        "fill",
+        "submit",
+        "verify"
+      ],
+      "elapsed_seconds": 0.005625875084660947,
+      "provider_cost_usd": 0,
+      "cost_basis": "scripted providers",
+      "repeat": 1
+    },
+    {
+      "scenario": "uncertain",
+      "variant": "fixture_batch",
+      "outcome": "phase_complete",
+      "failure_type": null,
+      "failure_code": null,
+      "blockers": [],
+      "independent_oracle_pass": true,
+      "verified": true,
+      "submission_count": 1,
+      "composition_calls": 3,
+      "jev_reviews": 3,
+      "tool_calls": 3,
+      "restarted": false,
+      "selected_operations": [
+        "inspect",
+        "batch",
+        "verify"
+      ],
+      "action_statuses": [
+        "success",
+        "success",
+        "success"
+      ],
+      "targeted_recoveries": [],
+      "argument_keys": [
+        [
+          "operation"
+        ],
+        [
+          "operation",
+          "version"
+        ],
+        [
+          "operation"
+        ]
+      ],
+      "operations": [
+        "inspect",
+        "fill",
+        "fill",
+        "submit",
+        "verify"
+      ],
+      "elapsed_seconds": 0.002273541991598904,
+      "provider_cost_usd": 0,
+      "cost_basis": "scripted providers",
+      "repeat": 1
+    },
+    {
+      "scenario": "cancel_during",
+      "variant": "per_action",
+      "outcome": "cancelled",
+      "failure_type": null,
+      "failure_code": null,
+      "blockers": [],
+      "independent_oracle_pass": true,
+      "verified": false,
+      "submission_count": 0,
+      "composition_calls": 2,
+      "jev_reviews": 1,
+      "tool_calls": 2,
+      "restarted": false,
+      "selected_operations": [
+        "inspect",
+        "fill"
+      ],
+      "action_statuses": [
+        "success",
+        "success"
+      ],
+      "targeted_recoveries": [],
+      "argument_keys": [
+        [
+          "operation"
+        ],
+        [
+          "field",
+          "operation",
+          "value",
+          "version"
+        ]
+      ],
+      "operations": [
+        "inspect",
+        "fill"
+      ],
+      "elapsed_seconds": 0.0008814999600872397,
+      "provider_cost_usd": 0,
+      "cost_basis": "scripted providers",
+      "repeat": 1
+    },
+    {
+      "scenario": "cancel_during",
+      "variant": "fixture_batch",
+      "outcome": "cancelled",
+      "failure_type": null,
+      "failure_code": null,
+      "blockers": [],
+      "independent_oracle_pass": true,
+      "verified": false,
+      "submission_count": 0,
+      "composition_calls": 2,
+      "jev_reviews": 1,
+      "tool_calls": 2,
+      "restarted": false,
+      "selected_operations": [
+        "inspect",
+        "batch"
+      ],
+      "action_statuses": [
+        "success",
+        "failed"
+      ],
+      "targeted_recoveries": [],
+      "argument_keys": [
+        [
+          "operation"
+        ],
+        [
+          "operation",
+          "version"
+        ]
+      ],
+      "operations": [
+        "inspect",
+        "fill"
+      ],
+      "elapsed_seconds": 0.0009288329165428877,
+      "provider_cost_usd": 0,
+      "cost_basis": "scripted providers",
+      "repeat": 1
+    },
+    {
+      "scenario": "changed_during",
+      "variant": "per_action",
+      "outcome": "blocked",
+      "failure_type": null,
+      "failure_code": null,
+      "blockers": [],
+      "independent_oracle_pass": true,
+      "verified": false,
+      "submission_count": 0,
+      "composition_calls": 3,
+      "jev_reviews": 3,
+      "tool_calls": 3,
+      "restarted": false,
+      "selected_operations": [
+        "inspect",
+        "fill",
+        "fill"
+      ],
+      "action_statuses": [
+        "success",
+        "success",
+        "failed"
+      ],
+      "targeted_recoveries": [],
+      "argument_keys": [
+        [
+          "operation"
+        ],
+        [
+          "field",
+          "operation",
+          "value",
+          "version"
+        ],
+        [
+          "field",
+          "operation",
+          "value",
+          "version"
+        ]
+      ],
+      "operations": [
+        "inspect",
+        "fill",
+        "change"
+      ],
+      "elapsed_seconds": 0.0022887919330969453,
+      "provider_cost_usd": 0,
+      "cost_basis": "scripted providers",
+      "repeat": 1
+    },
+    {
+      "scenario": "changed_during",
+      "variant": "fixture_batch",
+      "outcome": "blocked",
+      "failure_type": null,
+      "failure_code": null,
+      "blockers": [],
+      "independent_oracle_pass": true,
+      "verified": false,
+      "submission_count": 0,
+      "composition_calls": 2,
+      "jev_reviews": 2,
+      "tool_calls": 2,
+      "restarted": false,
+      "selected_operations": [
+        "inspect",
+        "batch"
+      ],
+      "action_statuses": [
+        "success",
+        "failed"
+      ],
+      "targeted_recoveries": [],
+      "argument_keys": [
+        [
+          "operation"
+        ],
+        [
+          "operation",
+          "version"
+        ]
+      ],
+      "operations": [
+        "inspect",
+        "fill",
+        "change"
+      ],
+      "elapsed_seconds": 0.0015851659700274467,
+      "provider_cost_usd": 0,
+      "cost_basis": "scripted providers",
+      "repeat": 1
+    },
+    {
+      "scenario": "denied_during",
+      "variant": "per_action",
+      "outcome": "blocked",
+      "failure_type": null,
+      "failure_code": null,
+      "blockers": [],
+      "independent_oracle_pass": true,
+      "verified": false,
+      "submission_count": 0,
+      "composition_calls": 3,
+      "jev_reviews": 3,
+      "tool_calls": 3,
+      "restarted": false,
+      "selected_operations": [
+        "inspect",
+        "fill",
+        "fill"
+      ],
+      "action_statuses": [
+        "success",
+        "success",
+        "failed"
+      ],
+      "targeted_recoveries": [],
+      "argument_keys": [
+        [
+          "operation"
+        ],
+        [
+          "field",
+          "operation",
+          "value",
+          "version"
+        ],
+        [
+          "field",
+          "operation",
+          "value",
+          "version"
+        ]
+      ],
+      "operations": [
+        "inspect",
+        "fill"
+      ],
+      "elapsed_seconds": 0.002125374972820282,
+      "provider_cost_usd": 0,
+      "cost_basis": "scripted providers",
+      "repeat": 1
+    },
+    {
+      "scenario": "denied_during",
+      "variant": "fixture_batch",
+      "outcome": "blocked",
+      "failure_type": null,
+      "failure_code": null,
+      "blockers": [],
+      "independent_oracle_pass": true,
+      "verified": false,
+      "submission_count": 0,
+      "composition_calls": 2,
+      "jev_reviews": 2,
+      "tool_calls": 2,
+      "restarted": false,
+      "selected_operations": [
+        "inspect",
+        "batch"
+      ],
+      "action_statuses": [
+        "success",
+        "failed"
+      ],
+      "targeted_recoveries": [],
+      "argument_keys": [
+        [
+          "operation"
+        ],
+        [
+          "operation",
+          "version"
+        ]
+      ],
+      "operations": [
+        "inspect",
+        "fill"
+      ],
+      "elapsed_seconds": 0.0013016249286010861,
+      "provider_cost_usd": 0,
+      "cost_basis": "scripted providers",
+      "repeat": 1
+    },
+    {
+      "scenario": "restart",
+      "variant": "per_action",
+      "outcome": "phase_complete",
+      "failure_type": null,
+      "failure_code": null,
+      "blockers": [],
+      "independent_oracle_pass": true,
+      "verified": true,
+      "submission_count": 1,
+      "composition_calls": 5,
+      "jev_reviews": 5,
+      "tool_calls": 5,
+      "restarted": true,
+      "selected_operations": [
+        "inspect",
+        "fill",
+        "fill",
+        "submit",
+        "verify"
+      ],
+      "action_statuses": [
+        "success",
+        "success",
+        "success",
+        "success",
+        "success"
+      ],
+      "targeted_recoveries": [],
+      "argument_keys": [
+        [
+          "operation"
+        ],
+        [
+          "field",
+          "operation",
+          "value",
+          "version"
+        ],
+        [
+          "field",
+          "operation",
+          "value",
+          "version"
+        ],
+        [
+          "operation",
+          "version"
+        ],
+        [
+          "operation"
+        ]
+      ],
+      "operations": [
+        "inspect",
+        "fill",
+        "fill",
+        "submit",
+        "verify"
+      ],
+      "elapsed_seconds": 0.003965666051954031,
+      "provider_cost_usd": 0,
+      "cost_basis": "scripted providers",
+      "repeat": 1
+    },
+    {
+      "scenario": "restart",
+      "variant": "fixture_batch",
+      "outcome": "phase_complete",
+      "failure_type": null,
+      "failure_code": null,
+      "blockers": [],
+      "independent_oracle_pass": true,
+      "verified": true,
+      "submission_count": 1,
+      "composition_calls": 3,
+      "jev_reviews": 3,
+      "tool_calls": 3,
+      "restarted": true,
+      "selected_operations": [
+        "inspect",
+        "batch",
+        "verify"
+      ],
+      "action_statuses": [
+        "success",
+        "success",
+        "success"
+      ],
+      "targeted_recoveries": [],
+      "argument_keys": [
+        [
+          "operation"
+        ],
+        [
+          "operation",
+          "version"
+        ],
+        [
+          "operation"
+        ]
+      ],
+      "operations": [
+        "inspect",
+        "fill",
+        "fill",
+        "submit",
+        "verify"
+      ],
+      "elapsed_seconds": 0.002208000048995018,
+      "provider_cost_usd": 0,
+      "cost_basis": "scripted providers",
+      "repeat": 1
+    },
+    {
+      "scenario": "normal",
+      "variant": "per_action",
+      "outcome": "phase_complete",
+      "failure_type": null,
+      "failure_code": null,
+      "blockers": [],
+      "independent_oracle_pass": true,
+      "verified": true,
+      "submission_count": 1,
+      "composition_calls": 5,
+      "jev_reviews": 5,
+      "tool_calls": 5,
+      "restarted": false,
+      "selected_operations": [
+        "inspect",
+        "fill",
+        "fill",
+        "submit",
+        "verify"
+      ],
+      "action_statuses": [
+        "success",
+        "success",
+        "success",
+        "success",
+        "success"
+      ],
+      "targeted_recoveries": [],
+      "argument_keys": [
+        [
+          "operation"
+        ],
+        [
+          "field",
+          "operation",
+          "value",
+          "version"
+        ],
+        [
+          "field",
+          "operation",
+          "value",
+          "version"
+        ],
+        [
+          "operation",
+          "version"
+        ],
+        [
+          "operation"
+        ]
+      ],
+      "operations": [
+        "inspect",
+        "fill",
+        "fill",
+        "submit",
+        "verify"
+      ],
+      "elapsed_seconds": 0.0040474169654771686,
+      "provider_cost_usd": 0,
+      "cost_basis": "scripted providers",
+      "repeat": 2
+    },
+    {
+      "scenario": "normal",
+      "variant": "fixture_batch",
+      "outcome": "phase_complete",
+      "failure_type": null,
+      "failure_code": null,
+      "blockers": [],
+      "independent_oracle_pass": true,
+      "verified": true,
+      "submission_count": 1,
+      "composition_calls": 3,
+      "jev_reviews": 3,
+      "tool_calls": 3,
+      "restarted": false,
+      "selected_operations": [
+        "inspect",
+        "batch",
+        "verify"
+      ],
+      "action_statuses": [
+        "success",
+        "success",
+        "success"
+      ],
+      "targeted_recoveries": [],
+      "argument_keys": [
+        [
+          "operation"
+        ],
+        [
+          "operation",
+          "version"
+        ],
+        [
+          "operation"
+        ]
+      ],
+      "operations": [
+        "inspect",
+        "fill",
+        "fill",
+        "submit",
+        "verify"
+      ],
+      "elapsed_seconds": 0.0021483340533450246,
+      "provider_cost_usd": 0,
+      "cost_basis": "scripted providers",
+      "repeat": 2
+    },
+    {
+      "scenario": "changed",
+      "variant": "per_action",
+      "outcome": "blocked",
+      "failure_type": null,
+      "failure_code": null,
+      "blockers": [],
+      "independent_oracle_pass": true,
+      "verified": false,
+      "submission_count": 0,
+      "composition_calls": 2,
+      "jev_reviews": 2,
+      "tool_calls": 2,
+      "restarted": false,
+      "selected_operations": [
+        "inspect",
+        "fill"
+      ],
+      "action_statuses": [
+        "success",
+        "failed"
+      ],
+      "targeted_recoveries": [],
+      "argument_keys": [
+        [
+          "operation"
+        ],
+        [
+          "field",
+          "operation",
+          "value",
+          "version"
+        ]
+      ],
+      "operations": [
+        "inspect",
+        "change"
+      ],
+      "elapsed_seconds": 0.0013592499308288097,
+      "provider_cost_usd": 0,
+      "cost_basis": "scripted providers",
+      "repeat": 2
+    },
+    {
+      "scenario": "changed",
+      "variant": "fixture_batch",
+      "outcome": "blocked",
+      "failure_type": null,
+      "failure_code": null,
+      "blockers": [],
+      "independent_oracle_pass": true,
+      "verified": false,
+      "submission_count": 0,
+      "composition_calls": 2,
+      "jev_reviews": 2,
+      "tool_calls": 2,
+      "restarted": false,
+      "selected_operations": [
+        "inspect",
+        "batch"
+      ],
+      "action_statuses": [
+        "success",
+        "failed"
+      ],
+      "targeted_recoveries": [],
+      "argument_keys": [
+        [
+          "operation"
+        ],
+        [
+          "operation",
+          "version"
+        ]
+      ],
+      "operations": [
+        "inspect",
+        "change"
+      ],
+      "elapsed_seconds": 0.0013987089041620493,
+      "provider_cost_usd": 0,
+      "cost_basis": "scripted providers",
+      "repeat": 2
+    },
+    {
+      "scenario": "denied",
+      "variant": "per_action",
+      "outcome": "blocked",
+      "failure_type": null,
+      "failure_code": null,
+      "blockers": [],
+      "independent_oracle_pass": true,
+      "verified": false,
+      "submission_count": 0,
+      "composition_calls": 1,
+      "jev_reviews": 1,
+      "tool_calls": 1,
+      "restarted": false,
+      "selected_operations": [
+        "inspect"
+      ],
+      "action_statuses": [
+        "failed"
+      ],
+      "targeted_recoveries": [],
+      "argument_keys": [
+        [
+          "operation"
+        ]
+      ],
+      "operations": [],
+      "elapsed_seconds": 0.0006447919877246022,
+      "provider_cost_usd": 0,
+      "cost_basis": "scripted providers",
+      "repeat": 2
+    },
+    {
+      "scenario": "denied",
+      "variant": "fixture_batch",
+      "outcome": "blocked",
+      "failure_type": null,
+      "failure_code": null,
+      "blockers": [],
+      "independent_oracle_pass": true,
+      "verified": false,
+      "submission_count": 0,
+      "composition_calls": 1,
+      "jev_reviews": 1,
+      "tool_calls": 1,
+      "restarted": false,
+      "selected_operations": [
+        "inspect"
+      ],
+      "action_statuses": [
+        "failed"
+      ],
+      "targeted_recoveries": [],
+      "argument_keys": [
+        [
+          "operation"
+        ]
+      ],
+      "operations": [],
+      "elapsed_seconds": 0.0006529999664053321,
+      "provider_cost_usd": 0,
+      "cost_basis": "scripted providers",
+      "repeat": 2
+    },
+    {
+      "scenario": "cancel",
+      "variant": "per_action",
+      "outcome": "cancelled",
+      "failure_type": null,
+      "failure_code": null,
+      "blockers": [],
+      "independent_oracle_pass": true,
+      "verified": false,
+      "submission_count": 0,
+      "composition_calls": 1,
+      "jev_reviews": 0,
+      "tool_calls": 1,
+      "restarted": false,
+      "selected_operations": [
+        "inspect"
+      ],
+      "action_statuses": [
+        "success"
+      ],
+      "targeted_recoveries": [],
+      "argument_keys": [
+        [
+          "operation"
+        ]
+      ],
+      "operations": [
+        "inspect"
+      ],
+      "elapsed_seconds": 0.0002263339702039957,
+      "provider_cost_usd": 0,
+      "cost_basis": "scripted providers",
+      "repeat": 2
+    },
+    {
+      "scenario": "cancel",
+      "variant": "fixture_batch",
+      "outcome": "cancelled",
+      "failure_type": null,
+      "failure_code": null,
+      "blockers": [],
+      "independent_oracle_pass": true,
+      "verified": false,
+      "submission_count": 0,
+      "composition_calls": 1,
+      "jev_reviews": 0,
+      "tool_calls": 1,
+      "restarted": false,
+      "selected_operations": [
+        "inspect"
+      ],
+      "action_statuses": [
+        "success"
+      ],
+      "targeted_recoveries": [],
+      "argument_keys": [
+        [
+          "operation"
+        ]
+      ],
+      "operations": [
+        "inspect"
+      ],
+      "elapsed_seconds": 0.0002171659143641591,
+      "provider_cost_usd": 0,
+      "cost_basis": "scripted providers",
+      "repeat": 2
+    },
+    {
+      "scenario": "uncertain",
+      "variant": "per_action",
+      "outcome": "phase_complete",
+      "failure_type": null,
+      "failure_code": null,
+      "blockers": [],
+      "independent_oracle_pass": true,
+      "verified": true,
+      "submission_count": 1,
+      "composition_calls": 5,
+      "jev_reviews": 5,
+      "tool_calls": 5,
+      "restarted": false,
+      "selected_operations": [
+        "inspect",
+        "fill",
+        "fill",
+        "submit",
+        "verify"
+      ],
+      "action_statuses": [
+        "success",
+        "success",
+        "success",
+        "success",
+        "success"
+      ],
+      "targeted_recoveries": [],
+      "argument_keys": [
+        [
+          "operation"
+        ],
+        [
+          "field",
+          "operation",
+          "value",
+          "version"
+        ],
+        [
+          "field",
+          "operation",
+          "value",
+          "version"
+        ],
+        [
+          "operation",
+          "version"
+        ],
+        [
+          "operation"
+        ]
+      ],
+      "operations": [
+        "inspect",
+        "fill",
+        "fill",
+        "submit",
+        "verify"
+      ],
+      "elapsed_seconds": 0.003993999911472201,
+      "provider_cost_usd": 0,
+      "cost_basis": "scripted providers",
+      "repeat": 2
+    },
+    {
+      "scenario": "uncertain",
+      "variant": "fixture_batch",
+      "outcome": "phase_complete",
+      "failure_type": null,
+      "failure_code": null,
+      "blockers": [],
+      "independent_oracle_pass": true,
+      "verified": true,
+      "submission_count": 1,
+      "composition_calls": 3,
+      "jev_reviews": 3,
+      "tool_calls": 3,
+      "restarted": false,
+      "selected_operations": [
+        "inspect",
+        "batch",
+        "verify"
+      ],
+      "action_statuses": [
+        "success",
+        "success",
+        "success"
+      ],
+      "targeted_recoveries": [],
+      "argument_keys": [
+        [
+          "operation"
+        ],
+        [
+          "operation",
+          "version"
+        ],
+        [
+          "operation"
+        ]
+      ],
+      "operations": [
+        "inspect",
+        "fill",
+        "fill",
+        "submit",
+        "verify"
+      ],
+      "elapsed_seconds": 0.002236249973066151,
+      "provider_cost_usd": 0,
+      "cost_basis": "scripted providers",
+      "repeat": 2
+    },
+    {
+      "scenario": "cancel_during",
+      "variant": "per_action",
+      "outcome": "cancelled",
+      "failure_type": null,
+      "failure_code": null,
+      "blockers": [],
+      "independent_oracle_pass": true,
+      "verified": false,
+      "submission_count": 0,
+      "composition_calls": 2,
+      "jev_reviews": 1,
+      "tool_calls": 2,
+      "restarted": false,
+      "selected_operations": [
+        "inspect",
+        "fill"
+      ],
+      "action_statuses": [
+        "success",
+        "success"
+      ],
+      "targeted_recoveries": [],
+      "argument_keys": [
+        [
+          "operation"
+        ],
+        [
+          "field",
+          "operation",
+          "value",
+          "version"
+        ]
+      ],
+      "operations": [
+        "inspect",
+        "fill"
+      ],
+      "elapsed_seconds": 0.0008789580315351486,
+      "provider_cost_usd": 0,
+      "cost_basis": "scripted providers",
+      "repeat": 2
+    },
+    {
+      "scenario": "cancel_during",
+      "variant": "fixture_batch",
+      "outcome": "cancelled",
+      "failure_type": null,
+      "failure_code": null,
+      "blockers": [],
+      "independent_oracle_pass": true,
+      "verified": false,
+      "submission_count": 0,
+      "composition_calls": 2,
+      "jev_reviews": 1,
+      "tool_calls": 2,
+      "restarted": false,
+      "selected_operations": [
+        "inspect",
+        "batch"
+      ],
+      "action_statuses": [
+        "success",
+        "failed"
+      ],
+      "targeted_recoveries": [],
+      "argument_keys": [
+        [
+          "operation"
+        ],
+        [
+          "operation",
+          "version"
+        ]
+      ],
+      "operations": [
+        "inspect",
+        "fill"
+      ],
+      "elapsed_seconds": 0.0009151250123977661,
+      "provider_cost_usd": 0,
+      "cost_basis": "scripted providers",
+      "repeat": 2
+    },
+    {
+      "scenario": "changed_during",
+      "variant": "per_action",
+      "outcome": "blocked",
+      "failure_type": null,
+      "failure_code": null,
+      "blockers": [],
+      "independent_oracle_pass": true,
+      "verified": false,
+      "submission_count": 0,
+      "composition_calls": 3,
+      "jev_reviews": 3,
+      "tool_calls": 3,
+      "restarted": false,
+      "selected_operations": [
+        "inspect",
+        "fill",
+        "fill"
+      ],
+      "action_statuses": [
+        "success",
+        "success",
+        "failed"
+      ],
+      "targeted_recoveries": [],
+      "argument_keys": [
+        [
+          "operation"
+        ],
+        [
+          "field",
+          "operation",
+          "value",
+          "version"
+        ],
+        [
+          "field",
+          "operation",
+          "value",
+          "version"
+        ]
+      ],
+      "operations": [
+        "inspect",
+        "fill",
+        "change"
+      ],
+      "elapsed_seconds": 0.002139999996870756,
+      "provider_cost_usd": 0,
+      "cost_basis": "scripted providers",
+      "repeat": 2
+    },
+    {
+      "scenario": "changed_during",
+      "variant": "fixture_batch",
+      "outcome": "blocked",
+      "failure_type": null,
+      "failure_code": null,
+      "blockers": [],
+      "independent_oracle_pass": true,
+      "verified": false,
+      "submission_count": 0,
+      "composition_calls": 2,
+      "jev_reviews": 2,
+      "tool_calls": 2,
+      "restarted": false,
+      "selected_operations": [
+        "inspect",
+        "batch"
+      ],
+      "action_statuses": [
+        "success",
+        "failed"
+      ],
+      "targeted_recoveries": [],
+      "argument_keys": [
+        [
+          "operation"
+        ],
+        [
+          "operation",
+          "version"
+        ]
+      ],
+      "operations": [
+        "inspect",
+        "fill",
+        "change"
+      ],
+      "elapsed_seconds": 0.0013762919697910547,
+      "provider_cost_usd": 0,
+      "cost_basis": "scripted providers",
+      "repeat": 2
+    },
+    {
+      "scenario": "denied_during",
+      "variant": "per_action",
+      "outcome": "blocked",
+      "failure_type": null,
+      "failure_code": null,
+      "blockers": [],
+      "independent_oracle_pass": true,
+      "verified": false,
+      "submission_count": 0,
+      "composition_calls": 3,
+      "jev_reviews": 3,
+      "tool_calls": 3,
+      "restarted": false,
+      "selected_operations": [
+        "inspect",
+        "fill",
+        "fill"
+      ],
+      "action_statuses": [
+        "success",
+        "success",
+        "failed"
+      ],
+      "targeted_recoveries": [],
+      "argument_keys": [
+        [
+          "operation"
+        ],
+        [
+          "field",
+          "operation",
+          "value",
+          "version"
+        ],
+        [
+          "field",
+          "operation",
+          "value",
+          "version"
+        ]
+      ],
+      "operations": [
+        "inspect",
+        "fill"
+      ],
+      "elapsed_seconds": 0.002194250002503395,
+      "provider_cost_usd": 0,
+      "cost_basis": "scripted providers",
+      "repeat": 2
+    },
+    {
+      "scenario": "denied_during",
+      "variant": "fixture_batch",
+      "outcome": "blocked",
+      "failure_type": null,
+      "failure_code": null,
+      "blockers": [],
+      "independent_oracle_pass": true,
+      "verified": false,
+      "submission_count": 0,
+      "composition_calls": 2,
+      "jev_reviews": 2,
+      "tool_calls": 2,
+      "restarted": false,
+      "selected_operations": [
+        "inspect",
+        "batch"
+      ],
+      "action_statuses": [
+        "success",
+        "failed"
+      ],
+      "targeted_recoveries": [],
+      "argument_keys": [
+        [
+          "operation"
+        ],
+        [
+          "operation",
+          "version"
+        ]
+      ],
+      "operations": [
+        "inspect",
+        "fill"
+      ],
+      "elapsed_seconds": 0.0013679580297321081,
+      "provider_cost_usd": 0,
+      "cost_basis": "scripted providers",
+      "repeat": 2
+    },
+    {
+      "scenario": "restart",
+      "variant": "per_action",
+      "outcome": "phase_complete",
+      "failure_type": null,
+      "failure_code": null,
+      "blockers": [],
+      "independent_oracle_pass": true,
+      "verified": true,
+      "submission_count": 1,
+      "composition_calls": 5,
+      "jev_reviews": 5,
+      "tool_calls": 5,
+      "restarted": true,
+      "selected_operations": [
+        "inspect",
+        "fill",
+        "fill",
+        "submit",
+        "verify"
+      ],
+      "action_statuses": [
+        "success",
+        "success",
+        "success",
+        "success",
+        "success"
+      ],
+      "targeted_recoveries": [],
+      "argument_keys": [
+        [
+          "operation"
+        ],
+        [
+          "field",
+          "operation",
+          "value",
+          "version"
+        ],
+        [
+          "field",
+          "operation",
+          "value",
+          "version"
+        ],
+        [
+          "operation",
+          "version"
+        ],
+        [
+          "operation"
+        ]
+      ],
+      "operations": [
+        "inspect",
+        "fill",
+        "fill",
+        "submit",
+        "verify"
+      ],
+      "elapsed_seconds": 0.004073332995176315,
+      "provider_cost_usd": 0,
+      "cost_basis": "scripted providers",
+      "repeat": 2
+    },
+    {
+      "scenario": "restart",
+      "variant": "fixture_batch",
+      "outcome": "phase_complete",
+      "failure_type": null,
+      "failure_code": null,
+      "blockers": [],
+      "independent_oracle_pass": true,
+      "verified": true,
+      "submission_count": 1,
+      "composition_calls": 3,
+      "jev_reviews": 3,
+      "tool_calls": 3,
+      "restarted": true,
+      "selected_operations": [
+        "inspect",
+        "batch",
+        "verify"
+      ],
+      "action_statuses": [
+        "success",
+        "success",
+        "success"
+      ],
+      "targeted_recoveries": [],
+      "argument_keys": [
+        [
+          "operation"
+        ],
+        [
+          "operation",
+          "version"
+        ],
+        [
+          "operation"
+        ]
+      ],
+      "operations": [
+        "inspect",
+        "fill",
+        "fill",
+        "submit",
+        "verify"
+      ],
+      "elapsed_seconds": 0.0021955829579383135,
+      "provider_cost_usd": 0,
+      "cost_basis": "scripted providers",
+      "repeat": 2
+    }
+  ]
+}

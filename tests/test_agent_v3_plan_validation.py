@@ -314,3 +314,59 @@ def test_uncertainty_recovery_cannot_authorize_unrevealed_action():
     assert calls == [{'key': 'first'}]
     assert not state.completed_subgoal_ids
     assert 'tactical_tool_not_revealed' in outcome.reason
+
+
+def test_stage_review_recovery_remains_available_after_action_uncertainty():
+    task, context, calls = fixture()
+    state = new_tactical_state(phase())
+    question = {'question_id': 'action_result', 'type': 'noul', 'instructions': 'Is this action result sufficient?',
+                'criteria': {'true': 'The result is sufficient.', 'false': 'The result is insufficient.'}}
+    context.inference = Inference(*[
+        {'tool_id': 'native.lookup', 'arguments': {'key': key}, 'acceptance_questions': [question]}
+        for key in ('first', 'second', 'third')])
+    reviews = iter([
+        SystemOneTacticalReview(False, .6, False, answers={'action_result': .6,
+            'runtime_action_added_progress': .9, 'runtime_declared_subgoal_complete': .1}),
+        SystemOneTacticalReview(False, .6, False, answers={'action_result': .9,
+            'runtime_action_added_progress': .9, 'runtime_declared_subgoal_complete': .6}),
+        SystemOneTacticalReview(True, .99, True, answers={'action_result': .99,
+            'runtime_action_added_progress': .99, 'runtime_declared_subgoal_complete': .99}),
+    ])
+    context.system_one.evaluate_tactical_progress = lambda **kwargs: next(reviews)
+    outcome = PhaseExecutor(reveal_policy=ToolRevealPolicy()).run(task, state, context)
+    assert outcome.status == PhaseStatus.PHASE_COMPLETE
+    assert len(calls) == len(context.inference.requests) == 3
+    assert 'action_result' in context.inference.requests[1].prompt
+    assert 'runtime_declared_subgoal_complete' in context.inference.requests[2].prompt
+    markers = [e['progress_review']['uncertainty_recovery']['budget_class'] for e in state.evidence.entries
+               if (e.get('progress_review') or {}).get('uncertainty_recovery')]
+    assert markers == ['other', 'stage']
+
+
+def test_system_two_assessment_is_recorded_but_cannot_complete_a_stage():
+    task, context, calls = fixture()
+    state = new_tactical_state(phase())
+    question = {'question_id': 'result', 'type': 'noul', 'instructions': 'Does the action satisfy the stage?',
+                'criteria': {'true': 'It satisfies the stage.', 'false': 'It does not satisfy the stage.'}}
+    class Provider:
+        def __init__(self): self.requests = []
+        def generate_json(self, request):
+            self.requests.append(request)
+            n = len(self.requests)
+            if n == 3:
+                return SimpleNamespace(json_value=None)
+            value = {'tool_id': 'native.lookup', 'arguments': {'key': str(n)}, 'acceptance_questions': [question]}
+            if n == 2:
+                value['uncertainty_assessment'] = {'question_id': 'runtime_action_added_progress',
+                    'answer': 'supported', 'evidence_refs': [state.evidence.entries[0]['evidence_ref']]}
+            return SimpleNamespace(json_value=value)
+    context.inference = Provider()
+    context.system_one.evaluate_tactical_progress = lambda **kwargs: SystemOneTacticalReview(
+        False, .6, False, answers={'runtime_action_added_progress': .6, 'runtime_declared_subgoal_complete': .1})
+    outcome = PhaseExecutor(reveal_policy=ToolRevealPolicy()).run(task, state, context)
+    assert outcome.status == PhaseStatus.BLOCKED
+    assert len(calls) == 2
+    assert not state.completed_subgoal_ids
+    recorded = state.evidence.entries[0]['progress_review']['uncertainty_recovery']['assessment']
+    assert recorded == {'status': 'recorded', 'answer': 'supported',
+                        'evidence_refs': [state.evidence.entries[0]['evidence_ref']]}

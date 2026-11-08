@@ -15,6 +15,7 @@ import tempfile
 
 from alphonse.agent_v2.core.inference import InferenceRouter, ModelProfile, OpenAICodexProvider, OpenAICodexProviderConfig
 from alphonse.agent_v2.database import default_database_path
+from alphonse.agent_v2.core.intelligence.v3 import executor
 from alphonse.agent_v2.evaluation import planning_form_fixture, planning_multifield
 from alphonse.agent_v2.evaluation.resourceful_live import BudgetTransport, read_settings
 from alphonse.agent_v2.system_one import JevCriterionDecisionProvider
@@ -47,6 +48,7 @@ def main():
               'jev_model': 'jev-1.14.0',
               'harness_sha256': hashlib.sha256(Path(planning_multifield.__file__).read_bytes()).hexdigest(),
               'fixture_sha256': hashlib.sha256(Path(planning_form_fixture.__file__).read_bytes()).hexdigest(),
+              'executor_sha256': hashlib.sha256(Path(executor.__file__).read_bytes()).hexdigest(),
               'limitations': ['One trial per shape; not a statistical comparison.',
                   'In-memory fixture checks do not qualify real browser or external effects.',
                   'ChatGPT subscription usage has no measured per-call dollar cost.',

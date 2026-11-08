@@ -210,11 +210,12 @@ what the model is shown, not how a live model will act or whether the loop is fa
 ## Targeted recovery in the existing tactical call
 
 For a successful action whose stage remains incomplete, an uncertain stage, progress, or action-acceptance
-Noul or incomplete review coverage queues one targeted recovery for that
-phase/subgoal. The next ordinary System Two action-composition request receives
+Noul or incomplete review coverage can queue a targeted recovery for that
+phase/subgoal. The initial implementation allowed one recovery; the follow-up
+allows at most one for stage completion and one for other uncertainty. The next ordinary System Two action-composition request receives
 the question, evidence reference, probability and coverage gaps alongside the
 existing authorized execution log. This reuses a call the loop already makes. A
-checkpoint reserves the single opportunity before inference so a restart cannot
+checkpoint reserves each opportunity before inference so a restart cannot
 repeatedly spend it; telemetry records the reason and reference, not the result
 content. If the phase exits before another action, no recovery call is made.
 
@@ -363,3 +364,46 @@ call or a higher threshold would improve outcomes. Across all multi-field live
 runs the Jev ledger charged US$0.004534740; the separate three-case diagnostic
 charged US$0.000150948, for US$0.004685688 total. ChatGPT subscription usage is
 not priced per call. All these runs used synthetic data.
+
+The follow-up budget separates one stage-completion recovery from one other
+recovery per phase/subgoal; both are checkpointed before inference, and old
+checkpoints retain their consumed budget. This reuses the next existing action
+composition call and does not permit either model to grant permission or mark
+completion. A frozen receipt-bearing live pair consumed both slots and each shape
+completed with one independently verified submission. The per-action run made
+seven composition calls and the fixture batch made four; both still repeated
+readback. Jev's stage Noul rose from 0.64 to 0.80 across the per-action readbacks
+and from 0.63 to 0.80 across the batch readbacks. The limited sample does not
+establish that the budget change caused completion, that rereading was necessary,
+or that this fixture-specific batching generalizes. Repeated observation and
+end-to-end architectural simplification remain open. The multi-field Jev ledger
+charged US$0.005564412 in total; with the earlier US$0.000150948 probe, the total
+is US$0.005715360, excluding unpriced ChatGPT subscription usage.
+
+The targeted action-composition call now also requests an explicit advisory
+assessment of the identified question. Code accepts only the bounded answers
+`supported`, `not_supported`, or `uncertain`, and accepts positive or negative
+assessments only with references to successful recorded evidence. A missing or
+malformed answer, mismatched question, invented reference, or failed-action
+reference is recorded as unavailable or invalid. The advisory cannot complete a
+stage, authorize an action, override incomplete evidence, or verify an effect;
+the existing deterministic controls and subsequent reviews remain authoritative.
+The assessment is carried in the same call, with no extra model invocation.
+
+In one later receipt-bearing live pair with the advisory enabled, the per-action
+trial failed on `openai_codex_invalid_json` after inspection and never submitted.
+The batch trial returned `supported` assessments for both progress and stage
+questions with references to recorded successful fixture actions. It then
+completed only after the ordinary stage review and independent fixture readback;
+it submitted exactly once and still repeated the final readback. This is evidence
+that the targeted assessment can be requested and recorded, not that its answer
+caused completion or that the runtime can safely trust the assessment as proof.
+The multi-field Jev ledger charged US$0.006000834 in total; including the earlier
+US$0.000150948 Jev probe the total is US$0.006151782. ChatGPT subscription usage
+remains unpriced. The raw operational outcome and synthetic evidence references
+are retained in `planning-multifield-live-v6.json`.
+
+For reproducibility, the v5 budget-only executor can be reconstructed by applying
+`planning-multifield-v5-executor.patch` to the executor at commit `31045c5`;
+the result matches the v5 report's recorded SHA-256. The v6 report records the
+later advisory-enabled executor hash. Earlier schema revisions remain separate.

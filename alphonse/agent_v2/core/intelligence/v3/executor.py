@@ -474,8 +474,8 @@ class PhaseExecutor:
                                                 selected_context_ids=selection.get("selected_context_ids", []))
         recovery = _consume_uncertainty_recovery(state, subgoal)
         if recovery is not None:
-            # Reserve this one recovery opportunity before inference so a restart
-            # cannot repeatedly spend it. The next ordinary action-composition
+            # Reserve this bounded recovery opportunity before inference so a
+            # restart cannot repeatedly spend it. The next ordinary action-composition
             # call carries the question and evidence; it cannot declare success.
             self._checkpoint(task, state, context)
             context.emit_telemetry({"event": "v3_tactical_uncertainty_recovery", "task_id": task.task_id,
@@ -484,7 +484,10 @@ class PhaseExecutor:
             skill_guidance += source(
                 "\nTargeted uncertainty recovery: " + json.dumps(recovery, ensure_ascii=False)
                 + "\nUse the referenced execution evidence and coverage gaps to select the next safe action. "
-                  "Do not infer completion from this assessment; obtain a targeted observation when needed. "
+                  "Alongside the action, include uncertainty_assessment with question_id, answer "
+                  "(supported, not_supported, or uncertain), and evidence_refs referencing only successful "
+                  "execution-log entries. Use uncertain if the evidence does not resolve the question. "
+                  "The assessment is advisory and cannot establish completion; obtain a targeted observation when needed. "
                   "Do not repeat a mutation with an uncertain effect. All normal authorization and verification apply.",
                 'phase:' + state.phase.phase_id + ':uncertainty_recovery', 'uncertainty_recovery',
             )
@@ -519,6 +522,8 @@ class PhaseExecutor:
                 cancel_checker=context.is_cancelled if context.cancellation_checker is not None else None,
             )
         )
+        if recovery is not None:
+            _record_uncertainty_assessment(state, recovery, result.json_value)
         if not isinstance(result.json_value, dict):
             return None
         if images:
@@ -988,13 +993,15 @@ def _is_update_inspection(state: TacticalState, subgoal: PhaseSubgoal, answers: 
 
 
 def _queue_uncertainty_recovery(state: TacticalState, subgoal: PhaseSubgoal, context: "CoreLoopContext") -> None:
-    """Queue at most one targeted recovery in a phase/subgoal, persisted with evidence."""
+    """Queue at most one stage and one other recovery per phase/subgoal."""
     import math
     relevant = [entry for entry in state.evidence.entries
                 if entry.get("phase_id") == state.phase.phase_id and entry.get("subgoal_id") == subgoal.subgoal_id]
-    if not relevant or any((entry.get("progress_review") or {}).get("uncertainty_recovery") for entry in relevant):
+    if not relevant:
         return
     review = relevant[-1].get("progress_review") or {}
+    if review.get("uncertainty_recovery"):
+        return
     settings = getattr(context.system_one, "settings", None)
     no = float(getattr(settings, "no_threshold", .2))
     yes = float(getattr(settings, "yes_threshold", .8))
@@ -1012,8 +1019,16 @@ def _queue_uncertainty_recovery(state: TacticalState, subgoal: PhaseSubgoal, con
                       and math.isfinite(answers[key]) and no < answers[key] < yes), None)
     if not incomplete and uncertain is None:
         return
+    budget_class = "stage" if uncertain == "runtime_declared_subgoal_complete" else "other"
+    for entry in relevant:
+        previous = (entry.get("progress_review") or {}).get("uncertainty_recovery") or {}
+        # Older checkpoints have no budget_class. Derive it from their question.
+        previous_class = previous.get("budget_class") or (
+            "stage" if previous.get("question_id") == "runtime_declared_subgoal_complete" else "other")
+        if previous and previous_class == budget_class:
+            return
     review["uncertainty_recovery"] = {"status": "pending", "reason": "incomplete_context" if incomplete else "ambiguous_judgment",
-                                      "question_id": uncertain}
+                                      "question_id": uncertain, "budget_class": budget_class}
 
 
 def _consume_uncertainty_recovery(state: TacticalState, subgoal: PhaseSubgoal) -> dict[str, Any] | None:
@@ -1044,6 +1059,30 @@ def _consume_uncertainty_recovery(state: TacticalState, subgoal: PhaseSubgoal) -
             "context_coverage": review.get("context_coverage") or {},
         }
     return None
+
+
+def _record_uncertainty_assessment(state: TacticalState, recovery: dict[str, Any], selected: Any) -> None:
+    """Record only a bounded advisory and references to existing successful evidence."""
+    target = next((entry for entry in state.evidence.entries
+                   if entry.get("evidence_ref") == recovery.get("evidence_ref")), None)
+    marker = ((target or {}).get("progress_review") or {}).get("uncertainty_recovery") or {}
+    if not marker or marker.get("status") != "consumed":
+        return
+    assessment = selected.get("uncertainty_assessment") if isinstance(selected, dict) else None
+    valid_refs = {entry.get("evidence_ref") for entry in state.evidence.entries
+                  if entry.get("status") == "success" and isinstance(entry.get("evidence_ref"), str)}
+    if not isinstance(assessment, dict):
+        marker["assessment"] = {"status": "unavailable"}
+        return
+    answer, refs = assessment.get("answer"), assessment.get("evidence_refs")
+    if (assessment.get("question_id") != recovery.get("question_id")
+            or not isinstance(answer, str) or answer not in {"supported", "not_supported", "uncertain"}
+            or not isinstance(refs, list) or len(refs) > 20
+            or any(not isinstance(ref, str) or ref not in valid_refs for ref in refs)
+            or (answer != "uncertain" and not refs)):
+        marker["assessment"] = {"status": "invalid"}
+        return
+    marker["assessment"] = {"status": "recorded", "answer": answer, "evidence_refs": list(dict.fromkeys(refs))}
 
 
 def _consecutive_no_progress(state: TacticalState, subgoal_id: str, threshold: float = 0.2) -> int:
