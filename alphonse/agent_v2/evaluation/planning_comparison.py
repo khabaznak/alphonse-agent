@@ -15,10 +15,11 @@ from time import perf_counter
 from unittest.mock import patch
 
 from . import resourceful_delegation as fixtures
+from . import planning_independent_reads
 from alphonse.agent_v2.core.intelligence.v3 import executor
 
-CORPUS = Path(__file__).resolve().parents[3] / 'tests/fixtures/planning_comparison/v1.json'
-VARIANTS = ('historical_progress_emulation', 'uncertainty_aware', 'targeted_recovery', 'combined_fixture_action')
+CORPUS = Path(__file__).resolve().parents[3] / 'tests/fixtures/planning_comparison/v2.json'
+VARIANTS = ('historical_progress_emulation', 'uncertainty_aware', 'targeted_recovery', 'combined_fixture_action', 'independent_read_sequence')
 
 
 def _historical_no_progress(state, subgoal_id, threshold=.2):
@@ -65,7 +66,7 @@ def _run_case(case, variant):
                 return original_review(**kwargs)
             trial.context.system_one.evaluate_tactical_progress = review
             with ExitStack() as stack:
-                if variant not in {'targeted_recovery', 'combined_fixture_action'}:
+                if variant not in {'targeted_recovery', 'combined_fixture_action', 'independent_read_sequence'}:
                     stack.enter_context(patch.object(executor, '_queue_uncertainty_recovery', lambda *_: None))
                 if variant == 'historical_progress_emulation':
                     stack.enter_context(patch.object(executor, '_consecutive_no_progress', _historical_no_progress))
@@ -138,7 +139,7 @@ def _run_tactical_case(case, variant):
                               system_one=SimpleNamespace(evaluate_tactical_progress=review))
     task = TaskState(task_id=case['id'], user='fixture', goal='Read every synthetic fragment')
     with ExitStack() as stack:
-        if variant not in {'targeted_recovery', 'combined_fixture_action'}:
+        if variant not in {'targeted_recovery', 'combined_fixture_action', 'independent_read_sequence'}:
             stack.enter_context(patch.object(executor, '_queue_uncertainty_recovery', lambda *_: None))
         if variant == 'historical_progress_emulation':
             stack.enter_context(patch.object(executor, '_consecutive_no_progress', _historical_no_progress))
@@ -154,6 +155,19 @@ def _run_tactical_case(case, variant):
             'unnecessary_questions': 0, 'elapsed_seconds': perf_counter() - started,
             'targeted_recovery_prompted': any('Targeted uncertainty recovery' in p for p in prompts),
             'provider_cost_usd': 0, 'cost_basis': 'scripted doubles; no provider calls'}
+
+
+def _run_independent_case(case, variant):
+    from . import planning_independent_reads
+    with ExitStack() as stack:
+        if variant not in {'targeted_recovery', 'combined_fixture_action', 'independent_read_sequence'}:
+            stack.enter_context(patch.object(executor, '_queue_uncertainty_recovery', lambda *_: None))
+        if variant == 'historical_progress_emulation':
+            stack.enter_context(patch.object(executor, '_consecutive_no_progress', _historical_no_progress))
+        result = planning_independent_reads.run_case(case['scenario'], variant == 'independent_read_sequence')
+    return {**result, 'case_id': case['id'], 'split': case['split'], 'variant': variant,
+            'independent_oracle_pass': result['oracle_pass'], 'inference_calls': result['composition_calls'],
+            'tactical_jev_calls': result['jev_reviews'], 'unnecessary_questions': 0}
 
 
 def run_comparison(corpus_path=CORPUS):
@@ -182,6 +196,15 @@ def run_comparison(corpus_path=CORPUS):
                            'outcome': 'error', 'error_type': type(exc).__name__, 'independent_oracle_pass': False}
                 row['repeat'] = repeat + 1
                 rows.append(row)
+        for case in corpus.get('independent_cases', []):
+            for variant in VARIANTS:
+                try:
+                    row = _run_independent_case(case, variant)
+                except Exception as exc:
+                    row = {'case_id': case['id'], 'split': case['split'], 'variant': variant,
+                           'outcome': 'error', 'error_type': type(exc).__name__, 'independent_oracle_pass': False}
+                row['repeat'] = repeat + 1
+                rows.append(row)
     return {
         'version': corpus['version'], 'mode': 'scripted-models-real-processor',
         'comparison_complete': False,
@@ -189,6 +212,8 @@ def run_comparison(corpus_path=CORPUS):
         'executor_sha256': hashlib.sha256(Path(executor.__file__).read_bytes()).hexdigest(),
         'corpus_sha256': hashlib.sha256(raw).hexdigest(),
         'source_corpus_sha256': hashlib.sha256(fixtures.CORPUS.read_bytes()).hexdigest(),
+        'source_harness_sha256': hashlib.sha256(Path(fixtures.__file__).read_bytes()).hexdigest(),
+        'independent_harness_sha256': hashlib.sha256(Path(planning_independent_reads.__file__).read_bytes()).hexdigest(),
         'variants': list(VARIANTS),
         'unavailable_variants': {'simpler_loop': 'No independently implemented and verified prototype yet.'},
         'limitations': [
@@ -196,6 +221,7 @@ def run_comparison(corpus_path=CORPUS):
             'Scripted providers return fixed answers and do not test model response to prompts.',
             'The ambiguous tactical case scripts both the model judgments and its subsequent actions; it cannot establish live recovery effectiveness.',
             'The combined fixture action removes inspection only for two scripted cases; it is not a generic simpler loop.',
+            'The independent-read sequence is implemented only for bounded read-only actions, not a general simpler phase loop.',
             'One-field form fixtures and nonce receipts do not qualify browser workflows or live sites.',
             'Wall time is local elapsed time, not provider latency; provider cost is not measured.',
             'Observation counts are recorded, but repeat necessity and false stalls are not classified by this oracle.',

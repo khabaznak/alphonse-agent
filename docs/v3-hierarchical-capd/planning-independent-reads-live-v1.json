@@ -1,0 +1,20 @@
+{
+  "version": "independent-reads-live-v1",
+  "model": "gpt-6-luna",
+  "jev_model": "jev-1.14.0",
+  "harness_sha256": "9e886b7fb682bedb85a389f5704261bf633c02544d9f8b040bcc5786f902709d",
+  "executor_sha256": "83ff3e5a928fbf151085317c7a4d6862e5f3a5307f07665604153daa37dce1e6",
+  "limitations": [
+    "One trial per shape; this is not a statistical comparison.",
+    "Synthetic in-memory reads do not qualify browser, mutation or real household workflows.",
+    "ChatGPT subscription usage has no measured per-call dollar cost.",
+    "Single-action control changes the composition prompt and rejects a sequence if returned.",
+    "The Jev ledger is capped at US$0.05; reuse the same ledger for repeated runs."
+  ],
+  "typesafe_cumulative_charge_usd": "0.006395718",
+  "cost_derivation": "Per-trial Jev charges summed from the synthetic-run ledger; ChatGPT subscription cost is not measured.",
+  "results": [
+    {"scenario":"normal","variant":"single_action","outcome":"phase_complete","failure_type":null,"failure_code":null,"oracle_pass":true,"observed_keys":["a","b","c"],"composition_calls":3,"jev_reviews":3,"tool_calls":3,"baseline_sequence_rejected":false,"targeted_recoveries":[],"elapsed_seconds":29.641702624969184,"provider_cost_usd":null,"cost_basis":"ChatGPT subscription; Jev charge recorded separately","typesafe_cumulative_charge_usd":"0.006198150","typesafe_trial_charge_usd":"0.000197316"},
+    {"scenario":"normal","variant":"independent_sequence","outcome":"phase_complete","failure_type":null,"failure_code":null,"oracle_pass":true,"observed_keys":["a","b","c"],"composition_calls":1,"jev_reviews":3,"tool_calls":3,"baseline_sequence_rejected":false,"targeted_recoveries":[],"elapsed_seconds":11.455921875080094,"provider_cost_usd":null,"cost_basis":"ChatGPT subscription; Jev charge recorded separately","typesafe_cumulative_charge_usd":"0.006395718","typesafe_trial_charge_usd":"0.000197568"}
+  ]
+}

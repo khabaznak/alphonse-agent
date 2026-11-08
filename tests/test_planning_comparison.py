@@ -10,10 +10,11 @@ def test_frozen_comparison_runs_every_variant_and_preserves_failure(monkeypatch)
                 'independent_oracle_pass': case['id'] != 'changed-form'}
     monkeypatch.setattr(planning_comparison, '_run_case', run)
     monkeypatch.setattr(planning_comparison, '_run_tactical_case', run)
+    monkeypatch.setattr(planning_comparison, '_run_independent_case', run)
     report = planning_comparison.run_comparison()
-    assert len(calls) == 9 * 4 * 2
+    assert len(calls) == 13 * 5 * 2
     assert len(report['results']) == len(calls)
-    assert sum(not row['independent_oracle_pass'] for row in report['results']) == 8
+    assert sum(not row['independent_oracle_pass'] for row in report['results']) == 10
     assert 'simpler_loop' in report['unavailable_variants']
     assert report['mode'] == 'scripted-models-real-processor'
     assert len(report['corpus_sha256']) == 64

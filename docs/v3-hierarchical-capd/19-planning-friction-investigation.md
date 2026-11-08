@@ -407,3 +407,77 @@ For reproducibility, the v5 budget-only executor can be reconstructed by applyin
 `planning-multifield-v5-executor.patch` to the executor at commit `31045c5`;
 the result matches the v5 report's recorded SHA-256. The v6 report records the
 later advisory-enabled executor hash. Earlier schema revisions remain separate.
+
+## Bounded independent reads in the existing loop
+
+The tactical executor now accepts an optional two- or three-action sequence only
+inside a read-only subgoal. Every proposed tool must be exposed, read-only,
+not marked sensitive, outside the browser workflow and compatible with the phase; user interaction,
+Bash, writes and duplicate proposals are excluded. Code validates the whole
+sequence before dispatch. Each action then passes the existing exposure,
+compatibility, invocation, actor, prerequisite and cancellation checks again.
+The remaining proposals are held only in memory, discarded on restart, failure,
+incomplete context, ambiguous review or stage completion, and never become a
+persisted tool registry. The model is asked to use this only for actions whose
+arguments are already known and do not depend on prior results; this instruction
+is not an authorization boundary.
+
+The frozen `planning_independent_reads` comparison ran three repetitions of four
+scenarios under single-action and sequence shapes: 24/24 fixture oracles passed.
+On the normal three-record case, the scripted sequence used one action-composition
+call instead of three, with three tool calls and three Jev reviews in both shapes.
+Uncertain progress discarded the remaining proposal and required normal
+recomposition. Revocation and cancellation stopped after the first observation.
+The fixture is read-only, in memory and synthetic; it does not establish safety or
+performance for writes, browser sessions, or real household data.
+
+One tool-disabled live synthetic pair also returned all three records. The
+single-action control used three composition calls and the sequence used one;
+both made three independent tool calls and three Jev reviews. Elapsed times were
+about 29.6 and 11.5 seconds, respectively, including provider and local time. One
+pair is not a latency distribution or a model-reliability estimate; the single
+control prompt explicitly forbade sequences. The raw report records the frozen
+harness and executor hashes, and includes failures if either shape fails. The Jev
+ledger charge through this pair was US$0.006395718, plus the separate earlier
+US$0.000150948 probe, totaling US$0.006546666. ChatGPT subscription cost was not
+measured. Compare additional frozen tasks and repeated live trials before choosing
+an overall architecture. See #188 and #190 for browser handoff and mutation
+sequencing; this narrow read-only path does not complete those issues.
+
+The expanded `planning-comparison-v2.json` uses the same frozen scenarios for
+five labeled variants and records 130 trials: 126 passed their fixture oracles.
+The four failures are the historical-rule emulation's expected false stalls in
+the two uncertain-fragment cases, repeated twice. In the independent normal read
+case, the four single-action variants made three composition and three tool calls;
+the independent-read variant made one composition and three tool calls. The
+fixture-only combined-action variant is still not a general simpler loop. This
+comparison is scripted, its historical rule is an emulation, and the live
+independent-read result remains one pair; do not infer a production success rate
+or close the general architectural comparison from these measurements.
+
+The live independent-read pair and expanded v2 comparison used the executor
+reconstructable by applying `planning-independent-reads-v1-executor.patch` to
+commit `1afb6df` with `git apply --unidiff-zero`. The result matches their
+recorded executor hash. A subsequent safety fix discards model-authored action
+IDs in sequences so each dispatched read gets a distinct runtime ID and evidence
+reference; the earlier measurements should not be presented as exact live trials
+of that subsequent revision.
+
+The second live independent-read pair used the action-ID-safe executor captured
+by `planning-independent-reads-v2-executor.patch` applied to `1afb6df`. Both
+shapes completed with three independently checked records; the control used
+three composition calls and the sequence used one, each with three tool calls
+and reviews. This remains a single pair, not a reliability estimate. Subsequent
+review found that sequence prevalidation had not checked every tool's argument
+schema or rejected Jev's reserved question IDs until dispatch/review. The current
+implementation checks those before any proposed read executes; this change was
+made after the v2 live pair and is not represented by its executor hash.
+
+The synthetic regression coverage spans genuine no-progress and duplicate
+actions (`test_agent_v3_phase_executor`), incomplete evidence and discarded
+sequences (`test_agent_v3_independent_reads`), conflicting judgments and missing
+information (`test_agent_v3_inspection_handoff` and `test_agent_v3_completion_recovery`),
+and denied operations, changed forms, uncertain effects, cancellation and
+simulated restart (`test_planning_multifield` and `test_planning_form_fixture`).
+These are fixture and runtime checks, not qualification of the live browser or
+of arbitrary external services.

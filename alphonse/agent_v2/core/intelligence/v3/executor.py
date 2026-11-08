@@ -45,6 +45,7 @@ ActionSelector = Callable[[TacticalState, PhaseSubgoal, tuple["ToolDescriptor", 
 TACTICAL_RETRY_BASE_SECONDS = 1.0
 MAX_UPDATE_INSPECTION_ACTIONS = 6
 MAX_UNCERTAIN_PROGRESS_ACTIONS = 6
+MAX_INDEPENDENT_READ_ACTIONS = 3
 
 
 class ScheduledHandoff(Exception):
@@ -82,6 +83,8 @@ class PhaseExecutor:
                 self._checkpoint(task, state, context)
                 return self._outcome(state, "The scheduled delivery outcome is unconfirmed.",
                                      blockers=("scheduled_delivery_outcome_unavailable",))
+        # Ephemeral only: a restart discards proposals that have not run.
+        pending_reads: list[dict[str, Any]] = []
         while state.status == PhaseStatus.RUNNING:
             interruption = self._interruption(task, state, context)
             if interruption is not None:
@@ -97,7 +100,11 @@ class PhaseExecutor:
             selected = (retry.get("action") if isinstance(retry, dict)
                         and retry.get("phase_id") == state.phase.phase_id
                         and retry.get("subgoal_id") == subgoal.subgoal_id else None)
-            if not isinstance(selected, dict):
+            if isinstance(selected, dict):
+                pending_reads.clear()
+            elif pending_reads:
+                selected = pending_reads.pop(0)
+            else:
                 selected = self._select_action(task, state, subgoal, tools, context)
             interruption = self._interruption(task, state, context)
             if interruption is not None:
@@ -107,12 +114,18 @@ class PhaseExecutor:
                 state.transition(PhaseStatus.BLOCKED)
                 self._checkpoint(task, state, context)
                 return self._outcome(state, "No valid tactical action was available.", blockers=("tactical_action_unavailable",))
+            is_sequence = "actions" in selected
             selected_id = selected.get("tool_id")
-            sensitive_action = (isinstance(selected_id, str) and selected_id.startswith("native.browser_workflow_")) or any(
+            sensitive_action = is_sequence or (isinstance(selected_id, str) and selected_id.startswith("native.browser_workflow_")) or any(
                 tool.tool_id == selected_id and tool.metadata.get("sensitive_content") is True for tool in tools)
             try:
+                if is_sequence:
+                    proposed = _validate_independent_reads(self, state, subgoal, selected, tools)
+                    selected, pending_reads = proposed[0], proposed[1:]
+                    sensitive_action = False
                 action = self._validate_action(state, subgoal, selected, tools)
             except (ValueError, PermissionError) as exc:
+                pending_reads.clear()
                 error = str(exc)
                 # IDs and acceptance-question wording do not change an invalid action.
                 fingerprint = hashlib.sha256(json.dumps({
@@ -328,6 +341,9 @@ class PhaseExecutor:
                 settings = getattr(context.system_one, "settings", None)
                 yes_threshold = float(getattr(settings, "yes_threshold", 0.8))
                 no_threshold = float(getattr(settings, "no_threshold", 0.2))
+                if pending_reads and (completion_met or completed.status != "success"
+                                      or not _independent_read_can_continue(progress_review, yes_threshold)):
+                    pending_reads.clear()
                 if not completion_met and _consecutive_no_progress(state, subgoal.subgoal_id, no_threshold) >= 3:
                     blocker = "tactical_stage_no_new_progress"
                     state.evidence.entries[-1]["no_progress_blocker"] = blocker
@@ -889,9 +905,13 @@ def _tactical_prompt(
     ]
     return (
         FEASIBILITY_GUIDANCE + ROUTINE_AUTONOMY_GUIDANCE +
-        "Select exactly one concrete tactical action for the current subgoal and define acceptance questions for its result. "
+        "Select one concrete tactical action for the current subgoal and define acceptance questions for its result. "
+        "For a read-only subgoal only, you may instead return {actions:[...]} with two or three independent read-only "
+        "actions, each in the same format, only when all arguments are already known and none depends on another result. "
+        "Never sequence writes, private or browser actions, user interaction, or actions needing a new observation. "
+        "The runtime rechecks every action and stops the sequence on failure, uncertainty or completion. "
         "Do not change the objective, acceptance criteria, or mutation scope. "
-        "Return JSON with tool_id, arguments, and a non-empty acceptance_questions array. Each item must be a Noul question "
+        "Each action has tool_id, arguments, and a non-empty acceptance_questions array. Each question must be a Noul "
         "shaped as {question_id, type:'noul', instructions, criteria:{true, false}}. Questions must evaluate the tool result "
         "against the stage goal and relevant acceptance criteria. Treat successful prior action results as authoritative inputs "
         "for the next action even when they did not complete the subgoal. Do not repeat a successful discovery/list action when "
@@ -990,6 +1010,49 @@ def _is_update_inspection(state: TacticalState, subgoal: PhaseSubgoal, answers: 
         }
         for item in state.phase.subgoals
     )
+
+
+def _validate_independent_reads(executor: PhaseExecutor, state: TacticalState, subgoal: PhaseSubgoal,
+                                selected: dict[str, Any], tools: tuple["ToolDescriptor", ...]) -> list[dict[str, Any]]:
+    """Validate the entire ephemeral sequence before any action can run."""
+    items = selected.get("actions")
+    if set(subgoal.allowed_side_effects) != {SideEffectClass.READ_ONLY}:
+        raise ValueError("independent_reads_require_read_only_subgoal")
+    if not isinstance(items, list) or not 2 <= len(items) <= MAX_INDEPENDENT_READ_ACTIONS:
+        raise ValueError("independent_reads_invalid_count")
+    from alphonse.agent_v2.system_one import _TACTICAL_RETRY_FUSE_QUESTIONS
+    reserved = {"runtime_declared_subgoal_complete", "runtime_action_added_progress", "runtime_action_is_inspection",
+                "runtime_inspection_ready_for_action", "runtime_inspection_requires_user_input"}
+    reserved.update(question["question_id"] for question in _TACTICAL_RETRY_FUSE_QUESTIONS)
+    seen: set[str] = set()
+    for item in items:
+        if not isinstance(item, dict):
+            raise ValueError("independent_reads_invalid_action")
+        descriptor = next((tool for tool in tools if tool.tool_id == item.get("tool_id")), None)
+        if (descriptor is None or not descriptor.read_only or descriptor.metadata.get("sensitive_content") is True
+                or descriptor.tool_id.startswith("native.browser_workflow_")
+                or descriptor.tool_id in {"native.ask_question", "native.respond"}
+                or descriptor.metadata.get("side_effect_class") not in {None, "read_only"}):
+            raise ValueError("independent_reads_tool_not_allowed")
+        executor._validate_action(state, subgoal, item, tools)
+        ToolInvocationService._validate(descriptor.argument_schema, item["arguments"])
+        if any(str(question.get("question_id") or "").strip() in reserved for question in item["acceptance_questions"]):
+            raise ValueError("independent_reads_reserved_question")
+        signature = json.dumps([item.get("tool_id"), item.get("arguments")], sort_keys=True, default=str)
+        if signature in seen:
+            raise ValueError("independent_reads_duplicate")
+        seen.add(signature)
+    # Action IDs are runtime-owned; a repeated model-authored ID would alias
+    # distinct evidence entries. Generate a fresh one at each actual dispatch.
+    return [{key: value for key, value in item.items() if key != "action_id"} for item in items]
+
+
+def _independent_read_can_continue(review: dict[str, Any], yes_threshold: float) -> bool:
+    coverage = review.get("context_coverage") or {}
+    return (review.get("confident") is True and review.get("context_complete") is not False
+            and not coverage.get("omitted_prior_count", 0)
+            and not coverage.get("omitted_prior_result_count", 0) and not coverage.get("omitted_prior_refs")
+            and _confident_probability((review.get("answers") or {}).get("runtime_action_added_progress"), yes_threshold))
 
 
 def _queue_uncertainty_recovery(state: TacticalState, subgoal: PhaseSubgoal, context: "CoreLoopContext") -> None:
