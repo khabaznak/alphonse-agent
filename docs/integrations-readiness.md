@@ -135,10 +135,12 @@ operator action, not evidence that it is enabled or that all telemetry disappear
 **P2 — BLOCKED, operator:** record the exact System Two provider/model, CLI version,
 sign-in product/account plan, governing terms, training controls, remote retention,
 subprocessors/region, local session/log/cache paths and deletion procedure. Shipped
-`InferenceSettingsStore` uses the signed-in Codex CLI subscription provider.
-`OpenAICodexProviderConfig.ephemeral` defaults to false: a temporary working directory
-does not prove session/prompt deletion outside that directory. Qualify and bound
-CLI persistence before private data enters it. No inference was made in this review.
+`InferenceSettingsStore` uses the signed-in Codex CLI subscription provider. The
+runtime now passes `--ephemeral` for model requests; the CLI documents this as
+preventing local session rollout files. This does not establish deletion of other
+local logs, caches, temporary files, backups or remote copies. Qualify those paths
+before private data enters them. No inference was made in this review.
+[Codex CLI command reference](https://learn.chatgpt.com/docs/developer-commands?surface=cli)
 [OpenAI API data controls](https://developers.openai.com/api/docs/guides/your-data)
 describe API endpoint-specific storage, with default abuse-monitoring retention up
 to 30 days subject to exceptions. Those API terms do not establish subscription CLI
