@@ -1,4 +1,4 @@
-# Browser fill sequence prototype (issue 190, incomplete)
+# Browser fill sequence evaluation (issue 190)
 
 This prototype accepts one fill followed by an observation and reconciliation,
 using the existing executor for every step. The proposal is ephemeral. It is not
@@ -27,10 +27,9 @@ runs neither dispatched a fill, and the attempted effect stayed unresolved.
 
 These are scripted selector calls, not actual LLM calls. The observation count
 is unchanged, so the requested reduction in observations is not demonstrated.
-The comparison also does not yet cover retries, submission/result qualification,
-or a real browser. Do not check off issue 190 or merge this prototype on the
-strength of these results. A broader matched evaluation and review of the plan's
-state-change and recovery semantics remain necessary.
+The comparison also does not cover retries, submission/result qualification,
+or a real browser. These early results alone do not justify closing the issue;
+the later comparisons and their limits are recorded below.
 
 ## Expanded paired fixture and exploratory model run
 
@@ -134,3 +133,38 @@ calls or real-browser qualification, and the task remains unqualified. Run
 `python -c 'from alphonse.agent_v2.evaluation.browser_handoff_comparison import sequence_report; import json; print(json.dumps(sequence_report(3, qualify=True), indent=2))'`
 to reproduce the matrix. Actual model trials and their failed outcomes are
 reported separately above.
+
+## Frozen live field-phase comparison
+
+Three paired runs of revision `3507fae3` used the configured `gpt-6-luna`
+model, the same synthetic field task and disposable service, and scripted
+tactical review. Each arm independently verified both fills and completed the
+field phase. The full task and any submission remain unqualified. Reports
+`qualified-live-pair-1.json` through `qualified-live-pair-3.json` preserve the
+counts and content-free tool selections. The control prompt requires single
+actions; the sequence arm may choose either form. Each model call has a 60-second
+timeout and each arm is capped at 12 composition calls. No Jev API was called.
+
+| Pair | Control model calls | Sequence model calls | Control observations | Sequence observations | Control seconds | Sequence seconds |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 7 | 3 | 4 | 4 | 62.76 | 45.60 |
+| 2 | 10 | 3 | 7 | 4 | 96.23 | 36.96 |
+| 3 | 8 | 3 | 4 | 4 | 66.77 | 35.19 |
+| Total | 25 | 9 | 15 | 12 | — | — |
+
+Observation counts include explicit workflow observations and the independent
+fixture verifier; they exclude the transport's internal fence and current-page
+checks, which remain present in both arms. An identical snapshot can be required
+for verification, so a repeated snapshot is not automatically unnecessary. In
+pair 2 the control additionally checked before both fields were ready and made
+extra observations; the sequence did not. The other pairs show no observation
+saving. One control call in pair 3 failed to produce valid JSON and the bounded
+retry recovered. All earlier failed or blocked runs are retained separately and
+are not included in this table. This small, synthetic sample demonstrates a
+case of fewer calls and observations, not a reliability estimate, a guarantee
+for every workflow, or real-browser performance. The ChatGPT subscription
+cost is not measured. No live household data was used.
+
+Validation: 128 focused tests passed. The broad suite had 2,746 passes and 37
+skips; eleven localhost fixture tests could not bind inside the sandbox and all
+passed when rerun with localhost access.
