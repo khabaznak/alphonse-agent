@@ -589,6 +589,53 @@ def test_unverified_browser_action_returns_do_not_count_as_phase_progress():
     assert _successful_evidence_signatures([{"evidence": {"entries": entries}}]) == set()
 
 
+def test_redacted_observations_are_bounded_without_assuming_identical_pages(tmp_path):
+    from types import SimpleNamespace
+    from alphonse.agent_v2.core.core import CoreLoopContext
+    from alphonse.agent_v2.core.intelligence.v3 import PhaseExecutor, PhasePlan, PhaseSubgoal, PhaseStatus, new_tactical_state
+    from alphonse.agent_v2.core.intelligence.v3.executor import MAX_BROWSER_OBSERVATIONS_PER_SUBGOAL
+    from alphonse.agent_v2.core.messages import InMemoryMessageQueue
+    from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry
+    from alphonse.agent_v2.core.tools.registry.native.browser_workflow import build_browser_workflow_tools
+    from alphonse.agent_v2.system_one import SystemOneTacticalReview
+
+    class ChangingPage(Page):
+        def __init__(self):
+            self.count = 0
+        def observe(self):
+            self.count += 1
+            return {"targets": ["1_1"], "version": self.count, "private": "PRIVATE_PAGE_MARKER"}
+    store, page = SQLiteQuestionStore(tmp_path / "db"), ChangingPage()
+    service = BrowserWorkflowService(checkpoint_store=store, transport=page,
+        authorized=lambda actor, task: "grant-1", cancelled=lambda: False, enabled=True)
+    task = _task()
+    phase = PhasePlan("phase-1", "Inspect", (PhaseSubgoal("fill", "Inspect", "form",
+        allowed_capabilities=("browser",)),), authorized_capabilities=("browser",))
+    state = new_tactical_state(phase)
+    state.transition(PhaseStatus.RUNNING)
+    state.revealed_tool_ids = ["native.browser_workflow_observe"]
+    task.hierarchical_state = state.to_dict()
+    service.begin(task)
+    registry = InMemoryToolRegistry()
+    for tool in build_browser_workflow_tools(enabled=True):
+        registry.register(tool)
+    review = SimpleNamespace(evaluate_tactical_progress=lambda **_: SystemOneTacticalReview(
+        False, .95, True, answers={"runtime_action_added_progress": .99}))
+    def select(*_):
+        if state.evidence.entries:
+            task.metadata["act_directive"] = {"outcome_review": {
+                "verified_evidence_refs": [state.evidence.entries[0]["evidence_ref"]]}}
+        return {"tool_id": "native.browser_workflow_observe", "arguments": {}}
+    outcome = PhaseExecutor(action_selector=select).run(
+        task, state, CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry, question_store=store,
+                                     browser_workflow_service=service, system_one=review))
+    assert page.count == MAX_BROWSER_OBSERVATIONS_PER_SUBGOAL
+    assert "browser_observation_budget_exhausted" in outcome.blockers
+    assert not any(entry.get("semantic_duplicate_of") for entry in state.evidence.entries)
+    assert "PRIVATE_PAGE_MARKER" not in json.dumps(task.to_checkpoint_dict())
+    service.private_data.clear()
+
+
 def test_verified_fill_resets_phase_stall_despite_redacted_prior_fill(tmp_path, monkeypatch):
     from types import SimpleNamespace
     from alphonse.agent_v2.core.core import CoreLoopContext

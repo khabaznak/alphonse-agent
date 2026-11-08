@@ -45,6 +45,7 @@ ActionSelector = Callable[[TacticalState, PhaseSubgoal, tuple["ToolDescriptor", 
 TACTICAL_RETRY_BASE_SECONDS = 1.0
 MAX_UPDATE_INSPECTION_ACTIONS = 6
 MAX_UNCERTAIN_PROGRESS_ACTIONS = 6
+MAX_BROWSER_OBSERVATIONS_PER_SUBGOAL = 8
 MAX_INDEPENDENT_READ_ACTIONS = 3
 
 
@@ -175,6 +176,14 @@ class PhaseExecutor:
             if sensitive_action:
                 action = TacticalAction(action_id=f"action-{uuid4()}", subgoal_id=action.subgoal_id,
                     tool_id=action.tool_id, arguments=action.arguments, acceptance_questions=action.acceptance_questions)
+            if (action.tool_id in {"native.browser_workflow_observe", "native.browser_workflow_observe_result"}
+                    and sum(prior.subgoal_id == action.subgoal_id and prior.tool_id in {
+                        "native.browser_workflow_observe", "native.browser_workflow_observe_result"}
+                            for prior in state.actions) >= MAX_BROWSER_OBSERVATIONS_PER_SUBGOAL):
+                state.transition(PhaseStatus.BLOCKED)
+                self._checkpoint(task, state, context)
+                return self._outcome(state, "Browser observation budget exhausted; review the existing evidence.",
+                                     blockers=("browser_observation_budget_exhausted",))
             recorded_arguments = {"redacted": True} if sensitive_action else action.arguments
             recorded_questions = [] if sensitive_action else action.acceptance_questions
             if _scheduled_delivery_may_repeat(task, state, action, context):
@@ -189,7 +198,8 @@ class PhaseExecutor:
                 and (entry.get("arguments") or {}) == recorded_arguments
                 for entry in state.evidence.entries
             )
-            if repeated_verified and not _browser_fill_has_protected_identity(task, action, context):
+            redacted_observation = action.tool_id in {"native.browser_workflow_observe", "native.browser_workflow_observe_result"}
+            if repeated_verified and not redacted_observation and not _browser_fill_has_protected_identity(task, action, context):
                 blocker = "act_recovery_repeats_verified_work"
                 state.transition(PhaseStatus.BLOCKED)
                 self._checkpoint(task, state, context)
@@ -1056,6 +1066,11 @@ def _pending_browser_fill_recovery(task: "TaskState") -> str | None:
 
 def _matching_prior_incomplete_result(state: TacticalState, completed: TacticalAction) -> str | None:
     """Find equivalent prior evidence that Jev already judged incomplete."""
+    if (completed.tool_id in {"native.browser_workflow_observe", "native.browser_workflow_observe_result"}
+            and completed.result == {"redacted": True}):
+        # Identical placeholders cannot establish identical page observations.
+        # A separate deterministic per-subgoal budget bounds repeated reads.
+        return None
     for evidence in reversed(state.evidence.entries[:-1]):
         review = evidence.get("progress_review")
         if not isinstance(review, dict) or review.get("complete") is not False:
