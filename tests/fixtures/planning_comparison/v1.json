@@ -1,0 +1,37 @@
+{
+  "version": "planning-comparison-v1",
+  "source": "resourceful-delegation-v2",
+  "repeats": 2,
+  "tactical_cases": [
+    {
+      "id": "uncertain-fragments",
+      "split": "development",
+      "fragments": [
+        "north",
+        "east",
+        "south",
+        "west"
+      ]
+    },
+    {
+      "id": "uncertain-heldout-five",
+      "split": "heldout",
+      "fragments": [
+        "amber",
+        "blue",
+        "green",
+        "ivory",
+        "violet"
+      ]
+    }
+  ],
+  "case_ids": [
+    "unfamiliar-form",
+    "access-denied",
+    "changed-form",
+    "cancel-before-dispatch",
+    "invalid-plan-loop",
+    "essential-input",
+    "restart-after-inspection"
+  ]
+}

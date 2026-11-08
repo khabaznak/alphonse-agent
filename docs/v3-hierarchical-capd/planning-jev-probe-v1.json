@@ -1,0 +1,429 @@
+{
+  "limit_usd": "0.02",
+  "budget_charge_usd": "0.000150948",
+  "price_per_million_input_tokens_usd": "0.042",
+  "unknown_attempt_reservation_usd": "0.003",
+  "calls": [
+    {
+      "case_id": "partial_useful",
+      "request": {
+        "state": {
+          "goal": "Read four synthetic fragments",
+          "stage_goal": {
+            "subgoal_id": "read",
+            "objective": "Read all four fragments",
+            "required_output_type": "fragments",
+            "completion": {
+              "kind": "output_present"
+            }
+          },
+          "strategic_plan": {
+            "objective": "Read four requested fragments",
+            "subgoals": []
+          },
+          "current_action": {
+            "action_id": "synthetic-action",
+            "tool_id": "native.fixture_read",
+            "arguments": {},
+            "status": "success",
+            "result": {
+              "fragment": "north"
+            }
+          },
+          "tool_execution_log": [
+            {
+              "evidence_ref": "fixture:current",
+              "status": "success",
+              "phase_id": "synthetic",
+              "subgoal_id": "read",
+              "result": {
+                "fragment": "north"
+              }
+            }
+          ],
+          "context_coverage": {
+            "current_result_complete": true,
+            "omitted_prior_refs": [],
+            "omitted_prior_count": 0,
+            "omitted_current_hits": 0,
+            "omitted_prior_result_count": 0,
+            "state_bytes": 767
+          }
+        },
+        "model": "jev-1.14.0",
+        "questions": {
+          "current_subgoal_complete": {
+            "type": "noul",
+            "instructions": "Does the successful tool result semantically satisfy the current subgoal's declared completion condition?",
+            "criteria": {
+              "true": "The observed result directly provides the required output and satisfies the declared completion condition.",
+              "false": "The call ran, but its result is irrelevant, incomplete, ambiguous, or does not establish the required output."
+            }
+          },
+          "runtime_declared_subgoal_complete": {
+            "type": "noul",
+            "instructions": "Do current_action and the supplied tool_execution_log establish the declared stage_goal objective, required_output_type and completion condition? Judge the original stage goal, not merely the latest action's narrower acceptance questions.",
+            "criteria": {
+              "true": "The observed results satisfy the declared stage goal and required output. All necessary operations have actually occurred. For an idempotent record update, fresh read-back may prove every requested value and provenance already matches confirmed authorized input, so no redundant write is needed. A request for a new event or distinct write still requires execution. Preparatory help, row existence or unrelated historical values alone are insufficient.",
+              "false": "The results establish only preparation, tool discovery, a partial attempt, a failed operation, or a narrower action goal while the declared stage remains unfinished."
+            }
+          },
+          "runtime_action_added_progress": {
+            "type": "noul",
+            "instructions": "Compared with the earlier entries in tool_execution_log, did the latest action add meaningful new evidence or enable a concrete next step toward the declared stage goal?",
+            "criteria": {
+              "true": "The action discovers useful new source content, obtains a fresh result, verifies a change, or identifies a new actionable blocker. Preparatory help may count once when it reveals usable syntax.",
+              "false": "Only search wording, formatting, IDs or repeated attempts changed. Repeated empty searches, already-known sources, the same unavailable route, or repeated help without new information do not establish progress."
+            }
+          },
+          "retry_fuse_transient_failure": {
+            "type": "noul",
+            "instructions": "Does the observed tool failure appear transient rather than caused by invalid credentials, missing permissions, invalid input, or another persistent configuration problem?",
+            "criteria": {
+              "true": "Evidence points to a temporary condition such as a timeout, connection interruption, or temporary service outage.",
+              "false": "Evidence points to credentials, permissions, invalid input, unavailable configuration, or another condition that will persist without a change."
+            }
+          },
+          "retry_fuse_same_call_likely_to_work": {
+            "type": "noul",
+            "instructions": "After a short backoff, is the same tool call with exactly the same arguments reasonably likely to succeed without new information or configuration?",
+            "criteria": {
+              "true": "A temporary failure is plausible and another identical attempt could succeed without changing inputs.",
+              "false": "The call needs changed arguments, credentials, permissions, configuration, or user input to succeed."
+            }
+          },
+          "retry_fuse_repeat_is_safe": {
+            "type": "noul",
+            "instructions": "Is repeating this exact tool call safe, without a meaningful risk of duplicating or compounding side effects?",
+            "criteria": {
+              "true": "The operation is read-only/idempotent, or the execution evidence explicitly establishes safe retry semantics.",
+              "false": "The operation may have partially succeeded, may duplicate side effects, or its retry safety is unknown."
+            }
+          }
+        }
+      },
+      "budget_charge_usd": "0.000049560",
+      "status": "success",
+      "response": {
+        "model": "jev-1.14.0",
+        "answers": {
+          "current_subgoal_complete": {
+            "type": "noul",
+            "noul": 0.26
+          },
+          "runtime_declared_subgoal_complete": {
+            "type": "noul",
+            "noul": 0.02
+          },
+          "runtime_action_added_progress": {
+            "type": "noul",
+            "noul": 0.85
+          },
+          "retry_fuse_transient_failure": {
+            "type": "noul",
+            "noul": 0.13
+          },
+          "retry_fuse_same_call_likely_to_work": {
+            "type": "noul",
+            "noul": 0.7
+          },
+          "retry_fuse_repeat_is_safe": {
+            "type": "noul",
+            "noul": 0.96
+          }
+        },
+        "usage": {
+          "input_tokens": 1180,
+          "output_tokens": 132
+        }
+      },
+      "seconds": 0.2641262080287561
+    },
+    {
+      "case_id": "empty_result",
+      "request": {
+        "state": {
+          "goal": "Read four synthetic fragments",
+          "stage_goal": {
+            "subgoal_id": "read",
+            "objective": "Read all four fragments",
+            "required_output_type": "fragments",
+            "completion": {
+              "kind": "output_present"
+            }
+          },
+          "strategic_plan": {
+            "objective": "Read four requested fragments",
+            "subgoals": []
+          },
+          "current_action": {
+            "action_id": "synthetic-action",
+            "tool_id": "native.fixture_read",
+            "arguments": {},
+            "status": "success",
+            "result": {
+              "fragments": []
+            }
+          },
+          "tool_execution_log": [
+            {
+              "status": "success",
+              "result": {
+                "fragments": []
+              }
+            },
+            {
+              "evidence_ref": "fixture:current",
+              "status": "success",
+              "phase_id": "synthetic",
+              "subgoal_id": "read",
+              "result": {
+                "fragments": []
+              }
+            }
+          ],
+          "context_coverage": {
+            "current_result_complete": true,
+            "omitted_prior_refs": [],
+            "omitted_prior_count": 0,
+            "omitted_current_hits": 0,
+            "omitted_prior_result_count": 0,
+            "state_bytes": 811
+          }
+        },
+        "model": "jev-1.14.0",
+        "questions": {
+          "current_subgoal_complete": {
+            "type": "noul",
+            "instructions": "Does the successful tool result semantically satisfy the current subgoal's declared completion condition?",
+            "criteria": {
+              "true": "The observed result directly provides the required output and satisfies the declared completion condition.",
+              "false": "The call ran, but its result is irrelevant, incomplete, ambiguous, or does not establish the required output."
+            }
+          },
+          "runtime_declared_subgoal_complete": {
+            "type": "noul",
+            "instructions": "Do current_action and the supplied tool_execution_log establish the declared stage_goal objective, required_output_type and completion condition? Judge the original stage goal, not merely the latest action's narrower acceptance questions.",
+            "criteria": {
+              "true": "The observed results satisfy the declared stage goal and required output. All necessary operations have actually occurred. For an idempotent record update, fresh read-back may prove every requested value and provenance already matches confirmed authorized input, so no redundant write is needed. A request for a new event or distinct write still requires execution. Preparatory help, row existence or unrelated historical values alone are insufficient.",
+              "false": "The results establish only preparation, tool discovery, a partial attempt, a failed operation, or a narrower action goal while the declared stage remains unfinished."
+            }
+          },
+          "runtime_action_added_progress": {
+            "type": "noul",
+            "instructions": "Compared with the earlier entries in tool_execution_log, did the latest action add meaningful new evidence or enable a concrete next step toward the declared stage goal?",
+            "criteria": {
+              "true": "The action discovers useful new source content, obtains a fresh result, verifies a change, or identifies a new actionable blocker. Preparatory help may count once when it reveals usable syntax.",
+              "false": "Only search wording, formatting, IDs or repeated attempts changed. Repeated empty searches, already-known sources, the same unavailable route, or repeated help without new information do not establish progress."
+            }
+          },
+          "retry_fuse_transient_failure": {
+            "type": "noul",
+            "instructions": "Does the observed tool failure appear transient rather than caused by invalid credentials, missing permissions, invalid input, or another persistent configuration problem?",
+            "criteria": {
+              "true": "Evidence points to a temporary condition such as a timeout, connection interruption, or temporary service outage.",
+              "false": "Evidence points to credentials, permissions, invalid input, unavailable configuration, or another condition that will persist without a change."
+            }
+          },
+          "retry_fuse_same_call_likely_to_work": {
+            "type": "noul",
+            "instructions": "After a short backoff, is the same tool call with exactly the same arguments reasonably likely to succeed without new information or configuration?",
+            "criteria": {
+              "true": "A temporary failure is plausible and another identical attempt could succeed without changing inputs.",
+              "false": "The call needs changed arguments, credentials, permissions, configuration, or user input to succeed."
+            }
+          },
+          "retry_fuse_repeat_is_safe": {
+            "type": "noul",
+            "instructions": "Is repeating this exact tool call safe, without a meaningful risk of duplicating or compounding side effects?",
+            "criteria": {
+              "true": "The operation is read-only/idempotent, or the execution evidence explicitly establishes safe retry semantics.",
+              "false": "The operation may have partially succeeded, may duplicate side effects, or its retry safety is unknown."
+            }
+          }
+        }
+      },
+      "budget_charge_usd": "0.000050568",
+      "status": "success",
+      "response": {
+        "model": "jev-1.14.0",
+        "answers": {
+          "current_subgoal_complete": {
+            "type": "noul",
+            "noul": 0.08
+          },
+          "runtime_declared_subgoal_complete": {
+            "type": "noul",
+            "noul": 0.03
+          },
+          "runtime_action_added_progress": {
+            "type": "noul",
+            "noul": 0.08
+          },
+          "retry_fuse_transient_failure": {
+            "type": "noul",
+            "noul": 0.22
+          },
+          "retry_fuse_same_call_likely_to_work": {
+            "type": "noul",
+            "noul": 0.4
+          },
+          "retry_fuse_repeat_is_safe": {
+            "type": "noul",
+            "noul": 0.95
+          }
+        },
+        "usage": {
+          "input_tokens": 1204,
+          "output_tokens": 132
+        }
+      },
+      "seconds": 0.24532704101875424
+    },
+    {
+      "case_id": "all_fragments",
+      "request": {
+        "state": {
+          "goal": "Read four synthetic fragments",
+          "stage_goal": {
+            "subgoal_id": "read",
+            "objective": "Read all four fragments",
+            "required_output_type": "fragments",
+            "completion": {
+              "kind": "output_present"
+            }
+          },
+          "strategic_plan": {
+            "objective": "Read four requested fragments",
+            "subgoals": []
+          },
+          "current_action": {
+            "action_id": "synthetic-action",
+            "tool_id": "native.fixture_read",
+            "arguments": {},
+            "status": "success",
+            "result": {
+              "fragments": [
+                "north",
+                "east",
+                "south",
+                "west"
+              ]
+            }
+          },
+          "tool_execution_log": [
+            {
+              "evidence_ref": "fixture:current",
+              "status": "success",
+              "phase_id": "synthetic",
+              "subgoal_id": "read",
+              "result": {
+                "fragments": [
+                  "north",
+                  "east",
+                  "south",
+                  "west"
+                ]
+              }
+            }
+          ],
+          "context_coverage": {
+            "current_result_complete": true,
+            "omitted_prior_refs": [],
+            "omitted_prior_count": 0,
+            "omitted_current_hits": 0,
+            "omitted_prior_result_count": 0,
+            "state_bytes": 823
+          }
+        },
+        "model": "jev-1.14.0",
+        "questions": {
+          "current_subgoal_complete": {
+            "type": "noul",
+            "instructions": "Does the successful tool result semantically satisfy the current subgoal's declared completion condition?",
+            "criteria": {
+              "true": "The observed result directly provides the required output and satisfies the declared completion condition.",
+              "false": "The call ran, but its result is irrelevant, incomplete, ambiguous, or does not establish the required output."
+            }
+          },
+          "runtime_declared_subgoal_complete": {
+            "type": "noul",
+            "instructions": "Do current_action and the supplied tool_execution_log establish the declared stage_goal objective, required_output_type and completion condition? Judge the original stage goal, not merely the latest action's narrower acceptance questions.",
+            "criteria": {
+              "true": "The observed results satisfy the declared stage goal and required output. All necessary operations have actually occurred. For an idempotent record update, fresh read-back may prove every requested value and provenance already matches confirmed authorized input, so no redundant write is needed. A request for a new event or distinct write still requires execution. Preparatory help, row existence or unrelated historical values alone are insufficient.",
+              "false": "The results establish only preparation, tool discovery, a partial attempt, a failed operation, or a narrower action goal while the declared stage remains unfinished."
+            }
+          },
+          "runtime_action_added_progress": {
+            "type": "noul",
+            "instructions": "Compared with the earlier entries in tool_execution_log, did the latest action add meaningful new evidence or enable a concrete next step toward the declared stage goal?",
+            "criteria": {
+              "true": "The action discovers useful new source content, obtains a fresh result, verifies a change, or identifies a new actionable blocker. Preparatory help may count once when it reveals usable syntax.",
+              "false": "Only search wording, formatting, IDs or repeated attempts changed. Repeated empty searches, already-known sources, the same unavailable route, or repeated help without new information do not establish progress."
+            }
+          },
+          "retry_fuse_transient_failure": {
+            "type": "noul",
+            "instructions": "Does the observed tool failure appear transient rather than caused by invalid credentials, missing permissions, invalid input, or another persistent configuration problem?",
+            "criteria": {
+              "true": "Evidence points to a temporary condition such as a timeout, connection interruption, or temporary service outage.",
+              "false": "Evidence points to credentials, permissions, invalid input, unavailable configuration, or another condition that will persist without a change."
+            }
+          },
+          "retry_fuse_same_call_likely_to_work": {
+            "type": "noul",
+            "instructions": "After a short backoff, is the same tool call with exactly the same arguments reasonably likely to succeed without new information or configuration?",
+            "criteria": {
+              "true": "A temporary failure is plausible and another identical attempt could succeed without changing inputs.",
+              "false": "The call needs changed arguments, credentials, permissions, configuration, or user input to succeed."
+            }
+          },
+          "retry_fuse_repeat_is_safe": {
+            "type": "noul",
+            "instructions": "Is repeating this exact tool call safe, without a meaningful risk of duplicating or compounding side effects?",
+            "criteria": {
+              "true": "The operation is read-only/idempotent, or the execution evidence explicitly establishes safe retry semantics.",
+              "false": "The operation may have partially succeeded, may duplicate side effects, or its retry safety is unknown."
+            }
+          }
+        }
+      },
+      "budget_charge_usd": "0.000050820",
+      "status": "success",
+      "response": {
+        "model": "jev-1.14.0",
+        "answers": {
+          "current_subgoal_complete": {
+            "type": "noul",
+            "noul": 0.95
+          },
+          "runtime_declared_subgoal_complete": {
+            "type": "noul",
+            "noul": 0.96
+          },
+          "runtime_action_added_progress": {
+            "type": "noul",
+            "noul": 0.93
+          },
+          "retry_fuse_transient_failure": {
+            "type": "noul",
+            "noul": 0.09
+          },
+          "retry_fuse_same_call_likely_to_work": {
+            "type": "noul",
+            "noul": 0.79
+          },
+          "retry_fuse_repeat_is_safe": {
+            "type": "noul",
+            "noul": 0.97
+          }
+        },
+        "usage": {
+          "input_tokens": 1210,
+          "output_tokens": 132
+        }
+      },
+      "seconds": 0.21168374991975725
+    }
+  ]
+}

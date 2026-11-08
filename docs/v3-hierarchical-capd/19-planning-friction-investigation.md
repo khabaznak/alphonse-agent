@@ -193,3 +193,82 @@ stage, a genuine negative streak, a bounded uncertain streak, incomplete compari
 context, and both retrieval-handoff paths. The comparative evaluation and analysis
 of the invalid inspection plans and runtime exceptions remain open; these changes
 do not establish live household reliability or justify removing either planning loop.
+
+## Tactical prompt contradiction
+
+The action-composition prompt previously claimed that `progress_review.complete = false`
+means an action made no semantic progress. That field reports stage completion;
+a successful intermediate observation can add useful evidence while the stage
+remains incomplete. The instruction contradicted the adjacent guidance to use
+successful prior results. The prompt now distinguishes completion from progress
+and directs the model to consider the result, individual answers and coverage,
+while continuing to avoid redundant observations and uncertain effect replay.
+A disposable regression checks that an incomplete review with positive progress
+and its synthetic record identifier reach the next action prompt. This establishes
+what the model is shown, not how a live model will act or whether the loop is faster.
+
+## Targeted recovery in the existing tactical call
+
+For a successful action whose stage remains incomplete, an uncertain stage, progress, or action-acceptance
+Noul or incomplete review coverage queues one targeted recovery for that
+phase/subgoal. The next ordinary System Two action-composition request receives
+the question, evidence reference, probability and coverage gaps alongside the
+existing authorized execution log. This reuses a call the loop already makes. A
+checkpoint reserves the single opportunity before inference so a restart cannot
+repeatedly spend it; telemetry records the reason and reference, not the result
+content. If the phase exits before another action, no recovery call is made.
+
+The response is an ordinary proposed action, not a completion verdict. Existing
+per-action validation, authorization, cancellation, mutation-replay and effect
+verification remain in force, and a later Jev review must still establish stage
+completion. Persistent uncertainty still ends in the existing bounded handoff.
+These scripted regressions establish the call path and budget, not model accuracy,
+a reduction in end-to-end latency or a comparison with a simpler loop. Provider
+errors retain their existing error handling rather than being treated as answers.
+
+## Scripted comparison, first pass
+
+`python -m alphonse.agent_v2.evaluation.planning_comparison --output REPORT.json`
+runs frozen disposable fixtures through the real V3 processor, plus two synthetic
+fragment cases through its tactical executor. Loopback access is needed for the
+processor fixtures. The command deliberately exits nonzero while the comparison
+is incomplete. The corresponding machine-readable report records corpus, harness
+and executor hashes, per-case outcomes, calls, elapsed time and limitations.
+
+The configurations are a **historical-rule emulation**, current
+uncertainty-aware behavior without the new recovery prompt, that behavior with
+targeted recovery, and a fixture-specific combined action prototype. The emulation changes only the no-progress rule; it is not a
+checkout of the old release. A simpler-loop prototype is not implemented and is
+reported as unavailable. The independent processor oracles check fixture effects;
+the tactical fragment oracle checks the sequence actually returned by the
+fixture. All System One and System Two answers are scripted. The held-out fixture
+split is a variation check, not a test of model generalization.
+
+The first pass has 72 runs, two per case and configuration. The historical-rule
+emulation stalled in all four ambiguous-fragment runs after three useful fragments;
+the two uncertainty-aware configurations completed all four. Each completed
+fragment run made exactly one composition call per observed fragment; adding the
+recovery prompt made no extra composition call. The other scripted cases passed under all four variants. For the normal and
+changed single-field forms, the combined-action prototype omitted a standalone
+inspection because the already-present submit command independently fetched and
+parsed the form before submitting. It saved one observation, one tactical action,
+one composition call, and one tactical review per trial while preserving the
+fixture's independent receipt. The prototype is deliberately specialized to two
+known test cases, not an implemented general planner policy; other cases used the
+existing plan. It cannot establish equivalent safety for arbitrary forms or effects. The fixed action script did
+not respond differently to the recovery prompt: the test establishes the control
+flow, not that System Two chooses better actions. Local wall time excludes live
+provider latency, provider cost was zero, and no claim is made about a simpler
+loop, real browsers, live providers, or household reliability.
+
+A separate live Jev 1.14 diagnostic sent only three synthetic fragment cases,
+with a US$0.02 reserved budget and an actual usage charge of US$0.000150948.
+The progress Noul was 0.85 for a useful partial result, 0.08 for a repeated empty
+result and 0.93 for all four fragments. The declared-stage completion Noul was
+0.02, 0.03 and 0.96 respectively. These are individual observations, not fitted
+thresholds or a model-quality estimate. They do not test the System Two recovery
+or compare loops. The request ledger contains only synthetic data.
+See [TypeSafe state](https://docs.typesafe.ai/concepts/state) and
+[Noul](https://docs.typesafe.ai/primitives/noul) for the provider's state and
+probability semantics; [model pricing](https://docs.typesafe.ai/models) was
+checked before the budgeted probe.

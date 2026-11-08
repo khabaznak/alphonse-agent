@@ -270,3 +270,47 @@ def test_failed_correction_preserves_actual_completed_subgoal_after_checkpoint(t
 
 
 pytestmark = pytest.mark.usefixtures("task_understanding_provider")
+
+
+def test_tactical_uncertainty_uses_next_composition_call_with_evidence_and_no_extra_calls():
+    task, context, calls = fixture()
+    state = new_tactical_state(phase())
+    question = {'question_id': 'result', 'type': 'noul', 'instructions': 'Does the result satisfy the stage?',
+                'criteria': {'true': 'The result satisfies it.', 'false': 'The result does not satisfy it.'}}
+    context.inference = Inference(
+        {'tool_id': 'native.lookup', 'arguments': {'key': 'first'}, 'acceptance_questions': [question]},
+        {'tool_id': 'native.lookup', 'arguments': {'key': 'second'}, 'acceptance_questions': [question]},
+    )
+    reviews = iter([
+        SystemOneTacticalReview(False, .6, False, answers={'runtime_action_added_progress': .6,
+                                                           'runtime_declared_subgoal_complete': .1}),
+        SystemOneTacticalReview(True, .99, True, answers={'runtime_action_added_progress': .99,
+                                                          'runtime_declared_subgoal_complete': .99}),
+    ])
+    context.system_one.evaluate_tactical_progress = lambda **kwargs: next(reviews)
+    outcome = PhaseExecutor(reveal_policy=ToolRevealPolicy()).run(task, state, context)
+    assert outcome.status == PhaseStatus.PHASE_COMPLETE
+    assert calls == [{'key': 'first'}, {'key': 'second'}]
+    assert len(context.inference.requests) == 2
+    prompt = context.inference.requests[1].prompt
+    assert 'Targeted uncertainty recovery' in prompt
+    assert state.evidence.entries[0]['evidence_ref'] in prompt
+    assert 'synthetic' in prompt
+    assert state.evidence.entries[0]['progress_review']['uncertainty_recovery']['status'] == 'consumed'
+
+
+def test_uncertainty_recovery_cannot_authorize_unrevealed_action():
+    task, context, calls = fixture()
+    state = new_tactical_state(phase())
+    question = {'question_id': 'result', 'type': 'noul', 'instructions': 'Does this satisfy the stage?',
+                'criteria': {'true': 'The result satisfies it.', 'false': 'It does not satisfy it.'}}
+    first = {'tool_id': 'native.lookup', 'arguments': {'key': 'first'}, 'acceptance_questions': [question]}
+    forbidden = {'tool_id': 'native.respond', 'arguments': {'message': 'done'}, 'acceptance_questions': [question]}
+    context.inference = Inference(first, forbidden, forbidden)
+    context.system_one.evaluate_tactical_progress = lambda **kwargs: SystemOneTacticalReview(
+        False, .6, False, answers={'runtime_action_added_progress': .6, 'runtime_declared_subgoal_complete': .1})
+    outcome = PhaseExecutor(reveal_policy=ToolRevealPolicy()).run(task, state, context)
+    assert outcome.status == PhaseStatus.BLOCKED
+    assert calls == [{'key': 'first'}]
+    assert not state.completed_subgoal_ids
+    assert 'tactical_tool_not_revealed' in outcome.reason

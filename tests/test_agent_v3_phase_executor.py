@@ -917,3 +917,77 @@ def test_dc1_cross_channel_checkpoint_does_not_repeat_completed_mutation():
     assert outcome.status == PhaseStatus.PHASE_COMPLETE
     assert calls == ['edit', 'read']
     assert restored.evidence.entries[0]['evidence_ref'] == 'tactical-action:prior-edit'
+
+
+def test_tactical_prompt_preserves_incomplete_but_useful_evidence():
+    from alphonse.agent_v2.core.intelligence.v3.executor import _tactical_prompt
+
+    subgoal = PhaseSubgoal('stage', 'Find and use the record', 'result')
+    state = new_tactical_state(PhasePlan('phase', 'Find and use the record', (subgoal,)))
+    state.evidence.append({
+        'phase_id': 'phase', 'subgoal_id': 'stage', 'status': 'success',
+        'result': {'record_id': 'synthetic-42'},
+        'progress_review': {'complete': False, 'context_complete': True,
+                            'answers': {'runtime_action_added_progress': .95}},
+    })
+    prompt = _tactical_prompt(state, subgoal, ())
+    assert 'synthetic-42' in prompt
+    assert 'not whether an action made progress' in prompt
+    assert 'executed but did not make semantic progress' not in prompt
+
+
+def test_uncertainty_recovery_is_bounded_and_preserves_coverage_across_restart():
+    from alphonse.agent_v2.core.intelligence.v3.executor import (
+        _queue_uncertainty_recovery, _consume_uncertainty_recovery,
+    )
+    subgoal = PhaseSubgoal('stage', 'Find the record', 'result')
+    state = new_tactical_state(PhasePlan('phase', 'Find the record', (subgoal,)))
+    state.evidence.append({
+        'evidence_ref': 'fixture:1', 'phase_id': 'phase', 'subgoal_id': 'stage',
+        'progress_review': {'complete': False, 'context_complete': False,
+                            'context_coverage': {'omitted_prior_result_count': 1},
+                            'answers': {'runtime_action_added_progress': .6}},
+    })
+    context = CoreLoopContext(messages=InMemoryMessageQueue())
+    _queue_uncertainty_recovery(state, subgoal, context)
+    state = TacticalState.from_dict(state.to_dict())
+    recovery = _consume_uncertainty_recovery(state, subgoal)
+    assert recovery['evidence_ref'] == 'fixture:1'
+    assert recovery['reason'] == 'incomplete_context'
+    assert recovery['context_coverage']['omitted_prior_result_count'] == 1
+    state = TacticalState.from_dict(state.to_dict())
+    _queue_uncertainty_recovery(state, subgoal, context)
+    assert _consume_uncertainty_recovery(state, subgoal) is None
+    assert not state.completed_subgoal_ids
+
+
+def test_uncertainty_recovery_ignores_confident_negative_and_invalid_probability():
+    from alphonse.agent_v2.core.intelligence.v3.executor import (
+        _queue_uncertainty_recovery, _consume_uncertainty_recovery,
+    )
+    subgoal = PhaseSubgoal('stage', 'Find the record', 'result')
+    context = CoreLoopContext(messages=InMemoryMessageQueue())
+    for probability in (.1, .9, float('nan'), None):
+        state = new_tactical_state(PhasePlan('phase', 'Find the record', (subgoal,)))
+        state.evidence.append({'phase_id': 'phase', 'subgoal_id': 'stage', 'progress_review': {
+            'context_complete': True, 'answers': {'runtime_action_added_progress': probability}}})
+        _queue_uncertainty_recovery(state, subgoal, context)
+        assert _consume_uncertainty_recovery(state, subgoal) is None
+
+
+def test_uncertainty_recovery_names_uncertain_action_question_not_retry_fuse():
+    from alphonse.agent_v2.core.intelligence.v3.executor import (
+        _queue_uncertainty_recovery, _consume_uncertainty_recovery,
+    )
+    subgoal = PhaseSubgoal('stage', 'Find the record', 'result')
+    state = new_tactical_state(PhasePlan('phase', 'Find the record', (subgoal,)))
+    state.evidence.append({'evidence_ref': 'fixture:1', 'phase_id': 'phase', 'subgoal_id': 'stage',
+        'acceptance_questions': [{'question_id': 'correct_record', 'instructions': 'Is this the requested record?'}],
+        'progress_review': {'context_complete': True, 'answers': {
+            'runtime_declared_subgoal_complete': .1, 'runtime_action_added_progress': .9,
+            'correct_record': .5, 'retry_fuse_repeat_is_safe': .5}}})
+    _queue_uncertainty_recovery(state, subgoal, CoreLoopContext(messages=InMemoryMessageQueue()))
+    recovery = _consume_uncertainty_recovery(state, subgoal)
+    assert recovery['question_id'] == 'correct_record'
+    assert recovery['question'] == 'Is this the requested record?'
+    assert recovery['probability'] == .5
