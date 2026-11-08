@@ -645,6 +645,81 @@ def test_private_question_rejects_raw_answers_and_records_question_provenance(tm
     service.private_data.clear()
 
 
+@pytest.mark.parametrize("scenario", ["live", "baseline", "missing_observation", "stale_session", "cancelled"])
+def test_private_answer_phase_continuation(tmp_path, monkeypatch, scenario):
+    from types import SimpleNamespace
+    from alphonse.agent_v2.core.core import CoreLoopContext
+    from alphonse.agent_v2.core.intelligence.v3 import PhasePlan, PhaseSubgoal, PhaseStatus, PhaseOutcome, SideEffectClass, new_tactical_state
+    from alphonse.agent_v2.core.intelligence.v3.contracts import TacticalAction
+    from alphonse.agent_v2.core.intelligence.v3.processor import HierarchicalCAPDProcessor
+    from alphonse.agent_v2.core.messages import InMemoryMessageQueue
+
+    store = SQLiteQuestionStore(tmp_path / "db")
+    service = BrowserWorkflowService(checkpoint_store=store, transport=Page(),
+        authorized=lambda actor, task: "grant-1", cancelled=lambda: False, enabled=True)
+    task = _task()
+    phase = PhasePlan("phase-1", "Complete form", (PhaseSubgoal("fill", "Fill fields", "form",
+        allowed_capabilities=("browser",), allowed_side_effects=(SideEffectClass.USER_RESPONSE,)),),
+        authorized_capabilities=("browser",))
+    state = new_tactical_state(phase)
+    state.transition(PhaseStatus.RUNNING)
+    task.hierarchical_state = state.to_dict()
+    service.begin(task)
+    if scenario != "missing_observation":
+        service.observe(task)
+    state.actions.append(TacticalAction("request-1", "fill", "native.browser_workflow_request_value",
+        {"redacted": True}, status="waiting", result={"redacted": True}))
+    task.hierarchical_state = state.to_dict()
+    question = store.create_question(task=task, question="Enter a field privately.", kind="open_text",
+        respondent_user_id=task.user, delivery_metadata={"private_browser_value": True, "browser_private_field": "name"})
+    ref = service.store_pending_answer(task, actor_id=task.user, question_id=question.question_id, value="PRIVATE_TEST_VALUE")
+    answer = store.route_answer(respondent_user_id=task.user, question_id=question.question_id,
+        payload={"text": ref}, private_browser_ref=ref, private_ref_validator=service.validate_pending_answer)
+    resumed = answer.resumed_task
+    assert store.claim_browser_resumption(resumed)
+    seen = []
+    processor = HierarchicalCAPDProcessor()
+    from alphonse.agent_v2.core.intelligence.v3 import task_understanding, processor as processor_module
+    monkeypatch.setattr(task_understanding, "ensure", lambda *_: None)
+    plans = []
+    def replan(*_):
+        plans.append(1)
+        return new_tactical_state(phase)
+    monkeypatch.setattr(processor, "_new_state", replan)
+    monkeypatch.setattr(processor, "_result", lambda *_: None)
+    if scenario == "baseline":
+        monkeypatch.setattr(processor_module, "_can_resume_browser_phase", lambda *_: False)
+    if scenario == "stale_session":
+        service._sessions.clear()
+    def run(task, current, context):
+        seen.append(current.to_dict())
+        return PhaseOutcome(current.phase.phase_id, PhaseStatus.BLOCKED, "fixture stop")
+    def review(task, state, outcome, context):
+        task.status = "failed"
+        task.outcome = {"status": "failure", "reason": "fixture stop"}
+        return SimpleNamespace(status=None), None
+    processor.executor = SimpleNamespace(run=run)
+    processor.outer = SimpleNamespace(review_and_route=review)
+    context = CoreLoopContext(messages=InMemoryMessageQueue(), question_store=store, browser_workflow_service=service,
+                              cancellation_checker=lambda: scenario == "cancelled")
+    processor._process(resumed, context)
+    if scenario == "cancelled":
+        assert not seen and not plans and resumed.status == "cancelled"
+        service.private_data.clear()
+        return
+    assert len(seen) == 1, resumed.outcome
+    if scenario != "live":
+        assert len(plans) == 1
+        service.private_data.clear()
+        return
+    assert not plans and seen[0]["status"] == "running"
+    assert seen[0]["phase"]["phase_id"] == "phase-1"
+    assert any(e.get("kind") == "authenticated_question_answer" for e in seen[0]["evidence"]["entries"])
+    rendered = json.dumps(seen)
+    assert "PRIVATE_TEST_VALUE" not in rendered and ref not in rendered
+    service.private_data.clear()
+
+
 def test_native_private_question_and_daemon_answer_keep_value_out_of_history(tmp_path):
     from types import SimpleNamespace
     from alphonse.agent_v2.core.core import CoreLoopContext
