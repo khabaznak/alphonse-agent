@@ -74,7 +74,7 @@ def test_disposable_probe_reports_blocked_effect_and_sanitized_measurements(tmp_
     assert result["reason"] == "reconciliation_required"
     assert result["observations"] == result["fills"] == 1
     assert result["spans"]["browser.fill"]["count"] == 1
-    assert result["spans"]["orchestration.tactical_composition"]["count"] == 1
+    assert result["spans"]["orchestration.tactical_composition"]["count"] == 2
     encoded = json.dumps(result)
     assert "synthetic name" not in encoded
     assert "1_1" not in encoded
@@ -98,3 +98,29 @@ def test_phase_planning_measurement_wraps_actual_processor_boundary(monkeypatch)
     assert events == [{"event_type": "v3_measurement", "task_id": "t", "operation": "phase_planning",
                        "status": "raised", "duration_ms": events[0]["duration_ms"]}]
     assert "private planning content" not in json.dumps(events)
+
+
+def test_field_probe_reports_verified_phase_not_task_completion():
+    from alphonse.agent_v2.evaluation.browser_field_probe import run
+    result = run(2)
+    assert result["task_result"] == "not_verified"
+    assert all(row["outcome"] == "verified_field_phase" and row["verified_fields"] == 2 for row in result["runs"])
+    assert all(row["spans"]["browser.fill"]["count"] == 2 for row in result["runs"])
+    assert "SYNTHETIC_NAME" not in json.dumps(result)
+    assert "SYNTHETIC_NUMBER" not in json.dumps(result)
+    for invalid in (0, 101, True):
+        with pytest.raises(ValueError):
+            run(invalid)
+
+
+def test_field_probe_never_promotes_incomplete_oracle(monkeypatch):
+    from alphonse.agent_v2.evaluation import browser_field_probe
+    real_run_case = browser_field_probe.run_case
+    def incomplete(**kwargs):
+        result = real_run_case(**kwargs)
+        result["effect_oracle_pass"] = False
+        return result
+    monkeypatch.setattr(browser_field_probe, "run_case", incomplete)
+    result = browser_field_probe.run(1)
+    assert result["runs"][0]["outcome"] == "unresolved"
+    assert result["task_result"] == "not_verified"

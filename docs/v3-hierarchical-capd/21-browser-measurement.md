@@ -63,3 +63,30 @@ pending: this fixture cannot currently produce a verified result through V3 and
 is an in-memory transport, not a site a direct assistant can operate. Do not
 compare it with an unrelated task or scripted shortcut. The integrated browser
 and any live comparison also remain pending #185 and the relevant authorization.
+
+## Updated two-field phase after #188, #190 and #192
+
+The previous blocked probe above is historical; it does not describe the new
+continued-phase path. On 2026-11-08, after integrating those changes, run
+`python -m alphonse.agent_v2.evaluation.browser_field_probe` to repeat the
+existing qualified synthetic field fixture with this draft's measurement sink.
+Five cold disposable fixtures completed and independently checked both field
+effects, with elapsed phase execution times 23.372, 21.537, 21.165, 20.761 and
+21.745 ms (median 21.537 ms). Each made three scripted compositions, seven
+V3 tool calls (two fills, two observations, two reconciliations and one fixture
+check), and verified two fields. The observation count is four: an initial
+setup observation, two workflow observations, and the independent fixture check;
+one was a repeat of an earlier observation. Two observation calls appear in tool
+telemetry because setup and the independent check do not use the browser
+observation tool. Composition and tool spans are inclusive and rounded to whole
+milliseconds; they are not additive wall-clock categories.
+
+The action provider and Jev review are scripted, the backend and inputs are
+in-memory and synthetic, and checkpoint storage is disposable SQLite. Timing
+starts immediately before the executor, after setup and initial observation;
+there is no human wait or measured remote provider. This qualifies the **field
+phase only**: the fixture does not submit a form or verify a task result. It
+therefore does not satisfy #200 or #187's completed baseline, and it is not a
+production or Jalisco result. The direct-assistant comparison still needs the
+same operable complete fixture and independent result oracle; it has not been
+performed. Integrated and live comparisons remain pending #185.
