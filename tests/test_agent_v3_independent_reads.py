@@ -237,3 +237,70 @@ def test_failed_first_read_stops_the_remaining_sequence():
     assert calls == ['a']
     assert state.evidence.entries[-1]['status'] == 'failed'
     assert not state.completed_subgoal_ids
+
+
+def test_invalid_outer_response_is_redacted_before_correction():
+    secret = 'synthetic-private-output'
+    invalid = {'action': {**action('a'), 'secret': secret}}
+    seq = Inference(invalid, None)
+    calls, _, state, context = setup(inference=seq)
+    outcome = PhaseExecutor().run(TaskState(user='fixture'), state, context)
+    assert outcome.status.value == 'blocked' and calls == []
+    assert secret not in str(state.to_dict())
+    assert secret not in seq.requests[1].prompt
+    assert state.evidence.entries[0]['error'] == 'tactical_response_schema_invalid'
+
+
+def test_invalid_single_action_arguments_are_rejected_before_dispatch():
+    malformed = action('a')
+    malformed['arguments'] = {'wrong': 'synthetic-private-output'}
+    seq = Inference(malformed, None)
+    schema = {'type': 'object', 'properties': {'key': {'type': 'string'}}, 'required': ['key']}
+    calls, _, state, context = setup(inference=seq, schema=schema)
+    outcome = PhaseExecutor().run(TaskState(user='fixture'), state, context)
+    assert outcome.status.value == 'blocked' and calls == []
+    assert 'synthetic-private-output' not in str(state.to_dict())
+    assert 'synthetic-private-output' not in seq.requests[1].prompt
+
+
+def test_invalid_descriptor_schema_cannot_dispatch():
+    seq = Inference(action('a'), None)
+    calls, _, state, context = setup(inference=seq, schema={'type': 'not-a-schema-type'})
+    result = PhaseExecutor().run(TaskState(user='fixture'), state, context)
+    assert result.status.value == 'blocked' and calls == []
+    assert state.evidence.entries[0]['error'] == 'tactical_tool_schema_invalid'
+
+
+def test_browser_schema_retry_uses_fixed_feedback_without_replaying_output():
+    class SchemaRetry:
+        def __init__(self):
+            self.requests = []
+        def generate_json(self, request):
+            self.requests.append(request)
+            if len(self.requests) == 1:
+                raise ValueError('openai_codex_invalid_tactical_schema')
+            return SimpleNamespace(json_value=action('a'))
+    provider = SchemaRetry()
+    calls, _, state, context = setup(inference=provider)
+    task = TaskState(user='fixture')
+    task.metadata['v3_browser_workflow'] = {}
+    selected = PhaseExecutor()._select_action(task, state, state.phase.subgoals[0],
+                                              (context.tools.get('native.read'),), context)
+    assert selected == action('a') and len(provider.requests) == 2 and calls == []
+    assert 'openai_codex_invalid_tactical_schema' not in provider.requests[1].prompt
+
+
+def test_browser_schema_retry_checks_cancellation_before_second_call():
+    class SchemaCancelled:
+        def __init__(self): self.calls = 0
+        def generate_json(self, request):
+            self.calls += 1
+            raise ValueError('openai_codex_invalid_tactical_schema')
+    provider = SchemaCancelled()
+    _, _, state, context = setup(inference=provider)
+    task = TaskState(user='fixture')
+    task.metadata['v3_browser_workflow'] = {}
+    context.cancellation_checker = lambda: provider.calls > 0
+    selected = PhaseExecutor()._select_action(task, state, state.phase.subgoals[0],
+                                              (context.tools.get('native.read'),), context)
+    assert selected is None and provider.calls == 1

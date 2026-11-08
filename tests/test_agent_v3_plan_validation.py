@@ -158,7 +158,7 @@ def test_failed_tactical_correction_is_bounded_even_with_changed_ids(changed_err
 
     outcome = PhaseExecutor(action_selector=select, reveal_policy=ToolRevealPolicy()).run(task, state, context)
     assert outcome.status == PhaseStatus.BLOCKED
-    assert ('tactical_correction_exhausted' if changed_error else 'tactical_planning_error_repeated') in outcome.reason
+    assert 'tactical_planning_error_repeated' in outcome.reason
     assert n == 2
     assert calls == []
     # The same rejected call is recognized after serialization and a renamed phase.

@@ -357,7 +357,7 @@ def test_phase_executor_still_rejects_non_read_only_native_tool_in_read_only_sub
     )
 
     assert outcome.status == PhaseStatus.BLOCKED
-    assert "tactical_side_effect_not_authorized:native.external_action" in outcome.reason
+    assert "tactical_side_effect_not_authorized" in outcome.reason
     assert calls == []
 
 
