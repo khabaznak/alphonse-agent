@@ -123,6 +123,9 @@ class HierarchicalCAPDProcessor:
             try:
                 if task.hierarchical_state:
                     state = TacticalState.from_dict(task.hierarchical_state)
+                    if browser_workflow.KEY in task.metadata:
+                        state.evidence.entries = [browser_workflow.public_answer_receipt(task, item)
+                                                  for item in state.evidence.entries]
                     if state.status == PhaseStatus.WAITING_USER:
                         if not _resume_from_authenticated_answer(task, state):
                             task.status = "waiting_user"
@@ -574,10 +577,12 @@ class HierarchicalCAPDProcessor:
         if review.get("evidence_version"):
             task.metadata["v3_act_recovery_version"] = review["evidence_version"]
         prior = _deduplicated_history_evidence(task.metadata.get("v3_phase_history"))
+        from .browser_workflow import public_answer_receipt
+        prior = [public_answer_receipt(task, item) for item in prior]
         seen = {item.get("evidence_ref") for item in prior}
         for receipt in task.metadata.get("v3_resumption_evidence", []):
             if isinstance(receipt, dict) and receipt.get("evidence_ref") not in seen:
-                prior.append(dict(receipt))
+                prior.append(public_answer_receipt(task, dict(receipt)))
                 seen.add(receipt.get("evidence_ref"))
         state = new_tactical_state(phase, cumulative_evidence=prior)
         task.hierarchical_state = state.to_dict()

@@ -847,6 +847,18 @@ def test_private_answer_phase_continuation(tmp_path, monkeypatch, scenario):
         registry.register(definition)
     context = CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry, question_store=store, browser_workflow_service=service,
                               cancellation_checker=lambda: scenario == "cancelled")
+    from alphonse.agent_v2.core.memory.continuity import active_task_continuity
+    from alphonse.agent_v2.core.intelligence.v3.projections import project
+    assert ref not in active_task_continuity(resumed)
+    if scenario != "cancelled":
+        assert ref not in str(project(resumed, context, purpose="execution", selected_context_ids=[]))
+    assert ref not in json.dumps(resumed.metadata["v3_resumption_evidence"])
+    if scenario == "live":
+        from alphonse.agent_v2.core.memory.clarification import authenticated_answers
+        # Checkpoints created before receipt redaction can still be resumed.
+        legacy = resumed.metadata["v3_resumption_evidence"][0]
+        legacy["result"]["answer"] = {"text": ref}
+        assert ref not in json.dumps(authenticated_answers(resumed))
     processor._process(resumed, context)
     if scenario == "cancelled":
         assert not seen and not plans and resumed.status == "cancelled"

@@ -16,6 +16,8 @@ def active_task_continuity(task: Any, *, max_chars: int = 9000) -> str:
     records = [("objective", str(task.goal or "").strip())]
     question = task.metadata.get("question_interrupt")
     if isinstance(question, dict) and str(question.get("task_id") or "") == task_id:
+        from alphonse.agent_v2.core.intelligence.v3.browser_workflow import public_question
+        question = public_question(question)
         # Do not expose delivery metadata or another member's task context.
         records.append(("question", json.dumps({
             key: question[key] for key in ("question_id", "message", "kind", "choices", "status", "answer") if key in question

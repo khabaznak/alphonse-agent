@@ -12,6 +12,7 @@ from alphonse.agent_v2.core.inference import InferencePurpose, InferenceRequest
 
 def authenticated_answers(task):
     """Only runtime-issued receipts bound to this requester and task qualify."""
+    from alphonse.agent_v2.core.intelligence.v3.browser_workflow import public_answer_receipt
     answers = []
     for receipt in task.metadata.get('v3_resumption_evidence') or []:
         if not isinstance(receipt, dict):
@@ -28,7 +29,7 @@ def authenticated_answers(task):
                 and question_id and receipt.get('evidence_ref') == 'question-answer:' + str(question_id)
                 and isinstance(result.get('question'), str) and result['question'].strip()
                 and isinstance(result.get('answer'), dict) and result['answer']):
-            answers.append(receipt)
+            answers.append(public_answer_receipt(task, receipt))
     return answers
 
 
