@@ -530,7 +530,7 @@ def test_verified_private_fill_identity_is_compared_in_protected_storage(tmp_pat
     service.private_data.clear()
 
 
-@pytest.mark.parametrize("scenario", ["normal", "repeated", "failed_verify", "cancelled"])
+@pytest.mark.parametrize("scenario", ["normal", "repeated", "replay_verified", "failed_verify", "cancelled"])
 def test_executor_reconciles_distinct_fills_in_same_phase(tmp_path, scenario):
     from alphonse.agent_v2.core.core import CoreLoopContext
     from alphonse.agent_v2.core.intelligence.v3 import PhaseExecutor, PhasePlan, PhaseSubgoal, PhaseStatus, SideEffectClass, MutationScope, new_tactical_state
@@ -572,13 +572,20 @@ def test_executor_reconciles_distinct_fills_in_same_phase(tmp_path, scenario):
     ]
     if scenario == "repeated":
         actions[1] = actions[0]
+    if scenario == "replay_verified":
+        actions[3] = actions[0]
     operations = iter(actions)
     registry = InMemoryToolRegistry()
     for tool in build_browser_workflow_tools(enabled=True):
         registry.register(tool)
     state.revealed_tool_ids = ["native.browser_workflow_" + name for name in ("fill", "observe", "reconcile")]
+    selections = []
     def select(*_):
         item = next(operations, None)
+        selections.append(item)
+        if len(selections) == 4:
+            task.metadata["act_directive"] = {"outcome_review": {"verified_evidence_refs": [
+                state.evidence.entries[0]["evidence_ref"]]}}
         return {"tool_id": "native.browser_workflow_" + item[0], "arguments": item[1]} if item else None
     outcome = PhaseExecutor(action_selector=select).run(task, state,
         CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry, question_store=store, browser_workflow_service=service,
@@ -589,6 +596,9 @@ def test_executor_reconciles_distinct_fills_in_same_phase(tmp_path, scenario):
         assert not workflow.unresolved(saved)
         assert [e["field"] for e in saved["events"] if e["kind"] == "verified"] == ["name", "number"]
         assert "tactical_action_unavailable" in outcome.blockers  # no claim of task completion
+    elif scenario == "replay_verified":
+        assert page.calls == ["1_1"] and not workflow.unresolved(saved)
+        assert "browser_workflow_reconciliation_required" in outcome.blockers
     else:
         assert page.calls == ["1_1"] and workflow.unresolved(saved)
         assert outcome.status in {PhaseStatus.BLOCKED, PhaseStatus.CANCELLED}

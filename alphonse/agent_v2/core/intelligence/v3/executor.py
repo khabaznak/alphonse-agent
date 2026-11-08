@@ -177,11 +177,12 @@ class PhaseExecutor:
                                      blockers=("scheduled_delivery_repetition_unresolved",))
             recovery = (task.metadata.get("act_directive") or {}).get("outcome_review") or {}
             verified_refs = set(recovery.get("verified_evidence_refs") or ())
-            if any(
+            repeated_verified = any(
                 entry.get("evidence_ref") in verified_refs and entry.get("tool_id") == action.tool_id
                 and (entry.get("arguments") or {}) == recorded_arguments
                 for entry in state.evidence.entries
-            ):
+            )
+            if repeated_verified and not _browser_fill_has_protected_identity(task, action, context):
                 blocker = "act_recovery_repeats_verified_work"
                 state.transition(PhaseStatus.BLOCKED)
                 self._checkpoint(task, state, context)
@@ -1005,6 +1006,19 @@ def _task_project_root(task: "TaskState", context: "CoreLoopContext") -> str:
         return str(project.root_path)
     except (KeyError, OSError, PermissionError):
         return ""
+
+
+def _browser_fill_has_protected_identity(task: "TaskState", action: TacticalAction, context: "CoreLoopContext") -> bool:
+    """Only the workflow service can compare redacted verified fill identities."""
+    if action.tool_id != "native.browser_workflow_fill" or context.browser_workflow_service is None:
+        return False
+    try:
+        from . import browser_workflow
+        events = browser_workflow.load(task)["events"]
+        attempts = {event["id"] for event in events if event["kind"] == "attempted" and event["field"] == "fill"}
+        return any(event["kind"] == "verified" and event["related"] in attempts for event in events)
+    except Exception:
+        return False
 
 
 def _pending_browser_fill_recovery(task: "TaskState") -> str | None:

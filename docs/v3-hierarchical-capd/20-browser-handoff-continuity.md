@@ -28,3 +28,11 @@ observation saving, completed submission, result verification, provider cost,
 or live browser reliability. Use the same fixture, outcome oracle and privacy
 constraints when comparing an integrated workflow; retain all blocked and
 uncertain outcomes rather than counting them as successes.
+
+`test_executor_reconciles_distinct_fills_in_same_phase` separately exercises
+the real tactical executor against a disposable two-field backend. It records
+two successful fills, each followed by an observation and independent field
+reconciliation, within one phase; it stops without claiming task completion.
+Repeated fill proposals, failed verification and cancellation stop with the
+first effect unresolved. This test uses scripted action choices and is not an
+end-to-end submission or a replacement for the #200 baseline.
