@@ -640,7 +640,7 @@ def test_verified_fill_resets_phase_stall_despite_redacted_prior_fill(tmp_path, 
     service.private_data.clear()
 
 
-@pytest.mark.parametrize("scenario", ["normal", "repeated", "replay_verified", "failed_verify", "cancelled"])
+@pytest.mark.parametrize("scenario", ["normal", "repeated", "replay_verified", "failed_verify", "cancelled", "revoked"])
 def test_executor_reconciles_distinct_fills_in_same_phase(tmp_path, scenario):
     from alphonse.agent_v2.core.core import CoreLoopContext
     from alphonse.agent_v2.core.intelligence.v3 import PhaseExecutor, PhasePlan, PhaseSubgoal, PhaseStatus, SideEffectClass, MutationScope, new_tactical_state
@@ -648,6 +648,7 @@ def test_executor_reconciles_distinct_fills_in_same_phase(tmp_path, scenario):
     from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry
     from alphonse.agent_v2.core.tools.registry.native.browser_workflow import build_browser_workflow_tools
 
+    grant = [True]
     class Form(Page):
         def __init__(self):
             self.calls, self.values = [], {}
@@ -658,13 +659,15 @@ def test_executor_reconciles_distinct_fills_in_same_phase(tmp_path, scenario):
                 return False
             self.calls.append(target)
             self.values[target] = value
+            if scenario == "revoked":
+                grant[0] = False
             return True
         def verify_fill(self, target, value, observed):
             return scenario != "failed_verify" and observed == self.observe() and observed["values"].get(target) == value
 
     store, page = SQLiteQuestionStore(tmp_path / "db"), Form()
     service = BrowserWorkflowService(checkpoint_store=store, transport=page,
-        authorized=lambda actor, task: "grant-1", cancelled=lambda: False, enabled=True)
+        authorized=lambda actor, task: "grant-1" if grant[0] else None, cancelled=lambda: False, enabled=True)
     task = _task()
     phase = PhasePlan("phase-1", "Fill form", (PhaseSubgoal("fill", "Fill form", "form",
         allowed_capabilities=("browser",), allowed_side_effects=(SideEffectClass.READ_ONLY, SideEffectClass.EXTERNAL_IRREVERSIBLE)),),
