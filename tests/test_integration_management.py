@@ -240,3 +240,56 @@ def test_desktop_cannot_swap_a_running_oauth_client(management):
         'values': {'provider': 'google', 'client_id': '123456-new.apps.googleusercontent.com'}}}
     with pytest.raises(ValueError, match='existing_configuration_requires_migration'):
         server._optional_management(SimpleNamespace(getpeereid=lambda: (os.getuid(), 0)), request)
+
+
+def test_managed_catalog_tolerates_other_provider_accounts(management):
+    from alphonse.agent_v2.integrations.oauth import ClientConfig, OAuthService
+    from test_oauth_lifecycle import FakeProvider
+    f = management
+    f.management.oauth = OAuthService(f.service, [ClientConfig('google', 'public-app',
+        'http://127.0.0.1:54321/callback')], client_factory=FakeProvider)
+    result = f.management.catalog(AccountSession('parent'))
+    assert result['connections'][0]['provider'] == 'synthetic'
+    assert result['connections'][0]['status'] == 'connected'
+    assert result['providers'][0]['status'] == 'available'
+
+
+def test_desktop_ipc_consent_callback_uses_synthetic_provider_and_no_implicit_grants(management):
+    import socket
+    from urllib.parse import urlencode
+    from urllib.request import urlopen
+    from alphonse.agent_v2.integrations.oauth import ClientConfig, OAuthService
+    from test_oauth_lifecycle import FakeProvider
+
+    f = management
+    f.runtime.user = 'parent'
+    with socket.socket() as probe:
+        probe.bind(('127.0.0.1', 0))
+        port = probe.getsockname()[1]
+    redirect = f'http://127.0.0.1:{port}/google'
+    oauth = OAuthService(f.service, [ClientConfig('google', 'synthetic-app', redirect)], client_factory=FakeProvider)
+    server = V2DaemonServer(SimpleNamespace(runtime=f.runtime, optional_accounts=lambda session: oauth))
+    left, right = socket.socketpair()
+    def request(action, values=None):
+        return server._optional_management(left, {'version': PROTOCOL_VERSION,
+            'params': {'action': action, 'values': values or {}}})
+    try:
+        before = request('catalog')
+        result = request('begin', {'connection_id': 'google-test', 'provider': 'google',
+            'capabilities': ['mail_read'], 'expected_revision': 0, 'display_name': 'Test account'})
+        assert result['authorization_url'].startswith('https://provider.invalid/')
+        state = oauth.clients['google'].state
+        callback = redirect + '?' + urlencode({'state': state, 'code': 'disposable-code'})
+        with urlopen(callback, timeout=3) as response:
+            assert response.status == 200
+            assert b'disposable' not in response.read()
+        after = request('catalog')
+        connected = next(c for c in after['connections'] if c['connection_id'] == 'google-test')
+        assert connected['status'] == 'connected' and connected['capabilities'] == ['mail_read']
+        assert len(after['grants']) == len(before['grants'])
+        assert 'disposable-access' not in json.dumps(after) and 'credential_ref' not in json.dumps(after)
+    finally:
+        if hasattr(server, '_oauth_loopback'):
+            server._oauth_loopback.stop()
+        left.close()
+        right.close()

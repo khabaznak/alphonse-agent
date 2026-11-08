@@ -32,10 +32,11 @@ class IntegrationManagement:
     def catalog(self, session):
         self._session(session)
         actor = session.actor_user_id
+        from alphonse.agent_v2.integrations.oauth import SCOPES
         owned = []
         for record in self.accounts.integrations.list():
             if record.connection.get('owner_user_id') == actor:
-                health = self.oauth.health(session, record.integration_id) if self.oauth else dict(
+                health = self.oauth.health(session, record.integration_id) if self.oauth and record.provider_key in SCOPES else dict(
                     connection_id=record.integration_id, display_name=record.display_name,
                     provider=record.provider_key, **{k: record.connection[k] for k in
                         ('revision', 'status', 'health_code', 'capabilities')})
@@ -47,7 +48,6 @@ class IntegrationManagement:
         # A household directory is needed for explicit recipients; no addresses or profiles.
         members = [dict(user_id=u.user_id, display_name=u.display_name) for u in
                    self.runtime.user_store.list_users() if u.is_active]
-        from alphonse.agent_v2.integrations.oauth import SCOPES
         clients = self.oauth.clients if self.oauth else {}
         status = getattr(self.oauth, 'provider_status', {})
         sources = getattr(self.oauth, 'provider_sources', {})
