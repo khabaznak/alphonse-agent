@@ -10,6 +10,8 @@ use tokio::net::UnixStream;
 use tokio::time::{sleep, Duration, Instant};
 
 const PROTOCOL_VERSION: u8 = 1;
+const DAEMON_START_TIMEOUT: Duration = Duration::from_secs(90);
+static DAEMON_START_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[tauri::command]
 fn desktop_diagnostic_mode() -> String {
@@ -23,6 +25,9 @@ fn desktop_diagnostic_project_id() -> String {
 
 #[tauri::command]
 async fn ensure_daemon(app: AppHandle) -> Result<(), String> {
+    // Multiple UI effects may ask at once. Only one should launch a sidecar;
+    // waiters recheck the socket after the first startup attempt completes.
+    let _startup = DAEMON_START_LOCK.lock().await;
     if ipc_request("ping", json!({})).await.is_ok() {
         return Ok(());
     }
@@ -44,7 +49,8 @@ async fn ensure_daemon(app: AppHandle) -> Result<(), String> {
             .map_err(|error| format!("could not start bundled daemon: {error}"))?;
     }
 
-    let deadline = Instant::now() + Duration::from_secs(8);
+    // A packaged one-file daemon may need to unpack on a cold launch.
+    let deadline = Instant::now() + DAEMON_START_TIMEOUT;
     while Instant::now() < deadline {
         if ipc_request("ping", json!({})).await.is_ok() {
             return Ok(());
