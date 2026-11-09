@@ -14,6 +14,7 @@ from alphonse.agent_v2.core.intelligence.v3.executor import PhaseExecutor
 from alphonse.agent_v2.core.intelligence.v3.executor import ScheduledHandoff
 from alphonse.agent_v2.core.intelligence.v3.outer import V3OuterController
 from alphonse.agent_v2.core.intelligence.v3.planner import plan_phase
+from alphonse.agent_v2.core.intelligence.v3.measurement import measured_span
 from alphonse.agent_v2.core.intelligence.v3.planner import V3PhasePlanValidationError
 from alphonse.agent_v2.core.intelligence.v3.projections import enabled as projections_enabled
 from alphonse.agent_v2.system_one import SystemOneUnavailableError
@@ -578,7 +579,8 @@ class HierarchicalCAPDProcessor:
                 "route": str(task.metadata.get("v3_route") or "initial"),
             },
         )
-        phase = plan_phase(task, context)
+        with measured_span(context, task, "phase_planning"):
+            phase = plan_phase(task, context)
         task.metadata.pop("v3_phase_review", None)
         review = (task.metadata.get("act_directive") or {}).get("outcome_review") or {}
         if review.get("evidence_version"):

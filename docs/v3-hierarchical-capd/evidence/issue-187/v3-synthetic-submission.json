@@ -1,0 +1,164 @@
+{
+  "scope": "synthetic local fixture, scripted V3 executor, guarded outcome",
+  "runs": [
+    {
+      "elapsed_ms": 52.186,
+      "phase_statuses": [
+        "blocked",
+        "blocked"
+      ],
+      "task_outcome": "blocked",
+      "oracle_result": "verified",
+      "v3_completion_guard": "blocked",
+      "submission_verified": true,
+      "verified_fields": 2,
+      "unresolved_effect": false,
+      "compositions": 9,
+      "observations": 4,
+      "repeated_observations": 0,
+      "spans": {
+        "browser.fill": {
+          "count": 2,
+          "failed": 0,
+          "elapsed_ms": 6
+        },
+        "browser.observe": {
+          "count": 2,
+          "failed": 0,
+          "elapsed_ms": 4
+        },
+        "browser.observe_result": {
+          "count": 1,
+          "failed": 0,
+          "elapsed_ms": 2
+        },
+        "browser.reconcile": {
+          "count": 2,
+          "failed": 0,
+          "elapsed_ms": 5
+        },
+        "browser.submit": {
+          "count": 1,
+          "failed": 0,
+          "elapsed_ms": 2
+        },
+        "browser.verify_submission": {
+          "count": 1,
+          "failed": 0,
+          "elapsed_ms": 2
+        },
+        "orchestration.tactical_composition": {
+          "count": 9,
+          "failed": 0,
+          "elapsed_ms": 0
+        }
+      }
+    },
+    {
+      "elapsed_ms": 41.499,
+      "phase_statuses": [
+        "blocked",
+        "blocked"
+      ],
+      "task_outcome": "blocked",
+      "oracle_result": "verified",
+      "v3_completion_guard": "blocked",
+      "submission_verified": true,
+      "verified_fields": 2,
+      "unresolved_effect": false,
+      "compositions": 9,
+      "observations": 4,
+      "repeated_observations": 0,
+      "spans": {
+        "browser.fill": {
+          "count": 2,
+          "failed": 0,
+          "elapsed_ms": 6
+        },
+        "browser.observe": {
+          "count": 2,
+          "failed": 0,
+          "elapsed_ms": 4
+        },
+        "browser.observe_result": {
+          "count": 1,
+          "failed": 0,
+          "elapsed_ms": 2
+        },
+        "browser.reconcile": {
+          "count": 2,
+          "failed": 0,
+          "elapsed_ms": 5
+        },
+        "browser.submit": {
+          "count": 1,
+          "failed": 0,
+          "elapsed_ms": 3
+        },
+        "browser.verify_submission": {
+          "count": 1,
+          "failed": 0,
+          "elapsed_ms": 2
+        },
+        "orchestration.tactical_composition": {
+          "count": 9,
+          "failed": 0,
+          "elapsed_ms": 0
+        }
+      }
+    },
+    {
+      "elapsed_ms": 43.264,
+      "phase_statuses": [
+        "blocked",
+        "blocked"
+      ],
+      "task_outcome": "blocked",
+      "oracle_result": "verified",
+      "v3_completion_guard": "blocked",
+      "submission_verified": true,
+      "verified_fields": 2,
+      "unresolved_effect": false,
+      "compositions": 9,
+      "observations": 4,
+      "repeated_observations": 0,
+      "spans": {
+        "browser.fill": {
+          "count": 2,
+          "failed": 0,
+          "elapsed_ms": 5
+        },
+        "browser.observe": {
+          "count": 2,
+          "failed": 0,
+          "elapsed_ms": 5
+        },
+        "browser.observe_result": {
+          "count": 1,
+          "failed": 0,
+          "elapsed_ms": 2
+        },
+        "browser.reconcile": {
+          "count": 2,
+          "failed": 0,
+          "elapsed_ms": 4
+        },
+        "browser.submit": {
+          "count": 1,
+          "failed": 0,
+          "elapsed_ms": 3
+        },
+        "browser.verify_submission": {
+          "count": 1,
+          "failed": 0,
+          "elapsed_ms": 2
+        },
+        "orchestration.tactical_composition": {
+          "count": 9,
+          "failed": 0,
+          "elapsed_ms": 0
+        }
+      }
+    }
+  ]
+}

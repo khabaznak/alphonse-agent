@@ -1322,6 +1322,7 @@ def test_executor_fill_checkpoints_attempt_and_blocks_without_leaking(tmp_path):
     assert outcome.status == PhaseStatus.BLOCKED
     assert "browser_workflow_reconciliation_required" in outcome.blockers
     assert page.calls == [("123_456", "PRIVATE_VALUE_SENTINEL")]
+    assert any(e.get("event_type") == "v3_measurement" and e.get("operation") == "tactical_composition" for e in telemetry)
     restored = store.load_task_checkpoint(task.task_id)
     assert workflow.unresolved(workflow.load(restored))
     combined = json.dumps([restored.to_checkpoint_dict(), [e.payload for e in events], telemetry, memory])

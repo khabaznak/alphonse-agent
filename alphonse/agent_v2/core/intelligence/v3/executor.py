@@ -16,6 +16,7 @@ from jsonschema.exceptions import SchemaError
 
 from alphonse.agent_v2.core.core import ImprovementPhase, ToolKind
 from alphonse.agent_v2.core.inference import InferencePurpose, InferenceRequest
+from alphonse.agent_v2.core.intelligence.v3.measurement import measured_span
 from alphonse.agent_v2.core.intelligence.v3.contracts import PhaseOutcome, FailurePolicy
 from alphonse.agent_v2.core.intelligence.v3.contracts import PhaseStatus
 from alphonse.agent_v2.core.intelligence.v3.contracts import PhaseSubgoal
@@ -112,7 +113,8 @@ class PhaseExecutor:
             elif pending_reads:
                 selected = pending_reads.pop(0)
             else:
-                selected = self._select_action(task, state, subgoal, tools, context)
+                with measured_span(context, task, "tactical_composition"):
+                    selected = self._select_action(task, state, subgoal, tools, context)
                 from_inference = self._action_selector is None
             interruption = self._interruption(task, state, context)
             if interruption is not None:

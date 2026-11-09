@@ -120,6 +120,7 @@ def run_case(*, control: bool, changed: bool = False, sequence: bool = False, in
                  ("fill", {"field": "number", "target": "1_2"}), ("observe", {}), ("reconcile", {})]
         segments = [fills] if not control else [fills[0:1], fills[1:3], fills[3:4], fills[4:6]]
         phases, actions, outcomes, compositions, recovery_guidance_calls, sequence_proposals = 0, 0, [], 0, 0, 0
+        telemetry = []
         tool_ids = []
         provider_choices = []
         provider_shapes = []
@@ -196,7 +197,7 @@ def run_case(*, control: bool, changed: bool = False, sequence: bool = False, in
                 try:
                     outcome = PhaseExecutor().run(task, state,
                         CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry, question_store=store,
-                                        browser_workflow_service=service,
+                                        browser_workflow_service=service, telemetry_sink=telemetry.append,
                                         inference=MeasuredProvider() if inference is not None else ScriptedProvider(),
                                         system_one=SimpleNamespace(evaluate_tactical_progress=review),
                                         cancellation_checker=lambda: compositions >= 12 or
@@ -242,7 +243,8 @@ def run_case(*, control: bool, changed: bool = False, sequence: bool = False, in
             expected_status = ("cancelled" if scenario in {"cancelled", "malformed_cancelled"} else
                                "phase_complete" if qualify and scenario in {"normal", "malformed_once"} else "blocked")
             expected = expected and failure_type is None and bool(outcomes) and outcomes[-1] == expected_status
-            return {"variant": "fill_sequence" if sequence else "forced_phase_breaks" if control else "continued_phase", "changed": scenario == "changed", "scenario": scenario,
+            from alphonse.agent_v2.evaluation.browser_metrics import summarize
+            return {"measurement_spans": summarize(telemetry, task_id=task.task_id)["spans"], "variant": "fill_sequence" if sequence else "forced_phase_breaks" if control else "continued_phase", "changed": scenario == "changed", "scenario": scenario,
                     "composition_calls": compositions,
                     "recovery_guidance_calls": recovery_guidance_calls,
                     "sequence_proposals": sequence_proposals,

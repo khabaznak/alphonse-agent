@@ -1,0 +1,34 @@
+{
+  "scope": "synthetic local fixture; actual direct assistant through in-app browser",
+  "outcome_definition": "server oracle verified both inputs and one submission; UI displayed accepted",
+  "runs": [
+    {
+      "elapsed_ms": 7847,
+      "interaction_ms": 179,
+      "browser_condition": "first tab; existing browser process",
+      "outcome": "verified",
+      "oracle_submissions": 1
+    },
+    {
+      "elapsed_ms": 2906,
+      "interaction_ms": 145,
+      "browser_condition": "warm tab, new fixture session",
+      "outcome": "verified",
+      "oracle_submissions": 1
+    },
+    {
+      "elapsed_ms": 2795,
+      "interaction_ms": 140,
+      "browser_condition": "warm tab, new fixture session",
+      "outcome": "verified",
+      "oracle_submissions": 1
+    }
+  ],
+  "limitations": [
+    "Elapsed time includes model/tool scheduling and page-state observation.",
+    "Interaction time excludes navigation; full browser time and model/provider time were not measured separately.",
+    "A server-oracle check after the UI result confirmed each run; no human input or waiting was requested.",
+    "The first run includes browser setup and tool documentation overhead.",
+    "Direct UI runs use a real browser; V3 uses a scripted provider and HTTP-backed synthetic transport."
+  ]
+}
