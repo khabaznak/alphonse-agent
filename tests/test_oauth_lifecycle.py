@@ -91,6 +91,61 @@ def authorization(f):
                 recipient_user_ids=[], required_scopes=[SCOPES['google']['mail_read']], expected_grant_revision=1)
 
 
+def test_operator_google_secret_is_vault_bound_and_used_only_for_matching_client(f, monkeypatch, caplog):
+    import logging
+    import requests
+    from pathlib import Path
+    from urllib.parse import parse_qs
+    from alphonse.agent_v2.integrations.oauth import ProviderClient, save_operator_client_secret, operator_client_secret
+
+    secret = 'synthetic-client-secret-uniquely-private'
+    with pytest.raises(PermissionError):
+        save_operator_client_secret(f.accounts, f.other, 'google', 'public-app', secret)
+    assert save_operator_client_secret(f.accounts, f.owner, 'google', 'public-app', secret) == {'saved': True}
+    assert operator_client_secret(f.store, 'google', 'different-client') is None
+    assert secret.encode() not in Path(f.store.db_path).read_bytes()
+    f.service = OAuthService(f.accounts, f.configs, client_factory=ProviderClient)
+    calls = []
+    def send(session, request, **kwargs):
+        response = requests.Response()
+        response.status_code, response.request = 200, request
+        response.headers['Content-Type'] = 'application/json'
+        if request.method == 'POST':
+            values = parse_qs(request.body)
+            calls.append(values)
+            assert values['client_id'] == ['public-app']
+            assert values['client_secret'] == [secret]
+            response._content = json.dumps(dict(access_token='synthetic-access', refresh_token='synthetic-refresh',
+                expires_in=3600, token_type='Bearer', scope=SCOPES['google']['mail_read'])).encode()
+        else:
+            response._content = b'{"sub":"verified-subject"}'
+        return response
+    monkeypatch.setattr(requests.Session, 'send', send)
+    caplog.set_level(logging.DEBUG)
+    result = f.service.begin(f.owner, connection_id='one', provider='google', capabilities=['mail_read'], expected_revision=0)
+    assert secret not in result['authorization_url']
+    from urllib.parse import parse_qs as parse, urlsplit
+    state = parse(urlsplit(result['authorization_url']).query)['state'][0]
+    callback = f.configs[0].redirect_uri + '?' + urlencode({'state': state, 'code': 'disposable-code'})
+    assert f.service.complete(f.owner, callback)['status'] == 'connected'
+    refreshed = f.service.clients['google'].refresh({'refresh_token': 'synthetic-refresh'}, [SCOPES['google']['mail_read']])
+    assert refreshed['access_token'] == 'synthetic-access'
+    assert len(calls) == 2 and secret not in caplog.text
+
+
+def test_operator_client_secret_rotation_and_identity_are_guarded(f):
+    from alphonse.agent_v2.integrations.oauth import save_operator_client_secret, operator_client_secret
+
+    save_operator_client_secret(f.accounts, f.owner, 'google', 'public-app', 'first-synthetic-secret')
+    with f.store._connect() as db:
+        old_ref = db.execute("SELECT credential_ref FROM v2_oauth_client_secrets WHERE provider='google'").fetchone()[0]
+    save_operator_client_secret(f.accounts, f.owner, 'google', 'public-app', 'second-synthetic-secret')
+    assert old_ref not in f.backend.data
+    assert operator_client_secret(f.store, 'google', 'public-app') == 'second-synthetic-secret'
+    with pytest.raises(OAuthError, match='requires_migration'):
+        save_operator_client_secret(f.accounts, f.owner, 'google', 'other-app', 'third-synthetic-secret')
+
+
 def expire(f):
     record = f.store.get('one')
     token = f.store.resolve_credentials(record)

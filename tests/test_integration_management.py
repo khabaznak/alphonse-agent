@@ -242,6 +242,27 @@ def test_desktop_cannot_swap_a_running_oauth_client(management):
         server._optional_management(SimpleNamespace(getpeereid=lambda: (os.getuid(), 0)), request)
 
 
+def test_client_secret_is_admin_desktop_only_and_bound_to_running_client(management):
+    import os
+    from alphonse.agent_v2.integrations.oauth import operator_client_secret
+    f = management
+    client = SimpleNamespace(config=SimpleNamespace(client_id='synthetic-client'))
+    oauth = SimpleNamespace(clients={'google': client})
+    server = V2DaemonServer(SimpleNamespace(runtime=f.runtime, optional_accounts=lambda session: oauth))
+    peer = SimpleNamespace(getpeereid=lambda: (os.getuid(), 0))
+    request = {'version': PROTOCOL_VERSION, 'params': {'action': 'configure_oauth_client_secret',
+        'values': {'provider': 'google', 'client_secret': 'synthetic-private-secret'}}}
+    f.runtime.user = 'child'
+    with pytest.raises(PermissionError, match='admin_required'):
+        server._optional_management(peer, request)
+    with pytest.raises(ValueError, match='action_invalid'):
+        f.management.request(AccountSession('parent'), 'configure_oauth_client_secret', request['params']['values'], channel='conversation')
+    f.runtime.user = 'parent'
+    assert server._optional_management(peer, request) == {'saved': True}
+    assert operator_client_secret(f.store, 'google', 'synthetic-client') == 'synthetic-private-secret'
+    assert operator_client_secret(f.store, 'google', 'other-client') is None
+
+
 def test_managed_catalog_tolerates_other_provider_accounts(management):
     from alphonse.agent_v2.integrations.oauth import ClientConfig, OAuthService
     from test_oauth_lifecycle import FakeProvider

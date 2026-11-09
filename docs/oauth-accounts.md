@@ -44,6 +44,16 @@ Google callback is `http://127.0.0.1:8765/google`; Microsoft uses
 `http://127.0.0.1:8766/microsoft`. These values are not claims that a provider has
 qualified the corresponding registration.
 
+Some Google Desktop registrations require a client secret at the token endpoint
+even though Google's general Desktop documentation lists it as optional. An
+administrator can enter that registration's secret in **Add a Google test client
+secret**. It is stored in the configured credential vault, tied to the exact active
+client ID, and used only for that client's token exchange and refresh. It is never
+included in the distribution manifest, authorization URL, catalog, logs or model
+tools. Never paste it into a conversation. This operator-provided value does not
+establish a secret-free distribution registration. A staged restore detaches and
+preserves the old vault reference separately for reconciliation.
+
 An advanced operator may instead install the `accounts-oauth` extra and the
 deployment's secure credential backend, then set
 `ALPHONSE_GOOGLE_OAUTH_CLIENT_ID` and `ALPHONSE_GOOGLE_OAUTH_REDIRECT_URI`, or

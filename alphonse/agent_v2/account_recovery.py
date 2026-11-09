@@ -34,6 +34,15 @@ def fence_restored_accounts(connection, *, now=None):
             integration_id TEXT PRIMARY KEY, credential_ref TEXT NOT NULL,
             credential_generation INTEGER NOT NULL, credential_deletion_pending INTEGER NOT NULL
         ) STRICT''')
+        if 'v2_oauth_client_secrets' in tables:
+            if 'v2_recovery_client_secrets' in tables:
+                raise ValueError('account_recovery_already_fenced')
+            connection.execute('''CREATE TABLE v2_recovery_client_secrets (
+                provider TEXT PRIMARY KEY, client_id TEXT NOT NULL,
+                credential_ref TEXT NOT NULL, generation INTEGER NOT NULL) STRICT''')
+            connection.execute('''INSERT INTO v2_recovery_client_secrets
+                SELECT provider,client_id,credential_ref,generation FROM v2_oauth_client_secrets''')
+            connection.execute('DELETE FROM v2_oauth_client_secrets')
         rows = connection.execute('''SELECT integration_id, connection_json, credential_ref,
             credential_generation, credential_deletion_pending FROM v2_integrations''').fetchall()
         managed = set()

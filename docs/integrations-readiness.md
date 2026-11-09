@@ -31,6 +31,9 @@ registration and code/S256 PKCE. The service accepts an explicit-port/path
 provider accepts that client/redirect pair. Qualify the actual pair before use.
 Do not embed a confidential web-client secret or adopt service accounts/domain-wide
 delegation to work around a rejected flow. See [Google desktop OAuth](https://developers.google.com/identity/protocols/oauth2/native-app).
+An operator-provided Desktop client secret can be stored in the credential vault
+and bound to the matching client for token exchange where Google requires it. It
+is not shipped with Alphonse and does not establish a distribution registration.
 
 Consumer Gmail accounts need External eligibility. Internal means the owning
 Workspace organization; it cannot cover unrelated household consumer accounts.

@@ -70,6 +70,19 @@ def test_recovery_never_overwrites_preserved_credential_references(f):
         assert copy.execute('SELECT * FROM v2_recovery_credential_references ORDER BY integration_id').fetchall() == before
 
 
+def test_recovery_detaches_client_secret_without_touching_live_vault(f):
+    from alphonse.agent_v2.integrations.oauth import save_operator_client_secret, operator_client_secret
+
+    save_operator_client_secret(f.service, AccountSession('parent'), 'google', 'public-client', 'synthetic-client-secret')
+    snapshot = f.tmp / 'client-secret-restore.sqlite'
+    with f.store._connect() as live, sqlite3.connect(snapshot) as copy:
+        live.backup(copy)
+        fence_restored_accounts(copy)
+        assert copy.execute('SELECT COUNT(*) FROM v2_oauth_client_secrets').fetchone()[0] == 0
+        assert copy.execute('SELECT COUNT(*) FROM v2_recovery_client_secrets').fetchone()[0] == 1
+    assert operator_client_secret(f.store, 'google', 'public-client') == 'synthetic-client-secret'
+
+
 def test_reconsent_on_fenced_copy_preserves_live_credential_and_old_grant_revocation(f):
     from alphonse.agent_v2.integrations.oauth import OAuthService
 

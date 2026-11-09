@@ -406,6 +406,16 @@ class V2DaemonServer:
             if existing and existing.config.client_id != values.get('client_id'):
                 raise OAuthError('oauth_client_existing_configuration_requires_migration')
             return save_operator_client(management.accounts, session, **values)
+        if params.get('action') == 'configure_oauth_client_secret':
+            from alphonse.agent_v2.integrations.oauth import save_operator_client_secret, OAuthError
+            values = params.get('values', {})
+            if set(values) != {'provider', 'client_secret'}:
+                raise OAuthError('oauth_client_secret_invalid')
+            existing = oauth.clients.get(values.get('provider')) if oauth else None
+            if not existing:
+                raise OAuthError('oauth_client_configuration_mismatch')
+            return save_operator_client_secret(management.accounts, session, values['provider'],
+                                               existing.config.client_id, values['client_secret'])
         if params.get('action') == 'begin':
             from alphonse.agent_v2.integrations.oauth_loopback import OAuthLoopback
             if not hasattr(self, '_oauth_loopback'):
