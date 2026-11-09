@@ -1,3 +1,4 @@
+import { IntegrationIcon } from "./IntegrationIcon";
 import { OptionalAccounts, ProjectCheckPanel, CheckAgenda } from "./OptionalIntegrations";
 import { appendWidgetDraft, CoordinationList, type CoordinationData } from "./CoordinationWidgets";
 import { authorizedWidgets, type WidgetContext } from "./widgetContext";
@@ -761,7 +762,7 @@ function SettingsWorkspace({ isAdmin, user, initialTab, workspaceRequired, enter
       </section>
       <div className="setting-group"><MediaToolsSettingsSection /></div>
     </div>}
-    {visitedSections.has("integrations") && <div hidden={tab !== "integrations"}><OptionalAccounts key={user} identity={user} />{isAdmin && <IntegrationsSettingsSection user={user} />}</div>}
+    {visitedSections.has("integrations") && <div hidden={tab !== "integrations"}><IntegrationsWorkspace key={user} user={user} isAdmin={isAdmin} /></div>}
     {visitedSections.has("automations") && isAdmin && <div hidden={tab !== "automations"}><AutomationsSettingsSection user={user} /></div>}
     {visitedSections.has("model") && isAdmin && <div hidden={tab !== "model"}><ModelSettingsSection /></div>}
     {visitedSections.has("system-one") && isAdmin && <div hidden={tab !== "system-one"}><SystemOneSettingsSection user={user} /></div>}
@@ -1173,6 +1174,17 @@ function ProjectEditorPanel({ user, project, onBack, onUpdated, onClose }: { use
   </div>;
 }
 
+function IntegrationsWorkspace({ user, isAdmin }: { user: string; isAdmin: boolean }) {
+  const [selected, setSelected] = useState<"telegram" | "discord" | null>(null);
+  const [statuses, setStatuses] = useState<Record<string, boolean> | null>(null);
+  const [statusError, setStatusError] = useState(false);
+  const refresh = useCallback(() => { void daemonRequest<{ integrations: Array<{ provider_key: string; integration: Record<string, unknown> | null }> }>("integrations").then(result => { setStatuses(Object.fromEntries(result.integrations.map(item => [item.provider_key, Boolean(item.integration?.enabled)]))); setStatusError(false); }).catch(() => { setStatuses(null); setStatusError(true); }); }, []);
+  useEffect(() => { refresh(); }, [refresh]);
+  if (selected) return <section className="integration-detail"><button className="integration-back" onClick={() => { setSelected(null); refresh(); }}>← All integrations</button>{selected === "telegram" ? <IntegrationsSettingsSection user={user} /> : <DiscordIntegrationSettingsSection user={user} />}</section>;
+  const messaging = <section className="integration-messaging"><h3>Household messaging</h3><p>Messaging channels are managed for the household.</p><div className="integration-service-grid">{(["telegram", "discord"] as const).map(id => <article className="mockup-settings-card integration-service-card" key={id}><div className="integration-card-heading"><IntegrationIcon service={id} /><div><h3>{id === "telegram" ? "Telegram" : "Discord"}</h3><p>Message Alphonse from an authorized {id === "telegram" ? "Telegram chat" : "Discord channel"}.</p></div></div><small className="integration-card-status">{statuses ? statuses[id] ? "Enabled" : "Not enabled" : statusError ? "Status unavailable" : "Checking status…"}</small><div className="integration-card-footer"><span>Household</span>{isAdmin ? <button onClick={() => setSelected(id)}>Manage {id === "telegram" ? "Telegram" : "Discord"} →</button> : <span>Administrator manages</span>}</div></article>)}</div></section>;
+  return <OptionalAccounts identity={user} messaging={messaging} />;
+}
+
 function IntegrationsSettingsSection({ user }: { user: string }) {
   const [integrationId, setIntegrationId] = useState("telegram-home"); const [displayName, setDisplayName] = useState("Telegram");
   const [token, setToken] = useState(""); const [telegramUserId, setTelegramUserId] = useState(""); const [allowedChatIds, setAllowedChatIds] = useState("");
@@ -1183,8 +1195,8 @@ function IntegrationsSettingsSection({ user }: { user: string }) {
     setIntegrationId(String(integration.integration_id || "telegram-home")); setDisplayName(String(integration.display_name || "Telegram")); setEnabled(Boolean(integration.enabled));
     setTelegramUserId(String(config.telegram_user_id || "")); setAllowedChatIds(Array.isArray(config.allowed_chat_ids) ? config.allowed_chat_ids.join(", ") : "");
     setPollInterval(String(config.poll_interval_sec || 1)); setPresenceEnabled(config.presence_enabled !== false);
-  }); }, []);
-  const save = async () => { await daemonRequest("save_telegram_integration", { user, values: { integration_id: integrationId, display_name: displayName, enabled, bot_token: token, telegram_user_id: telegramUserId, allowed_chat_ids: allowedChatIds, poll_interval_sec: pollInterval, presence_enabled: presenceEnabled } }); setToken(""); setNotice("Saved and integrations restarted."); };
+  }).catch((cause: unknown) => setNotice(cause instanceof Error ? cause.message : "Telegram settings unavailable")); }, []);
+  const save = async () => { try { await daemonRequest("save_telegram_integration", { user, values: { integration_id: integrationId, display_name: displayName, enabled, bot_token: token, telegram_user_id: telegramUserId, allowed_chat_ids: allowedChatIds, poll_interval_sec: pollInterval, presence_enabled: presenceEnabled } }); setToken(""); setNotice("Saved and integrations restarted."); } catch (cause) { setNotice(cause instanceof Error ? cause.message : "Save failed"); } };
   return <><section className="settings-panel">
     <h3>Telegram integration</h3>
     <div className="form-field">
@@ -1220,7 +1232,7 @@ function IntegrationsSettingsSection({ user }: { user: string }) {
       <small>Shows typing indicators and status reactions while Alphonse is working on a Telegram message.</small>
     </div>
     <button onClick={() => void save()}>Save integration</button><p>{notice}</p>
-  </section><DiscordIntegrationSettingsSection user={user} /></>;
+  </section></>;
 }
 
 function DiscordIntegrationSettingsSection({ user }: { user: string }) {
