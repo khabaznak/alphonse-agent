@@ -115,9 +115,16 @@ def save_operator_client(accounts, session, provider, client_id):
     saved_client_manifest(store)
     with store._connect() as db:
         db.execute('BEGIN IMMEDIATE')
-        # Client identities cannot be swapped under existing managed credentials.
-        for row in db.execute('SELECT connection_json, credential_generation FROM v2_integrations WHERE provider_key=?', (provider,)):
-            if row['credential_generation'] or json.loads(row['connection_json'] or '{}'):
+        # Existing credentials may only keep the client that issued them.
+        has_bindings = bool(db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_oauth_connection_clients'").fetchone())
+        fingerprint = hashlib.sha256(client_id.encode()).hexdigest()
+        for row in db.execute('SELECT integration_id,connection_json,credential_generation FROM v2_integrations WHERE provider_key=?', (provider,)):
+            connection = json.loads(row['connection_json'] or '{}')
+            if not row['credential_generation'] and (not connection or str(connection.get('provider_subject', '')).startswith('pending:')):
+                continue
+            binding = db.execute('SELECT client_digest FROM v2_oauth_connection_clients WHERE connection_id=?',
+                                 (row['integration_id'],)).fetchone() if has_bindings else None
+            if not binding or binding['client_digest'] != fingerprint:
                 raise OAuthError('oauth_client_existing_accounts_require_migration')
         db.execute('INSERT OR REPLACE INTO v2_oauth_client_config VALUES (?, ?, ?)',
                    (provider, config.client_id, config.redirect_uri))
@@ -325,6 +332,8 @@ class OAuthService:
         self.lock = threading.RLock()
         with self.store._connect() as db:
             db.execute('CREATE TABLE IF NOT EXISTS v2_oauth_leases (connection_id TEXT PRIMARY KEY, nonce TEXT NOT NULL)')
+            db.execute('''CREATE TABLE IF NOT EXISTS v2_oauth_connection_clients (
+                connection_id TEXT PRIMARY KEY, client_digest TEXT NOT NULL) STRICT''')
 
     def _owned(self, session, connection_id):
         record = self.store.get(connection_id)
@@ -432,12 +441,27 @@ class OAuthService:
         granted = token.get('scope', scopes)
         credentials['scope'] = granted if isinstance(granted, str) else ' '.join(granted)
         reference = self.store.credential_vault.put(record.integration_id, generation, credentials)
-        with self.store._connect() as db:
-            cursor = db.execute('''UPDATE v2_integrations SET connection_json=?, credential_ref=?,
-                credential_generation=?, enabled=1, revocation_pending=0, credential_deletion_pending=0,
-                secret_json='{}', updated_at=? WHERE integration_id=? AND connection_json=?
-                AND credential_generation=?''', (json.dumps(value, sort_keys=True), reference, generation,
-                value['updated_at'], record.integration_id, json.dumps(record.connection, sort_keys=True), record.credential_generation))
+        client = self.clients.get(record.provider_key)
+        if not client:
+            self.store.credential_vault.delete(reference)
+            raise OAuthError('oauth_provider_not_configured')
+        client_digest = hashlib.sha256(client.config.client_id.encode()).hexdigest()
+        try:
+            with self.store._connect() as db:
+                cursor = db.execute('''UPDATE v2_integrations SET connection_json=?, credential_ref=?,
+                    credential_generation=?, enabled=1, revocation_pending=0, credential_deletion_pending=0,
+                    secret_json='{}', updated_at=? WHERE integration_id=? AND connection_json=?
+                    AND credential_generation=?''', (json.dumps(value, sort_keys=True), reference, generation,
+                    value['updated_at'], record.integration_id, json.dumps(record.connection, sort_keys=True), record.credential_generation))
+                if cursor.rowcount == 1:
+                    db.execute('INSERT OR REPLACE INTO v2_oauth_connection_clients VALUES (?,?)',
+                               (record.integration_id, client_digest))
+        except Exception:
+            try:
+                self.store.credential_vault.delete(reference)
+            except CredentialError:
+                pass
+            raise
         if cursor.rowcount != 1:
             self.store.credential_vault.delete(reference)
             raise OAuthError('oauth_revision_conflict')
@@ -556,6 +580,12 @@ class OAuthService:
         return self.health(session, connection_id)
 
     def _read(self, record):
+        client = self.clients.get(record.provider_key)
+        with self.store._connect() as db:
+            binding = db.execute('SELECT client_digest FROM v2_oauth_connection_clients WHERE connection_id=?',
+                                 (record.integration_id,)).fetchone()
+        if binding and (not client or binding['client_digest'] != hashlib.sha256(client.config.client_id.encode()).hexdigest()):
+            raise OAuthError('oauth_client_binding_mismatch')
         return self.store.credential_vault.get(record.credential_ref, record.integration_id, record.credential_generation)
 
     def token(self, session: AccountSession, *, authorization: dict):

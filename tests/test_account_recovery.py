@@ -84,7 +84,8 @@ def test_recovery_detaches_client_secret_without_touching_live_vault(f):
 
 
 def test_reconsent_on_fenced_copy_preserves_live_credential_and_old_grant_revocation(f):
-    from alphonse.agent_v2.integrations.oauth import OAuthService
+    from alphonse.agent_v2.integrations.oauth import OAuthService, ClientConfig
+    from test_oauth_lifecycle import FakeProvider
 
     snapshot = f.tmp / 'synthetic-reconsent.sqlite'
     with f.store._connect() as live, sqlite3.connect(snapshot) as copy:
@@ -94,7 +95,7 @@ def test_reconsent_on_fenced_copy_preserves_live_credential_and_old_grant_revoca
         copy.execute("UPDATE v2_integrations SET provider_key='google' WHERE integration_id='one'")
     restored = SQLiteIntegrationStore(snapshot, credential_vault=f.store.credential_vault)
     accounts = AccountService(restored, f.users)
-    oauth = OAuthService(accounts, [])
+    oauth = OAuthService(accounts, [ClientConfig('google', 'synthetic-client', 'http://127.0.0.1:8765/google')], client_factory=FakeProvider)
     owner = AccountSession('parent')
     old_live = f.store.resolve_credentials(f.store.get('one'))
     old_ref = f.store.get('one').credential_ref

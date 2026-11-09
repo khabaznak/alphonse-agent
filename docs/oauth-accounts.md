@@ -38,8 +38,9 @@ only the public client ID. The saved ID and fixed loopback callback are in the
 household database and survive daemon restarts and package upgrades. The action is
 available only through authenticated local Desktop IPC, not conversation tools.
 Use `/stop` to stop the daemon, then reopen Desktop; an already-running daemon
-continues using its previous configuration. Existing account records and a different
-active client block replacement until an explicit migration is implemented. The
+continues using its previous configuration. A connected account can retain the
+same client only when its recorded issuance provenance matches; older accounts
+without provenance and different clients require explicit reconciliation. The
 Google callback is `http://127.0.0.1:8765/google`; Microsoft uses
 `http://127.0.0.1:8766/microsoft`. These values are not claims that a provider has
 qualified the corresponding registration.

@@ -665,3 +665,43 @@ def test_saved_operator_client_survives_store_reopen_and_distribution_upgrade(f)
         'google': client_id, 'microsoft': 'new-microsoft-client'}
     assert status == {'google': 'available', 'microsoft': 'available'}
     assert source == {'google': 'operator', 'microsoft': 'distribution'}
+
+
+def test_connected_client_can_be_saved_only_with_matching_issuance_provenance(f):
+    from alphonse.agent_v2.integrations.oauth import save_operator_client, saved_client_manifest, environment_clients
+
+    client_id = '123456-personal.apps.googleusercontent.com'
+    f.service.clients['google'].config = ClientConfig('google', client_id, 'http://127.0.0.1:8765/google')
+    connect(f)
+    with pytest.raises(OAuthError, match='existing_accounts_require_migration'):
+        save_operator_client(f.accounts, f.owner, 'google', '123456-different.apps.googleusercontent.com')
+    assert save_operator_client(f.accounts, f.owner, 'google', client_id)['saved']
+    configs, _, _ = environment_clients({}, {}, saved_client_manifest(f.store))
+    f.service = OAuthService(f.accounts, configs, client_factory=FakeProvider)
+    assert f.service.health(f.owner, 'one')['status'] == 'connected'
+    assert f.service.token(f.owner, authorization=authorization(f)) == 'disposable-access'
+    with f.store._connect() as db:
+        db.execute('DELETE FROM v2_oauth_connection_clients')
+    with pytest.raises(OAuthError, match='existing_accounts_require_migration'):
+        save_operator_client(f.accounts, f.owner, 'google', client_id)
+
+
+def test_changed_client_cannot_use_a_previously_issued_credential(f):
+    connect(f)
+    grant = authorization(f)
+    f.service.clients['google'].config = ClientConfig('google', 'different-client', 'http://127.0.0.1:54321/callback')
+    with pytest.raises(OAuthError, match='client_binding_mismatch'):
+        f.service.token(f.owner, authorization=grant)
+
+
+def test_failed_client_provenance_write_rolls_back_credential_install(f):
+    import sqlite3
+    callback = begin(f)
+    with f.store._connect() as db:
+        db.execute('''CREATE TRIGGER fail_client_provenance BEFORE INSERT ON v2_oauth_connection_clients
+                      BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END''')
+    with pytest.raises(sqlite3.IntegrityError):
+        f.service.complete(f.owner, callback)
+    assert f.backend.data == {}
+    record = f.store.get('one')
+    assert record.credential_ref == '' and record.credential_generation == 0
