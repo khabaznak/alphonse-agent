@@ -425,6 +425,11 @@ class OAuthService:
         with self._lease(record.integration_id):
             try:
                 token, granted = self._validated(client.exchange(query['code'][0], pending.verifier, pending.scopes), pending.scopes, provider=record.provider_key)
+            except OAuthError:
+                raise
+            except Exception:
+                raise OAuthError('oauth_token_exchange_failed') from None
+            try:
                 subject = client.subject(token)
                 if not subject or (not record.connection['provider_subject'].startswith('pending:')
                                    and subject != record.connection['provider_subject']):
@@ -432,7 +437,7 @@ class OAuthService:
             except OAuthError:
                 raise
             except Exception:
-                raise OAuthError('oauth_consent_failed') from None
+                raise OAuthError('oauth_identity_lookup_failed') from None
             self._persist(session, record, token, subject=subject, capabilities=pending.capabilities, scopes=granted)
         return self.health(session, record.integration_id)
 
