@@ -96,15 +96,28 @@ def _claim_single_instance_lock(daemon_id: str) -> Any:
     lock_path = default_socket_path().with_suffix(".lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     lock_file = lock_path.open("a+")
-    try:
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        lock_file.close()
+    deadline = time.monotonic() + 15.0
+    while True:
         try:
-            V2DaemonClient(default_socket_path(), timeout_sec=0.5).ping()
-        except Exception as exc:
-            raise RuntimeError("alphonse_v2_daemon_lock_held") from exc
-        raise RuntimeError("alphonse_v2_daemon_already_running")
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            break
+        except BlockingIOError:
+            try:
+                V2DaemonClient(default_socket_path(), timeout_sec=0.5).ping()
+            except Exception as exc:
+                if time.monotonic() >= deadline:
+                    lock_file.close()
+                    raise RuntimeError("alphonse_v2_daemon_lock_held") from exc
+                # An old daemon can close its socket before its shutdown
+                # releases the lock; likewise a new one can hold the lock
+                # before publishing its socket. Wait without starting twice.
+                time.sleep(0.1)
+            else:
+                lock_file.close()
+                raise RuntimeError("alphonse_v2_daemon_already_running")
+        except BaseException:
+            lock_file.close()
+            raise
     lock_file.seek(0)
     lock_file.truncate()
     lock_file.write(daemon_id)
@@ -133,6 +146,7 @@ class V2Daemon:
         if hasattr(self.runtime.queue, "lease_owner"):
             self.runtime.queue.lease_owner = self.daemon_id
         self._stop = threading.Event()
+        self._ready = threading.Event()
         self._processor_thread: threading.Thread | None = None
         self._memory_migration_thread: threading.Thread | None = None
         self._lock_file: Any | None = None
@@ -253,6 +267,10 @@ class V2Daemon:
             self.event_dispatcher.start()
             self._processor_thread = threading.Thread(target=self._process_loop, name="alphonse-v2-core", daemon=True)
             self._processor_thread.start()
+            with self._lifecycle_lock:
+                if self._stopped:
+                    raise RuntimeError('alphonse_v2_daemon_stopped')
+                self._ready.set()
         except Exception:
             self.stop()
             raise
@@ -262,6 +280,7 @@ class V2Daemon:
             if self._stopped:
                 return
             self._stopped = True
+            self._ready.clear()
         try:
             self._stop.set()
             self.ipc.stop()

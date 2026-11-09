@@ -33,8 +33,10 @@ npm run tauri:build
 ```
 
 This command builds the standalone sidecar for the host target, packages it, and
-restores the development wrapper afterward. The packaged executable is launched only when the app cannot connect to an
-already-running daemon. Closing Desktop leaves the daemon running.
+restores the development wrapper afterward. The packaged executable is launched
+only when the app cannot connect to an already-running daemon. Its socket can
+report `starting` while initialization continues; Desktop waits for `ready`
+before treating startup as complete. Closing Desktop leaves the daemon running.
 Building successfully does not qualify provider registrations, credential access,
 startup time, upgrades, or privacy and recovery behavior for a release.
 

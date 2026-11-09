@@ -13,6 +13,10 @@ const PROTOCOL_VERSION: u8 = 1;
 const DAEMON_START_TIMEOUT: Duration = Duration::from_secs(90);
 static DAEMON_START_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+fn daemon_is_ready(value: &Value) -> bool {
+    value.get("status").and_then(Value::as_str) == Some("ready")
+}
+
 #[tauri::command]
 fn desktop_diagnostic_mode() -> String {
     env::var("ALPHONSE_DESKTOP_DIAGNOSTIC_MODE").unwrap_or_else(|_| "normal".to_owned())
@@ -28,11 +32,10 @@ async fn ensure_daemon(app: AppHandle) -> Result<(), String> {
     // Multiple UI effects may ask at once. Only one should launch a sidecar;
     // waiters recheck the socket after the first startup attempt completes.
     let _startup = DAEMON_START_LOCK.lock().await;
-    if ipc_request("ping", json!({})).await.is_ok() {
-        return Ok(());
-    }
+    let existing = ipc_request("ping", json!({})).await;
+    if existing.as_ref().is_ok_and(daemon_is_ready) { return Ok(()); }
 
-    if cfg!(debug_assertions) {
+    if existing.is_err() && cfg!(debug_assertions) {
         let project_root = development_project_root();
         let python = project_root.join(".venv").join("bin").join("python");
         let executable = if python.is_file() { python } else { PathBuf::from("python3") };
@@ -41,7 +44,7 @@ async fn ensure_daemon(app: AppHandle) -> Result<(), String> {
             .current_dir(project_root)
             .spawn()
             .map_err(|error| format!("could not start the development daemon: {error}"))?;
-    } else {
+    } else if existing.is_err() {
         app.shell()
             .sidecar("alphonse-daemon")
             .map_err(|error| format!("bundled daemon unavailable: {error}"))?
@@ -52,7 +55,7 @@ async fn ensure_daemon(app: AppHandle) -> Result<(), String> {
     // A packaged one-file daemon may need to unpack on a cold launch.
     let deadline = Instant::now() + DAEMON_START_TIMEOUT;
     while Instant::now() < deadline {
-        if ipc_request("ping", json!({})).await.is_ok() {
+        if ipc_request("ping", json!({})).await.as_ref().is_ok_and(daemon_is_ready) {
             return Ok(());
         }
         sleep(Duration::from_millis(150)).await;
@@ -212,4 +215,16 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running Alphonse Desktop");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_ready_ping_completes_startup() {
+        assert!(daemon_is_ready(&json!({"status": "ready"})));
+        assert!(!daemon_is_ready(&json!({"status": "starting"})));
+        assert!(!daemon_is_ready(&json!({})));
+    }
 }

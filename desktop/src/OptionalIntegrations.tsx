@@ -12,7 +12,7 @@ function useManaged<T>(action: string, values: Record<string, unknown>, identity
     try {
       const result = await optionalManagement<T>(action, JSON.parse(serialized));
       if (fence.current.current(ticket)) { setData(result); setError(""); }
-    } catch (cause) { if (fence.current.current(ticket)) { setData(null); setError(String(cause instanceof Error ? cause.message : cause)); } }
+    } catch (cause) { if (fence.current.current(ticket)) { setData(null); setError(action === 'catalog' ? 'Could not load accounts. Check the local connection and retry.' : String(cause instanceof Error ? cause.message : cause)); } }
   }, [action, serialized, identity]);
   useEffect(() => { setData(null); void refresh(); const timer = action === 'catalog' ? null : window.setInterval(() => void refresh(), 15000); return () => { if (timer !== null) window.clearInterval(timer); fence.current.invalidate(); }; }, [refresh, action]);
   return { data, error, refresh };
@@ -32,6 +32,18 @@ function clientSetupError(cause: unknown): string {
   if (message.includes('oauth_configuration_admin_required')) return 'A household administrator must configure a test client.';
   if (message.includes('oauth_client_existing_')) return 'A client or account already exists for this provider. A separate migration is required before changing the client.';
   return 'Could not save the test client. Check the daemon connection and try again.';
+}
+
+export function accountActionError(cause: unknown): string {
+  const message = cause instanceof Error ? cause.message : String(cause);
+  if (message.includes('oauth_account_mismatch')) return 'The provider account does not match this connection. Sign in to the original account, or create a separate connection.';
+  if (message.includes('oauth_credential_cleanup_required')) return 'Credential removal is still pending. Retry deletion before reconnecting.';
+  if (message.includes('oauth_revision_conflict')) return 'This account changed while you were editing. Refresh the account list and try again.';
+  if (message.includes('oauth_provider_not_configured') || message.includes('oauth_provider_unconfigured')) return 'This provider is not configured. Ask your administrator to configure it, then restart Alphonse.';
+  if (message.includes('oauth_dependency_unavailable') || message.includes('oauth_setup_unavailable')) return 'Account setup is unavailable. Check the installed Desktop build and provider configuration, then retry.';
+  if (message.includes('oauth_setup_busy') || message.includes('oauth_operation_in_progress')) return 'Another account operation is in progress. Wait for it to finish, then retry.';
+  if (message.includes('oauth_client_binding_mismatch')) return 'This connection belongs to a different OAuth client. Ask your administrator to review its client configuration before reconnecting.';
+  return 'The account operation could not be completed. Refresh the account list and retry; if it continues, ask your administrator for help.';
 }
 
 export function AccountDisclosure({ accepted, onChange }: { accepted: boolean; onChange: (value: boolean) => void }) {
@@ -59,7 +71,7 @@ export function OptionalAccounts({ identity }: { identity: string }) {
   const run = async (action: string, values: Record<string, unknown>) => {
     setBusy(true); setNotice("");
     try { await optionalManagement(action, values); setNotice("Saved. Dependent checks may require review."); await refresh(); }
-    catch (cause) { setNotice(cause instanceof Error ? cause.message : String(cause)); await refresh(); }
+    catch (cause) { setNotice(accountActionError(cause)); await refresh(); }
     finally { setBusy(false); }
   };
   const begin = async (connection?: Connection) => {
@@ -68,7 +80,7 @@ export function OptionalAccounts({ identity }: { identity: string }) {
     try {
       const result = await optionalManagement<{ authorization_url: string }>('begin', { connection_id: connection?.connection_id || `account_${crypto.randomUUID()}`, provider: connection?.provider || provider, expected_revision: connection?.revision || 0, display_name: connection?.display_name || name, capabilities: connection ? (accountCapabilities[connection.connection_id] || connection.capabilities) : capabilities });
       await openAccountConsent(result.authorization_url); setNotice("Complete consent in your browser, then refresh the account list."); await refresh();
-    } catch (cause) { setNotice(cause instanceof Error ? cause.message : String(cause)); await refresh(); }
+    } catch (cause) { setNotice(accountActionError(cause)); await refresh(); }
     finally { setBusy(false); }
   };
   const checkHealth = async (connection: Connection) => {
@@ -81,7 +93,7 @@ export function OptionalAccounts({ identity }: { identity: string }) {
     finally { setBusy(false); }
   };
   return <section className="optional-management"><h3 tabIndex={-1} ref={heading}>Optional accounts</h3><p>Connect only the capabilities you choose. A connection starts no monitoring. Account owners control grants independently of project membership.</p><StatusText>{error || notice}</StatusText>
-    {!data ? <p>Account management is unavailable until a local authenticated session is ready.</p> : <>
+    {!data ? <><p>Account management is unavailable until a local authenticated session is ready. If Desktop just started, wait a moment and retry.</p><button disabled={busy} onClick={() => void refresh()}>Retry loading accounts</button></> : <>
       <p>Managing accounts as {data.members.find(m => m.user_id === data.actor_user_id)?.display_name || data.actor_user_id}.</p>
       <button disabled={busy} onClick={() => void refresh()}>Refresh account list</button>
       <AccountDisclosure accepted={accountDisclosureAccepted} onChange={setAccountDisclosureAccepted} />

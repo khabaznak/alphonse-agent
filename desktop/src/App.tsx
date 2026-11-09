@@ -319,6 +319,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
     const runCycle = diagnosticBehavior.cycle === "ping"
       ? () => daemonRequest("ping")
       : diagnosticBehavior.cycle === "poll" ? poll : null;
+    let cycleReady = !diagnosticBehavior.startsDaemon;
     if (diagnosticBehavior.startsDaemon) void ensureDaemon().then(async () => {
       if (diagnosticBehavior.loadsHistory) {
         const current = await daemonRequest<{ onboarded: boolean; user: { user_id: string } | null }>("current_user");
@@ -339,6 +340,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
           if (!current.workspace_configured) { setWorkspaceRequired(true); setSettingsTab("general"); setVisited((value) => new Set([...value, "settings"])); setWorkspace("settings"); }
         }
       }
+      cycleReady = true;
       if (runCycle) await runCycle();
     }).catch((cause: unknown) => {
       if (diagnosticBehavior.commitsPollResponses || diagnosticBehavior.loadsHistory) {
@@ -350,7 +352,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       return () => window.clearInterval(timer);
     }
     if (runCycle) {
-      const timer = window.setInterval(() => void runCycle(), 800);
+      const timer = window.setInterval(() => { if (cycleReady) void runCycle(); }, 800);
       return () => window.clearInterval(timer);
     }
   }, [diagnosticBehavior, diagnosticMode, diagnosticProjectId, poll]);

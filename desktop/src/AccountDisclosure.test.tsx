@@ -1,7 +1,7 @@
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { AccountConsentGuidance, AccountDisclosure } from './OptionalIntegrations';
+import { AccountConsentGuidance, AccountDisclosure, accountActionError } from './OptionalIntegrations';
 import type { Connection } from './integrationManagement';
 
 describe('account processing disclosure', () => {
@@ -12,6 +12,19 @@ describe('account processing disclosure', () => {
     expect(html).toContain('local storage or backups');
     expect(html).toContain('I have reviewed how account information may be processed');
     expect(html).not.toContain('checked=""');
+  });
+});
+
+describe('account setup errors', () => {
+  it('offers recovery for account mismatch, cleanup, and stale state', () => {
+    expect(accountActionError(new Error('OAuthError: oauth_account_mismatch'))).toContain('original account');
+    expect(accountActionError('oauth_credential_cleanup_required')).toContain('Retry deletion');
+    expect(accountActionError('oauth_revision_conflict')).toContain('Refresh the account list');
+  });
+  it('does not display unrecognized errors or private provider details', () => {
+    const message = accountActionError('unexpected synthetic private detail');
+    expect(message).toContain('could not be completed');
+    expect(message).not.toContain('synthetic private detail');
   });
 });
 

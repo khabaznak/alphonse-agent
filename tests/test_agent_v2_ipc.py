@@ -90,6 +90,48 @@ def test_daemon_main_waits_for_concurrent_shutdown_cleanup(monkeypatch):
         main.join(5)
     assert exited.is_set()
     assert not shutdown.is_alive() and not main.is_alive()
+
+
+def test_startup_waits_for_lock_when_old_socket_is_closed(monkeypatch, tmp_path):
+    from alphonse.agent_v2 import daemon as daemon_module
+    monkeypatch.setenv('ALPHONSE_V2_SOCKET_PATH', str(tmp_path / 'synthetic.sock'))
+    calls = []
+    def lock(fd, flags):
+        calls.append(flags)
+        if len(calls) < 3:
+            raise BlockingIOError()
+    def unavailable(self):
+        raise ConnectionRefusedError()
+    monkeypatch.setattr(daemon_module.fcntl, 'flock', lock)
+    monkeypatch.setattr(daemon_module.V2DaemonClient, 'ping', unavailable)
+    monkeypatch.setattr(daemon_module.time, 'sleep', lambda _: None)
+    lock_file = daemon_module._claim_single_instance_lock('synthetic-daemon')
+    try:
+        assert len(calls) == 3
+        assert lock_file.readable()
+    finally:
+        lock_file.close()
+
+
+def test_startup_does_not_retry_when_another_daemon_answers(monkeypatch, tmp_path):
+    from alphonse.agent_v2 import daemon as daemon_module
+    monkeypatch.setenv('ALPHONSE_V2_SOCKET_PATH', str(tmp_path / 'synthetic.sock'))
+    monkeypatch.setattr(daemon_module.fcntl, 'flock', lambda *args: (_ for _ in ()).throw(BlockingIOError()))
+    monkeypatch.setattr(daemon_module.V2DaemonClient, 'ping', lambda self: {'status': 'starting'})
+    monkeypatch.setattr(daemon_module.time, 'sleep', lambda _: pytest.fail('must not retry a live daemon'))
+    with pytest.raises(RuntimeError, match='daemon_already_running'):
+        daemon_module._claim_single_instance_lock('synthetic-daemon')
+
+
+def test_startup_fails_closed_when_lock_remains_held(monkeypatch, tmp_path):
+    from alphonse.agent_v2 import daemon as daemon_module
+    monkeypatch.setenv('ALPHONSE_V2_SOCKET_PATH', str(tmp_path / 'synthetic.sock'))
+    monkeypatch.setattr(daemon_module.fcntl, 'flock', lambda *args: (_ for _ in ()).throw(BlockingIOError()))
+    monkeypatch.setattr(daemon_module.V2DaemonClient, 'ping', lambda self: (_ for _ in ()).throw(ConnectionRefusedError()))
+    clock = iter((0.0,))
+    monkeypatch.setattr(daemon_module.time, 'monotonic', lambda: next(clock, 16.0))
+    with pytest.raises(RuntimeError, match='daemon_lock_held'):
+        daemon_module._claim_single_instance_lock('synthetic-daemon')
 from alphonse.agent_v2.code_mode_settings import SQLiteCodeModeSettingsStore
 from alphonse.agent_v2.system_one import SQLiteSystemOneSettingsStore
 
@@ -117,7 +159,7 @@ def test_daemon_ipc_dispatches_ping_status_and_queue_message() -> None:
         schedule_store=ScheduledTaskStore(":memory:"),
     )
     daemon = V2Daemon(runtime)
-    assert daemon.ipc._dispatch({"method": "ping"})["status"] == "ready"
+    assert daemon.ipc._dispatch({"method": "ping"})["status"] == "starting"
     queued = daemon.ipc._dispatch({"method": "queue_message", "params": {"prompt": "hello", "user": "alex"}})
     assert queued["message_id"]
     assert queued["created_at"]
@@ -125,6 +167,55 @@ def test_daemon_ipc_dispatches_ping_status_and_queue_message() -> None:
     assert daemon.ipc._dispatch({"method": "status"})["queue_size"] == 1
     daemon.run_once()
     assert daemon.ipc._dispatch({"method": "status"})["queue_size"] == 0
+
+
+def test_ping_reports_starting_until_daemon_initialization_finishes(monkeypatch, tmp_path):
+    monkeypatch.setenv('HOME', str(tmp_path))
+    monkeypatch.setenv('ALPHONSE_V2_DB_PATH', str(tmp_path / 'synthetic.sqlite'))
+    runtime = build_runtime_host(inference=_router(), schedule_store=ScheduledTaskStore(':memory:'))
+    daemon = V2Daemon(runtime)
+    started = threading.Event()
+    finish = threading.Event()
+    failures = []
+
+    for name in ('_acquire_single_instance_lock', '_ensure_home_projects', '_migrate_blank_project_records',
+                 '_run_retention_if_due', '_align_configured_provider_addresses', '_release_single_instance_lock'):
+        monkeypatch.setattr(daemon, name, lambda *args, **kwargs: None)
+    monkeypatch.setattr(daemon, '_migrate_project_memories', lambda: None)
+    monkeypatch.setattr(daemon, '_process_loop', lambda: daemon._stop.wait())
+    monkeypatch.setattr(runtime.user_store, 'list_users', lambda: [])
+    monkeypatch.setattr(runtime.project_store, 'migrate_legacy_shared_access', lambda users: None)
+    monkeypatch.setattr(daemon.ipc, 'start', lambda: None)
+    monkeypatch.setattr(daemon.ipc, 'stop', lambda: None)
+    monkeypatch.setattr(daemon.scheduler, 'start', lambda: None)
+    monkeypatch.setattr(daemon.scheduler, 'stop', lambda: None)
+    monkeypatch.setattr(daemon.event_dispatcher, 'start', lambda: None)
+    monkeypatch.setattr(daemon.event_dispatcher, 'stop', lambda: None)
+    if daemon.project_check_worker is not None:
+        monkeypatch.setattr(daemon.project_check_worker, 'start', lambda: None)
+        monkeypatch.setattr(daemon.project_check_worker, 'stop', lambda: None)
+    def start_integrations(*args, **kwargs):
+        started.set()
+        if not finish.wait(5): raise RuntimeError('synthetic startup timeout')
+    monkeypatch.setattr('alphonse.agent_v2.daemon.start_runtime_integrations', start_integrations)
+    monkeypatch.setattr('alphonse.agent_v2.daemon.stop_runtime_integrations', lambda runtime: None)
+    def run():
+        try: daemon.start()
+        except Exception as error: failures.append(error)
+    thread = threading.Thread(target=run)
+    thread.start()
+    try:
+        assert started.wait(2)
+        assert daemon.ipc._dispatch({'method': 'ping'})['status'] == 'starting'
+        finish.set()
+        thread.join(5)
+        assert not thread.is_alive() and not failures
+        assert daemon.ipc._dispatch({'method': 'ping'})['status'] == 'ready'
+    finally:
+        finish.set()
+        thread.join(5)
+        daemon.stop()
+    assert daemon.ipc._dispatch({'method': 'ping'})['status'] == 'starting'
 
 
 def test_daemon_ipc_killswitch_reaches_active_runtime(tmp_path) -> None:

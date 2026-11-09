@@ -452,7 +452,8 @@ class V2DaemonServer:
         method = str(request.get("method") or "").strip()
         params = request.get("params") if isinstance(request.get("params"), dict) else {}
         if method == "ping":
-            return {"service": "alphonse-v2-daemon", "status": "ready"}
+            readiness = getattr(self.daemon, '_ready', None)
+            return {"service": "alphonse-v2-daemon", "status": "ready" if readiness is None or readiness.is_set() else "starting"}
         if method == "status":
             runtime = self.daemon.runtime
             status_error = ""
