@@ -22,17 +22,21 @@ requirements.txt`), including the event-worker JSON Schema dependency.
 
 Tauri expects a target-specific executable at
 `src-tauri/binaries/alphonse-daemon-<target-triple>`. The committed macOS ARM
-wrapper starts the daemon from the project virtual environment for development. Replace it with the
-standalone executable before packaging:
+wrapper starts the daemon from the project virtual environment for development.
+Build releases in a dedicated, reviewed Python environment with the project
+dependencies, `accounts-oauth`, `credentials-desktop` on macOS, and PyInstaller
+installed. The build collects installed Python dependencies, so an unrelated
+development environment can produce a much larger, slower bundle. Then run:
 
 ```bash
-python -m pip install pyinstaller
-./scripts/build-daemon-sidecar.sh aarch64-apple-darwin
-npm run tauri build
+npm run tauri:build
 ```
 
-The packaged executable is launched only when the app cannot connect to an
+This command builds the standalone sidecar for the host target, packages it, and
+restores the development wrapper afterward. The packaged executable is launched only when the app cannot connect to an
 already-running daemon. Closing Desktop leaves the daemon running.
+Building successfully does not qualify provider registrations, credential access,
+startup time, upgrades, or privacy and recovery behavior for a release.
 
 ## WebKit memory diagnostics
 
