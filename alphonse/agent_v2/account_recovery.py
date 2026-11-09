@@ -323,6 +323,9 @@ def apply_current_source_deletions(staged, current):
                 target.execute('UPDATE v2_source_evidence SET definition=? WHERE evidence_id=?',
                                (json.dumps(evidence), evidence_id))
         redacted = 0
+        if 'v2_outbox' in tables and 'v2_findings' not in tables:
+            if target.execute("SELECT 1 FROM v2_outbox WHERE kind='finding' LIMIT 1").fetchone():
+                raise ValueError('account_recovery_outbox_finding_missing')
         if 'v2_findings' in tables:
             findings = {}
             affected = set()
@@ -341,7 +344,7 @@ def apply_current_source_deletions(staged, current):
 
             for finding_id, raw in target.execute('SELECT finding_id,definition FROM v2_findings').fetchall():
                 finding = json.loads(raw)
-                if references_deleted(finding):
+                if references_deleted(finding) or finding.get('state') == 'redacted':
                     affected.add(finding_id)
                 findings[finding_id] = finding
             for finding_id, raw in target.execute('SELECT finding_id,definition FROM v2_finding_versions'):
@@ -349,6 +352,15 @@ def apply_current_source_deletions(staged, current):
                     raise ValueError('account_recovery_invalid_finding')
                 if references_deleted(json.loads(raw)):
                     affected.add(finding_id)
+            if 'v2_outbox' in tables:
+                for (raw,) in target.execute("SELECT metadata_json FROM v2_outbox WHERE kind='finding'"):
+                    try:
+                        metadata = json.loads(raw)
+                    except (TypeError, ValueError):
+                        raise ValueError('account_recovery_outbox_invalid') from None
+                    if (not isinstance(metadata, dict) or not isinstance(metadata.get('finding_id'), str)
+                            or metadata['finding_id'] not in findings):
+                        raise ValueError('account_recovery_outbox_finding_missing')
             for finding_id in affected:
                 finding = findings[finding_id]
                 keys = ('finding_id', 'version', 'policy_id', 'policy_revision', 'project_id',

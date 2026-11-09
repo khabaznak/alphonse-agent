@@ -409,3 +409,34 @@ def test_recovery_rejects_current_evidence_identity_mismatch(f):
     with sqlite3.connect(stage) as db:
         assert json.loads(db.execute('SELECT definition FROM v2_source_evidence').fetchone()[0])['state'] == 'available'
         assert not db.execute("SELECT 1 FROM sqlite_master WHERE name='v2_recovery_source_tombstones'").fetchone()
+
+
+@pytest.mark.parametrize('metadata,error', [('{bad', 'outbox_invalid'), ('{}', 'outbox_finding_missing'),
+                                            ('{"finding_id":"missing"}', 'outbox_finding_missing')])
+def test_recovery_rejects_unresolvable_finding_deliveries(f, metadata, error):
+    from alphonse.agent_v2.account_recovery import apply_current_source_deletions
+
+    stage, current = _recovery_deletion_fixture(f)
+    with sqlite3.connect(stage) as db:
+        db.execute('UPDATE v2_outbox SET metadata_json=?', (metadata,))
+    with pytest.raises(ValueError, match=error):
+        apply_current_source_deletions(stage, current)
+    with sqlite3.connect(stage) as db:
+        assert json.loads(db.execute('SELECT definition FROM v2_source_evidence').fetchone()[0])['state'] == 'available'
+        assert db.execute('SELECT message,status FROM v2_outbox').fetchone() == ('synthetic private', 'pending')
+        assert not db.execute("SELECT 1 FROM sqlite_master WHERE name='v2_recovery_source_tombstones'").fetchone()
+
+
+def test_recovery_redacts_delivery_of_an_already_redacted_finding(f):
+    from alphonse.agent_v2.account_recovery import apply_current_source_deletions
+
+    stage, current = _recovery_deletion_fixture(f)
+    with sqlite3.connect(stage) as db:
+        finding = json.loads(db.execute('SELECT definition FROM v2_findings').fetchone()[0])
+        finding.update(state='redacted', source_refs=[])
+        db.execute('UPDATE v2_findings SET definition=?', (json.dumps(finding),))
+    result = apply_current_source_deletions(stage, current)
+    assert result['findings_redacted'] == 1
+    with sqlite3.connect(stage) as db:
+        assert db.execute('SELECT message,status FROM v2_outbox').fetchone() == ('[Finding unavailable]', 'failed')
+        assert db.execute('SELECT COUNT(*) FROM v2_finding_versions').fetchone()[0] == 0
