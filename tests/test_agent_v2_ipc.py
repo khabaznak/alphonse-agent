@@ -57,6 +57,39 @@ def test_stop_acknowledgement_is_sent_before_shutdown_starts():
     V2DaemonServer(SimpleNamespace(stop=stop))._handle(Connection())
     assert sent.wait(1) and stopped.wait(1)
     assert order == ['response', 'stop']
+
+
+def test_daemon_main_waits_for_concurrent_shutdown_cleanup(monkeypatch):
+    runtime = build_runtime_host(inference=_router(), schedule_store=ScheduledTaskStore(':memory:'))
+    daemon = V2Daemon(runtime)
+    cleanup_started = threading.Event()
+    release_cleanup = threading.Event()
+    exited = threading.Event()
+
+    def stop_ipc():
+        cleanup_started.set()
+        assert release_cleanup.wait(5)
+
+    monkeypatch.setattr(daemon, 'start', lambda: None)
+    monkeypatch.setattr(daemon.ipc, 'stop', stop_ipc)
+    monkeypatch.setattr(daemon.scheduler, 'stop', lambda: None)
+    monkeypatch.setattr(daemon.event_dispatcher, 'stop', lambda: None)
+    monkeypatch.setattr('alphonse.agent_v2.daemon.stop_runtime_integrations', lambda runtime: None)
+    if daemon.project_check_worker is not None:
+        monkeypatch.setattr(daemon.project_check_worker, 'stop', lambda: None)
+    main = threading.Thread(target=lambda: (daemon.run_forever(), exited.set()))
+    shutdown = threading.Thread(target=daemon.stop)
+    main.start()
+    shutdown.start()
+    try:
+        assert cleanup_started.wait(2)
+        assert not exited.wait(.2)
+    finally:
+        release_cleanup.set()
+        shutdown.join(5)
+        main.join(5)
+    assert exited.is_set()
+    assert not shutdown.is_alive() and not main.is_alive()
 from alphonse.agent_v2.code_mode_settings import SQLiteCodeModeSettingsStore
 from alphonse.agent_v2.system_one import SQLiteSystemOneSettingsStore
 

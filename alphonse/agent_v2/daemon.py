@@ -137,6 +137,7 @@ class V2Daemon:
         self._memory_migration_thread: threading.Thread | None = None
         self._lock_file: Any | None = None
         self._lifecycle_lock = threading.RLock()
+        self._shutdown_complete = threading.Event()
         self._optional_account_service = None
         self._stopped = False
         self._last_processor_error = ""
@@ -261,18 +262,21 @@ class V2Daemon:
             if self._stopped:
                 return
             self._stopped = True
-        self._stop.set()
-        self.ipc.stop()
-        self.scheduler.stop()
-        if self.project_check_worker is not None:
-            self.project_check_worker.stop()
-        self.event_dispatcher.stop()
-        stop_runtime_integrations(self.runtime)
-        if self._processor_thread is not None and self._processor_thread.is_alive():
-            self._processor_thread.join(timeout=5)
-        if self._memory_migration_thread is not None and self._memory_migration_thread.is_alive():
-            self._memory_migration_thread.join(timeout=5)
-        self._release_single_instance_lock()
+        try:
+            self._stop.set()
+            self.ipc.stop()
+            self.scheduler.stop()
+            if self.project_check_worker is not None:
+                self.project_check_worker.stop()
+            self.event_dispatcher.stop()
+            stop_runtime_integrations(self.runtime)
+            if self._processor_thread is not None and self._processor_thread.is_alive():
+                self._processor_thread.join(timeout=5)
+            if self._memory_migration_thread is not None and self._memory_migration_thread.is_alive():
+                self._memory_migration_thread.join(timeout=5)
+            self._release_single_instance_lock()
+        finally:
+            self._shutdown_complete.set()
 
     def _migrate_project_memories(self) -> None:
         admin = self.runtime.user_store.admin_user()
@@ -2915,6 +2919,9 @@ class V2Daemon:
                 pass
         finally:
             self.stop()
+            # An IPC handler can already be stopping on another thread. Do not
+            # let the main thread exit and tear down the process mid-cleanup.
+            self._shutdown_complete.wait()
 
     def _emit_scheduled_task_card(self, snapshot: Any) -> None:
         metadata = getattr(snapshot, "metadata", {}) or {}
