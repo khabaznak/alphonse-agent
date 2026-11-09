@@ -20,6 +20,7 @@ describe('account setup errors', () => {
     expect(accountActionError(new Error('OAuthError: oauth_account_mismatch'))).toContain('original account');
     expect(accountActionError('oauth_credential_cleanup_required')).toContain('Retry deletion');
     expect(accountActionError('oauth_revision_conflict')).toContain('Refresh the account list');
+    expect(accountActionError('oauth_callback_listener_unavailable')).toContain('callback port');
   });
   it('does not display unrecognized errors or private provider details', () => {
     const message = accountActionError('unexpected synthetic private detail');

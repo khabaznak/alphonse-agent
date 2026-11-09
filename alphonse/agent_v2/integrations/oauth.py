@@ -550,11 +550,14 @@ class OAuthService:
         record = self._owned(session, pending.connection_id)
         client = self.clients[record.provider_key]
         if (uri._replace(query='').geturl() != client.config.redirect_uri or uri.fragment
-                or len(query.get('state', [])) != 1 or len(query.get('code', [])) != 1
-                or not query['code'][0] or 'error' in query):
+                or len(query.get('state', [])) != 1):
             raise OAuthError('oauth_callback_invalid')
         if record.connection['revision'] != pending.revision or record.credential_generation != pending.generation:
             raise OAuthError('oauth_revision_conflict')
+        if query.get('error') == ['access_denied'] and 'code' not in query:
+            raise OAuthError('oauth_consent_denied')
+        if len(query.get('code', [])) != 1 or not query['code'][0] or 'error' in query:
+            raise OAuthError('oauth_callback_invalid')
         with self._lease(record.integration_id):
             try:
                 token, granted = self._validated(client.exchange(query['code'][0], pending.verifier, pending.scopes), pending.scopes, provider=record.provider_key)

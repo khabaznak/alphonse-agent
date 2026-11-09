@@ -8,6 +8,9 @@ from alphonse.agent_v2.integrations.credentials import CredentialError
 from alphonse.agent_v2.integrations.oauth import OAuthError
 
 _SAFE_ERRORS = {
+    'oauth_consent_denied': 'Consent was not granted. Return to Alphonse and reconnect if you want to try again.',
+    'oauth_state_expired': 'The consent attempt expired. Return to Alphonse and start a new attempt.',
+    'oauth_revision_conflict': 'The account changed during consent. Return to Alphonse, refresh accounts, and retry.',
     'oauth_token_exchange_failed': 'The provider token exchange failed. Return to Alphonse and retry.',
     'oauth_identity_lookup_failed': 'The provider identity check failed. Return to Alphonse and retry.',
     'oauth_scopes_missing': 'The provider did not grant all selected permissions. Return to Alphonse and retry.',
@@ -69,7 +72,10 @@ class OAuthLoopback:
                     self.end_headers()
                     self.wfile.write(message.encode())
 
-            server = ThreadingHTTPServer(('127.0.0.1', uri.port), Handler)
+            try:
+                server = ThreadingHTTPServer(('127.0.0.1', uri.port), Handler)
+            except OSError:
+                raise ValueError('oauth_callback_listener_unavailable') from None
             self.servers[uri.port] = server
             threading.Thread(target=server.serve_forever, daemon=True, name='oauth-loopback').start()
 
