@@ -7,14 +7,25 @@ use tauri::AppHandle;
 use tauri_plugin_shell::ShellExt;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
-use tokio::time::{sleep, Duration, Instant};
+use tokio::time::{sleep, timeout, Duration, Instant};
 
 const PROTOCOL_VERSION: u8 = 1;
 const DAEMON_START_TIMEOUT: Duration = Duration::from_secs(90);
+const DAEMON_PING_TIMEOUT: &str = "daemon readiness check timed out";
 static DAEMON_START_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 fn daemon_is_ready(value: &Value) -> bool {
     value.get("status").and_then(Value::as_str) == Some("ready")
+}
+
+async fn daemon_ping(path: PathBuf, limit: Duration) -> Result<Value, String> {
+    timeout(limit, ipc_request_at(path, "ping", json!({})))
+        .await
+        .map_err(|_| DAEMON_PING_TIMEOUT.to_owned())?
+}
+
+fn should_spawn_daemon(result: &Result<Value, String>) -> bool {
+    result.as_ref().err().is_some_and(|error| error != DAEMON_PING_TIMEOUT)
 }
 
 #[tauri::command]
@@ -32,10 +43,10 @@ async fn ensure_daemon(app: AppHandle) -> Result<(), String> {
     // Multiple UI effects may ask at once. Only one should launch a sidecar;
     // waiters recheck the socket after the first startup attempt completes.
     let _startup = DAEMON_START_LOCK.lock().await;
-    let existing = ipc_request("ping", json!({})).await;
+    let existing = daemon_ping(socket_path(), Duration::from_secs(2)).await;
     if existing.as_ref().is_ok_and(daemon_is_ready) { return Ok(()); }
 
-    if existing.is_err() && cfg!(debug_assertions) {
+    if should_spawn_daemon(&existing) && cfg!(debug_assertions) {
         let project_root = development_project_root();
         let python = project_root.join(".venv").join("bin").join("python");
         let executable = if python.is_file() { python } else { PathBuf::from("python3") };
@@ -44,7 +55,7 @@ async fn ensure_daemon(app: AppHandle) -> Result<(), String> {
             .current_dir(project_root)
             .spawn()
             .map_err(|error| format!("could not start the development daemon: {error}"))?;
-    } else if existing.is_err() {
+    } else if should_spawn_daemon(&existing) {
         app.shell()
             .sidecar("alphonse-daemon")
             .map_err(|error| format!("bundled daemon unavailable: {error}"))?
@@ -55,7 +66,7 @@ async fn ensure_daemon(app: AppHandle) -> Result<(), String> {
     // A packaged one-file daemon may need to unpack on a cold launch.
     let deadline = Instant::now() + DAEMON_START_TIMEOUT;
     while Instant::now() < deadline {
-        if ipc_request("ping", json!({})).await.as_ref().is_ok_and(daemon_is_ready) {
+        if daemon_ping(socket_path(), Duration::from_secs(2)).await.as_ref().is_ok_and(daemon_is_ready) {
             return Ok(());
         }
         sleep(Duration::from_millis(150)).await;
@@ -153,7 +164,11 @@ fn play_alert_sound(path: String) -> Result<(), String> {
 }
 
 async fn ipc_request(method: &str, params: Value) -> Result<Value, String> {
-    let mut stream = UnixStream::connect(socket_path())
+    ipc_request_at(socket_path(), method, params).await
+}
+
+async fn ipc_request_at(path: PathBuf, method: &str, params: Value) -> Result<Value, String> {
+    let mut stream = UnixStream::connect(path)
         .await
         .map_err(|error| format!("daemon unavailable: {error}"))?;
     let request = json!({
@@ -226,5 +241,26 @@ mod tests {
         assert!(daemon_is_ready(&json!({"status": "ready"})));
         assert!(!daemon_is_ready(&json!({"status": "starting"})));
         assert!(!daemon_is_ready(&json!({})));
+        assert!(!should_spawn_daemon(&Ok(json!({"status": "starting"}))));
+        assert!(!should_spawn_daemon(&Err(DAEMON_PING_TIMEOUT.to_owned())));
+        assert!(should_spawn_daemon(&Err("daemon unavailable".to_owned())));
+    }
+
+    #[test]
+    fn readiness_ping_times_out_when_peer_never_replies() {
+        use std::os::unix::net::UnixListener;
+        let directory = std::env::temp_dir().join(format!("alphonse-ping-test-{}", std::process::id()));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("daemon.sock");
+        let listener = UnixListener::bind(&path).unwrap();
+        let peer = std::thread::spawn(move || {
+            let (_connection, _) = listener.accept().unwrap();
+            std::thread::sleep(Duration::from_millis(300));
+        });
+        let result = tauri::async_runtime::block_on(daemon_ping(path.clone(), Duration::from_millis(50)));
+        assert_eq!(result.unwrap_err(), DAEMON_PING_TIMEOUT);
+        peer.join().unwrap();
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_dir(directory).unwrap();
     }
 }
