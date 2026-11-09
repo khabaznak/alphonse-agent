@@ -329,6 +329,7 @@ def apply_current_source_deletions(staged, current):
         if 'v2_findings' in tables:
             findings = {}
             affected = set()
+            versions = set()
             def references_deleted(value):
                 if not isinstance(value, dict) or not isinstance(value.get('source_refs'), list):
                     raise ValueError('account_recovery_invalid_finding')
@@ -347,10 +348,16 @@ def apply_current_source_deletions(staged, current):
                 if references_deleted(finding) or finding.get('state') == 'redacted':
                     affected.add(finding_id)
                 findings[finding_id] = finding
-            for finding_id, raw in target.execute('SELECT finding_id,definition FROM v2_finding_versions'):
+            for finding_id, version, raw in target.execute('SELECT finding_id,version,definition FROM v2_finding_versions'):
                 if finding_id not in findings:
                     raise ValueError('account_recovery_invalid_finding')
-                if references_deleted(json.loads(raw)):
+                historical = json.loads(raw)
+                if (not isinstance(historical, dict) or historical.get('finding_id') != finding_id
+                        or type(version) is not int or type(historical.get('version')) is not int
+                        or historical['version'] != version):
+                    raise ValueError('account_recovery_invalid_finding')
+                versions.add((finding_id, version))
+                if references_deleted(historical):
                     affected.add(finding_id)
             if 'v2_outbox' in tables:
                 for (raw,) in target.execute("SELECT metadata_json FROM v2_outbox WHERE kind='finding'"):
@@ -361,6 +368,12 @@ def apply_current_source_deletions(staged, current):
                     if (not isinstance(metadata, dict) or not isinstance(metadata.get('finding_id'), str)
                             or metadata['finding_id'] not in findings):
                         raise ValueError('account_recovery_outbox_finding_missing')
+                    version = metadata.get('finding_version')
+                    if type(version) is not int or version < 1:
+                        raise ValueError('account_recovery_outbox_invalid')
+                    if (findings[metadata['finding_id']].get('state') != 'redacted'
+                            and (metadata['finding_id'], version) not in versions):
+                        raise ValueError('account_recovery_outbox_version_missing')
             for finding_id in affected:
                 finding = findings[finding_id]
                 keys = ('finding_id', 'version', 'policy_id', 'policy_revision', 'project_id',

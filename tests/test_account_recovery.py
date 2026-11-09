@@ -255,7 +255,7 @@ def _recovery_deletion_fixture(f):
         db.execute('INSERT INTO v2_findings VALUES (?,?)', ('f1', json.dumps(finding)))
         db.execute('INSERT INTO v2_finding_versions VALUES (?,?,?)', ('f1', 1, json.dumps(finding)))
         db.execute('INSERT INTO v2_outbox VALUES (?,?,?,?,?,?,?)',
-                   ('finding', 'synthetic private', 'pending', '{"finding_id":"f1"}', '', '', ''))
+                   ('finding', 'synthetic private', 'pending', '{"finding_id":"f1","finding_version":1}', '', '', ''))
     stage = f.tmp / 'restore.sqlite'
     prepare_restored_database(f.store.db_path, stage)
     current = f.tmp / 'current-snapshot.sqlite'
@@ -412,7 +412,10 @@ def test_recovery_rejects_current_evidence_identity_mismatch(f):
 
 
 @pytest.mark.parametrize('metadata,error', [('{bad', 'outbox_invalid'), ('{}', 'outbox_finding_missing'),
-                                            ('{"finding_id":"missing"}', 'outbox_finding_missing')])
+                                            ('{"finding_id":"missing"}', 'outbox_finding_missing'),
+                                            ('{"finding_id":"f1"}', 'outbox_invalid'),
+                                            ('{"finding_id":"f1","finding_version":true}', 'outbox_invalid'),
+                                            ('{"finding_id":"f1","finding_version":2}', 'outbox_version_missing')])
 def test_recovery_rejects_unresolvable_finding_deliveries(f, metadata, error):
     from alphonse.agent_v2.account_recovery import apply_current_source_deletions
 

@@ -298,8 +298,9 @@ staged copy, reconciliation fails and rolls back: it cannot determine whether
 that finding depends on a deleted source. The copy remains isolated for explicit
 investigation; a missing source is never treated as evidence of safety.
 The same fail-closed rule applies to malformed finding-delivery metadata and
-outbox entries whose finding is missing. Existing redacted findings also have
-their retained versions and matching local outbox content redacted again.
+outbox entries whose finding is missing, or whose non-redacted finding version
+is missing. Existing redacted findings have their retained versions and matching
+local outbox content redacted again.
 This does not prove the supplied snapshot is current or complete, reconcile
 separate databases or backups, or authorize activation. Keep both files protected.
 
