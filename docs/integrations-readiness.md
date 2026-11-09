@@ -230,7 +230,9 @@ does not qualify other consumers, remote model sessions or filesystem copies of 
 manifest. Source and finding cleanup now compare the exact previously checked
 record before updating it, so a concurrent deletion tombstone or newer finding
 is not overwritten by a stale cleanup decision; changed records are revisited on
-a later cleanup pass. Collected transient UI and activity journals now expire after 30 days;
+a later cleanup pass. Cleanup also removes residual bytes from evidence already
+marked expired, revoked, deleted, or in an unknown state. Collected transient UI
+and activity journals now expire after 30 days;
 future timestamps are clamped and malformed ones are rejected. Uncollected
 transient events are also pruned by the running daemon's daily maintenance;
 producers, pruning and collection share a lock to preserve fresh events. Cleanup

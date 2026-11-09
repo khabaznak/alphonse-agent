@@ -378,11 +378,16 @@ class SourceAcquisition:
     def purge_content(self):
         """Remove expired/revoked bytes; keep content-free provenance receipts."""
         with self.dispatcher.store._connect() as conn:
-            rows = conn.execute("SELECT evidence_id,check_run_id,definition FROM v2_source_evidence WHERE json_extract(definition, '$.state') = 'available'").fetchall()
+            rows = conn.execute("""SELECT evidence_id,check_run_id,definition FROM v2_source_evidence
+                WHERE json_extract(definition, '$.state') = 'available'
+                   OR (json_extract(definition, '$.state') IS NOT 'available'
+                       AND COALESCE(json_extract(definition, '$.content'), 'null') != '{}')""").fetchall()
         for row in rows:
             value = json.loads(row['definition'])
-            state = 'expired' if instant(value['retention_deadline']) <= self.clock() else ''
-            if not state:
+            previous_state = value.get('state')
+            state = (previous_state if previous_state in {'expired', 'revoked', 'deleted'} else 'revoked') if previous_state != 'available' else (
+                'expired' if instant(value['retention_deadline']) <= self.clock() else '')
+            if not state and previous_state == 'available':
                 run = None
                 try:
                     run = self.dispatcher.get(row['check_run_id'])

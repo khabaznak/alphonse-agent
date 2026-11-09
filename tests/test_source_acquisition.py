@@ -318,6 +318,25 @@ def test_expiry_does_not_overwrite_a_concurrent_deletion_tombstone(acquisition):
     assert value['state'] == 'deleted' and value['deleted'] is True and value['content'] == {}
 
 
+@pytest.mark.parametrize('state', ['expired', 'revoked', 'deleted', 'unknown'])
+def test_cleanup_scrubs_bytes_from_nonavailable_evidence(acquisition, state):
+    f = acquisition
+    f.adapter.pages = [SourcePage((record(f),), 'next', False)]
+    f.process()
+    with f.schedules._connect() as conn:
+        row = conn.execute('SELECT evidence_id,definition FROM v2_source_evidence').fetchone()
+        value = json.loads(row['definition'])
+        assert value['content']
+        value['state'] = state
+        conn.execute('UPDATE v2_source_evidence SET definition=? WHERE evidence_id=?',
+                     (json.dumps(value), row['evidence_id']))
+    f.acquisition.purge_content()
+    with f.schedules._connect() as conn:
+        value = json.loads(conn.execute('SELECT definition FROM v2_source_evidence').fetchone()[0])
+    assert value['content'] == {}
+    assert value['state'] == ('revoked' if state == 'unknown' else state)
+
+
 def test_later_stale_version_cannot_resurrect_deleted_source(acquisition):
     f = acquisition
     f.adapter.pages = [
