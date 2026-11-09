@@ -1,0 +1,28 @@
+--- a/alphonse/agent_v2/core/intelligence/v3/executor.py
++++ b/alphonse/agent_v2/core/intelligence/v3/executor.py
+@@ -477,2 +477,2 @@
+-            # Reserve this one recovery opportunity before inference so a restart
+-            # cannot repeatedly spend it. The next ordinary action-composition
++            # Reserve this bounded recovery opportunity before inference so a
++            # restart cannot repeatedly spend it. The next ordinary action-composition
+@@ -991 +991 @@
+-    """Queue at most one targeted recovery in a phase/subgoal, persisted with evidence."""
++    """Queue at most one stage and one other recovery per phase/subgoal."""
+@@ -995 +995 @@
+-    if not relevant or any((entry.get("progress_review") or {}).get("uncertainty_recovery") for entry in relevant):
++    if not relevant:
+@@ -997,0 +998,2 @@
++    if review.get("uncertainty_recovery"):
++        return
+@@ -1014,0 +1017,8 @@
++    budget_class = "stage" if uncertain == "runtime_declared_subgoal_complete" else "other"
++    for entry in relevant:
++        previous = (entry.get("progress_review") or {}).get("uncertainty_recovery") or {}
++        # Older checkpoints have no budget_class. Derive it from their question.
++        previous_class = previous.get("budget_class") or (
++            "stage" if previous.get("question_id") == "runtime_declared_subgoal_complete" else "other")
++        if previous and previous_class == budget_class:
++            return
+@@ -1016 +1026 @@
+-                                      "question_id": uncertain}
++                                      "question_id": uncertain, "budget_class": budget_class}

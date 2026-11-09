@@ -1,0 +1,52 @@
+--- a/alphonse/agent_v2/evaluation/planning_comparison.py
++++ b/alphonse/agent_v2/evaluation/planning_comparison.py
+@@ -21,2 +21,2 @@
+-CORPUS = Path(__file__).resolve().parents[3] / 'tests/fixtures/planning_comparison/v2.json'
+-VARIANTS = ('historical_progress_emulation', 'uncertainty_aware', 'targeted_recovery', 'combined_fixture_action', 'independent_read_sequence')
++CORPUS = Path(__file__).resolve().parents[3] / 'tests/fixtures/planning_comparison/v3.json'
++VARIANTS = ('historical_progress_emulation', 'uncertainty_aware', 'targeted_recovery', 'combined_fixture_action', 'independent_read_sequence', 'flat_phase_prototype')
+@@ -41,0 +42,36 @@
++
++
++def _run_flat_trial(trial):
++    """One planned phase, real dispatch and outer verification; no replan loop.
++
++    This evaluation-only prototype deliberately reports unresolved questions,
++    recovery and replanning as non-completion. It is not a replacement runtime.
++    """
++    from alphonse.agent_v2.core.inference import InferencePurpose, InferenceRequest
++    from alphonse.agent_v2.core.intelligence.v3 import (PhasePlan, PhaseExecutor, ToolRevealPolicy,
++        V3OuterController, HierarchicalCAPDProcessor, new_tactical_state)
++    from alphonse.agent_v2.core.intelligence.v3.contracts import TacticalState
++    from alphonse.agent_v2.core.intelligence.v3.revealing import validate_phase_actions
++    trial.task.status = 'running'
++    trial.task.set_acceptance_contract_from_markdown('- [ ] Fulfill the original delegated outcome with verified effects')
++    request = InferenceRequest(prompt='Prepare the synthetic task phase', purpose=InferencePurpose.PHASE_PLANNING,
++                               task_id=trial.task.task_id)
++    phase = PhasePlan.from_dict(trial.inference.generate_json(request).json_value)
++    validate_phase_actions(phase, tuple(trial.context.tools.list()))
++    state = new_tactical_state(phase)
++    try:
++        outcome = PhaseExecutor(reveal_policy=ToolRevealPolicy()).run(trial.task, state, trial.context)
++    except fixtures.SimulatedRestart:
++        trial.restarted = True
++        trial.questions = fixtures.RestartStore(trial.root / 'questions.sqlite')
++        trial.context.question_store = trial.questions
++        trial.task = trial.questions.load_task_checkpoint(trial.task.task_id)
++        state = TacticalState.from_dict(trial.task.hierarchical_state)
++        outcome = PhaseExecutor(reveal_policy=ToolRevealPolicy()).run(trial.task, state, trial.context)
++    HierarchicalCAPDProcessor._append_history(trial.task, state, outcome.to_dict())
++    V3OuterController().review_and_route(trial.task, state, outcome, trial.context)
++    if trial.task.status == 'running':
++        # This prototype does not autonomously replan or invent a user response.
++        trial.task.status = 'failed'
++        trial.task.outcome = {'status': 'failure', 'reason': 'flat_prototype_requires_replanning'}
++    return trial.score()
+@@ -75 +111 @@
+-                    result = trial.run()
++                    result = _run_flat_trial(trial) if variant == 'flat_phase_prototype' else trial.run()
+@@ -218 +254 @@
+-        'unavailable_variants': {'simpler_loop': 'No independently implemented and verified prototype yet.'},
++        'unavailable_variants': {'general_simpler_loop': 'The flat-phase prototype omits general replanning and authenticated question resumption.'},
+@@ -224,0 +261 @@
++            'The flat phase prototype uses real dispatch and outer verification but has no general replanning or question-resumption loop; tactical-only cases do not compare hierarchy.',

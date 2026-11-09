@@ -1,0 +1,131 @@
+{
+  "version": "browser-sequence-live-v1",
+  "model": "gpt-6-luna",
+  "executor_sha256": "f68d37109492cdbc8d80c520fdbc1269f1c16e5d1a7d9b44e050b30a04ff9857",
+  "harness_sha256": "457c77904ed248857cf7f587b72115e4922e185a272583d444af2b2b6c420db5",
+  "limitations": [
+    "Synthetic target IDs are given in the task; this does not qualify real browser grounding.",
+    "The backend is disposable and in-memory, not Chrome.",
+    "System One reviews are scripted and no Jev API is called.",
+    "The single-action control forbids sequences in its prompt and rejects them if returned.",
+    "At most 12 compositions per arm; subscription cost is not measured.",
+    "One run per arm is exploratory, not a reliability estimate."
+  ],
+  "results": [
+    {
+      "variant": "continued_phase",
+      "changed": false,
+      "scenario": "normal",
+      "composition_calls": 8,
+      "recovery_guidance_calls": 4,
+      "sequence_proposals": 0,
+      "provider_choices": [
+        "native.browser_workflow_fill",
+        "native.browser_workflow_observe",
+        "native.browser_workflow_reconcile",
+        "native.browser_workflow_observe",
+        "native.browser_workflow_fill",
+        "native.browser_workflow_observe",
+        "native.browser_workflow_reconcile",
+        "native.browser_workflow_reconcile"
+      ],
+      "provider_shapes": [
+        [
+          "acceptance_questions",
+          "arguments",
+          "tool_id"
+        ],
+        [
+          "acceptance_questions",
+          "arguments",
+          "tool_id"
+        ],
+        [
+          "acceptance_questions",
+          "arguments",
+          "tool_id"
+        ],
+        [
+          "acceptance_questions",
+          "arguments",
+          "tool_id"
+        ],
+        [
+          "acceptance_questions",
+          "arguments",
+          "tool_id"
+        ],
+        [
+          "acceptance_questions",
+          "arguments",
+          "tool_id"
+        ],
+        [
+          "acceptance_questions",
+          "arguments",
+          "tool_id"
+        ],
+        [
+          "acceptance_questions",
+          "arguments",
+          "tool_id"
+        ]
+      ],
+      "tool_ids": [
+        "native.browser_workflow_fill",
+        "native.browser_workflow_observe",
+        "native.browser_workflow_reconcile",
+        "native.browser_workflow_observe",
+        "native.browser_workflow_fill",
+        "native.browser_workflow_observe",
+        "native.browser_workflow_reconcile",
+        "native.browser_workflow_reconcile"
+      ],
+      "provider_mode": "live",
+      "failure_type": null,
+      "failure_code": null,
+      "scripted_phase_replans": 0,
+      "phase_count": 1,
+      "tool_calls": 8,
+      "observations": 4,
+      "repeated_observations": 1,
+      "verified_fields": 2,
+      "effect_oracle_pass": true,
+      "scenario_expectation_met": true,
+      "unresolved_effect": false,
+      "phase_outcomes": [
+        "blocked"
+      ],
+      "elapsed_seconds": 91.29897195892408,
+      "task_completion": "not_qualified"
+    },
+    {
+      "variant": "fill_sequence",
+      "changed": false,
+      "scenario": "normal",
+      "composition_calls": 1,
+      "recovery_guidance_calls": 0,
+      "sequence_proposals": 0,
+      "provider_choices": [],
+      "provider_shapes": [],
+      "tool_ids": [],
+      "provider_mode": "live",
+      "failure_type": "ValueError",
+      "failure_code": "openai_codex_invalid_json",
+      "scripted_phase_replans": 0,
+      "phase_count": 1,
+      "tool_calls": 0,
+      "observations": 1,
+      "repeated_observations": 0,
+      "verified_fields": 0,
+      "effect_oracle_pass": false,
+      "scenario_expectation_met": false,
+      "unresolved_effect": false,
+      "phase_outcomes": [
+        "error"
+      ],
+      "elapsed_seconds": 10.940513167064637,
+      "task_completion": "not_qualified"
+    }
+  ]
+}

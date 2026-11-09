@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { openAccountConsent, optionalManagement } from "./api";
+import { IntegrationIcon } from "./IntegrationIcon";
 import { Catalog, Connection, Definition, Grant, Member, Policy, ProjectChecks, ResponseFence, days, defaultDefinition, editableDefinition, friendly, groupAccountRecords, labels, sourceDefinition, validateDefinition } from "./integrationManagement";
 
 function useManaged<T>(action: string, values: Record<string, unknown>, identity: string) {
@@ -64,8 +65,29 @@ export function AccountConsentGuidance({ connection }: { connection: Connection 
   return <p>Consent is needed for this record. It may be an unfinished connection or an account that needs to reconnect. Select capabilities below and use Reconnect with consent to continue this record. Starting a new connection creates a separate record; matching provider names do not establish that two records are the same account.</p>;
 }
 
-export function OptionalAccounts({ identity }: { identity: string }) {
-  const { data, error, refresh } = useManaged<Catalog>('catalog', {}, identity);
+type AccountService = { name: string; provider: string; capability: string; description: string; icon: "gmail" | "calendar" | "outlook" };
+const ACCOUNT_SERVICES: AccountService[] = [
+  { name: "Gmail", icon: "gmail", provider: "google", capability: "mail_read", description: "Read mail from an authorized Google account." },
+  { name: "Google Calendar", icon: "calendar", provider: "google", capability: "calendar_read", description: "Read events from an authorized Google calendar." },
+  { name: "Outlook / Hotmail", icon: "outlook", provider: "microsoft", capability: "mail_read", description: "Read mail from an authorized Microsoft account." },
+];
+
+export function AccountServiceCards({ catalog, unavailable = false, onChoose }: { catalog: Catalog | null; unavailable?: boolean; onChoose: (provider: string, capability: string) => void }) {
+  return <div className="integration-service-grid">{ACCOUNT_SERVICES.map(service => {
+    const provider = catalog?.providers.find(item => item.provider === service.provider);
+    const configured = Boolean(provider?.status === "available" && provider.capabilities.includes(service.capability));
+    const connections = (catalog?.connections || []).filter(item => item.provider === service.provider && item.capabilities.includes(service.capability));
+    const connected = connections.filter(item => item.status === "connected").length;
+    const existing = connections.length > 0;
+    return <article className="mockup-settings-card integration-service-card" key={service.name}><div className="integration-card-heading"><IntegrationIcon service={service.icon} /><div><h3>{service.name}</h3><p>{service.description}</p></div></div><small className="integration-card-status">{!catalog ? (unavailable ? "Account management unavailable" : "Checking availability…") : connected ? `${connected} ${connected === 1 ? "account" : "accounts"} connected` : existing ? "Account needs attention" : configured ? "Available to connect" : "Provider setup required"}</small><div className="integration-card-footer"><span>{service.capability === "mail_read" ? "Email" : "Calendar"}</span><button type="button" disabled={!catalog} aria-label={`${existing ? "Manage" : configured ? "Connect" : "View setup for"} ${service.name}`} onClick={() => onChoose(service.provider, service.capability)}>{existing ? "Manage" : configured ? "Connect" : "View setup"} →</button></div></article>;
+  })}<article className="mockup-settings-card integration-service-card"><div className="integration-card-heading"><IntegrationIcon service="outlook" /><div><h3>Outlook Calendar</h3><p>Access events from a Microsoft calendar.</p></div></div><small className="integration-card-status">Not yet available</small><div className="integration-card-footer"><span>Calendar</span></div></article></div>;
+}
+
+export function OptionalAccounts({ identity, messaging }: { identity: string; messaging?: React.ReactNode }) {
+  const managed = useManaged<Catalog>('catalog', {}, identity);
+  const mismatch = Boolean(managed.data && managed.data.actor_user_id !== identity);
+  const data = mismatch ? null : managed.data; const error = mismatch ? 'The active account session does not match the selected household member. Reconnect the correct session to manage accounts.' : managed.error; const refresh = managed.refresh;
+  const [view, setView] = useState<'overview' | 'accounts'>('overview');
   const [notice, setNotice] = useState(""); const [busy, setBusy] = useState(false);
   const [accountDisclosureAccepted, setAccountDisclosureAccepted] = useState(false);
   useEffect(() => { setAccountDisclosureAccepted(false); }, [identity]);
@@ -78,7 +100,7 @@ export function OptionalAccounts({ identity }: { identity: string }) {
   const [disconnectFor, setDisconnectFor] = useState<Connection | null>(null);
   const [panel, setPanel] = useState<'account' | 'new' | 'client' | 'secret' | null>(null);
   const [selectedId, setSelectedId] = useState('');
-  useEffect(() => { setPanel(null); setSelectedId(''); setDisconnectFor(null); setAccountCapabilities({}); }, [identity]);
+  useEffect(() => { setView('overview'); setPanel(null); setSelectedId(''); setDisconnectFor(null); setAccountCapabilities({}); }, [identity]);
   const heading = useRef<HTMLHeadingElement>(null);
   const panelHeading = useRef<HTMLHeadingElement>(null);
   useEffect(() => { if (panel) panelHeading.current?.focus(); }, [panel, selectedId]);
@@ -119,7 +141,8 @@ export function OptionalAccounts({ identity }: { identity: string }) {
       <button disabled={busy} aria-label={`Manage ${c.display_name}${qualifier}, ${status}`} aria-pressed={panel === 'account' && selectedId === c.connection_id} onClick={() => openPanel('account', c.connection_id)}>Manage</button>
     </li>;
   };
-  return <section className="optional-management accounts-workspace"><div className="accounts-heading"><div><h3 tabIndex={-1} ref={heading}>Optional accounts</h3><p>Connect the accounts you choose. Connecting does not start monitoring.</p></div>{data && <button disabled={busy} onClick={() => void refresh()}>Refresh</button>}</div><StatusText>{error || notice}</StatusText>
+  if (view === 'overview') return <section className="optional-management"><h3>Personal accounts</h3><StatusText>{error}</StatusText>{error && <button onClick={() => void refresh()}>Retry loading accounts</button>}<div className="integration-owner-note"><strong>{data ? `Managing accounts as ${data.members.find(m => m.user_id === data.actor_user_id)?.display_name || data.actor_user_id}` : 'Personal accounts'}</strong><p>Each household member connects their own accounts and chooses what Alphonse can access.</p></div><AccountServiceCards catalog={data} unavailable={Boolean(error)} onChoose={(nextProvider, capability) => { setProvider(nextProvider); setCapabilities([capability]); setView('accounts'); if (!data?.connections.some(c => c.provider === nextProvider && c.capabilities.includes(capability)) && data?.providers.some(p => p.provider === nextProvider && p.status === 'available')) openPanel('new'); }} />{data && <button className="integration-link" onClick={() => setView('accounts')}>Review accounts, setup and access →</button>}{messaging}<p className="integration-privacy"><strong>Personal by default.</strong> Connecting an account does not start monitoring.</p></section>;
+  return <section className="optional-management accounts-workspace"><button className="integration-back" onClick={() => { setView('overview'); openPanel(null); }}>← All integrations</button><div className="accounts-heading"><div><h3 tabIndex={-1} ref={heading}>Optional accounts</h3><p>Connect the accounts you choose. Connecting does not start monitoring.</p></div>{data && <button disabled={busy} onClick={() => void refresh()}>Refresh</button>}</div><StatusText>{error || notice}</StatusText>
     {!data ? <><p>Account management is unavailable until a local authenticated session is ready. If Desktop just started, wait a moment and retry.</p><button disabled={busy} onClick={() => void refresh()}>Retry loading accounts</button></> : <>
       <div className="accounts-list"><div className="accounts-list-heading"><h4>Connected accounts</h4><button disabled={busy} onClick={() => openPanel('new')}>Connect an account</button></div>
         {connected.length ? <ul className="account-rows">{connected.map(row)}</ul> : <p className="account-empty">No connected accounts yet.</p>}

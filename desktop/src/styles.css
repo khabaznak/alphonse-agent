@@ -1402,3 +1402,39 @@ a { color: var(--accent); }
   .desktop-shell .conversation { padding-inline: 20px; }
   .shell-toolbar { padding-inline: 20px; }
 }
+
+.integration-service-grid { display: grid; gap: 12px; margin: 18px 0 22px; }
+.mockup-settings-card { padding: 20px; border: 1px solid var(--border); border-radius: 11px; background: var(--surface); }
+.mockup-settings-card h3 { margin: 0; color: var(--text); font-size: 14px; }
+.mockup-settings-card p { margin: 12px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.integration-service-card { display: flex; flex-direction: column; }
+/* Integrations */
+.integration-service-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.integration-service-grid .integration-service-card { margin: 0; min-height: 176px; gap: 12px; }
+.integration-card-heading { display: flex; align-items: flex-start; gap: 12px; flex: 1; }
+.integration-card-heading > div { min-width: 0; }
+.integration-card-heading p { margin: 5px 0 0; }
+.integration-icon { width: 40px; height: 40px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 10px; background: var(--surface-raised); }
+.integration-icon svg { width: 28px; height: 28px; }
+.integration-service-card .integration-card-status { font-size: 12px; }
+.integration-card-status::before { content: ''; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); margin-right: 7px; vertical-align: middle; }
+.integration-card-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; border-top: 1px solid var(--border); padding-top: 10px; }
+.integration-card-footer span { color: var(--muted); font-size: 11px; }
+.integration-service-card .integration-card-footer button, .integration-link, .integration-back { padding: 7px 0; border: 0; background: transparent; color: var(--accent); font-size: 12px; font-weight: 700; }
+.integration-owner-note, .integration-privacy { padding: 16px; border-radius: 9px; background: var(--accent-soft); color: var(--text); font-size: 12px; }
+.integration-owner-note p, .integration-privacy p { color: var(--muted); margin: 5px 0 0; }
+.integration-context-heading { margin: 0 0 12px; }
+.integration-messaging { margin-top: 30px; }
+.integration-messaging > h3 { margin: 0; font-size: 14px; }
+.integration-messaging > p { margin: 6px 0 0; font-size: 12px; color: var(--muted); }
+.integration-privacy { margin-top: 22px; }
+.integration-connect-form { margin-top: 24px; }
+.integration-back { display: block; margin-bottom: 15px; }
+.integration-detail .settings-panel { max-width: 700px; }
+@media (max-width: 650px) { .integration-service-grid { grid-template-columns: 1fr; } }
+.optional-management .project-detail, .integration-connect-form { padding: 18px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+.optional-management .project-detail h4, .optional-management .project-detail h5 { margin: 0; }
+.optional-management .project-detail p { margin: 0; color: var(--muted); font-size: 12px; }
+.optional-management .integration-connect-form fieldset { margin-bottom: 0; }
+.optional-management .dialog-actions { gap: 8px; }
+.optional-management .dialog-actions button { margin: 0; }
