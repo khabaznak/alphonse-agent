@@ -269,7 +269,11 @@ def apply_current_source_deletions(staged, current):
         # Reapply all prior tombstones as well, so retries are monotonic.
         tombstones = set(target.execute('SELECT connection_id,resource,source_id FROM v2_recovery_source_tombstones'))
         evidence_ids = set()
+        staged_evidence_ids = set()
         for evidence_id, raw in target.execute('SELECT evidence_id,definition FROM v2_source_evidence').fetchall():
+            if not isinstance(evidence_id, str) or not evidence_id:
+                raise ValueError('account_recovery_invalid_evidence')
+            staged_evidence_ids.add(evidence_id)
             evidence = json.loads(raw)
             if (not isinstance(evidence, dict) or type(evidence.get('deleted')) is not bool
                     or evidence.get('state') not in {'available', 'expired', 'deleted', 'revoked'}):
@@ -290,8 +294,13 @@ def apply_current_source_deletions(staged, current):
                 if not isinstance(value, dict) or not isinstance(value.get('source_refs'), list):
                     raise ValueError('account_recovery_invalid_finding')
                 refs = value['source_refs']
-                if any(not isinstance(ref, dict) or not isinstance(ref.get('evidence_id'), str) for ref in refs):
+                if any(not isinstance(ref, dict) or not isinstance(ref.get('evidence_id'), str)
+                       or not ref['evidence_id'] for ref in refs):
                     raise ValueError('account_recovery_invalid_finding')
+                # A finding with an unresolved source cannot be reconciled
+                # against current deletion markers. Keep the copy isolated.
+                if any(ref['evidence_id'] not in staged_evidence_ids for ref in refs):
+                    raise ValueError('account_recovery_finding_evidence_missing')
                 return any(ref['evidence_id'] in evidence_ids for ref in refs)
 
             for finding_id, raw in target.execute('SELECT finding_id,definition FROM v2_findings').fetchall():

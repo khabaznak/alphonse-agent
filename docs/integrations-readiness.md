@@ -287,6 +287,10 @@ deletion markers from a trusted, current offline snapshot to an isolated copy.
 It records markers even for sources absent from the older copy, redacts matching
 cached evidence and finding versions, and redacts matching outbox rows when that
 table shares the staged database. The changes are transactional and repeatable.
+If any current or historical finding refers to source evidence missing from the
+staged copy, reconciliation fails and rolls back: it cannot determine whether
+that finding depends on a deleted source. The copy remains isolated for explicit
+investigation; a missing source is never treated as evidence of safety.
 This does not prove the supplied snapshot is current or complete, reconcile
 separate databases or backups, or authorize activation. Keep both files protected.
 

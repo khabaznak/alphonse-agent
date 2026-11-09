@@ -317,3 +317,23 @@ def test_recovery_deletion_also_checks_historical_finding_versions(f):
     with sqlite3.connect(stage) as db:
         assert json.loads(db.execute('SELECT definition FROM v2_findings').fetchone()[0])['state'] == 'redacted'
         assert db.execute('SELECT COUNT(*) FROM v2_finding_versions').fetchone()[0] == 0
+
+
+@pytest.mark.parametrize('table', ['v2_findings', 'v2_finding_versions'])
+def test_recovery_deletion_rejects_findings_with_missing_source_evidence(f, table):
+    from alphonse.agent_v2.account_recovery import apply_current_source_deletions, reject_staged_database
+
+    stage, current = _recovery_deletion_fixture(f)
+    with sqlite3.connect(stage) as db:
+        value = json.loads(db.execute(f'SELECT definition FROM {table}').fetchone()[0])
+        value['source_refs'].append({'evidence_id': 'missing-evidence'})
+        db.execute(f'UPDATE {table} SET definition=?', (json.dumps(value),))
+
+    with pytest.raises(ValueError, match='finding_evidence_missing'):
+        apply_current_source_deletions(stage, current)
+    with sqlite3.connect(stage) as db:
+        assert json.loads(db.execute('SELECT definition FROM v2_source_evidence').fetchone()[0])['state'] == 'available'
+        assert db.execute('SELECT message,status FROM v2_outbox').fetchone() == ('synthetic private', 'pending')
+        assert not db.execute("SELECT 1 FROM sqlite_master WHERE name='v2_recovery_source_tombstones'").fetchone()
+    with pytest.raises(RuntimeError, match='staged_database_not_activated'):
+        reject_staged_database(stage)
