@@ -214,11 +214,13 @@ def inspect_staged_database(path):
 
 
 def apply_current_source_deletions(staged, current):
-    """Apply a trusted current snapshot's deletion tombstones to an isolated copy.
+    """Apply trusted current source privacy state to an isolated copy.
 
-    Both paths must be offline, protected operator inputs. This copies no source
-    content from current. It does not establish that the snapshot is current or
-    complete, cover separate databases/backups, or authorize activation.
+    Deletions apply by source identity; revoked and expired states also apply to
+    matching evidence IDs. Both paths must be offline, protected operator inputs.
+    This copies no source content from current. It does not establish that the
+    snapshot is current or complete, cover separate databases/backups, or authorize
+    activation.
     """
     import os
     from pathlib import Path
@@ -242,16 +244,24 @@ def apply_current_source_deletions(staged, current):
         if 'v2_source_evidence' not in source_tables:
             raise ValueError('account_recovery_current_tombstones_missing')
         tombstones = set()
-        for (raw,) in source.execute('SELECT definition FROM v2_source_evidence'):
+        unavailable = {}
+        current_identities = {}
+        for evidence_id, raw in source.execute('SELECT evidence_id,definition FROM v2_source_evidence'):
             evidence = json.loads(raw)
             if (not isinstance(evidence, dict) or type(evidence.get('deleted')) is not bool
                     or evidence.get('state') not in {'available', 'expired', 'deleted', 'revoked'}):
                 raise ValueError('account_recovery_invalid_evidence')
-            if evidence.get('deleted') is True or evidence.get('state') == 'deleted':
+            if evidence.get('deleted') is True or evidence.get('state') in {'deleted', 'revoked', 'expired'}:
                 key = tuple(evidence.get(k) for k in ('connection_id', 'resource', 'source_id'))
                 if any(not isinstance(v, str) or not v for v in key):
                     raise ValueError('account_recovery_invalid_evidence')
+                if not isinstance(evidence_id, str) or not evidence_id:
+                    raise ValueError('account_recovery_invalid_evidence')
+                current_identities[evidence_id] = key
+            if evidence.get('deleted') is True or evidence.get('state') == 'deleted':
                 tombstones.add(key)
+            elif evidence['state'] in {'revoked', 'expired'}:
+                unavailable[evidence_id] = (key, evidence['state'])
         target.execute('PRAGMA secure_delete=ON')
         target.execute('BEGIN IMMEDIATE')
         tables = {r[0] for r in target.execute("SELECT name FROM sqlite_master WHERE type='table'")}
@@ -270,6 +280,7 @@ def apply_current_source_deletions(staged, current):
         tombstones = set(target.execute('SELECT connection_id,resource,source_id FROM v2_recovery_source_tombstones'))
         evidence_ids = set()
         staged_evidence_ids = set()
+        staged_evidence = []
         for evidence_id, raw in target.execute('SELECT evidence_id,definition FROM v2_source_evidence').fetchall():
             if not isinstance(evidence_id, str) or not evidence_id:
                 raise ValueError('account_recovery_invalid_evidence')
@@ -281,11 +292,36 @@ def apply_current_source_deletions(staged, current):
             key = tuple(evidence.get(k) for k in ('connection_id', 'resource', 'source_id'))
             if any(not isinstance(v, str) or not v for v in key):
                 raise ValueError('account_recovery_invalid_evidence')
+            staged_evidence.append((evidence_id, evidence, key))
+            if evidence['deleted'] or evidence['state'] == 'deleted':
+                # An older staged copy may itself have a deletion that the
+                # supplied snapshot lacks. Never weaken that privacy state.
+                tombstones.add(key)
+                target.execute('INSERT OR IGNORE INTO v2_recovery_source_tombstones VALUES (?,?,?)', key)
+        for evidence_id, evidence, key in staged_evidence:
+            current_state = unavailable.get(evidence_id)
+            if evidence_id in current_identities and current_identities[evidence_id] != key:
+                raise ValueError('account_recovery_evidence_identity_mismatch')
+            if current_state and evidence['state'] == 'available':
+                evidence['state'] = current_state[1]
+            elif current_state and current_state[1] == 'revoked' and evidence['state'] == 'expired':
+                evidence['state'] = 'revoked'
             if key in tombstones:
                 evidence.update(content={}, state='deleted', deleted=True)
                 target.execute('UPDATE v2_source_evidence SET definition=? WHERE evidence_id=?',
                                (json.dumps(evidence), evidence_id))
                 evidence_ids.add(evidence_id)
+            elif evidence['state'] == 'revoked':
+                evidence['content'] = {}
+                target.execute('UPDATE v2_source_evidence SET definition=? WHERE evidence_id=?',
+                               (json.dumps(evidence), evidence_id))
+                evidence_ids.add(evidence_id)
+            elif evidence['state'] == 'expired':
+                # Expired cache bytes are not retained, but expiry alone does
+                # not invalidate independently retained finding history.
+                evidence['content'] = {}
+                target.execute('UPDATE v2_source_evidence SET definition=? WHERE evidence_id=?',
+                               (json.dumps(evidence), evidence_id))
         redacted = 0
         if 'v2_findings' in tables:
             findings = {}

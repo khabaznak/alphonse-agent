@@ -287,6 +287,12 @@ deletion markers from a trusted, current offline snapshot to an isolated copy.
 It records markers even for sources absent from the older copy, redacts matching
 cached evidence and finding versions, and redacts matching outbox rows when that
 table shares the staged database. The changes are transactional and repeatable.
+Deletion markers already present in the staged copy are also retained and applied
+to every matching cached source, even if the supplied snapshot lacks them. Staged
+revoked sources invalidate their dependent findings; expired and revoked source
+cache bytes are scrubbed. Cache expiry alone does not invalidate finding history.
+The command also applies a current snapshot's revocation or expiry to the same
+evidence ID, after checking its source identity; mismatches fail the transaction.
 If any current or historical finding refers to source evidence missing from the
 staged copy, reconciliation fails and rolls back: it cannot determine whether
 that finding depends on a deleted source. The copy remains isolated for explicit

@@ -337,3 +337,75 @@ def test_recovery_deletion_rejects_findings_with_missing_source_evidence(f, tabl
         assert not db.execute("SELECT 1 FROM sqlite_master WHERE name='v2_recovery_source_tombstones'").fetchone()
     with pytest.raises(RuntimeError, match='staged_database_not_activated'):
         reject_staged_database(stage)
+
+
+@pytest.mark.parametrize('state', ['deleted', 'revoked', 'expired'])
+def test_recovery_respects_source_state_already_in_staged_copy(f, state):
+    from alphonse.agent_v2.account_recovery import apply_current_source_deletions
+
+    stage, current = _recovery_deletion_fixture(f)
+    with sqlite3.connect(current) as db:
+        evidence = json.loads(db.execute("SELECT definition FROM v2_source_evidence WHERE evidence_id='e1'").fetchone()[0])
+        evidence.update(state='available', deleted=False)
+        db.execute("UPDATE v2_source_evidence SET definition=? WHERE evidence_id='e1'", (json.dumps(evidence),))
+    with sqlite3.connect(stage) as db:
+        evidence = json.loads(db.execute("SELECT definition FROM v2_source_evidence WHERE evidence_id='e1'").fetchone()[0])
+        evidence.update(state=state, deleted=state == 'deleted')
+        db.execute("UPDATE v2_source_evidence SET definition=? WHERE evidence_id='e1'", (json.dumps(evidence),))
+        if state == 'deleted':
+            # Earlier evidence for the same source must also be invalidated.
+            deleted_evidence = dict(evidence)
+            db.execute("DELETE FROM v2_source_evidence WHERE evidence_id='e1'")
+            evidence.update(state='available', deleted=False)
+            db.execute("INSERT INTO v2_source_evidence VALUES (?,?)", ('earlier', json.dumps(evidence)))
+            db.execute("INSERT INTO v2_source_evidence VALUES (?,?)", ('e1', json.dumps(deleted_evidence)))
+            finding = json.loads(db.execute('SELECT definition FROM v2_findings').fetchone()[0])
+            finding['source_refs'] = [{'evidence_id': 'earlier'}]
+            db.execute('UPDATE v2_findings SET definition=?', (json.dumps(finding),))
+
+    result = apply_current_source_deletions(stage, current)
+    with sqlite3.connect(stage) as db:
+        finding = json.loads(db.execute('SELECT definition FROM v2_findings').fetchone()[0])
+        if state == 'expired':
+            assert finding['state'] == 'open' and result['findings_redacted'] == 0
+            assert json.loads(db.execute("SELECT definition FROM v2_source_evidence WHERE evidence_id='e1'").fetchone()[0])['content'] == {}
+        else:
+            assert finding['state'] == 'redacted' and result['findings_redacted'] == 1
+            assert db.execute('SELECT message,status FROM v2_outbox').fetchone() == ('[Finding unavailable]', 'failed')
+            assert json.loads(db.execute("SELECT definition FROM v2_source_evidence WHERE evidence_id='e1'").fetchone()[0])['content'] == {}
+        if state == 'deleted':
+            assert json.loads(db.execute("SELECT definition FROM v2_source_evidence WHERE evidence_id='earlier'").fetchone()[0])['state'] == 'deleted'
+            assert db.execute('SELECT COUNT(*) FROM v2_recovery_source_tombstones').fetchone()[0] == 2
+
+
+@pytest.mark.parametrize('state', ['revoked', 'expired'])
+def test_recovery_applies_current_exact_evidence_state(f, state):
+    from alphonse.agent_v2.account_recovery import apply_current_source_deletions
+
+    stage, current = _recovery_deletion_fixture(f)
+    with sqlite3.connect(current) as db:
+        evidence = json.loads(db.execute("SELECT definition FROM v2_source_evidence WHERE evidence_id='e1'").fetchone()[0])
+        evidence.update(state=state, deleted=False)
+        db.execute("UPDATE v2_source_evidence SET definition=? WHERE evidence_id='e1'", (json.dumps(evidence),))
+    result = apply_current_source_deletions(stage, current)
+    with sqlite3.connect(stage) as db:
+        restored = json.loads(db.execute("SELECT definition FROM v2_source_evidence WHERE evidence_id='e1'").fetchone()[0])
+        finding = json.loads(db.execute('SELECT definition FROM v2_findings').fetchone()[0])
+        assert restored['state'] == state and restored['content'] == {}
+        assert finding['state'] == ('redacted' if state == 'revoked' else 'open')
+        assert result['findings_redacted'] == (1 if state == 'revoked' else 0)
+
+
+def test_recovery_rejects_current_evidence_identity_mismatch(f):
+    from alphonse.agent_v2.account_recovery import apply_current_source_deletions
+
+    stage, current = _recovery_deletion_fixture(f)
+    with sqlite3.connect(current) as db:
+        evidence = json.loads(db.execute("SELECT definition FROM v2_source_evidence WHERE evidence_id='e1'").fetchone()[0])
+        evidence.update(state='revoked', deleted=False, source_id='different-source')
+        db.execute("UPDATE v2_source_evidence SET definition=? WHERE evidence_id='e1'", (json.dumps(evidence),))
+    with pytest.raises(ValueError, match='evidence_identity_mismatch'):
+        apply_current_source_deletions(stage, current)
+    with sqlite3.connect(stage) as db:
+        assert json.loads(db.execute('SELECT definition FROM v2_source_evidence').fetchone()[0])['state'] == 'available'
+        assert not db.execute("SELECT 1 FROM sqlite_master WHERE name='v2_recovery_source_tombstones'").fetchone()

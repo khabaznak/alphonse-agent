@@ -27,7 +27,7 @@ def build_parser() -> argparse.ArgumentParser:
     recovery.add_argument("destination", help="New staging file in a private directory")
     inspect_recovery = subparsers.add_parser("inspect-account-recovery", help="Count work in an isolated recovery copy without activating it")
     inspect_recovery.add_argument("source", help="Already prepared isolated recovery copy")
-    deletion_recovery = subparsers.add_parser("apply-recovery-deletions", help="Apply current source deletion markers to an isolated copy")
+    deletion_recovery = subparsers.add_parser("apply-recovery-deletions", help="Apply current source deletion, revocation and expiry state to an isolated copy")
     deletion_recovery.add_argument("staged", help="Already prepared isolated recovery copy")
     deletion_recovery.add_argument("current", help="Trusted current offline SQLite snapshot")
     return parser
