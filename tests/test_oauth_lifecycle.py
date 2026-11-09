@@ -705,3 +705,28 @@ def test_failed_client_provenance_write_rolls_back_credential_install(f):
     assert f.backend.data == {}
     record = f.store.get('one')
     assert record.credential_ref == '' and record.credential_generation == 0
+
+
+def test_explicit_admin_attestation_migrates_legacy_connected_client(f):
+    from alphonse.agent_v2.integrations.oauth import attest_current_client, save_operator_client
+
+    client_id = '123456-personal.apps.googleusercontent.com'
+    config = ClientConfig('google', client_id, 'http://127.0.0.1:8765/google')
+    f.service.clients['google'].config = config
+    connect(f)
+    record = f.store.get('one')
+    with f.store._connect() as db:
+        db.execute('DELETE FROM v2_oauth_connection_clients')
+    args = dict(connection_id='one', expected_revision=record.connection['revision'],
+                expected_generation=record.credential_generation)
+    with pytest.raises(PermissionError):
+        attest_current_client(f.accounts, f.other, config, **args)
+    with pytest.raises(OAuthError, match='attestation_stale'):
+        attest_current_client(f.accounts, f.owner, config, **dict(args, expected_generation=999))
+    assert attest_current_client(f.accounts, f.owner, config, **args) == {'recorded': True}
+    with f.store._connect() as db:
+        assert db.execute('SELECT provenance FROM v2_oauth_connection_clients').fetchone()[0] == 'operator_attested'
+    assert save_operator_client(f.accounts, f.owner, 'google', client_id)['saved']
+    other = ClientConfig('google', '123456-other.apps.googleusercontent.com', 'http://127.0.0.1:8765/google')
+    with pytest.raises(OAuthError, match='require_migration'):
+        attest_current_client(f.accounts, f.owner, other, **args)

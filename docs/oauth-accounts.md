@@ -45,6 +45,13 @@ Google callback is `http://127.0.0.1:8765/google`; Microsoft uses
 `http://127.0.0.1:8766/microsoft`. These values are not claims that a provider has
 qualified the corresponding registration.
 
+For an older connection without an issuance record, an authenticated household
+administrator can explicitly attest the currently configured client only after
+independently establishing which client issued its credential. The record labels
+this as `operator_attested`, not provider-verified; stale revisions or an existing
+different association fail closed. New consent exchanges record their client
+association transactionally with the credential reference.
+
 Some Google Desktop registrations require a client secret at the token endpoint
 even though Google's general Desktop documentation lists it as optional. An
 administrator can enter that registration's secret in **Add a Google test client

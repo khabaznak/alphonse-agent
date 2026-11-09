@@ -193,6 +193,36 @@ def operator_client_secret(store, provider, client_id):
     value = store.credential_vault.get(row['credential_ref'], _client_secret_binding(provider, client_id), row['generation'])
     return value['client_secret']
 
+
+def attest_current_client(accounts, session, config, *, connection_id, expected_revision, expected_generation):
+    """Record an administrator's explicit client association for an older connection.
+
+    This is an operator attestation, not provider verification. The caller must
+    have independently established which client issued the existing credentials.
+    """
+    accounts._active(session.actor_user_id)
+    if not accounts.users.is_admin(session.actor_user_id):
+        raise PermissionError('oauth_configuration_admin_required')
+    store = accounts.integrations
+    with store._connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        row = db.execute('SELECT provider_key, enabled, connection_json, credential_generation, credential_ref FROM v2_integrations WHERE integration_id=?',
+                         (connection_id,)).fetchone()
+        if not row:
+            raise OAuthError('oauth_connection_unavailable')
+        value = json.loads(row['connection_json'])
+        if (row['provider_key'] != config.provider or not row['enabled'] or not row['credential_ref']
+                or value.get('owner_user_id') != session.actor_user_id or value.get('status') != 'connected'
+                or value.get('revision') != expected_revision or row['credential_generation'] != expected_generation):
+            raise OAuthError('oauth_client_attestation_stale')
+        digest = hashlib.sha256(config.client_id.encode()).hexdigest()
+        old = db.execute('SELECT client_digest FROM v2_oauth_connection_clients WHERE connection_id=?', (connection_id,)).fetchone()
+        if old and old['client_digest'] != digest:
+            raise OAuthError('oauth_client_existing_accounts_require_migration')
+        db.execute('INSERT OR IGNORE INTO v2_oauth_connection_clients VALUES (?,?,?)',
+                   (connection_id, digest, 'operator_attested'))
+    return {'recorded': True}
+
 def environment_clients(environ, packaged=None, saved=None):
     """Resolve operator overrides over bundled public clients, independently."""
     clients, status, sources = [], {}, {}
@@ -333,7 +363,11 @@ class OAuthService:
         with self.store._connect() as db:
             db.execute('CREATE TABLE IF NOT EXISTS v2_oauth_leases (connection_id TEXT PRIMARY KEY, nonce TEXT NOT NULL)')
             db.execute('''CREATE TABLE IF NOT EXISTS v2_oauth_connection_clients (
-                connection_id TEXT PRIMARY KEY, client_digest TEXT NOT NULL) STRICT''')
+                connection_id TEXT PRIMARY KEY, client_digest TEXT NOT NULL,
+                provenance TEXT NOT NULL CHECK (provenance IN ('oauth_exchange','operator_attested'))) STRICT''')
+            columns = {row[1] for row in db.execute('PRAGMA table_info(v2_oauth_connection_clients)')}
+            if 'provenance' not in columns:
+                db.execute("ALTER TABLE v2_oauth_connection_clients ADD COLUMN provenance TEXT NOT NULL DEFAULT 'oauth_exchange'")
 
     def _owned(self, session, connection_id):
         record = self.store.get(connection_id)
@@ -454,8 +488,8 @@ class OAuthService:
                     AND credential_generation=?''', (json.dumps(value, sort_keys=True), reference, generation,
                     value['updated_at'], record.integration_id, json.dumps(record.connection, sort_keys=True), record.credential_generation))
                 if cursor.rowcount == 1:
-                    db.execute('INSERT OR REPLACE INTO v2_oauth_connection_clients VALUES (?,?)',
-                               (record.integration_id, client_digest))
+                    db.execute('INSERT OR REPLACE INTO v2_oauth_connection_clients VALUES (?,?,?)',
+                               (record.integration_id, client_digest, 'oauth_exchange'))
         except Exception:
             try:
                 self.store.credential_vault.delete(reference)

@@ -416,6 +416,17 @@ class V2DaemonServer:
                 raise OAuthError('oauth_client_configuration_mismatch')
             return save_operator_client_secret(management.accounts, session, values['provider'],
                                                existing.config.client_id, values['client_secret'])
+        if params.get('action') == 'attest_current_oauth_client':
+            from alphonse.agent_v2.integrations.oauth import attest_current_client, OAuthError
+            values = params.get('values', {})
+            if set(values) != {'provider', 'connection_id', 'expected_revision', 'expected_generation'}:
+                raise OAuthError('oauth_client_attestation_invalid')
+            existing = oauth.clients.get(values['provider']) if oauth else None
+            if not existing:
+                raise OAuthError('oauth_client_configuration_mismatch')
+            return attest_current_client(management.accounts, session, existing.config,
+                connection_id=values['connection_id'], expected_revision=values['expected_revision'],
+                expected_generation=values['expected_generation'])
         if params.get('action') == 'begin':
             from alphonse.agent_v2.integrations.oauth_loopback import OAuthLoopback
             if not hasattr(self, '_oauth_loopback'):
