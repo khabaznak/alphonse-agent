@@ -27,7 +27,7 @@ import { followDesktopStyle, readDesktopStyle, saveDesktopStyle, type DesktopSty
 import { desktopDiagnosticBehavior, type DesktopDiagnosticMode } from "./diagnosticMode";
 import { createDesktopNotifier, DESKTOP_NOTIFICATION_PREFERENCES_KEY, notificationForCompletion, notificationForQuestion, readDesktopNotificationPreferences, type DesktopNotificationPreferences } from "./desktopNotifications";
 import { readDismissedScheduledSurfaces, rememberDismissedScheduledSurface, withoutDismissedSurfaces, withoutSurface } from "./dismissedSurfaces";
-import { avatarState, avatarStateLabel, capdActivityLabel, canOpenSettingsSection, type Workspace, SETTINGS_SECTIONS } from "./layoutState";
+import { avatarState, avatarStateLabel, capdActivityLabel, canOpenSettingsSection, isCurrentDesktopAdmin, type Workspace, SETTINGS_SECTIONS } from "./layoutState";
 import { reconcileQuestionSurfaces, reuseQuestions, withoutTaskProgressSurfaces } from "./pollState";
 import { appendQueueSample, type QueueSample } from "./queueHistory";
 import { appendPdcaActivity, type PdcaSample } from "./pdcaHistory";
@@ -333,7 +333,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       } else if (diagnosticMode === "normal") {
         const current = await daemonRequest<{ onboarded: boolean; workspace_configured?: boolean; user: { user_id: string; display_name?: string; role?: string; is_active?: boolean } | null }>("current_user");
         setMemberName(current.user?.display_name || current.user?.user_id || "");
-        setIsAdmin(current.user?.role === "admin" && current.user?.is_active !== false);
+        setIsAdmin(isCurrentDesktopAdmin(current));
         if (!current.onboarded || !current.user) setModal("onboarding"); else {
           setUser(current.user.user_id);
           if (!current.workspace_configured) { setWorkspaceRequired(true); setSettingsTab("general"); setVisited((value) => new Set([...value, "settings"])); setWorkspace("settings"); }
