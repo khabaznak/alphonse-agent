@@ -1010,6 +1010,25 @@ a { color: var(--accent); }
 .optional-management .dialog-actions { flex-wrap: wrap; min-width: 0; }
 .optional-management p, .optional-management li, .optional-management label { overflow-wrap: anywhere; }
 .optional-management button { white-space: normal; }
+.accounts-workspace { display: grid; gap: 20px; }
+.accounts-workspace > [role=status]:empty { display: none; }
+.accounts-heading, .accounts-list-heading, .account-panel-heading { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 12px; }
+.accounts-heading h3, .accounts-list-heading h4, .account-panel-heading h4, .account-providers h4, .account-grants h4 { margin: 0; }
+.accounts-heading p, .account-panel-heading p, .account-attention > p, .account-grants > p { color: var(--muted); margin: 6px 0 0; }
+.accounts-list, .account-providers, .account-grants { display: grid; gap: 12px; min-width: 0; }
+.account-rows { list-style: none; display: grid; gap: 8px; padding: 0; margin: 0; }
+.account-row { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius-card); background: var(--surface); }
+.account-row-copy { display: grid; gap: 4px; flex: 1 1 160px; min-width: 0; }
+.account-row-copy span, .account-provider-row span, .account-empty { color: var(--muted); font-size: .9em; }
+.account-state { border: 1px solid var(--border); border-radius: 999px; padding: 3px 9px; color: var(--muted); font-size: .8em; text-transform: capitalize; }
+.account-state.is-connected { background: var(--accent-soft); color: var(--accent); }
+.account-attention { display: grid; gap: 8px; margin-top: 8px; }
+.account-attention h4 { margin: 0; }
+.account-work-panel { min-width: 0; padding: 18px; border: 1px solid var(--border); border-radius: var(--radius-card); background: var(--surface-subtle); }
+.account-work-panel > button { margin-left: 0; }
+.account-work-panel .form-field { display: grid; gap: 8px; }
+.account-provider-row { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 6px 16px; border-bottom: 1px solid var(--border); padding: 10px 0; }
+.account-provider-row span { flex: 1 1 240px; }
 /* Persistent desktop shell: each column owns its scrolling. */
 .desktop-shell { --nav-width: 224px; position: relative; grid-template-columns: var(--nav-width) minmax(0, 1fr); }
 .desktop-shell.sidebar-collapsed { --nav-width: 72px; grid-template-columns: var(--nav-width) minmax(0, 1fr); }
