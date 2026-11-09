@@ -86,6 +86,15 @@ callbacks remain usable by a separately arranged headless callback transport but
 are unavailable to Desktop's loopback receiver. The existing account state and
 health controls report connection and reconnect status independently.
 
+Routine account catalog views do not probe credentials for each owned connection:
+they show credential storage as not checked. The owner may explicitly select
+**Check credential storage**, which can prompt for Keychain access and reports a
+last-check result rather than a continuing guarantee. Catalogs are not polled
+automatically in Desktop. Listing selected, granted skill sources can still verify
+their authorization and credential availability; actual account use always repeats
+the deterministic checks. A connected status alone does not prove current vault
+access or contact the provider.
+
 Google requires a Desktop public client, the Gmail and Google Calendar APIs enabled,
 and a consent audience eligible for the account: consumer accounts need an External
 app; Testing requires the chosen account to be an allowed test user. Workspace admin

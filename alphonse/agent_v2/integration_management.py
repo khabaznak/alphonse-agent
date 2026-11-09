@@ -36,7 +36,7 @@ class IntegrationManagement:
         owned = []
         for record in self.accounts.integrations.list():
             if record.connection.get('owner_user_id') == actor:
-                health = self.oauth.health(session, record.integration_id) if self.oauth and record.provider_key in SCOPES else dict(
+                health = self.oauth.health(session, record.integration_id, probe_credentials=False) if self.oauth and record.provider_key in SCOPES else dict(
                     connection_id=record.integration_id, display_name=record.display_name,
                     provider=record.provider_key, **{k: record.connection[k] for k in
                         ('revision', 'status', 'health_code', 'capabilities')})
@@ -229,6 +229,12 @@ class IntegrationManagement:
             return {'findings': self.finding_views(session)}
         if action == 'catalog':
             return self.catalog(session)
+        if action == 'account_health':
+            if channel != 'desktop' or not self.oauth:
+                raise PermissionError('account_health_desktop_required')
+            health = self.oauth.health(session, connection_id=values['connection_id'])
+            health.pop('granted_scopes', None)
+            return health
         if action == 'project':
             return self.project(session, **values)
         if action == 'review':

@@ -275,7 +275,7 @@ def test_managed_catalog_tolerates_other_provider_accounts(management):
     assert result['providers'][0]['status'] == 'available'
 
 
-def test_desktop_ipc_consent_callback_uses_synthetic_provider_and_no_implicit_grants(management):
+def test_desktop_ipc_consent_callback_uses_synthetic_provider_and_no_implicit_grants(management, monkeypatch):
     import socket
     from urllib.parse import urlencode
     from urllib.request import urlopen
@@ -304,9 +304,23 @@ def test_desktop_ipc_consent_callback_uses_synthetic_provider_and_no_implicit_gr
         with urlopen(callback, timeout=3) as response:
             assert response.status == 200
             assert b'disposable' not in response.read()
+        calls = []
+        original_health = f.store.credential_vault.health
+        def counted_health(*args):
+            calls.append(True)
+            return original_health(*args)
+        monkeypatch.setattr(f.store.credential_vault, 'health', counted_health)
         after = request('catalog')
         connected = next(c for c in after['connections'] if c['connection_id'] == 'google-test')
         assert connected['status'] == 'connected' and connected['capabilities'] == ['mail_read']
+        assert connected['credential_health'] == 'not_checked' and calls == []
+        checked = request('account_health', {'connection_id': 'google-test'})
+        assert checked['credential_health'] == 'available' and len(calls) == 1
+        assert 'granted_scopes' not in checked
+        with pytest.raises(PermissionError):
+            f.management.request(AccountSession('parent'), 'account_health', {'connection_id': 'google-test'}, channel='task:synthetic')
+        with pytest.raises(PermissionError):
+            f.management.request(AccountSession('child'), 'account_health', {'connection_id': 'google-test'})
         assert len(after['grants']) == len(before['grants'])
         assert 'disposable-access' not in json.dumps(after) and 'credential_ref' not in json.dumps(after)
     finally:

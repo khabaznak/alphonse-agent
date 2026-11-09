@@ -376,11 +376,13 @@ class OAuthService:
         self.accounts._owner(session, record.connection)
         return record
 
-    def health(self, session: AccountSession, connection_id: str):
+    def health(self, session: AccountSession, connection_id: str, *, probe_credentials: bool = True):
         record = self._owned(session, connection_id)
         value = record.connection
         storage = 'absent'
-        if record.credential_ref:
+        if record.credential_ref and not probe_credentials:
+            storage = 'not_checked'
+        elif record.credential_ref:
             storage = self.store.credential_vault.health(record.credential_ref, connection_id, record.credential_generation)
         return dict(connection_id=connection_id, provider=record.provider_key, display_name=record.display_name,
                     status=value['status'], health_code=value['health_code'], revision=value['revision'],

@@ -14,7 +14,7 @@ function useManaged<T>(action: string, values: Record<string, unknown>, identity
       if (fence.current.current(ticket)) { setData(result); setError(""); }
     } catch (cause) { if (fence.current.current(ticket)) { setData(null); setError(String(cause instanceof Error ? cause.message : cause)); } }
   }, [action, serialized, identity]);
-  useEffect(() => { setData(null); void refresh(); const timer = window.setInterval(() => void refresh(), 15000); return () => { window.clearInterval(timer); fence.current.invalidate(); }; }, [refresh]);
+  useEffect(() => { setData(null); void refresh(); const timer = action === 'catalog' ? null : window.setInterval(() => void refresh(), 15000); return () => { if (timer !== null) window.clearInterval(timer); fence.current.invalidate(); }; }, [refresh, action]);
   return { data, error, refresh };
 }
 function RecipientPicker({ members, selected, onChange, allowed }: { members: Member[]; selected: string[]; onChange: (v: string[]) => void; allowed?: string[] }) {
@@ -49,6 +49,8 @@ export function OptionalAccounts({ identity }: { identity: string }) {
   const [accountDisclosureAccepted, setAccountDisclosureAccepted] = useState(false);
   useEffect(() => { setAccountDisclosureAccepted(false); }, [identity]);
   const [accountCapabilities, setAccountCapabilities] = useState<Record<string, string[]>>({});
+  const [checkedHealth, setCheckedHealth] = useState<Record<string, { revision: number; credential_health?: string }>>({});
+  useEffect(() => { setCheckedHealth({}); }, [identity]);
   const [clientId, setClientId] = useState(""); const [clientSecret, setClientSecret] = useState(""); const [configProvider, setConfigProvider] = useState("google");
   const [provider, setProvider] = useState('google'); const [name, setName] = useState(""); const [capabilities, setCapabilities] = useState<string[]>([]);
   const [grantFor, setGrantFor] = useState<Connection | null>(null); const [editingGrant, setEditingGrant] = useState<Grant | undefined>();
@@ -65,16 +67,25 @@ export function OptionalAccounts({ identity }: { identity: string }) {
     setBusy(true); setNotice("");
     try {
       const result = await optionalManagement<{ authorization_url: string }>('begin', { connection_id: connection?.connection_id || `account_${crypto.randomUUID()}`, provider: connection?.provider || provider, expected_revision: connection?.revision || 0, display_name: connection?.display_name || name, capabilities: connection ? (accountCapabilities[connection.connection_id] || connection.capabilities) : capabilities });
-      await openAccountConsent(result.authorization_url); setNotice("Complete consent in your browser, then refresh account health."); await refresh();
+      await openAccountConsent(result.authorization_url); setNotice("Complete consent in your browser, then refresh the account list."); await refresh();
     } catch (cause) { setNotice(cause instanceof Error ? cause.message : String(cause)); await refresh(); }
+    finally { setBusy(false); }
+  };
+  const checkHealth = async (connection: Connection) => {
+    setBusy(true); setNotice('');
+    try {
+      const result = await optionalManagement<Connection>('account_health', { connection_id: connection.connection_id });
+      setCheckedHealth(current => ({ ...current, [connection.connection_id]: { revision: result.revision, credential_health: result.credential_health } }));
+      if (result.revision !== connection.revision) await refresh();
+    } catch { setNotice('Could not check credential storage. Check local account access and try again.'); }
     finally { setBusy(false); }
   };
   return <section className="optional-management"><h3 tabIndex={-1} ref={heading}>Optional accounts</h3><p>Connect only the capabilities you choose. A connection starts no monitoring. Account owners control grants independently of project membership.</p><StatusText>{error || notice}</StatusText>
     {!data ? <p>Account management is unavailable until a local authenticated session is ready.</p> : <>
       <p>Managing accounts as {data.members.find(m => m.user_id === data.actor_user_id)?.display_name || data.actor_user_id}.</p>
-      <button disabled={busy} onClick={() => void refresh()}>Refresh account health</button>
+      <button disabled={busy} onClick={() => void refresh()}>Refresh account list</button>
       <AccountDisclosure accepted={accountDisclosureAccepted} onChange={setAccountDisclosureAccepted} />
-      {data.connections.map(c => <article key={c.connection_id} className="project-detail"><h4>{c.display_name} · {c.provider}</h4><p>{friendly(c.status)} · {friendly(c.health_code)} · credential storage: {c.credential_health || 'unknown'}</p><AccountConsentGuidance connection={c} /><p>{c.capabilities.map(k => labels[k] || friendly(k)).join(', ')}</p><fieldset disabled={busy}><legend>Capabilities for next consent</legend>{data.providers.find(p => p.provider === c.provider)?.capabilities.map(k => <label key={k}><input type="checkbox" checked={(accountCapabilities[c.connection_id] || c.capabilities).includes(k)} onChange={e => { const current = accountCapabilities[c.connection_id] || c.capabilities; setAccountCapabilities(v => ({ ...v, [c.connection_id]: e.target.checked ? [...current, k] : current.filter(c => c !== k) })); }} /> {labels[k] || friendly(k)}</label>)}</fieldset>{c.revocation_pending && <p>Provider revocation pending. Local access is stopped.</p>}{c.credential_deletion_pending && <p>Credential deletion pending.</p>}<div className="dialog-actions">
+      {data.connections.map(c => <article key={c.connection_id} className="project-detail"><h4>{c.display_name} · {c.provider}</h4><p>{friendly(c.status)} · {friendly(c.health_code)} · credential storage (last check): {friendly((checkedHealth[c.connection_id]?.revision === c.revision ? checkedHealth[c.connection_id].credential_health : c.credential_health) || 'unknown')}</p><button disabled={busy} onClick={() => void checkHealth(c)}>Check credential storage</button><AccountConsentGuidance connection={c} /><p>{c.capabilities.map(k => labels[k] || friendly(k)).join(', ')}</p><fieldset disabled={busy}><legend>Capabilities for next consent</legend>{data.providers.find(p => p.provider === c.provider)?.capabilities.map(k => <label key={k}><input type="checkbox" checked={(accountCapabilities[c.connection_id] || c.capabilities).includes(k)} onChange={e => { const current = accountCapabilities[c.connection_id] || c.capabilities; setAccountCapabilities(v => ({ ...v, [c.connection_id]: e.target.checked ? [...current, k] : current.filter(c => c !== k) })); }} /> {labels[k] || friendly(k)}</label>)}</fieldset>{c.revocation_pending && <p>Provider revocation pending. Local access is stopped.</p>}{c.credential_deletion_pending && <p>Credential deletion pending.</p>}<div className="dialog-actions">
         <button disabled={busy || c.status !== 'connected'} onClick={() => void run('pause', { connection_id: c.connection_id, expected_revision: c.revision })}>Pause account</button>
         <button disabled={busy || !accountDisclosureAccepted || c.credential_deletion_pending || data.providers.find(p => p.provider === c.provider)?.status !== 'available' || !(accountCapabilities[c.connection_id] || c.capabilities).length} onClick={() => void begin(c)}>Reconnect with consent</button>
         <button disabled={busy || c.status !== 'connected'} onClick={() => { setEditingGrant(undefined); setGrantFor(c); }}>Grant access</button>
