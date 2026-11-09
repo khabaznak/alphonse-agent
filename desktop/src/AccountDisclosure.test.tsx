@@ -1,7 +1,7 @@
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { AccountConsentGuidance, AccountDisclosure, accountActionError } from './OptionalIntegrations';
+import { AccountConsentGuidance, AccountDisclosure, accountActionError, clientSetupError } from './OptionalIntegrations';
 import type { Connection } from './integrationManagement';
 
 describe('account processing disclosure', () => {
@@ -25,6 +25,12 @@ describe('account setup errors', () => {
     const message = accountActionError('unexpected synthetic private detail');
     expect(message).toContain('could not be completed');
     expect(message).not.toContain('synthetic private detail');
+  });
+  it('distinguishes test client secret recovery from public client setup', () => {
+    expect(clientSetupError('oauth_client_configuration_mismatch', 'secret')).toContain('Configure the Google test client');
+    expect(clientSetupError('credential_backend_unavailable', 'secret')).toContain('Keychain access');
+    expect(clientSetupError('unexpected synthetic private detail', 'secret')).not.toContain('synthetic private detail');
+    expect(clientSetupError('oauth_client_configuration_invalid')).toContain('public client ID');
   });
 });
 
