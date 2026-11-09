@@ -82,3 +82,16 @@ def test_irrelevant_items_do_not_remain_pending_analysis(findings):
         conn.execute('INSERT INTO v2_project_triage VALUES(?,?,?)', (f.run_id, f.eid, json.dumps({'status': 'irrelevant'})))
     result = management(f).project(AccountSession('child'), f.project.project_id)
     assert result['checks'][0]['runs'][0]['pending_analysis'] is False
+
+
+def test_expired_processing_details_are_not_reported_as_pending_or_complete(findings):
+    f = findings
+    with f.schedules._connect() as conn:
+        row = conn.execute('SELECT receipt FROM v2_project_check_runs WHERE check_run_id=?', (f.run_id,)).fetchone()
+        receipt = json.loads(row[0])
+        receipt['processing_details_expired'] = True
+        conn.execute('UPDATE v2_project_check_runs SET receipt=? WHERE check_run_id=?', (json.dumps(receipt), f.run_id))
+    result = management(f).project(AccountSession('child'), f.project.project_id)
+    run = result['checks'][0]['runs'][0]
+    assert run['processing_details_expired'] is True
+    assert run['pending_analysis'] is None

@@ -1,15 +1,49 @@
 use std::env;
-use std::path::PathBuf;
-use std::process::Command;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 
 use serde_json::{json, Value};
-use tauri::AppHandle;
-use tauri_plugin_shell::ShellExt;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
-use tokio::time::{sleep, Duration, Instant};
+use tokio::time::{sleep, timeout, Duration, Instant};
 
 const PROTOCOL_VERSION: u8 = 1;
+const DAEMON_START_TIMEOUT: Duration = Duration::from_secs(90);
+const DAEMON_PING_TIMEOUT: &str = "daemon readiness check timed out";
+static DAEMON_START_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+fn daemon_is_ready(value: &Value) -> bool {
+    value.get("status").and_then(Value::as_str) == Some("ready")
+}
+
+async fn daemon_ping(path: PathBuf, limit: Duration) -> Result<Value, String> {
+    timeout(limit, ipc_request_at(path, "ping", json!({})))
+        .await
+        .map_err(|_| DAEMON_PING_TIMEOUT.to_owned())?
+}
+
+fn should_spawn_daemon(result: &Result<Value, String>) -> bool {
+    result.as_ref().err().is_some_and(|error| error != DAEMON_PING_TIMEOUT)
+}
+
+fn bundled_daemon_path(executable: &Path) -> Result<PathBuf, String> {
+    let directory = executable.parent().ok_or("Desktop executable directory unavailable")?;
+    Ok(directory.join(format!("alphonse-daemon{}", env::consts::EXE_SUFFIX)))
+}
+
+fn spawn_bundled_daemon() -> Result<(), String> {
+    let executable = env::current_exe().map_err(|_| "Desktop executable unavailable")?;
+    let daemon = bundled_daemon_path(&executable)?;
+    let home = dirs_home().filter(|path| path.is_dir()).ok_or("Home directory unavailable")?;
+    let mut command = Command::new(daemon);
+    command.current_dir(home).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    #[cfg(unix)]
+    command.process_group(0);
+    command.spawn().map(|_| ()).map_err(|error| format!("could not start bundled daemon: {error}"))
+}
 
 #[tauri::command]
 fn desktop_diagnostic_mode() -> String {
@@ -22,12 +56,14 @@ fn desktop_diagnostic_project_id() -> String {
 }
 
 #[tauri::command]
-async fn ensure_daemon(app: AppHandle) -> Result<(), String> {
-    if ipc_request("ping", json!({})).await.is_ok() {
-        return Ok(());
-    }
+async fn ensure_daemon() -> Result<(), String> {
+    // Multiple UI effects may ask at once. Only one should launch a sidecar;
+    // waiters recheck the socket after the first startup attempt completes.
+    let _startup = DAEMON_START_LOCK.lock().await;
+    let existing = daemon_ping(socket_path(), Duration::from_secs(2)).await;
+    if existing.as_ref().is_ok_and(daemon_is_ready) { return Ok(()); }
 
-    if cfg!(debug_assertions) {
+    if should_spawn_daemon(&existing) && cfg!(debug_assertions) {
         let project_root = development_project_root();
         let python = project_root.join(".venv").join("bin").join("python");
         let executable = if python.is_file() { python } else { PathBuf::from("python3") };
@@ -36,17 +72,14 @@ async fn ensure_daemon(app: AppHandle) -> Result<(), String> {
             .current_dir(project_root)
             .spawn()
             .map_err(|error| format!("could not start the development daemon: {error}"))?;
-    } else {
-        app.shell()
-            .sidecar("alphonse-daemon")
-            .map_err(|error| format!("bundled daemon unavailable: {error}"))?
-            .spawn()
-            .map_err(|error| format!("could not start bundled daemon: {error}"))?;
+    } else if should_spawn_daemon(&existing) {
+        spawn_bundled_daemon()?;
     }
 
-    let deadline = Instant::now() + Duration::from_secs(8);
+    // A packaged one-file daemon may need to unpack on a cold launch.
+    let deadline = Instant::now() + DAEMON_START_TIMEOUT;
     while Instant::now() < deadline {
-        if ipc_request("ping", json!({})).await.is_ok() {
+        if daemon_ping(socket_path(), Duration::from_secs(2)).await.as_ref().is_ok_and(daemon_is_ready) {
             return Ok(());
         }
         sleep(Duration::from_millis(150)).await;
@@ -144,7 +177,11 @@ fn play_alert_sound(path: String) -> Result<(), String> {
 }
 
 async fn ipc_request(method: &str, params: Value) -> Result<Value, String> {
-    let mut stream = UnixStream::connect(socket_path())
+    ipc_request_at(socket_path(), method, params).await
+}
+
+async fn ipc_request_at(path: PathBuf, method: &str, params: Value) -> Result<Value, String> {
+    let mut stream = UnixStream::connect(path)
         .await
         .map_err(|error| format!("daemon unavailable: {error}"))?;
     let request = json!({
@@ -206,4 +243,46 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running Alphonse Desktop");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bundled_daemon_is_next_to_desktop_executable() {
+        let executable = Path::new("/tmp/Alphonse Desktop.app/Contents/MacOS/alphonse-desktop");
+        assert_eq!(
+            bundled_daemon_path(executable).unwrap(),
+            executable.parent().unwrap().join(format!("alphonse-daemon{}", env::consts::EXE_SUFFIX))
+        );
+    }
+
+    #[test]
+    fn only_ready_ping_completes_startup() {
+        assert!(daemon_is_ready(&json!({"status": "ready"})));
+        assert!(!daemon_is_ready(&json!({"status": "starting"})));
+        assert!(!daemon_is_ready(&json!({})));
+        assert!(!should_spawn_daemon(&Ok(json!({"status": "starting"}))));
+        assert!(!should_spawn_daemon(&Err(DAEMON_PING_TIMEOUT.to_owned())));
+        assert!(should_spawn_daemon(&Err("daemon unavailable".to_owned())));
+    }
+
+    #[test]
+    fn readiness_ping_times_out_when_peer_never_replies() {
+        use std::os::unix::net::UnixListener;
+        let directory = std::env::temp_dir().join(format!("alphonse-ping-test-{}", std::process::id()));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("daemon.sock");
+        let listener = UnixListener::bind(&path).unwrap();
+        let peer = std::thread::spawn(move || {
+            let (_connection, _) = listener.accept().unwrap();
+            std::thread::sleep(Duration::from_millis(300));
+        });
+        let result = tauri::async_runtime::block_on(daemon_ping(path.clone(), Duration::from_millis(50)));
+        assert_eq!(result.unwrap_err(), DAEMON_PING_TIMEOUT);
+        peer.join().unwrap();
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_dir(directory).unwrap();
+    }
 }

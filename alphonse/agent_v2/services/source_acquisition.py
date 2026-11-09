@@ -8,6 +8,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta
 import hashlib
 import json
+from pathlib import Path
 
 from alphonse.agent_v2.accounts import AccountSession
 from alphonse.agent_v2.automations import EventEnvelope
@@ -40,6 +41,8 @@ class SourceAcquisition:
                     PRIMARY KEY(check_run_id,scope_key,request_key));
                 CREATE TABLE IF NOT EXISTS v2_source_streams (
                     scope_key TEXT PRIMARY KEY, definition TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS v2_source_expired_streams (
+                    scope_key TEXT PRIMARY KEY);
                 CREATE TABLE IF NOT EXISTS v2_source_processing (
                     check_run_id TEXT NOT NULL, stage TEXT NOT NULL,
                     definition TEXT NOT NULL, PRIMARY KEY(check_run_id,stage));
@@ -107,6 +110,9 @@ class SourceAcquisition:
         if progress is None:
             with self.dispatcher.store._connect() as conn:
                 row = conn.execute('SELECT definition FROM v2_source_streams WHERE scope_key=?', (key,)).fetchone()
+                expired = conn.execute('SELECT 1 FROM v2_source_expired_streams WHERE scope_key=?', (key,)).fetchone()
+            if not row and expired and 'cursor_expired_bounded_resync' not in ctx.run['coverage']['gaps']:
+                ctx.run['coverage']['gaps'].append('cursor_expired_bounded_resync')
             progress = json.loads(row[0]) if row else dict(mode='baseline', cursor=None,
                 since=(instant(ctx.run['scheduled_for']) - timedelta(days=policy['initial_lookback_days'])).isoformat())
         query = self._query(policy, source)
@@ -260,6 +266,27 @@ class SourceAcquisition:
         # at a window boundary may be stored, but cannot cause another read.
         with self.dispatcher.store._connect() as conn:
             conn.execute('BEGIN IMMEDIATE')
+            # Provider pages and retries can arrive out of order. A later page
+            # alone is not proof that a previously deleted source was restored:
+            # keep it redacted and report the unresolved coverage gap.
+            deleted_keys = {tuple(row) for row in conn.execute("""
+                SELECT json_extract(definition, '$.connection_id'),
+                       json_extract(definition, '$.resource'),
+                       json_extract(definition, '$.source_id')
+                FROM v2_source_evidence
+                WHERE json_extract(definition, '$.deleted')=1
+                   OR json_extract(definition, '$.state')='deleted'""")}
+            if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_recovery_source_tombstones'").fetchone():
+                deleted_keys.update(tuple(row) for row in conn.execute(
+                    'SELECT connection_id,resource,source_id FROM v2_recovery_source_tombstones'))
+            for record in records:
+                identity = (record['connection_id'], record['resource'], record['source_id'])
+                if not record['deleted'] and identity in deleted_keys:
+                    record.update(content={}, state='deleted', deleted=True)
+                    if 'source_deletion_reconciliation_required' not in coverage['gaps']:
+                        coverage['gaps'].append('source_deletion_reconciliation_required')
+                elif record['deleted']:
+                    deleted_keys.add(identity)
             updated = conn.execute("""UPDATE v2_project_check_runs SET receipt=? WHERE check_run_id=?
                 AND state='leased' AND generation=? AND lease_owner=? AND lease_until>?""",
                 (json.dumps(receipt), ctx.run['check_run_id'], ctx.run['generation'], ctx.run['lease_owner'], observed))
@@ -280,6 +307,7 @@ class SourceAcquisition:
                 conn.execute('INSERT OR IGNORE INTO v2_source_evidence VALUES(?,?,?,?)',
                              (record['evidence_id'], ctx.run['check_run_id'], key, json.dumps(record)))
             conn.execute('INSERT OR REPLACE INTO v2_source_streams VALUES(?,?)', (key, json.dumps(next_progress)))
+            conn.execute('DELETE FROM v2_source_expired_streams WHERE scope_key=?', (key,))
         # The evidence transaction already accounts for bytes/items; perform
         # must not add them again. A crash now recovers the persisted receipt.
         ctx.run.update(acquisition_checkpoint=checkpoint, coverage=coverage,
@@ -350,11 +378,16 @@ class SourceAcquisition:
     def purge_content(self):
         """Remove expired/revoked bytes; keep content-free provenance receipts."""
         with self.dispatcher.store._connect() as conn:
-            rows = conn.execute("SELECT evidence_id,check_run_id,definition FROM v2_source_evidence WHERE json_extract(definition, '$.state') = 'available'").fetchall()
+            rows = conn.execute("""SELECT evidence_id,check_run_id,definition FROM v2_source_evidence
+                WHERE json_extract(definition, '$.state') = 'available'
+                   OR (json_extract(definition, '$.state') IS NOT 'available'
+                       AND COALESCE(json_extract(definition, '$.content'), 'null') != '{}')""").fetchall()
         for row in rows:
             value = json.loads(row['definition'])
-            state = 'expired' if instant(value['retention_deadline']) <= self.clock() else ''
-            if not state:
+            previous_state = value.get('state')
+            state = (previous_state if previous_state in {'expired', 'revoked', 'deleted'} else 'revoked') if previous_state != 'available' else (
+                'expired' if instant(value['retention_deadline']) <= self.clock() else '')
+            if not state and previous_state == 'available':
                 run = None
                 try:
                     run = self.dispatcher.get(row['check_run_id'])
@@ -382,16 +415,102 @@ class SourceAcquisition:
             if state:
                 value.update(content={}, state=state)
                 with self.dispatcher.store._connect() as conn:
-                    conn.execute('UPDATE v2_source_evidence SET definition=? WHERE evidence_id=?',
-                                 (json.dumps(value), row['evidence_id']))
+                    # A newer provider deletion or revocation may have changed
+                    # this evidence while authority was checked. Never replace
+                    # its newer tombstone with a stale expiry snapshot.
+                    conn.execute('UPDATE v2_source_evidence SET definition=? WHERE evidence_id=? AND definition=?',
+                                 (json.dumps(value), row['evidence_id'], row['definition']))
 
         findings = getattr(self, 'findings', None)
         if findings is not None:
             findings.purge()
 
+    def purge_source_metadata(self):
+        """Expire old terminal page receipts and their unreferenced cursors.
+
+        The cursor table predates timestamps, so age comes from its page receipts.
+        Unknown-age cursors are retained rather than guessed old. A live run may
+        need an old cursor before it has written its checkpoint: defer cursor
+        eviction while any run is active. Receipt deletion and cursor selection
+        share the writer transaction with page acceptance.
+        """
+        cutoff = (self.clock() - timedelta(days=30)).isoformat()
+        with self.dispatcher.store._connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            active = conn.execute("SELECT 1 FROM v2_project_check_runs WHERE state != 'terminal' LIMIT 1").fetchone()
+            if not active:
+                conn.execute("""INSERT OR IGNORE INTO v2_source_expired_streams
+                    SELECT s.scope_key FROM v2_source_streams s JOIN v2_source_pages p ON p.scope_key=s.scope_key
+                    GROUP BY s.scope_key
+                    HAVING COUNT(*) = COUNT(julianday(json_extract(p.definition, '$.observed_at')))
+                       AND MAX(julianday(json_extract(p.definition, '$.observed_at'))) < julianday(?)""", (cutoff,))
+                conn.execute("""DELETE FROM v2_source_streams WHERE scope_key IN (
+                    SELECT p.scope_key FROM v2_source_pages p GROUP BY p.scope_key
+                    HAVING COUNT(*) = COUNT(julianday(json_extract(p.definition, '$.observed_at')))
+                       AND MAX(julianday(json_extract(p.definition, '$.observed_at'))) < julianday(?)
+                )""", (cutoff,))
+            # Processing records can be removed only when event and run state
+            # share this transaction. Unknown topology or any active work keeps
+            # them: neither a missing event nor a separate database proves that
+            # downstream work is finished.
+            source_db = str(self.dispatcher.store.db_path)
+            event_db = str(self.events.db_path)
+            same_database = (source_db != ':memory:' and event_db != ':memory:'
+                             and Path(source_db).resolve() == Path(event_db).resolve())
+            tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            required = {'v2_event_receipts', 'v2_automation_executions', 'v2_source_publications'}
+            event_active = (conn.execute("SELECT 1 FROM v2_automation_executions WHERE status NOT IN ('completed','cancelled','failed','denied') LIMIT 1").fetchone()
+                            if same_database and required <= tables else True)
+            if not active and not event_active:
+                rows = conn.execute("""SELECT r.check_run_id, r.receipt FROM v2_project_check_runs r
+                    WHERE r.state='terminal'
+                      AND julianday(json_extract(r.receipt, '$.finished_at')) < julianday(?)
+                      AND julianday(json_extract(r.receipt, '$.window_end')) < julianday(?)
+                      AND (json_extract(r.receipt, '$.outcome') IN ('no_match','cancelled')
+                           OR (json_extract(r.receipt, '$.outcome')='complete'
+                               AND json_extract(r.receipt, '$.coverage.triage_no_match')=1)
+                           OR (EXISTS (SELECT 1 FROM v2_source_publications p WHERE p.check_run_id=r.check_run_id)
+                               AND EXISTS (SELECT 1 FROM v2_event_receipts e WHERE e.worker_id=?
+                                           AND e.source_event_id='source-result:' || r.check_run_id)))""",
+                    (cutoff, cutoff, WORKER)).fetchall()
+                for row in rows:
+                    count = conn.execute('DELETE FROM v2_source_processing WHERE check_run_id=?', (row['check_run_id'],)).rowcount
+                    if 'v2_project_triage' in tables:
+                        count += conn.execute('DELETE FROM v2_project_triage WHERE check_run_id=?', (row['check_run_id'],)).rowcount
+                    receipt = json.loads(row['receipt'])
+                    if count or not receipt.get('diagnostics_expired'):
+                        # Retain the small identity and outcome envelope needed
+                        # for event scope, replay, and historical finding checks.
+                        # Do not retain checkpoints, source IDs, cursors, grants,
+                        # or provider-specific coverage beyond this deadline.
+                        keep = ('check_run_id', 'policy_id', 'policy_revision', 'occurrence_key',
+                                'scheduled_for', 'executing_user_id', 'project_id',
+                                'window_start', 'window_end', 'pages', 'items', 'bytes_read',
+                                'model_calls', 'attempts', 'runtime_seconds', 'started_at',
+                                'finished_at', 'outcome', 'error_code', 'publication_id')
+                        compact = {key: receipt[key] for key in keep if key in receipt}
+                        coverage = receipt.get('coverage') if isinstance(receipt.get('coverage'), dict) else {}
+                        compact['coverage'] = {key: coverage[key] for key in
+                            ('acquisition_complete', 'processing', 'triage_no_match') if key in coverage}
+                        compact['coverage']['details_expired'] = True
+                        compact.update(acquisition_checkpoint={}, analysis_checkpoint={},
+                                       processing_details_expired=True, diagnostics_expired=True)
+                        conn.execute("UPDATE v2_project_check_runs SET receipt=? WHERE check_run_id=? AND state='terminal'",
+                                     (json.dumps(compact), row['check_run_id']))
+            # Keep at least one recent age witness for a cursor that remains.
+            conn.execute("""DELETE FROM v2_source_pages WHERE
+                julianday(json_extract(definition, '$.observed_at')) < julianday(?)
+                AND (NOT EXISTS (SELECT 1 FROM v2_source_streams s WHERE s.scope_key=v2_source_pages.scope_key)
+                     OR EXISTS (SELECT 1 FROM v2_source_pages newer
+                                WHERE newer.scope_key=v2_source_pages.scope_key
+                                AND julianday(json_extract(newer.definition, '$.observed_at')) >= julianday(?)))
+                AND EXISTS (SELECT 1 FROM v2_project_check_runs r
+                            WHERE r.check_run_id=v2_source_pages.check_run_id AND r.state='terminal')""", (cutoff, cutoff))
+
     def publish_ready(self):
         """Crash-safe retry via existing durable event receipts; no second queue."""
         self.purge_content()
+        self.purge_source_metadata()
         with self.dispatcher.store._connect() as conn:
             rows = conn.execute("""SELECT r.check_run_id FROM v2_project_check_runs r
                 LEFT JOIN v2_source_publish_attempts a ON a.check_run_id=r.check_run_id

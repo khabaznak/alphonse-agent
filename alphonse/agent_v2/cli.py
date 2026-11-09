@@ -22,6 +22,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers.add_parser("status", help="Show v2 daemon health and queue status")
     subparsers.add_parser("stop", help="Gracefully stop the v2 daemon")
+    recovery = subparsers.add_parser("prepare-account-recovery", help="Prepare an isolated, fenced database copy; does not restore it")
+    recovery.add_argument("source", help="Offline SQLite backup")
+    recovery.add_argument("destination", help="New staging file in a private directory")
+    inspect_recovery = subparsers.add_parser("inspect-account-recovery", help="Count work in an isolated recovery copy without activating it")
+    inspect_recovery.add_argument("source", help="Already prepared isolated recovery copy")
+    deletion_recovery = subparsers.add_parser("apply-recovery-deletions", help="Apply current source deletion, revocation and expiry state to an isolated copy")
+    deletion_recovery.add_argument("staged", help="Already prepared isolated recovery copy")
+    deletion_recovery.add_argument("current", help="Trusted current offline SQLite snapshot")
     return parser
 
 
@@ -35,6 +43,26 @@ def main(argv: list[str] | None = None) -> int:
         return show_status()
     if args.command == "stop":
         return stop_daemon()
+    if args.command == "prepare-account-recovery":
+        from alphonse.agent_v2.account_recovery import prepare_restored_database
+        result = prepare_restored_database(args.source, args.destination)
+        print(f"Isolated recovery copy prepared: {result['connections']} accounts fenced, {result['grants']} grants revoked.")
+        print("Do not start Alphonse from this copy; restore reconciliation is not yet supported.")
+        return 0
+    if args.command == "inspect-account-recovery":
+        from alphonse.agent_v2.account_recovery import inspect_staged_database
+        counts = inspect_staged_database(args.source)
+        for label, count in counts.items():
+            print(f"{label.replace('_', ' ')}: {count if count is not None else 'unknown (table absent)'}")
+        print("Inventory only; this copy remains isolated and is not ready to activate.")
+        return 0
+    if args.command == "apply-recovery-deletions":
+        from alphonse.agent_v2.account_recovery import apply_current_source_deletions
+        counts = apply_current_source_deletions(args.staged, args.current)
+        print(f"Applied {counts['source_tombstones']} deletion markers; redacted {counts['evidence_redacted']} evidence records and {counts['findings_redacted']} findings.")
+        print("Outbox table inspected." if counts['outbox_inspected'] else "Outbox table absent; independent deliveries remain unqualified.")
+        print("This copy remains isolated and is not ready to activate.")
+        return 0
     return 2
 
 

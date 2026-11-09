@@ -31,6 +31,9 @@ registration and code/S256 PKCE. The service accepts an explicit-port/path
 provider accepts that client/redirect pair. Qualify the actual pair before use.
 Do not embed a confidential web-client secret or adopt service accounts/domain-wide
 delegation to work around a rejected flow. See [Google desktop OAuth](https://developers.google.com/identity/protocols/oauth2/native-app).
+An operator-provided Desktop client secret can be stored in the credential vault
+and bound to the matching client for token exchange where Google requires it. It
+is not shipped with Alphonse and does not establish a distribution registration.
 
 Consumer Gmail accounts need External eligibility. Internal means the owning
 Workspace organization; it cannot cover unrelated household consumer accounts.
@@ -124,15 +127,23 @@ Sources checked on the review date:
 [submitted data](https://help.typesafe.ai/articles/5974925716-how-is-submitted-data-used-or-retained),
 [DPA, April 24 2026](https://typesafe.ai/legal/data-processing),
 [privacy policy, November 19 2025](https://typesafe.ai/legal/privacy-policy).
-No deployment-specific retention commitment was supplied.
+No deployment-specific retention commitment was supplied. On 2026-11-08,
+TypeSafe's public documentation stated that standard retention has no fixed
+published period and that zero data retention is available by support request,
+with confirmation visible in the organization settings. This is a possible
+operator action, not evidence that it is enabled or that all telemetry disappears:
+[TypeSafe data handling](https://help.typesafe.ai/articles/5974925716-how-is-submitted-data-used-or-retained),
+[TypeSafe ZDR request](https://help.typesafe.ai/articles/9520184411).
 
 **P2 — BLOCKED, operator:** record the exact System Two provider/model, CLI version,
 sign-in product/account plan, governing terms, training controls, remote retention,
 subprocessors/region, local session/log/cache paths and deletion procedure. Shipped
-`InferenceSettingsStore` uses the signed-in Codex CLI subscription provider.
-`OpenAICodexProviderConfig.ephemeral` defaults to false: a temporary working directory
-does not prove session/prompt deletion outside that directory. Qualify and bound
-CLI persistence before private data enters it. No inference was made in this review.
+`InferenceSettingsStore` uses the signed-in Codex CLI subscription provider. The
+runtime now passes `--ephemeral` for model requests; the CLI documents this as
+preventing local session rollout files. This does not establish deletion of other
+local logs, caches, temporary files, backups or remote copies. Qualify those paths
+before private data enters them. No inference was made in this review.
+[Codex CLI command reference](https://learn.chatgpt.com/docs/developer-commands?surface=cli)
 [OpenAI API data controls](https://developers.openai.com/api/docs/guides/your-data)
 describe API endpoint-specific storage, with default abuse-monitoring retention up
 to 30 days subject to exceptions. Those API terms do not establish subscription CLI
@@ -199,19 +210,105 @@ language in the original #105 contract.
 **R1 — BLOCKED, engineering:** the inspected runtime enforces seven-day source
 reads/cleanup and finding deadlines, but has no complete time-based 30-day cleanup
 for source streams/pages, terminal run receipts and all event/input manifests.
-Event history is count-bounded. The event receipt table rejects duplicates older
-than 90 days but keeps acceptance tombstones indefinitely; pruning these would
+A partial cleanup now removes terminal source page receipts and source cursors
+whose newest known page is older than 30 days. Cursor eviction is deferred while
+any run is active, and cursors without reliable page timestamps remain; expiry
+records a content-free scope marker so the next bounded baseline reports a coverage
+gap. Terminal processing and triage details are also expired after 30 days
+when acquisition and event recovery share a database, no run or event execution is
+active, and publication is confirmed or the run was quiet/cancelled. Desktop
+reports expired analysis details as unknown rather than complete. Unknown storage
+topology, unconfirmed publication and active work keep the details. Eligible
+terminal run receipts are reduced to identity, timing and outcome needed by event
+scope, replay and historical finding checks; checkpoints, grants and source-specific
+coverage are removed. The UI indicates that coverage details expired. This is not
+a complete 30-day retention guarantee: input manifests remain unqualified, and
+safety deferrals can exceed 30 days. Synthetic tests confirm decision and
+event-input manifests in completed, failed and cancelled task checkpoints expire
+after 30 days, while active and waiting tasks retain recovery state. That test
+does not qualify other consumers, remote model sessions or filesystem copies of a
+manifest. Source and finding cleanup now compare the exact previously checked
+record before updating it, so a concurrent deletion tombstone or newer finding
+is not overwritten by a stale cleanup decision; changed records are revisited on
+a later cleanup pass. Cleanup also removes residual bytes from evidence already
+marked expired, revoked, deleted, or in an unknown state. Collected transient UI
+and activity journals now expire after 30 days;
+future timestamps are clamped and malformed ones are rejected. Uncollected
+transient events are also pruned by the running daemon's daily maintenance;
+producers, pruning and collection share a lock to preserve fresh events. Cleanup
+is periodic, so an event can remain past its deadline until maintenance runs.
+After a provider deletion, a later page claiming the same connection, resource and
+source ID is available stays redacted and reports a reconciliation coverage gap.
+The system does not yet provide a verified way to clear that tombstone for a
+legitimately restored provider item.
+Operational retention also deletes event history older than 30 days when no
+nonterminal execution depends on it and its independent replay receipt exists;
+unknown/missing replay state keeps the event. Receipts remain in place. The event
+receipt table rejects duplicates older than 90 days but keeps acceptance tombstones indefinitely; pruning these would
 allow unseen old IDs to become new without a trusted original-age fence. Keep
 those content-free receipts until such a fence is implemented. This review does
 not relabel that behavior as a qualified 90-day physical deletion policy.
 
 **R2 — BLOCKED, operator/engineering:** no encrypted deployment backup/restore or
-private export pipeline was supplied for qualification. Live-row redaction does
-not erase WAL, freed SQLite pages, filesystem snapshots or independent backups.
+private export pipeline was supplied for qualification. Alphonse connections now
+explicitly enable SQLite `secure_delete` for ordinary deleted database content;
+that is not complete secure erasure. Daily daemon maintenance attempts a nonblocking
+WAL checkpoint and truncation after operational pruning, and defers it if another
+reader or writer prevents completion. WAL frames may remain or be created again;
+redaction does not guarantee removal from WAL, virtual-table shadow storage,
+filesystem snapshots or independent backups.
 A pre-deletion backup can resurrect content if it also restores old authority.
 Do not enable a real-account pilot until a synthetic restore with current durable
 tombstones has demonstrated denial/redaction and the actual backup expiry is
 verified. A copied database alone is not a safe restore procedure.
+
+The offline `alphonse prepare-account-recovery SOURCE DESTINATION` command creates
+an owner-only staged SQLite copy in an owner-only directory, refusing to overwrite
+an existing file. It fences all restored managed connections and revokes their
+grants transactionally, preserving their IDs. It detaches credential references
+from managed connections and preserves them separately in the isolated database
+for reconciliation, so ordinary replacement or deletion cannot inadvertently
+delete a credential still used by the live database. It does not alter the vault. The
+normal daemon refuses to start from a staged copy. Synthetic tests restore a
+pre-revocation snapshot and verify account binding, findings and pending delivery
+remain denied. A synthetic OAuth-persistence test also verifies that a new
+credential and grant in a fenced copy do not delete the live credential or revive
+an old grant. It does not authorize activating the copy. Use an offline backup as SOURCE; never target a running household
+database. Output still contains private data and needs protected storage.
+
+`alphonse inspect-account-recovery STAGED_COPY` inventories selected account,
+queue, scheduling and event tables by count without displaying row contents. An
+absent table is reported as unknown. Counts include terminal as well as pending
+rows; they do not certify fencing, completeness or readiness, and do not inspect
+independent stores or external copies. The command never activates the copy.
+
+`alphonse apply-recovery-deletions STAGED_COPY CURRENT_SNAPSHOT` applies source
+deletion markers from a trusted, current offline snapshot to an isolated copy.
+It records markers even for sources absent from the older copy, redacts matching
+cached evidence and finding versions, and redacts matching outbox rows when that
+table shares the staged database. The changes are transactional and repeatable.
+Deletion markers already present in the staged copy are also retained and applied
+to every matching cached source, even if the supplied snapshot lacks them. Staged
+revoked sources invalidate their dependent findings; expired and revoked source
+cache bytes are scrubbed. Cache expiry alone does not invalidate finding history.
+The command also applies a current snapshot's revocation or expiry to the same
+evidence ID, after checking its source identity; mismatches fail the transaction.
+If any current or historical finding refers to source evidence missing from the
+staged copy, reconciliation fails and rolls back: it cannot determine whether
+that finding depends on a deleted source. The copy remains isolated for explicit
+investigation; a missing source is never treated as evidence of safety.
+The same fail-closed rule applies to malformed finding-delivery metadata and
+outbox entries whose finding is missing, or whose non-redacted finding version
+is missing. Existing redacted findings have their retained versions and matching
+local outbox content redacted again.
+This does not prove the supplied snapshot is current or complete, reconcile
+separate databases or backups, or authorize activation. Keep both files protected.
+
+This is **not** an automatic detector for arbitrary database restores or a complete
+restore procedure: queues, external copies, credentials, backup encryption/expiry,
+reconciliation and re-consent remain unqualified. There is deliberately no command
+to activate or install this staged copy yet. Keep it isolated until a complete
+recovery procedure has been independently verified.
 
 ## Credentials and disconnect qualification
 

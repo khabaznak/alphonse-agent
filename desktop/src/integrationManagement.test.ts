@@ -1,5 +1,17 @@
 import { describe, it, expect } from 'vitest';
-import { defaultDefinition, editableDefinition, ResponseFence, sourceDefinition, validateDefinition } from './integrationManagement';
+import { defaultDefinition, editableDefinition, groupAccountRecords, ResponseFence, sourceDefinition, validateDefinition } from './integrationManagement';
+import type { Connection } from './integrationManagement';
+
+describe('account record grouping', () => {
+  it('keeps same-label records separate across connected and recovery states', () => {
+    const record = (connection_id: string, status: string): Connection => ({ connection_id, status, provider: 'google', display_name: 'Mail', revision: 1, health_code: '', capabilities: [] });
+    const records = [record('connected-one', 'connected'), record('unfinished', 'reauth_required'), record('connected-two', 'connected'), record('disconnected', 'disconnected')];
+    const groups = groupAccountRecords(records);
+    expect(groups.connected.map(c => c.connection_id)).toEqual(['connected-one', 'connected-two']);
+    expect(groups.other.map(c => c.connection_id)).toEqual(['unfinished', 'disconnected']);
+    expect([...groups.connected, ...groups.other]).toHaveLength(records.length);
+  });
+});
 
 describe('bounded check editor', () => {
   const valid = () => {

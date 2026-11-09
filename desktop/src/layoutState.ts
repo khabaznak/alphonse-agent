@@ -47,3 +47,8 @@ export const SETTINGS_SECTIONS = [
 export function canOpenSettingsSection(section: (typeof SETTINGS_SECTIONS)[number][0], isAdmin: boolean): boolean {
   return isAdmin || section === "general" || section === "appearance" || section === "integrations";
 }
+
+/** current_user identifies the configured desktop administrator. */
+export function isCurrentDesktopAdmin(current: { onboarded: boolean; user: { is_active?: boolean } | null }): boolean {
+  return current.onboarded && !!current.user && current.user.is_active !== false;
+}

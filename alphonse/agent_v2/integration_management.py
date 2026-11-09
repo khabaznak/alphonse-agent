@@ -32,10 +32,11 @@ class IntegrationManagement:
     def catalog(self, session):
         self._session(session)
         actor = session.actor_user_id
+        from alphonse.agent_v2.integrations.oauth import SCOPES
         owned = []
         for record in self.accounts.integrations.list():
             if record.connection.get('owner_user_id') == actor:
-                health = self.oauth.health(session, record.integration_id) if self.oauth else dict(
+                health = self.oauth.health(session, record.integration_id, probe_credentials=False) if self.oauth and record.provider_key in SCOPES else dict(
                     connection_id=record.integration_id, display_name=record.display_name,
                     provider=record.provider_key, **{k: record.connection[k] for k in
                         ('revision', 'status', 'health_code', 'capabilities')})
@@ -47,11 +48,14 @@ class IntegrationManagement:
         # A household directory is needed for explicit recipients; no addresses or profiles.
         members = [dict(user_id=u.user_id, display_name=u.display_name) for u in
                    self.runtime.user_store.list_users() if u.is_active]
-        providers = []
-        if self.oauth:
-            from alphonse.agent_v2.integrations.oauth import SCOPES
-            providers = [dict(provider=p, capabilities=list(SCOPES[p])) for p in self.oauth.clients]
-        return dict(actor_user_id=actor, connections=owned, grants=grants, members=members,
+        clients = self.oauth.clients if self.oauth else {}
+        status = getattr(self.oauth, 'provider_status', {})
+        sources = getattr(self.oauth, 'provider_sources', {})
+        providers = [dict(provider=p, capabilities=list(SCOPES[p]),
+                          status=status.get(p, 'available' if p in clients else 'unconfigured'),
+                          source=sources.get(p, 'distribution'))
+                     for p in SCOPES]
+        return dict(actor_user_id=actor, can_configure_oauth=self.runtime.user_store.is_admin(actor), connections=owned, grants=grants, members=members,
                     providers=providers, sources=self.sources(session), skills=[dict(skill_id=s.skill_id, name=s.name)
                         for s in self.runtime.skill_store.list_skills() if self.runtime.skill_store.can_use(s.skill_id, actor)],
                     bindings=self.binding_options(session), projects=[dict(project_id=p.project_id, name=p.name)
@@ -122,13 +126,13 @@ class IntegrationManagement:
             # Never serialize checkpoints, raw evidence, provider cursors or exception text.
             runs = [{k: r.get(k) for k in ('check_run_id', 'state', 'outcome', 'error_code',
                 'window_start', 'window_end', 'coverage', 'stale', 'offline', 'items', 'acquisition_checkpoint',
-                'analysis_checkpoint')} for r in runs]
+                'analysis_checkpoint', 'processing_details_expired')} for r in runs]
             for run in runs:
                 for key in ('acquisition_checkpoint', 'analysis_checkpoint'):
                     checkpoint = run.pop(key, None)
                     run[key.replace('_checkpoint', '_state')] = 'checkpoint_saved' if checkpoint else 'not_started'
-                run['pending_analysis'] = False
-                if self.findings and run.get('items') and not run.get('coverage', {}).get('triage_no_match'):
+                run['pending_analysis'] = None if run.get('processing_details_expired') else False
+                if not run.get('processing_details_expired') and self.findings and run.get('items') and not run.get('coverage', {}).get('triage_no_match'):
                     with self.dispatcher.store._connect() as conn:
                         row = conn.execute("SELECT definition FROM v2_source_processing WHERE check_run_id=? AND stage='capd'",
                                            (run['check_run_id'],)).fetchone()
@@ -225,6 +229,12 @@ class IntegrationManagement:
             return {'findings': self.finding_views(session)}
         if action == 'catalog':
             return self.catalog(session)
+        if action == 'account_health':
+            if channel != 'desktop' or not self.oauth:
+                raise PermissionError('account_health_desktop_required')
+            health = self.oauth.health(session, connection_id=values['connection_id'])
+            health.pop('granted_scopes', None)
+            return health
         if action == 'project':
             return self.project(session, **values)
         if action == 'review':

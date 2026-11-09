@@ -265,6 +265,29 @@ def test_historical_version_revalidates_its_own_retention(findings):
         f.findings.view(RECIPIENT, ref['finding_id'], version=1)
 
 
+def test_purge_does_not_redact_a_finding_changed_during_authorization(findings, monkeypatch):
+    f = findings
+    ref = f.save()
+    changed = []
+    def concurrent_change_then_denial(finding, recipient=None):
+        with f.schedules._connect() as conn:
+            row = conn.execute('SELECT definition FROM v2_findings WHERE finding_id=?', (ref['finding_id'],)).fetchone()
+            value = json.loads(row[0])
+            value['summary'] = 'synthetic changed finding'
+            conn.execute('UPDATE v2_findings SET definition=? WHERE finding_id=?',
+                         (json.dumps(value), ref['finding_id']))
+        changed.append(True)
+        raise PermissionError('synthetic_authority_changed')
+    monkeypatch.setattr(f.findings, '_authorize', concurrent_change_then_denial)
+    monkeypatch.setattr(f.outbox, 'redact_finding', lambda _: pytest.fail('stale result must not redact outbox'))
+    f.findings.purge()
+    assert changed
+    with f.schedules._connect() as conn:
+        value = json.loads(conn.execute('SELECT definition FROM v2_findings WHERE finding_id=?', (ref['finding_id'],)).fetchone()[0])
+        versions = conn.execute('SELECT COUNT(*) FROM v2_finding_versions WHERE finding_id=?', (ref['finding_id'],)).fetchone()[0]
+    assert value['summary'] == 'synthetic changed finding' and versions == 1
+
+
 def test_restored_evidence_cannot_override_current_revocation(findings):
     f = findings
     ref = f.save()
@@ -378,3 +401,40 @@ def test_forged_evidence_and_cross_actor_cannot_record(findings):
     with pytest.raises(PermissionError):
         f.findings.record(RECIPIENT, f.run_id, evidence_ids=[f.eid], interpretation=f.value,
                           audience_user_ids=['parent'])
+
+
+def test_fenced_full_authority_snapshot_denies_restored_findings_and_delivery(findings):
+    from alphonse.agent_v2.account_recovery import fence_restored_accounts
+    from alphonse.agent_v2.integrations.store import SQLiteIntegrationStore
+    from alphonse.agent_v2.skill_bindings import SkillBindings
+
+    f = findings
+    ref = f.save()
+    delivery = f.findings.notify(ACTOR, ref['finding_id'])['parent']['outbox_message_id']
+    account_copy = f.tmp / 'stale-accounts.sqlite'
+    evidence_copy = f.tmp / 'stale-evidence.sqlite'
+    with f.store._connect() as live, sqlite3.connect(account_copy) as snapshot:
+        live.backup(snapshot)
+    with f.schedules._connect() as live, sqlite3.connect(evidence_copy) as snapshot:
+        live.backup(snapshot)
+    f.service.revoke_grant(AccountSession('parent'), grant_id='school-grant', expected_revision=1)
+    # Both account authority and evidence snapshots predate revocation. The
+    # staged recovery fence must not rely on the newer live account database.
+    with sqlite3.connect(account_copy) as restored:
+        fence_restored_accounts(restored)
+    with sqlite3.connect(evidence_copy) as restored, f.schedules._connect() as target:
+        restored.backup(target)
+    restored_store = SQLiteIntegrationStore(account_copy, credential_vault=f.store.credential_vault)
+    f.checks.bindings = SkillBindings(restored_store, f.users, f.skills)
+    recovered = FindingService(f.acquisition, f.outbox, f.resolver)
+    f.acquisition.findings = recovered
+    for operation in (lambda: recovered.view(RECIPIENT, ref['finding_id']),
+                      lambda: recovered.view(RECIPIENT, **ref),
+                      lambda: recovered.delivery_status(RECIPIENT, ref['finding_id']),
+                      lambda: f.acquisition.evidence(ACTOR, f.run_id),
+                      lambda: f.acquisition.processing(ACTOR, f.run_id)):
+        with pytest.raises(PermissionError):
+            operation()
+    assert f.outbox.claim_next() is None
+    f.acquisition.purge_content()
+    assert f.outbox.get(delivery).message == '[Finding unavailable]'

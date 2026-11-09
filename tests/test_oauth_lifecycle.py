@@ -91,6 +91,61 @@ def authorization(f):
                 recipient_user_ids=[], required_scopes=[SCOPES['google']['mail_read']], expected_grant_revision=1)
 
 
+def test_operator_google_secret_is_vault_bound_and_used_only_for_matching_client(f, monkeypatch, caplog):
+    import logging
+    import requests
+    from pathlib import Path
+    from urllib.parse import parse_qs
+    from alphonse.agent_v2.integrations.oauth import ProviderClient, save_operator_client_secret, operator_client_secret
+
+    secret = 'synthetic-client-secret-uniquely-private'
+    with pytest.raises(PermissionError):
+        save_operator_client_secret(f.accounts, f.other, 'google', 'public-app', secret)
+    assert save_operator_client_secret(f.accounts, f.owner, 'google', 'public-app', secret) == {'saved': True}
+    assert operator_client_secret(f.store, 'google', 'different-client') is None
+    assert secret.encode() not in Path(f.store.db_path).read_bytes()
+    f.service = OAuthService(f.accounts, f.configs, client_factory=ProviderClient)
+    calls = []
+    def send(session, request, **kwargs):
+        response = requests.Response()
+        response.status_code, response.request = 200, request
+        response.headers['Content-Type'] = 'application/json'
+        if request.method == 'POST':
+            values = parse_qs(request.body)
+            calls.append(values)
+            assert values['client_id'] == ['public-app']
+            assert values['client_secret'] == [secret]
+            response._content = json.dumps(dict(access_token='synthetic-access', refresh_token='synthetic-refresh',
+                expires_in=3600, token_type='Bearer', scope=SCOPES['google']['mail_read'])).encode()
+        else:
+            response._content = b'{"sub":"verified-subject"}'
+        return response
+    monkeypatch.setattr(requests.Session, 'send', send)
+    caplog.set_level(logging.DEBUG)
+    result = f.service.begin(f.owner, connection_id='one', provider='google', capabilities=['mail_read'], expected_revision=0)
+    assert secret not in result['authorization_url']
+    from urllib.parse import parse_qs as parse, urlsplit
+    state = parse(urlsplit(result['authorization_url']).query)['state'][0]
+    callback = f.configs[0].redirect_uri + '?' + urlencode({'state': state, 'code': 'disposable-code'})
+    assert f.service.complete(f.owner, callback)['status'] == 'connected'
+    refreshed = f.service.clients['google'].refresh({'refresh_token': 'synthetic-refresh'}, [SCOPES['google']['mail_read']])
+    assert refreshed['access_token'] == 'synthetic-access'
+    assert len(calls) == 2 and secret not in caplog.text
+
+
+def test_operator_client_secret_rotation_and_identity_are_guarded(f):
+    from alphonse.agent_v2.integrations.oauth import save_operator_client_secret, operator_client_secret
+
+    save_operator_client_secret(f.accounts, f.owner, 'google', 'public-app', 'first-synthetic-secret')
+    with f.store._connect() as db:
+        old_ref = db.execute("SELECT credential_ref FROM v2_oauth_client_secrets WHERE provider='google'").fetchone()[0]
+    save_operator_client_secret(f.accounts, f.owner, 'google', 'public-app', 'second-synthetic-secret')
+    assert old_ref not in f.backend.data
+    assert operator_client_secret(f.store, 'google', 'public-app') == 'second-synthetic-secret'
+    with pytest.raises(OAuthError, match='requires_migration'):
+        save_operator_client_secret(f.accounts, f.owner, 'google', 'other-app', 'third-synthetic-secret')
+
+
 def expire(f):
     record = f.store.get('one')
     token = f.store.resolve_credentials(record)
@@ -345,6 +400,7 @@ def test_daemon_api_lazy_trusted_session_and_no_clients_still_allows_disconnect(
     for provider in SCOPES:
         for suffix in ['CLIENT_ID', 'REDIRECT_URI']:
             monkeypatch.delenv(f'ALPHONSE_{provider.upper()}_OAUTH_{suffix}', raising=False)
+    monkeypatch.setattr('alphonse.agent_v2.integrations.oauth.packaged_client_manifest', lambda: {})
     daemon = SimpleNamespace(runtime=SimpleNamespace(integration_store=f.store, user_store=f.accounts.users),
         _lifecycle_lock=threading.RLock(), _optional_account_service=None)
     with pytest.raises(PermissionError, match='trusted_session_required'):
@@ -505,3 +561,172 @@ def test_classroom_consent_is_minimal_and_role_discovery_is_required(f, capabili
     with pytest.raises(OAuthError, match='scopes_missing'):
         f.service._validated(dict(access_token='fake', refresh_token='fake-refresh', expires_at=time.time() + 3600,
             token_type='Bearer', scope=[SCOPES['google'][capability]]), provider.scopes)
+
+
+def test_environment_clients_are_independent_and_desktop_only():
+    from alphonse.agent_v2.integrations.oauth import environment_clients
+
+    clients, status, sources = environment_clients({
+        'ALPHONSE_GOOGLE_OAUTH_CLIENT_ID': 'synthetic-google-client',
+        'ALPHONSE_GOOGLE_OAUTH_REDIRECT_URI': 'http://127.0.0.1:8765/callback',
+        'ALPHONSE_MICROSOFT_OAUTH_CLIENT_ID': 'synthetic-microsoft-client',
+        'ALPHONSE_MICROSOFT_OAUTH_REDIRECT_URI': 'http://127.0.0.1:invalid/callback',
+    }, {})
+    assert sources == {'google': 'operator', 'microsoft': 'operator'}
+    assert [c.provider for c in clients] == ['google']
+    assert status == {'google': 'available', 'microsoft': 'invalid_configuration'}
+    clients, status, sources = environment_clients({'ALPHONSE_GOOGLE_OAUTH_CLIENT_ID': 'synthetic'}, {})
+    assert not clients
+    assert status == {'google': 'invalid_configuration', 'microsoft': 'unconfigured'}
+    clients, status, sources = environment_clients({
+        'ALPHONSE_MICROSOFT_OAUTH_CLIENT_ID': 'synthetic',
+        'ALPHONSE_MICROSOFT_OAUTH_REDIRECT_URI': 'https://example.test/callback',
+    }, {})
+    assert len(clients) == 1 and status['microsoft'] == 'unsupported_desktop_callback'
+
+
+def test_packaged_clients_override_persistence_and_invalid_entries():
+    from alphonse.agent_v2.integrations.oauth import environment_clients
+    manifest = {'google': {'client_id': 'synthetic-google',
+                           'redirect_uri': 'http://127.0.0.1:8765/google'},
+                'microsoft': {'client_id': 'synthetic-microsoft',
+                              'redirect_uri': 'http://127.0.0.1:8766/microsoft'}}
+    clients, status, source = environment_clients({}, manifest)
+    assert [c.provider for c in clients] == ['google', 'microsoft']
+    assert set(status.values()) == {'available'}
+    assert set(source.values()) == {'distribution'}
+    # The same immutable manifest supplies the same clients after a daemon restart.
+    assert environment_clients({}, manifest)[0] == clients
+    clients, status, source = environment_clients({'ALPHONSE_GOOGLE_OAUTH_CLIENT_ID': 'partial'}, manifest)
+    assert [c.provider for c in clients] == ['microsoft']
+    assert status['google'] == 'invalid_configuration' and source['google'] == 'operator'
+    manifest['google']['client_secret'] = 'synthetic-secret-must-not-be-used'
+    clients, status, _ = environment_clients({}, manifest)
+    assert [c.provider for c in clients] == ['microsoft']
+    assert status['google'] == 'invalid_configuration'
+    assert 'synthetic-secret' not in str(status)
+    manifest['google'] = {'client_id': 'invalid client id', 'redirect_uri': 'http://127.0.0.1:8765/google'}
+    assert environment_clients({}, manifest)[1]['google'] == 'invalid_configuration'
+    assert set(environment_clients({}, None)[1].values()) == {'invalid_configuration'}
+
+
+def test_restart_with_same_distribution_client_preserves_connection_and_revocation(f):
+    from alphonse.agent_v2.integrations.oauth import environment_clients
+
+    manifest = {'google': {'client_id': 'public-app',
+                           'redirect_uri': 'http://127.0.0.1:54321/callback'}}
+    configs, _, _ = environment_clients({}, manifest)
+    f.service = OAuthService(f.accounts, configs, client_factory=FakeProvider)
+    connect(f)
+    grant = authorization(f)
+    restarted_configs, _, _ = environment_clients({}, manifest)
+    f.service = OAuthService(f.accounts, restarted_configs, client_factory=FakeProvider)
+    assert f.service.health(f.owner, 'one')['status'] == 'connected'
+    assert f.service.token(f.owner, authorization=grant) == 'disposable-access'
+    f.service.disconnect(f.owner, 'one', revision(f))
+    with pytest.raises((PermissionError, ValueError)):
+        f.service.token(f.owner, authorization=grant)
+
+
+def test_operator_client_configuration_is_admin_only_persistent_and_fenced(f):
+    from alphonse.agent_v2.integrations.oauth import save_operator_client, saved_client_manifest, environment_clients
+
+    with pytest.raises(PermissionError, match='admin_required'):
+        save_operator_client(f.accounts, f.other, 'google', '123456-synthetic.apps.googleusercontent.com')
+    with pytest.raises(OAuthError, match='configuration_invalid'):
+        save_operator_client(f.accounts, f.owner, 'google', 'not a valid id')
+    assert save_operator_client(f.accounts, f.owner, 'google', '123456-synthetic.apps.googleusercontent.com')['restart_required']
+    saved = saved_client_manifest(f.store)
+    assert saved['google'] == {'client_id': '123456-synthetic.apps.googleusercontent.com', 'redirect_uri': 'http://127.0.0.1:8765/google'}
+    configs, status, sources = environment_clients({}, {}, saved_client_manifest(f.store))
+    assert configs[0].client_id == '123456-synthetic.apps.googleusercontent.com'
+    assert status['google'] == 'available' and sources['google'] == 'operator'
+    configs, _, _ = environment_clients({'ALPHONSE_GOOGLE_OAUTH_CLIENT_ID': 'synthetic-override',
+        'ALPHONSE_GOOGLE_OAUTH_REDIRECT_URI': 'http://127.0.0.1:9999/callback'}, {}, saved)
+    assert configs[0].client_id == 'synthetic-override'
+    connect(f)
+    with pytest.raises(OAuthError, match='existing_accounts_require_migration'):
+        save_operator_client(f.accounts, f.owner, 'google', '123456-other.apps.googleusercontent.com')
+    assert saved_client_manifest(f.store) == saved
+
+
+def test_saved_operator_client_survives_store_reopen_and_distribution_upgrade(f):
+    from alphonse.agent_v2.integrations.oauth import save_operator_client, saved_client_manifest, environment_clients
+
+    client_id = '123456-personal.apps.googleusercontent.com'
+    save_operator_client(f.accounts, f.owner, 'google', client_id)
+    reopened = SQLiteIntegrationStore(f.store.db_path, credential_vault=CredentialVault(f.backend))
+    upgraded_distribution = {'google': {'client_id': 'new-distribution-client',
+        'redirect_uri': 'http://127.0.0.1:9998/callback'},
+        'microsoft': {'client_id': 'new-microsoft-client',
+        'redirect_uri': 'http://127.0.0.1:9999/callback'}}
+    clients, status, source = environment_clients({}, upgraded_distribution, saved_client_manifest(reopened))
+    assert {c.provider: c.client_id for c in clients} == {
+        'google': client_id, 'microsoft': 'new-microsoft-client'}
+    assert status == {'google': 'available', 'microsoft': 'available'}
+    assert source == {'google': 'operator', 'microsoft': 'distribution'}
+
+
+def test_connected_client_can_be_saved_only_with_matching_issuance_provenance(f):
+    from alphonse.agent_v2.integrations.oauth import save_operator_client, saved_client_manifest, environment_clients
+
+    client_id = '123456-personal.apps.googleusercontent.com'
+    f.service.clients['google'].config = ClientConfig('google', client_id, 'http://127.0.0.1:8765/google')
+    connect(f)
+    with pytest.raises(OAuthError, match='existing_accounts_require_migration'):
+        save_operator_client(f.accounts, f.owner, 'google', '123456-different.apps.googleusercontent.com')
+    assert save_operator_client(f.accounts, f.owner, 'google', client_id)['saved']
+    configs, _, _ = environment_clients({}, {}, saved_client_manifest(f.store))
+    f.service = OAuthService(f.accounts, configs, client_factory=FakeProvider)
+    assert f.service.health(f.owner, 'one')['status'] == 'connected'
+    assert f.service.token(f.owner, authorization=authorization(f)) == 'disposable-access'
+    with f.store._connect() as db:
+        db.execute('DELETE FROM v2_oauth_connection_clients')
+    with pytest.raises(OAuthError, match='existing_accounts_require_migration'):
+        save_operator_client(f.accounts, f.owner, 'google', client_id)
+
+
+def test_changed_client_cannot_use_a_previously_issued_credential(f):
+    connect(f)
+    grant = authorization(f)
+    f.service.clients['google'].config = ClientConfig('google', 'different-client', 'http://127.0.0.1:54321/callback')
+    with pytest.raises(OAuthError, match='client_binding_mismatch'):
+        f.service.token(f.owner, authorization=grant)
+
+
+def test_failed_client_provenance_write_rolls_back_credential_install(f):
+    import sqlite3
+    callback = begin(f)
+    with f.store._connect() as db:
+        db.execute('''CREATE TRIGGER fail_client_provenance BEFORE INSERT ON v2_oauth_connection_clients
+                      BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END''')
+    with pytest.raises(sqlite3.IntegrityError):
+        f.service.complete(f.owner, callback)
+    assert f.backend.data == {}
+    record = f.store.get('one')
+    assert record.credential_ref == '' and record.credential_generation == 0
+
+
+def test_explicit_admin_attestation_migrates_legacy_connected_client(f):
+    from alphonse.agent_v2.integrations.oauth import attest_current_client, save_operator_client
+
+    client_id = '123456-personal.apps.googleusercontent.com'
+    config = ClientConfig('google', client_id, 'http://127.0.0.1:8765/google')
+    f.service.clients['google'].config = config
+    connect(f)
+    record = f.store.get('one')
+    with f.store._connect() as db:
+        db.execute('DELETE FROM v2_oauth_connection_clients')
+    args = dict(connection_id='one', expected_revision=record.connection['revision'],
+                expected_generation=record.credential_generation)
+    with pytest.raises(PermissionError):
+        attest_current_client(f.accounts, f.other, config, **args)
+    with pytest.raises(OAuthError, match='attestation_stale'):
+        attest_current_client(f.accounts, f.owner, config, **dict(args, expected_generation=999))
+    assert attest_current_client(f.accounts, f.owner, config, **args) == {'recorded': True}
+    with f.store._connect() as db:
+        assert db.execute('SELECT provenance FROM v2_oauth_connection_clients').fetchone()[0] == 'operator_attested'
+    assert save_operator_client(f.accounts, f.owner, 'google', client_id)['saved']
+    other = ClientConfig('google', '123456-other.apps.googleusercontent.com', 'http://127.0.0.1:8765/google')
+    with pytest.raises(OAuthError, match='require_migration'):
+        attest_current_client(f.accounts, f.owner, other, **args)

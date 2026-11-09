@@ -12,9 +12,62 @@ from alphonse.agent_v2.core.io.channels import ChannelAddress
 from alphonse.agent_v2.core.io.outbox import SQLiteOutboundStore
 from alphonse.agent_v2.core.questions import SQLiteQuestionStore
 from alphonse.agent_v2.database import DEFAULT_BUSY_TIMEOUT_MS, connect_database, default_database_path
-from alphonse.agent_v2.retention import prune_operational_data
+from alphonse.agent_v2.retention import prune_operational_data, truncate_wal_if_idle
 from alphonse.agent_v2.storage_migration import migrate_legacy_databases
 from alphonse.agent_v2.users import V2UserStore
+
+
+def test_database_connections_enable_secure_delete(tmp_path):
+    database = tmp_path / 'private.sqlite'
+    with connect_database(database) as connection:
+        assert connection.execute('PRAGMA secure_delete').fetchone()[0] == 1
+    # Do not rely on SQLite compile-time defaults or other connections.
+    with sqlite3.connect(database) as connection:
+        connection.execute('PRAGMA secure_delete=OFF')
+    with connect_database(database) as connection:
+        assert connection.execute('PRAGMA secure_delete').fetchone()[0] == 1
+
+
+def test_wal_cleanup_defers_for_active_reader_and_retries(tmp_path):
+    database = tmp_path / 'wal.sqlite'
+    writer = connect_database(database)
+    reader = connect_database(database)
+    try:
+        writer.execute('CREATE TABLE example (content TEXT)')
+        writer.execute("INSERT INTO example VALUES ('first')")
+        writer.commit()
+        assert truncate_wal_if_idle(database)
+        reader.execute('BEGIN')
+        assert reader.execute('SELECT COUNT(*) FROM example').fetchone()[0] == 1
+        writer.execute("INSERT INTO example VALUES ('second')")
+        writer.commit()
+        assert not truncate_wal_if_idle(database)
+        assert reader.execute('SELECT COUNT(*) FROM example').fetchone()[0] == 1
+        reader.rollback()
+        assert truncate_wal_if_idle(database)
+        assert writer.execute('SELECT COUNT(*) FROM example').fetchone()[0] == 2
+    finally:
+        reader.close()
+        writer.close()
+
+
+def test_wal_cleanup_removes_synthetic_deleted_content_from_idle_wal(tmp_path):
+    database = tmp_path / 'wal-private.sqlite'
+    writer = connect_database(database)
+    marker = 'synthetic-deleted-' + 'x' * 200
+    try:
+        writer.execute('CREATE TABLE example (content TEXT)')
+        writer.execute('INSERT INTO example VALUES (?)', (marker,))
+        writer.commit()
+        writer.execute('DELETE FROM example')
+        writer.commit()
+        wal = database.with_name(database.name + '-wal')
+        assert marker.encode() in wal.read_bytes()
+        assert truncate_wal_if_idle(database)
+        assert not wal.exists() or marker.encode() not in wal.read_bytes()
+        assert marker.encode() not in database.read_bytes()
+    finally:
+        writer.close()
 
 
 def test_shared_database_configuration_and_defaults(monkeypatch, tmp_path) -> None:
@@ -241,3 +294,23 @@ def test_concurrent_store_writers_share_wal_database(tmp_path) -> None:
     with connect_database(database) as connection:
         assert connection.execute("SELECT COUNT(*) FROM v2_conversation_events").fetchone()[0] == 40
         assert connection.execute("SELECT COUNT(*) FROM v2_outbox").fetchone()[0] == 40
+
+
+def test_terminal_input_manifests_expire_without_discarding_active_recovery(tmp_path) -> None:
+    database = tmp_path / 'retention.sqlite3'
+    questions = SQLiteQuestionStore(database)
+    for status in ('done', 'failed', 'cancelled', 'running', 'waiting_user'):
+        task = TaskState(task_id=f'synthetic-{status}', user='fixture', goal='synthetic')
+        task.metadata['decision_context_manifests'] = [{'source_id': f'synthetic-manifest-{status}'}]
+        task.metadata['v3_event_input_manifests'] = {'review': {'source_id': f'synthetic-event-{status}'}}
+        questions.save_task_checkpoint(task, status=status)
+    old = (datetime.now(timezone.utc) - timedelta(days=31)).isoformat()
+    with connect_database(database) as db:
+        db.execute('UPDATE v2_task_checkpoints SET updated_at=?', (old,))
+    deleted = prune_operational_data(database)
+    assert deleted['task_checkpoints'] == 3
+    for status in ('done', 'failed', 'cancelled'):
+        assert questions.load_task_checkpoint(f'synthetic-{status}') is None
+    for status in ('running', 'waiting_user'):
+        task = questions.load_task_checkpoint(f'synthetic-{status}')
+        assert task.metadata['decision_context_manifests'][0]['source_id'] == f'synthetic-manifest-{status}'

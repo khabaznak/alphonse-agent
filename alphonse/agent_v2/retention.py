@@ -12,6 +12,25 @@ from alphonse.agent_v2.database import DEFAULT_BUSY_TIMEOUT_MS, connect_database
 DEFAULT_OPERATIONAL_RETENTION_DAYS = 30
 
 
+def truncate_wal_if_idle(db_path: str | Path) -> bool:
+    """Checkpoint and truncate a WAL without waiting on other readers/writers.
+
+    This is best effort, not secure erasure: the WAL can contain new frames
+    immediately afterward and filesystem snapshots or other copies may remain.
+    Callers should retry on a later maintenance tick if False is returned.
+    """
+    path = Path(db_path).expanduser().absolute()
+    try:
+        connection = sqlite3.connect(path.as_uri() + '?mode=rw', uri=True, timeout=0)
+        try:
+            row = connection.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchone()
+            return bool(row is not None and row[0] == 0)
+        finally:
+            connection.close()
+    except sqlite3.OperationalError:
+        return False
+
+
 def prune_operational_data(
     db_path: str | Path,
     *,
@@ -37,6 +56,22 @@ def prune_operational_data(
                 (cutoff,),
             )
             deleted["task_dependencies"] = int(cursor.rowcount)
+        if {"v2_event_history", "v2_automation_executions", "v2_event_receipts"} <= tables:
+            # History is diagnostic content. Keep any event still needed for
+            # dispatch/recovery and retain its independent replay receipt.
+            cursor = connection.execute(
+                """DELETE FROM v2_event_history
+                   WHERE julianday(created_at) < julianday(?)
+                   AND NOT EXISTS (SELECT 1 FROM v2_automation_executions x
+                       WHERE x.event_key=v2_event_history.event_key
+                       AND x.status NOT IN ('completed','cancelled','failed','denied'))
+                   AND EXISTS (SELECT 1 FROM v2_event_receipts r
+                       WHERE r.worker_id=v2_event_history.worker_id
+                       AND r.source_event_id=v2_event_history.source_event_id
+                       AND r.event_key=v2_event_history.event_key)""",
+                (cutoff,),
+            )
+            deleted["event_history"] = int(cursor.rowcount)
         statements = (
             (
                 "questions",

@@ -181,6 +181,7 @@ class CoreUiEvent:
 
     event_type: str
     payload: dict[str, Any] = field(default_factory=dict)
+    occurred_at: str = field(default_factory=lambda: datetime.now().astimezone().isoformat())
 
 
 @dataclass(frozen=True)

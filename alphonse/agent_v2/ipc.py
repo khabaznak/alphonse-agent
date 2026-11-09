@@ -363,7 +363,13 @@ class V2DaemonServer:
                     "ok": False,
                     "error": f"{type(exc).__name__}: {exc}",
                 }
-            connection.sendall((json.dumps(response, sort_keys=True) + "\n").encode("utf-8"))
+            try:
+                connection.sendall((json.dumps(response, sort_keys=True) + "\n").encode("utf-8"))
+            finally:
+                # Starting shutdown earlier can terminate the process before
+                # this handler sends its acknowledgement to the client.
+                if response.get('ok') and isinstance(request, dict) and request.get('method') == 'stop':
+                    threading.Thread(target=self.daemon.stop, name='alphonse-v2-stop', daemon=True).start()
 
     def _optional_management(self, connection, request):
         # The owner-only Unix socket and kernel peer identity authenticate the
@@ -399,6 +405,34 @@ class V2DaemonServer:
         oauth = self.daemon.optional_accounts(session)
         management = self.daemon.runtime.integration_management
         management.oauth = oauth
+        if params.get('action') == 'configure_oauth_client':
+            from alphonse.agent_v2.integrations.oauth import save_operator_client, OAuthError
+            values = params.get('values', {})
+            existing = oauth.clients.get(values.get('provider')) if oauth else None
+            if existing and existing.config.client_id != values.get('client_id'):
+                raise OAuthError('oauth_client_existing_configuration_requires_migration')
+            return save_operator_client(management.accounts, session, **values)
+        if params.get('action') == 'configure_oauth_client_secret':
+            from alphonse.agent_v2.integrations.oauth import save_operator_client_secret, OAuthError
+            values = params.get('values', {})
+            if set(values) != {'provider', 'client_secret'}:
+                raise OAuthError('oauth_client_secret_invalid')
+            existing = oauth.clients.get(values.get('provider')) if oauth else None
+            if not existing:
+                raise OAuthError('oauth_client_configuration_mismatch')
+            return save_operator_client_secret(management.accounts, session, values['provider'],
+                                               existing.config.client_id, values['client_secret'])
+        if params.get('action') == 'attest_current_oauth_client':
+            from alphonse.agent_v2.integrations.oauth import attest_current_client, OAuthError
+            values = params.get('values', {})
+            if set(values) != {'provider', 'connection_id', 'expected_revision', 'expected_generation'}:
+                raise OAuthError('oauth_client_attestation_invalid')
+            existing = oauth.clients.get(values['provider']) if oauth else None
+            if not existing:
+                raise OAuthError('oauth_client_configuration_mismatch')
+            return attest_current_client(management.accounts, session, existing.config,
+                connection_id=values['connection_id'], expected_revision=values['expected_revision'],
+                expected_generation=values['expected_generation'])
         if params.get('action') == 'begin':
             from alphonse.agent_v2.integrations.oauth_loopback import OAuthLoopback
             if not hasattr(self, '_oauth_loopback'):
@@ -418,7 +452,8 @@ class V2DaemonServer:
         method = str(request.get("method") or "").strip()
         params = request.get("params") if isinstance(request.get("params"), dict) else {}
         if method == "ping":
-            return {"service": "alphonse-v2-daemon", "status": "ready"}
+            readiness = getattr(self.daemon, '_ready', None)
+            return {"service": "alphonse-v2-daemon", "status": "ready" if readiness is None or readiness.is_set() else "starting"}
         if method == "status":
             runtime = self.daemon.runtime
             status_error = ""
@@ -460,7 +495,6 @@ class V2DaemonServer:
                 "intelligence_engine": runtime.intelligence_engine_settings_store.get().to_dict(),
             }
         if method == "stop":
-            threading.Thread(target=self.daemon.stop, name="alphonse-v2-stop", daemon=True).start()
             return {"status": "stopping"}
         if method == "trigger_killswitch":
             return self.daemon.trigger_killswitch(

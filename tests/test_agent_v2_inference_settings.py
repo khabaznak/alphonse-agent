@@ -38,6 +38,21 @@ def test_configured_codex_binary_is_pinned_for_runtime(monkeypatch: pytest.Monke
     assert router.provider.config.cli_bin == "/Applications/Codex/codex"
 
 
+def test_runtime_codex_request_uses_ephemeral_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace
+
+    commands = []
+    monkeypatch.setattr("alphonse.agent_v2.core.inference.openai_codex.shutil.which", lambda _: "/bin/codex")
+    def fake_run(command, **kwargs):
+        commands.append(command)
+        return SimpleNamespace(returncode=0, stdout="OK", stderr="")
+    monkeypatch.setattr("alphonse.agent_v2.core.inference.openai_codex.subprocess.run", fake_run)
+    router = build_inference_router_from_settings(InferenceSettingsRecord(model_id="fixture-model"))
+    result = router.generate_markdown(InferenceRequest(prompt="Synthetic", purpose=InferencePurpose.ACCEPTANCE_CRITERIA))
+    assert result.content == "OK"
+    assert "--ephemeral" in commands[0]
+
+
 def test_codex_catalog_filters_hidden_models(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     cache_path = tmp_path / "models_cache.json"
     cache_path.write_text(

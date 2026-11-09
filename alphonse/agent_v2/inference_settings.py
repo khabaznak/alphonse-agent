@@ -72,7 +72,7 @@ class InferenceProviderDescriptor:
         model = _normalize_model_id(model_id)
         return InferenceRouter(
             provider=OpenAICodexProvider(
-                OpenAICodexProviderConfig(cli_bin=_codex_cli_bin(), require_explicit_model=True)
+                OpenAICodexProviderConfig(cli_bin=_codex_cli_bin(), ephemeral=True, require_explicit_model=True)
             ),
             default_profile=ModelProfile(
                 provider=OPENAI_CODEX_PROVIDER,

@@ -16,4 +16,13 @@ if [[ ! -x "$python_bin" ]]; then
 fi
 
 cd "$root"
-"$python_bin" -m PyInstaller --onefile --collect-data alphonse.agent_v2 --name "alphonse-daemon-$target" --distpath "$(dirname "$output")" --workpath /tmp/alphonse-desktop-pyinstaller --specpath /tmp alphonse/agent_v2/daemon.py
+# Do not ship a Desktop build whose configured accounts cannot start consent.
+"$python_bin" -c 'import requests_oauthlib; import sys; sys.platform != "darwin" or __import__("keyring.backends.macOS")' || {
+  print -u2 'Install the accounts-oauth and credentials-desktop extras in the build environment.'
+  exit 1
+}
+extra_collect=()
+if [[ "$(uname -s)" == Darwin ]]; then
+  extra_collect=(--collect-submodules keyring.backends.macOS)
+fi
+"$python_bin" -m PyInstaller --onefile --collect-data alphonse.agent_v2 "${extra_collect[@]}" --name "alphonse-daemon-$target" --distpath "$(dirname "$output")" --workpath /tmp/alphonse-desktop-pyinstaller --specpath /tmp alphonse/agent_v2/daemon.py

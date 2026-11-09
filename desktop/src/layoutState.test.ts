@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { avatarState, avatarStateLabel, capdActivityLabel, canOpenSettingsSection, projectKey } from "./layoutState";
+import { avatarState, avatarStateLabel, capdActivityLabel, canOpenSettingsSection, isCurrentDesktopAdmin, projectKey } from "./layoutState";
 
 describe("Desktop layout state helpers", () => {
+  it("recognizes the active administrator returned by the daemon without relying on a profile role label", () => {
+    expect(isCurrentDesktopAdmin({ onboarded: true, user: { is_active: true } })).toBe(true);
+    expect(isCurrentDesktopAdmin({ onboarded: true, user: { is_active: false } })).toBe(false);
+    expect(isCurrentDesktopAdmin({ onboarded: false, user: null })).toBe(false);
+  });
   it("maps CAPD activity into compact node labels", () => {
     expect(capdActivityLabel({ phase: "check", label: "" })).toBe("checking");
     expect(capdActivityLabel({ phase: "decide", label: "" })).toBe("planning");

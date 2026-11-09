@@ -2483,8 +2483,7 @@ def _build_textual_app_class() -> type[Any]:
                     self.external_processor_error = "daemon connection lost"
                     self.daemon_connection_status = "disconnected"
             else:
-                while self.runtime.activity_events:
-                    event = self.runtime.activity_events.pop(0)
+                for event in self.runtime.activity_events.drain():
                     self._append_activity_event(event)
             selector = OutboundSelector(integration_id="tui", channel_target=self.runtime.user, status="pending")
             chat = self.query_one("#chat", RichLog)

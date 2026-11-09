@@ -12,12 +12,14 @@ import base64
 import json
 import logging
 import math
+import re
 import secrets
 import threading
 import time
 from urllib.parse import parse_qs, urlsplit, urlencode
 
 from alphonse.agent_v2.accounts import AccountService, AccountSession
+from alphonse.agent_v2.integrations.credentials import CredentialError
 
 
 class OAuthError(ValueError):
@@ -63,11 +65,208 @@ class ClientConfig:
 
     def __post_init__(self):
         uri = urlsplit(self.redirect_uri)
-        if (self.provider not in SCOPES or not self.client_id.strip() or uri.query or uri.fragment
+        if (self.provider not in SCOPES or not self.client_id or any(c.isspace() for c in self.client_id) or uri.query or uri.fragment
                 or uri.username or uri.password or not uri.path
                 or not ((uri.scheme == 'http' and uri.hostname == '127.0.0.1' and uri.port)
                         or (uri.scheme == 'https' and uri.netloc))):
             raise OAuthError('oauth_client_configuration_invalid')
+
+
+def packaged_client_manifest():
+    """Read public distribution configuration bundled with this daemon."""
+    from importlib.resources import files
+    try:
+        raw = files('alphonse.agent_v2.integrations').joinpath('oauth_clients.json').read_text(encoding='utf-8')
+        manifest = json.loads(raw)
+        if not isinstance(manifest, dict) or set(manifest) != {'version', 'providers'} or manifest['version'] != 1:
+            raise ValueError
+        if not isinstance(manifest['providers'], dict) or set(manifest['providers']) - set(SCOPES):
+            raise ValueError
+        return manifest['providers']
+    except (OSError, ValueError, TypeError):
+        # Do not log file contents: an accidentally included secret must stay private.
+        return None
+
+
+
+def saved_client_manifest(store):
+    """Load public operator registrations from the existing household database."""
+    with store._connect() as db:
+        db.execute("CREATE TABLE IF NOT EXISTS v2_oauth_client_config (provider TEXT PRIMARY KEY, client_id TEXT NOT NULL, redirect_uri TEXT NOT NULL)")
+        return {row['provider']: {'client_id': row['client_id'], 'redirect_uri': row['redirect_uri']}
+                for row in db.execute('SELECT provider, client_id, redirect_uri FROM v2_oauth_client_config')}
+
+
+def save_operator_client(accounts, session, provider, client_id):
+    """Desktop-only setup; never expose this mutation as a conversation tool."""
+    accounts._active(session.actor_user_id)
+    if not accounts.users.is_admin(session.actor_user_id):
+        raise PermissionError('oauth_configuration_admin_required')
+    callbacks = {'google': 'http://127.0.0.1:8765/google',
+                 'microsoft': 'http://127.0.0.1:8766/microsoft'}
+    if provider not in callbacks or not isinstance(client_id, str) or len(client_id) > 255:
+        raise OAuthError('oauth_client_configuration_invalid')
+    patterns = {'google': r'[0-9]+-[A-Za-z0-9_-]+\.apps\.googleusercontent\.com',
+                'microsoft': r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'}
+    if not re.fullmatch(patterns[provider], client_id):
+        raise OAuthError('oauth_client_configuration_invalid')
+    config = ClientConfig(provider, client_id, callbacks[provider])
+    store = accounts.integrations
+    saved_client_manifest(store)
+    with store._connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        # Existing credentials may only keep the client that issued them.
+        has_bindings = bool(db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_oauth_connection_clients'").fetchone())
+        fingerprint = hashlib.sha256(client_id.encode()).hexdigest()
+        for row in db.execute('SELECT integration_id,connection_json,credential_generation FROM v2_integrations WHERE provider_key=?', (provider,)):
+            connection = json.loads(row['connection_json'] or '{}')
+            if not row['credential_generation'] and (not connection or str(connection.get('provider_subject', '')).startswith('pending:')):
+                continue
+            binding = db.execute('SELECT client_digest FROM v2_oauth_connection_clients WHERE connection_id=?',
+                                 (row['integration_id'],)).fetchone() if has_bindings else None
+            if not binding or binding['client_digest'] != fingerprint:
+                raise OAuthError('oauth_client_existing_accounts_require_migration')
+        db.execute('INSERT OR REPLACE INTO v2_oauth_client_config VALUES (?, ?, ?)',
+                   (provider, config.client_id, config.redirect_uri))
+    return {'saved': True, 'restart_required': True}
+
+
+def _client_secret_binding(provider, client_id):
+    return 'oauth-client:' + provider + ':' + hashlib.sha256(client_id.encode()).hexdigest()
+
+
+def save_operator_client_secret(accounts, session, provider, client_id, client_secret):
+    """Store an operator-supplied Google Desktop client secret in the vault only."""
+    accounts._active(session.actor_user_id)
+    if not accounts.users.is_admin(session.actor_user_id):
+        raise PermissionError('oauth_configuration_admin_required')
+    if (provider != 'google' or not isinstance(client_id, str) or not client_id
+            or not isinstance(client_secret, str) or not client_secret or len(client_secret) > 1024):
+        raise OAuthError('oauth_client_secret_invalid')
+    store = accounts.integrations
+    with store._connect() as db:
+        db.execute('''CREATE TABLE IF NOT EXISTS v2_oauth_client_secrets (
+            provider TEXT PRIMARY KEY, client_id TEXT NOT NULL, credential_ref TEXT NOT NULL,
+            generation INTEGER NOT NULL) STRICT''')
+        row = db.execute('SELECT client_id,credential_ref,generation FROM v2_oauth_client_secrets WHERE provider=?', (provider,)).fetchone()
+    if row and row['client_id'] != client_id:
+        raise OAuthError('oauth_client_existing_configuration_requires_migration')
+    old_ref, old_generation = (row['credential_ref'], row['generation']) if row else ('', 0)
+    generation = old_generation + 1
+    reference = store.credential_vault.put(_client_secret_binding(provider, client_id), generation,
+                                           {'client_secret': client_secret})
+    try:
+        with store._connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            if row:
+                changed = db.execute('''UPDATE v2_oauth_client_secrets SET credential_ref=?,generation=?
+                    WHERE provider=? AND client_id=? AND credential_ref=? AND generation=?''',
+                    (reference, generation, provider, client_id, old_ref, old_generation)).rowcount
+            else:
+                changed = db.execute('INSERT OR IGNORE INTO v2_oauth_client_secrets VALUES (?,?,?,?)',
+                                     (provider, client_id, reference, generation)).rowcount
+            if changed != 1:
+                raise OAuthError('oauth_client_secret_revision_conflict')
+    except Exception:
+        try:
+            store.credential_vault.delete(reference)
+        except CredentialError:
+            pass
+        raise
+    if old_ref:
+        try:
+            store.credential_vault.delete(old_ref)
+        except ValueError:
+            pass
+    return {'saved': True}
+
+
+def operator_client_secret(store, provider, client_id):
+    """Read only an exact client-bound secret; never return it in a projection."""
+    with store._connect() as db:
+        if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_oauth_client_secrets'").fetchone():
+            return None
+        row = db.execute('SELECT credential_ref,generation FROM v2_oauth_client_secrets WHERE provider=? AND client_id=?',
+                         (provider, client_id)).fetchone()
+    if not row:
+        return None
+    value = store.credential_vault.get(row['credential_ref'], _client_secret_binding(provider, client_id), row['generation'])
+    return value['client_secret']
+
+
+def attest_current_client(accounts, session, config, *, connection_id, expected_revision, expected_generation):
+    """Record an administrator's explicit client association for an older connection.
+
+    This is an operator attestation, not provider verification. The caller must
+    have independently established which client issued the existing credentials.
+    """
+    accounts._active(session.actor_user_id)
+    if not accounts.users.is_admin(session.actor_user_id):
+        raise PermissionError('oauth_configuration_admin_required')
+    store = accounts.integrations
+    with store._connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        row = db.execute('SELECT provider_key, enabled, connection_json, credential_generation, credential_ref FROM v2_integrations WHERE integration_id=?',
+                         (connection_id,)).fetchone()
+        if not row:
+            raise OAuthError('oauth_connection_unavailable')
+        value = json.loads(row['connection_json'])
+        if (row['provider_key'] != config.provider or not row['enabled'] or not row['credential_ref']
+                or value.get('owner_user_id') != session.actor_user_id or value.get('status') != 'connected'
+                or value.get('revision') != expected_revision or row['credential_generation'] != expected_generation):
+            raise OAuthError('oauth_client_attestation_stale')
+        digest = hashlib.sha256(config.client_id.encode()).hexdigest()
+        old = db.execute('SELECT client_digest FROM v2_oauth_connection_clients WHERE connection_id=?', (connection_id,)).fetchone()
+        if old and old['client_digest'] != digest:
+            raise OAuthError('oauth_client_existing_accounts_require_migration')
+        db.execute('INSERT OR IGNORE INTO v2_oauth_connection_clients VALUES (?,?,?)',
+                   (connection_id, digest, 'operator_attested'))
+    return {'recorded': True}
+
+def environment_clients(environ, packaged=None, saved=None):
+    """Resolve operator overrides over bundled public clients, independently."""
+    clients, status, sources = [], {}, {}
+    for provider in SCOPES:
+        prefix = 'ALPHONSE_' + provider.upper() + '_OAUTH_'
+        overridden = prefix + 'CLIENT_ID' in environ or prefix + 'REDIRECT_URI' in environ
+        sources[provider] = 'operator' if overridden or provider in (saved or {}) else 'distribution'
+        if overridden:
+            client_id = environ.get(prefix + 'CLIENT_ID', '')
+            redirect = environ.get(prefix + 'REDIRECT_URI', '')
+        elif provider in (saved or {}):
+            entry = saved[provider]
+            if not isinstance(entry, dict) or set(entry) != {'client_id', 'redirect_uri'}:
+                status[provider] = 'invalid_configuration'
+                continue
+            client_id, redirect = entry['client_id'], entry['redirect_uri']
+        elif packaged is None:
+            status[provider] = 'invalid_configuration'
+            continue
+        else:
+            entry = packaged.get(provider)
+            if entry is None:
+                status[provider] = 'unconfigured'
+                continue
+            if not isinstance(entry, dict) or set(entry) != {'client_id', 'redirect_uri'}:
+                status[provider] = 'invalid_configuration'
+                continue
+            client_id, redirect = entry['client_id'], entry['redirect_uri']
+        if not isinstance(client_id, str) or not isinstance(redirect, str):
+            status[provider] = 'invalid_configuration'
+            continue
+        if not client_id and not redirect:
+            status[provider] = 'invalid_configuration' if overridden else 'unconfigured'
+            continue
+        try:
+            config = ClientConfig(provider, client_id, redirect)
+            uri = urlsplit(config.redirect_uri)
+        except (ValueError, TypeError):
+            status[provider] = 'invalid_configuration'
+            continue
+        clients.append(config)
+        status[provider] = ('available' if uri.scheme == 'http' and uri.hostname == '127.0.0.1'
+                            else 'unsupported_desktop_callback')
+    return clients, status, sources
 
 
 class ProviderClient:
@@ -79,6 +278,7 @@ class ProviderClient:
     """
     def __init__(self, config):
         self.config = config
+        self.client_secret_resolver = None
 
     def _session(self, scopes=None, token=None):
         try:
@@ -103,14 +303,18 @@ class ProviderClient:
 
     def exchange(self, code, verifier, scopes):
         with self._session() as client:
+            secret = self.client_secret_resolver() if self.client_secret_resolver else None
+            options = {'client_secret': secret} if secret is not None else {}
             return dict(client.fetch_token(ENDPOINTS[self.config.provider][1], code=code,
-                        code_verifier=verifier, include_client_id=True, timeout=20))
+                        code_verifier=verifier, include_client_id=True, timeout=20, **options))
 
     def refresh(self, token, scopes):
         with self._session() as client:
+            secret = self.client_secret_resolver() if self.client_secret_resolver else None
+            options = {'client_secret': secret} if secret is not None else {}
             return dict(client.refresh_token(ENDPOINTS[self.config.provider][1],
                         refresh_token=token['refresh_token'], client_id=self.config.client_id,
-                        body=urlencode({'scope': ' '.join(scopes)}), timeout=20))
+                        body=urlencode({'scope': ' '.join(scopes)}), timeout=20, **options))
 
     def subject(self, token):
         with self._session(token=token) as client:
@@ -150,10 +354,20 @@ class OAuthService:
         if len({c.provider for c in clients}) != len(clients):
             raise OAuthError('oauth_client_ambiguous')
         self.clients = {c.provider: client_factory(c) for c in clients}
+        for provider, client in self.clients.items():
+            if provider == 'google' and isinstance(client, ProviderClient):
+                client.client_secret_resolver = lambda client=client: operator_client_secret(
+                    self.store, client.config.provider, client.config.client_id)
         self.pending = {}
         self.lock = threading.RLock()
         with self.store._connect() as db:
             db.execute('CREATE TABLE IF NOT EXISTS v2_oauth_leases (connection_id TEXT PRIMARY KEY, nonce TEXT NOT NULL)')
+            db.execute('''CREATE TABLE IF NOT EXISTS v2_oauth_connection_clients (
+                connection_id TEXT PRIMARY KEY, client_digest TEXT NOT NULL,
+                provenance TEXT NOT NULL CHECK (provenance IN ('oauth_exchange','operator_attested'))) STRICT''')
+            columns = {row[1] for row in db.execute('PRAGMA table_info(v2_oauth_connection_clients)')}
+            if 'provenance' not in columns:
+                db.execute("ALTER TABLE v2_oauth_connection_clients ADD COLUMN provenance TEXT NOT NULL DEFAULT 'oauth_exchange'")
 
     def _owned(self, session, connection_id):
         record = self.store.get(connection_id)
@@ -162,11 +376,13 @@ class OAuthService:
         self.accounts._owner(session, record.connection)
         return record
 
-    def health(self, session: AccountSession, connection_id: str):
+    def health(self, session: AccountSession, connection_id: str, *, probe_credentials: bool = True):
         record = self._owned(session, connection_id)
         value = record.connection
         storage = 'absent'
-        if record.credential_ref:
+        if record.credential_ref and not probe_credentials:
+            storage = 'not_checked'
+        elif record.credential_ref:
             storage = self.store.credential_vault.health(record.credential_ref, connection_id, record.credential_generation)
         return dict(connection_id=connection_id, provider=record.provider_key, display_name=record.display_name,
                     status=value['status'], health_code=value['health_code'], revision=value['revision'],
@@ -261,12 +477,27 @@ class OAuthService:
         granted = token.get('scope', scopes)
         credentials['scope'] = granted if isinstance(granted, str) else ' '.join(granted)
         reference = self.store.credential_vault.put(record.integration_id, generation, credentials)
-        with self.store._connect() as db:
-            cursor = db.execute('''UPDATE v2_integrations SET connection_json=?, credential_ref=?,
-                credential_generation=?, enabled=1, revocation_pending=0, credential_deletion_pending=0,
-                secret_json='{}', updated_at=? WHERE integration_id=? AND connection_json=?
-                AND credential_generation=?''', (json.dumps(value, sort_keys=True), reference, generation,
-                value['updated_at'], record.integration_id, json.dumps(record.connection, sort_keys=True), record.credential_generation))
+        client = self.clients.get(record.provider_key)
+        if not client:
+            self.store.credential_vault.delete(reference)
+            raise OAuthError('oauth_provider_not_configured')
+        client_digest = hashlib.sha256(client.config.client_id.encode()).hexdigest()
+        try:
+            with self.store._connect() as db:
+                cursor = db.execute('''UPDATE v2_integrations SET connection_json=?, credential_ref=?,
+                    credential_generation=?, enabled=1, revocation_pending=0, credential_deletion_pending=0,
+                    secret_json='{}', updated_at=? WHERE integration_id=? AND connection_json=?
+                    AND credential_generation=?''', (json.dumps(value, sort_keys=True), reference, generation,
+                    value['updated_at'], record.integration_id, json.dumps(record.connection, sort_keys=True), record.credential_generation))
+                if cursor.rowcount == 1:
+                    db.execute('INSERT OR REPLACE INTO v2_oauth_connection_clients VALUES (?,?,?)',
+                               (record.integration_id, client_digest, 'oauth_exchange'))
+        except Exception:
+            try:
+                self.store.credential_vault.delete(reference)
+            except CredentialError:
+                pass
+            raise
         if cursor.rowcount != 1:
             self.store.credential_vault.delete(reference)
             raise OAuthError('oauth_revision_conflict')
@@ -319,14 +550,22 @@ class OAuthService:
         record = self._owned(session, pending.connection_id)
         client = self.clients[record.provider_key]
         if (uri._replace(query='').geturl() != client.config.redirect_uri or uri.fragment
-                or len(query.get('state', [])) != 1 or len(query.get('code', [])) != 1
-                or not query['code'][0] or 'error' in query):
+                or len(query.get('state', [])) != 1):
             raise OAuthError('oauth_callback_invalid')
         if record.connection['revision'] != pending.revision or record.credential_generation != pending.generation:
             raise OAuthError('oauth_revision_conflict')
+        if query.get('error') == ['access_denied'] and 'code' not in query:
+            raise OAuthError('oauth_consent_denied')
+        if len(query.get('code', [])) != 1 or not query['code'][0] or 'error' in query:
+            raise OAuthError('oauth_callback_invalid')
         with self._lease(record.integration_id):
             try:
                 token, granted = self._validated(client.exchange(query['code'][0], pending.verifier, pending.scopes), pending.scopes, provider=record.provider_key)
+            except (OAuthError, CredentialError):
+                raise
+            except Exception:
+                raise OAuthError('oauth_token_exchange_failed') from None
+            try:
                 subject = client.subject(token)
                 if not subject or (not record.connection['provider_subject'].startswith('pending:')
                                    and subject != record.connection['provider_subject']):
@@ -334,7 +573,7 @@ class OAuthService:
             except OAuthError:
                 raise
             except Exception:
-                raise OAuthError('oauth_consent_failed') from None
+                raise OAuthError('oauth_identity_lookup_failed') from None
             self._persist(session, record, token, subject=subject, capabilities=pending.capabilities, scopes=granted)
         return self.health(session, record.integration_id)
 
@@ -380,6 +619,12 @@ class OAuthService:
         return self.health(session, connection_id)
 
     def _read(self, record):
+        client = self.clients.get(record.provider_key)
+        with self.store._connect() as db:
+            binding = db.execute('SELECT client_digest FROM v2_oauth_connection_clients WHERE connection_id=?',
+                                 (record.integration_id,)).fetchone()
+        if binding and (not client or binding['client_digest'] != hashlib.sha256(client.config.client_id.encode()).hexdigest()):
+            raise OAuthError('oauth_client_binding_mismatch')
         return self.store.credential_vault.get(record.credential_ref, record.integration_id, record.credential_generation)
 
     def token(self, session: AccountSession, *, authorization: dict):

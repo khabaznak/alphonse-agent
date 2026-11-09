@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 from datetime import datetime, timezone
 from types import SimpleNamespace
+import json
+import threading
 
 import pytest
 
@@ -33,6 +35,103 @@ from alphonse.agent_v2.services.project_sessions import SQLiteProjectSessionStor
 from alphonse.agent_v2.runtime import build_runtime_host
 from alphonse.agent_v2.users import V2UserStore
 from alphonse.agent_v2.web_tools_settings import SQLiteWebToolsSettingsStore
+
+
+def test_stop_acknowledgement_is_sent_before_shutdown_starts():
+    from alphonse.agent_v2.ipc import V2DaemonServer
+
+    sent = threading.Event()
+    stopped = threading.Event()
+    order = []
+    class Connection:
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+        def recv(self, size): return b'{"version":1,"method":"stop"}\n'
+        def sendall(self, value):
+            order.append('response')
+            assert json.loads(value)['result'] == {'status': 'stopping'}
+            sent.set()
+    def stop():
+        order.append('stop')
+        stopped.set()
+    V2DaemonServer(SimpleNamespace(stop=stop))._handle(Connection())
+    assert sent.wait(1) and stopped.wait(1)
+    assert order == ['response', 'stop']
+
+
+def test_daemon_main_waits_for_concurrent_shutdown_cleanup(monkeypatch):
+    runtime = build_runtime_host(inference=_router(), schedule_store=ScheduledTaskStore(':memory:'))
+    daemon = V2Daemon(runtime)
+    cleanup_started = threading.Event()
+    release_cleanup = threading.Event()
+    exited = threading.Event()
+
+    def stop_ipc():
+        cleanup_started.set()
+        assert release_cleanup.wait(5)
+
+    monkeypatch.setattr(daemon, 'start', lambda: None)
+    monkeypatch.setattr(daemon.ipc, 'stop', stop_ipc)
+    monkeypatch.setattr(daemon.scheduler, 'stop', lambda: None)
+    monkeypatch.setattr(daemon.event_dispatcher, 'stop', lambda: None)
+    monkeypatch.setattr('alphonse.agent_v2.daemon.stop_runtime_integrations', lambda runtime: None)
+    if daemon.project_check_worker is not None:
+        monkeypatch.setattr(daemon.project_check_worker, 'stop', lambda: None)
+    main = threading.Thread(target=lambda: (daemon.run_forever(), exited.set()))
+    shutdown = threading.Thread(target=daemon.stop)
+    main.start()
+    shutdown.start()
+    try:
+        assert cleanup_started.wait(2)
+        assert not exited.wait(.2)
+    finally:
+        release_cleanup.set()
+        shutdown.join(5)
+        main.join(5)
+    assert exited.is_set()
+    assert not shutdown.is_alive() and not main.is_alive()
+
+
+def test_startup_waits_for_lock_when_old_socket_is_closed(monkeypatch, tmp_path):
+    from alphonse.agent_v2 import daemon as daemon_module
+    monkeypatch.setenv('ALPHONSE_V2_SOCKET_PATH', str(tmp_path / 'synthetic.sock'))
+    calls = []
+    def lock(fd, flags):
+        calls.append(flags)
+        if len(calls) < 3:
+            raise BlockingIOError()
+    def unavailable(self):
+        raise ConnectionRefusedError()
+    monkeypatch.setattr(daemon_module.fcntl, 'flock', lock)
+    monkeypatch.setattr(daemon_module.V2DaemonClient, 'ping', unavailable)
+    monkeypatch.setattr(daemon_module.time, 'sleep', lambda _: None)
+    lock_file = daemon_module._claim_single_instance_lock('synthetic-daemon')
+    try:
+        assert len(calls) == 3
+        assert lock_file.readable()
+    finally:
+        lock_file.close()
+
+
+def test_startup_does_not_retry_when_another_daemon_answers(monkeypatch, tmp_path):
+    from alphonse.agent_v2 import daemon as daemon_module
+    monkeypatch.setenv('ALPHONSE_V2_SOCKET_PATH', str(tmp_path / 'synthetic.sock'))
+    monkeypatch.setattr(daemon_module.fcntl, 'flock', lambda *args: (_ for _ in ()).throw(BlockingIOError()))
+    monkeypatch.setattr(daemon_module.V2DaemonClient, 'ping', lambda self: {'status': 'starting'})
+    monkeypatch.setattr(daemon_module.time, 'sleep', lambda _: pytest.fail('must not retry a live daemon'))
+    with pytest.raises(RuntimeError, match='daemon_already_running'):
+        daemon_module._claim_single_instance_lock('synthetic-daemon')
+
+
+def test_startup_fails_closed_when_lock_remains_held(monkeypatch, tmp_path):
+    from alphonse.agent_v2 import daemon as daemon_module
+    monkeypatch.setenv('ALPHONSE_V2_SOCKET_PATH', str(tmp_path / 'synthetic.sock'))
+    monkeypatch.setattr(daemon_module.fcntl, 'flock', lambda *args: (_ for _ in ()).throw(BlockingIOError()))
+    monkeypatch.setattr(daemon_module.V2DaemonClient, 'ping', lambda self: (_ for _ in ()).throw(ConnectionRefusedError()))
+    clock = iter((0.0,))
+    monkeypatch.setattr(daemon_module.time, 'monotonic', lambda: next(clock, 16.0))
+    with pytest.raises(RuntimeError, match='daemon_lock_held'):
+        daemon_module._claim_single_instance_lock('synthetic-daemon')
 from alphonse.agent_v2.code_mode_settings import SQLiteCodeModeSettingsStore
 from alphonse.agent_v2.system_one import SQLiteSystemOneSettingsStore
 
@@ -60,7 +159,7 @@ def test_daemon_ipc_dispatches_ping_status_and_queue_message() -> None:
         schedule_store=ScheduledTaskStore(":memory:"),
     )
     daemon = V2Daemon(runtime)
-    assert daemon.ipc._dispatch({"method": "ping"})["status"] == "ready"
+    assert daemon.ipc._dispatch({"method": "ping"})["status"] == "starting"
     queued = daemon.ipc._dispatch({"method": "queue_message", "params": {"prompt": "hello", "user": "alex"}})
     assert queued["message_id"]
     assert queued["created_at"]
@@ -68,6 +167,55 @@ def test_daemon_ipc_dispatches_ping_status_and_queue_message() -> None:
     assert daemon.ipc._dispatch({"method": "status"})["queue_size"] == 1
     daemon.run_once()
     assert daemon.ipc._dispatch({"method": "status"})["queue_size"] == 0
+
+
+def test_ping_reports_starting_until_daemon_initialization_finishes(monkeypatch, tmp_path):
+    monkeypatch.setenv('HOME', str(tmp_path))
+    monkeypatch.setenv('ALPHONSE_V2_DB_PATH', str(tmp_path / 'synthetic.sqlite'))
+    runtime = build_runtime_host(inference=_router(), schedule_store=ScheduledTaskStore(':memory:'))
+    daemon = V2Daemon(runtime)
+    started = threading.Event()
+    finish = threading.Event()
+    failures = []
+
+    for name in ('_acquire_single_instance_lock', '_ensure_home_projects', '_migrate_blank_project_records',
+                 '_run_retention_if_due', '_align_configured_provider_addresses', '_release_single_instance_lock'):
+        monkeypatch.setattr(daemon, name, lambda *args, **kwargs: None)
+    monkeypatch.setattr(daemon, '_migrate_project_memories', lambda: None)
+    monkeypatch.setattr(daemon, '_process_loop', lambda: daemon._stop.wait())
+    monkeypatch.setattr(runtime.user_store, 'list_users', lambda: [])
+    monkeypatch.setattr(runtime.project_store, 'migrate_legacy_shared_access', lambda users: None)
+    monkeypatch.setattr(daemon.ipc, 'start', lambda: None)
+    monkeypatch.setattr(daemon.ipc, 'stop', lambda: None)
+    monkeypatch.setattr(daemon.scheduler, 'start', lambda: None)
+    monkeypatch.setattr(daemon.scheduler, 'stop', lambda: None)
+    monkeypatch.setattr(daemon.event_dispatcher, 'start', lambda: None)
+    monkeypatch.setattr(daemon.event_dispatcher, 'stop', lambda: None)
+    if daemon.project_check_worker is not None:
+        monkeypatch.setattr(daemon.project_check_worker, 'start', lambda: None)
+        monkeypatch.setattr(daemon.project_check_worker, 'stop', lambda: None)
+    def start_integrations(*args, **kwargs):
+        started.set()
+        if not finish.wait(5): raise RuntimeError('synthetic startup timeout')
+    monkeypatch.setattr('alphonse.agent_v2.daemon.start_runtime_integrations', start_integrations)
+    monkeypatch.setattr('alphonse.agent_v2.daemon.stop_runtime_integrations', lambda runtime: None)
+    def run():
+        try: daemon.start()
+        except Exception as error: failures.append(error)
+    thread = threading.Thread(target=run)
+    thread.start()
+    try:
+        assert started.wait(2)
+        assert daemon.ipc._dispatch({'method': 'ping'})['status'] == 'starting'
+        finish.set()
+        thread.join(5)
+        assert not thread.is_alive() and not failures
+        assert daemon.ipc._dispatch({'method': 'ping'})['status'] == 'ready'
+    finally:
+        finish.set()
+        thread.join(5)
+        daemon.stop()
+    assert daemon.ipc._dispatch({'method': 'ping'})['status'] == 'starting'
 
 
 def test_daemon_ipc_killswitch_reaches_active_runtime(tmp_path) -> None:
@@ -1146,3 +1294,57 @@ def test_desktop_progress_retry_wait_and_non_desktop_terminal_guard(tmp_path):
     task.metadata["channel"]["integration_id"] = "telegram"
     daemon._publish_task_progress(StateSnapshot(metadata={"task_state": task.to_dict()}), status="failed")
     assert not runtime.activity_events
+
+
+def test_transient_activity_and_ui_events_expire_by_age() -> None:
+    from datetime import datetime, timedelta, timezone
+    runtime = build_runtime_host(inference=_router(), schedule_store=ScheduledTaskStore(':memory:'))
+    daemon = V2Daemon(runtime)
+    old = (datetime.now(timezone.utc) - timedelta(days=31)).isoformat()
+    recent = datetime.now(timezone.utc).isoformat()
+    runtime.activity_events.extend([
+        CoreActivityEvent(phase=ImprovementPhase.PLAN, label='old', message='synthetic-old', occurred_at=old),
+        CoreActivityEvent(phase=ImprovementPhase.PLAN, label='new', message='synthetic-new', occurred_at=recent),
+    ])
+    runtime.ui_events.extend([
+        CoreUiEvent('state_snapshot', {'status': 'old'}, occurred_at=old),
+        CoreUiEvent('state_snapshot', {'status': 'new'}, occurred_at=recent),
+    ])
+    activity, _ = daemon.activity_events_since()
+    ui, _ = daemon.ui_events_since(user='alex')
+    assert [event['label'] for event in activity] == ['new']
+    assert len(ui) == 1 and '_retained_at' not in ui[0]
+    # Once an already collected record ages, a retention tick removes it.
+    daemon._activity_event_journal[0]['occurred_at'] = old
+    daemon._ui_event_journal[0]['_retained_at'] = old
+    daemon._run_retention_if_due(force=True)
+    assert daemon._activity_event_journal == [] and daemon._ui_event_journal == []
+
+
+def test_future_or_malformed_transient_event_times_cannot_extend_retention() -> None:
+    from datetime import datetime, timedelta, timezone
+    runtime = build_runtime_host(inference=_router(), schedule_store=ScheduledTaskStore(':memory:'))
+    daemon = V2Daemon(runtime)
+    future = (datetime.now(timezone.utc) + timedelta(days=365)).isoformat()
+    runtime.activity_events.append(CoreActivityEvent(phase=ImprovementPhase.PLAN, label='future', message='future', occurred_at=future))
+    runtime.ui_events.extend([CoreUiEvent('state_snapshot', {'status': 'future'}, occurred_at=future),
+                              CoreUiEvent('state_snapshot', {'status': 'invalid'}, occurred_at='not-a-time')])
+    activity, _ = daemon.activity_events_since()
+    ui, _ = daemon.ui_events_since(user='alex')
+    assert datetime.fromisoformat(activity[0]['occurred_at']) < datetime.now(timezone.utc) + timedelta(minutes=1)
+    assert len(ui) == 1
+    assert datetime.fromisoformat(daemon._ui_event_journal[0]['_retained_at']) < datetime.now(timezone.utc) + timedelta(minutes=1)
+
+
+def test_retention_tick_does_not_drain_fresh_ui_or_activity_events() -> None:
+    from datetime import datetime, timedelta, timezone
+    runtime = build_runtime_host(inference=_router(), schedule_store=ScheduledTaskStore(':memory:'))
+    daemon = V2Daemon(runtime)
+    old = (datetime.now(timezone.utc) - timedelta(days=31)).isoformat()
+    runtime.activity_events.append(CoreActivityEvent(phase=ImprovementPhase.PLAN, label='old', message='old', occurred_at=old))
+    runtime.ui_events.append(CoreUiEvent('state_snapshot', {'status': 'old'}, occurred_at=old))
+    runtime.activity_events.append(CoreActivityEvent(phase=ImprovementPhase.PLAN, label='new', message='new'))
+    runtime.ui_events.append(CoreUiEvent('state_snapshot', {'status': 'new'}))
+    daemon._run_retention_if_due(force=True)
+    assert len(runtime.activity_events) == len(runtime.ui_events) == 1
+    assert len(daemon.activity_events_since()[0]) == len(daemon.ui_events_since(user='alex')[0]) == 1

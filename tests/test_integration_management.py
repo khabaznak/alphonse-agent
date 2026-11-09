@@ -200,3 +200,131 @@ def test_review_save_rechecks_authority_after_preflight(management, monkeypatch)
     with pytest.raises(ValueError, match='review_stale'):
         f.management.apply_review(AccountSession('child'), r['review_id'], activate=True)
     assert f.checks.list(AccountSession('child'), f.project.project_id) == []
+
+
+def test_catalog_reports_provider_readiness_without_exposing_configuration(management):
+    f = management
+    f.management.oauth = SimpleNamespace(clients={'google': object()},
+        provider_status={'google': 'available', 'microsoft': 'invalid_configuration'},
+        health=lambda session, connection_id: {'connection_id': connection_id})
+    providers = f.management.catalog(AccountSession('parent'))['providers']
+    assert [(p['provider'], p['status']) for p in providers] == [
+        ('google', 'available'), ('microsoft', 'invalid_configuration')]
+    assert 'client_id' not in json.dumps(providers)
+
+
+def test_client_configuration_is_desktop_only_and_admin_required(management):
+    import os
+    f = management
+    f.runtime.user = 'child'
+    server = V2DaemonServer(SimpleNamespace(runtime=f.runtime, optional_accounts=lambda session: None))
+    request = {'version': PROTOCOL_VERSION, 'params': {'action': 'configure_oauth_client',
+        'values': {'provider': 'google', 'client_id': '123456-synthetic.apps.googleusercontent.com'}}}
+    peer = SimpleNamespace(getpeereid=lambda: (os.getuid(), 0))
+    with pytest.raises(PermissionError, match='admin_required'):
+        server._optional_management(peer, request)
+    with pytest.raises(ValueError, match='action_invalid'):
+        f.management.request(AccountSession('parent'), 'configure_oauth_client', request['params']['values'], channel='conversation')
+    f.runtime.user = 'parent'
+    assert server._optional_management(peer, request)['restart_required']
+
+
+def test_desktop_cannot_swap_a_running_oauth_client(management):
+    import os
+    f = management
+    f.runtime.user = 'parent'
+    client = SimpleNamespace(config=SimpleNamespace(client_id='123456-original.apps.googleusercontent.com'))
+    oauth = SimpleNamespace(clients={'google': client})
+    server = V2DaemonServer(SimpleNamespace(runtime=f.runtime, optional_accounts=lambda session: oauth))
+    request = {'version': PROTOCOL_VERSION, 'params': {'action': 'configure_oauth_client',
+        'values': {'provider': 'google', 'client_id': '123456-new.apps.googleusercontent.com'}}}
+    with pytest.raises(ValueError, match='existing_configuration_requires_migration'):
+        server._optional_management(SimpleNamespace(getpeereid=lambda: (os.getuid(), 0)), request)
+
+
+def test_client_secret_is_admin_desktop_only_and_bound_to_running_client(management):
+    import os
+    from alphonse.agent_v2.integrations.oauth import operator_client_secret
+    f = management
+    client = SimpleNamespace(config=SimpleNamespace(client_id='synthetic-client'))
+    oauth = SimpleNamespace(clients={'google': client})
+    server = V2DaemonServer(SimpleNamespace(runtime=f.runtime, optional_accounts=lambda session: oauth))
+    peer = SimpleNamespace(getpeereid=lambda: (os.getuid(), 0))
+    request = {'version': PROTOCOL_VERSION, 'params': {'action': 'configure_oauth_client_secret',
+        'values': {'provider': 'google', 'client_secret': 'synthetic-private-secret'}}}
+    f.runtime.user = 'child'
+    with pytest.raises(PermissionError, match='admin_required'):
+        server._optional_management(peer, request)
+    with pytest.raises(ValueError, match='action_invalid'):
+        f.management.request(AccountSession('parent'), 'configure_oauth_client_secret', request['params']['values'], channel='conversation')
+    f.runtime.user = 'parent'
+    assert server._optional_management(peer, request) == {'saved': True}
+    assert operator_client_secret(f.store, 'google', 'synthetic-client') == 'synthetic-private-secret'
+    assert operator_client_secret(f.store, 'google', 'other-client') is None
+
+
+def test_managed_catalog_tolerates_other_provider_accounts(management):
+    from alphonse.agent_v2.integrations.oauth import ClientConfig, OAuthService
+    from test_oauth_lifecycle import FakeProvider
+    f = management
+    f.management.oauth = OAuthService(f.service, [ClientConfig('google', 'public-app',
+        'http://127.0.0.1:54321/callback')], client_factory=FakeProvider)
+    result = f.management.catalog(AccountSession('parent'))
+    assert result['connections'][0]['provider'] == 'synthetic'
+    assert result['connections'][0]['status'] == 'connected'
+    assert result['providers'][0]['status'] == 'available'
+
+
+def test_desktop_ipc_consent_callback_uses_synthetic_provider_and_no_implicit_grants(management, monkeypatch):
+    import socket
+    from urllib.parse import urlencode
+    from urllib.request import urlopen
+    from alphonse.agent_v2.integrations.oauth import ClientConfig, OAuthService
+    from test_oauth_lifecycle import FakeProvider
+
+    f = management
+    f.runtime.user = 'parent'
+    with socket.socket() as probe:
+        probe.bind(('127.0.0.1', 0))
+        port = probe.getsockname()[1]
+    redirect = f'http://127.0.0.1:{port}/google'
+    oauth = OAuthService(f.service, [ClientConfig('google', 'synthetic-app', redirect)], client_factory=FakeProvider)
+    server = V2DaemonServer(SimpleNamespace(runtime=f.runtime, optional_accounts=lambda session: oauth))
+    left, right = socket.socketpair()
+    def request(action, values=None):
+        return server._optional_management(left, {'version': PROTOCOL_VERSION,
+            'params': {'action': action, 'values': values or {}}})
+    try:
+        before = request('catalog')
+        result = request('begin', {'connection_id': 'google-test', 'provider': 'google',
+            'capabilities': ['mail_read'], 'expected_revision': 0, 'display_name': 'Test account'})
+        assert result['authorization_url'].startswith('https://provider.invalid/')
+        state = oauth.clients['google'].state
+        callback = redirect + '?' + urlencode({'state': state, 'code': 'disposable-code'})
+        with urlopen(callback, timeout=3) as response:
+            assert response.status == 200
+            assert b'disposable' not in response.read()
+        calls = []
+        original_health = f.store.credential_vault.health
+        def counted_health(*args):
+            calls.append(True)
+            return original_health(*args)
+        monkeypatch.setattr(f.store.credential_vault, 'health', counted_health)
+        after = request('catalog')
+        connected = next(c for c in after['connections'] if c['connection_id'] == 'google-test')
+        assert connected['status'] == 'connected' and connected['capabilities'] == ['mail_read']
+        assert connected['credential_health'] == 'not_checked' and calls == []
+        checked = request('account_health', {'connection_id': 'google-test'})
+        assert checked['credential_health'] == 'available' and len(calls) == 1
+        assert 'granted_scopes' not in checked
+        with pytest.raises(PermissionError):
+            f.management.request(AccountSession('parent'), 'account_health', {'connection_id': 'google-test'}, channel='task:synthetic')
+        with pytest.raises(PermissionError):
+            f.management.request(AccountSession('child'), 'account_health', {'connection_id': 'google-test'})
+        assert len(after['grants']) == len(before['grants'])
+        assert 'disposable-access' not in json.dumps(after) and 'credential_ref' not in json.dumps(after)
+    finally:
+        if hasattr(server, '_oauth_loopback'):
+            server._oauth_loopback.stop()
+        left.close()
+        right.close()

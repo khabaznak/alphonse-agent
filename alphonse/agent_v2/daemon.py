@@ -96,15 +96,28 @@ def _claim_single_instance_lock(daemon_id: str) -> Any:
     lock_path = default_socket_path().with_suffix(".lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     lock_file = lock_path.open("a+")
-    try:
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        lock_file.close()
+    deadline = time.monotonic() + 15.0
+    while True:
         try:
-            V2DaemonClient(default_socket_path(), timeout_sec=0.5).ping()
-        except Exception as exc:
-            raise RuntimeError("alphonse_v2_daemon_lock_held") from exc
-        raise RuntimeError("alphonse_v2_daemon_already_running")
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            break
+        except BlockingIOError:
+            try:
+                V2DaemonClient(default_socket_path(), timeout_sec=0.5).ping()
+            except Exception as exc:
+                if time.monotonic() >= deadline:
+                    lock_file.close()
+                    raise RuntimeError("alphonse_v2_daemon_lock_held") from exc
+                # An old daemon can close its socket before its shutdown
+                # releases the lock; likewise a new one can hold the lock
+                # before publishing its socket. Wait without starting twice.
+                time.sleep(0.1)
+            else:
+                lock_file.close()
+                raise RuntimeError("alphonse_v2_daemon_already_running")
+        except BaseException:
+            lock_file.close()
+            raise
     lock_file.seek(0)
     lock_file.truncate()
     lock_file.write(daemon_id)
@@ -133,10 +146,12 @@ class V2Daemon:
         if hasattr(self.runtime.queue, "lease_owner"):
             self.runtime.queue.lease_owner = self.daemon_id
         self._stop = threading.Event()
+        self._ready = threading.Event()
         self._processor_thread: threading.Thread | None = None
         self._memory_migration_thread: threading.Thread | None = None
         self._lock_file: Any | None = None
         self._lifecycle_lock = threading.RLock()
+        self._shutdown_complete = threading.Event()
         self._optional_account_service = None
         self._stopped = False
         self._last_processor_error = ""
@@ -252,6 +267,10 @@ class V2Daemon:
             self.event_dispatcher.start()
             self._processor_thread = threading.Thread(target=self._process_loop, name="alphonse-v2-core", daemon=True)
             self._processor_thread.start()
+            with self._lifecycle_lock:
+                if self._stopped:
+                    raise RuntimeError('alphonse_v2_daemon_stopped')
+                self._ready.set()
         except Exception:
             self.stop()
             raise
@@ -261,18 +280,22 @@ class V2Daemon:
             if self._stopped:
                 return
             self._stopped = True
-        self._stop.set()
-        self.ipc.stop()
-        self.scheduler.stop()
-        if self.project_check_worker is not None:
-            self.project_check_worker.stop()
-        self.event_dispatcher.stop()
-        stop_runtime_integrations(self.runtime)
-        if self._processor_thread is not None and self._processor_thread.is_alive():
-            self._processor_thread.join(timeout=5)
-        if self._memory_migration_thread is not None and self._memory_migration_thread.is_alive():
-            self._memory_migration_thread.join(timeout=5)
-        self._release_single_instance_lock()
+            self._ready.clear()
+        try:
+            self._stop.set()
+            self.ipc.stop()
+            self.scheduler.stop()
+            if self.project_check_worker is not None:
+                self.project_check_worker.stop()
+            self.event_dispatcher.stop()
+            stop_runtime_integrations(self.runtime)
+            if self._processor_thread is not None and self._processor_thread.is_alive():
+                self._processor_thread.join(timeout=5)
+            if self._memory_migration_thread is not None and self._memory_migration_thread.is_alive():
+                self._memory_migration_thread.join(timeout=5)
+            self._release_single_instance_lock()
+        finally:
+            self._shutdown_complete.set()
 
     def _migrate_project_memories(self) -> None:
         admin = self.runtime.user_store.admin_user()
@@ -2132,20 +2155,17 @@ class V2Daemon:
         this service or its token API.
         """
         from alphonse.agent_v2.accounts import AccountService, AccountSession
-        from alphonse.agent_v2.integrations.oauth import ClientConfig, OAuthService
+        from alphonse.agent_v2.integrations.oauth import environment_clients, packaged_client_manifest, saved_client_manifest, OAuthService
         if not isinstance(session, AccountSession):
             raise PermissionError("account_trusted_session_required")
         accounts = AccountService(self.runtime.integration_store, self.runtime.user_store)
         accounts._active(session.actor_user_id)
         with self._lifecycle_lock:
             if self._optional_account_service is None:
-                clients = []
-                for provider in ("google", "microsoft"):
-                    prefix = "ALPHONSE_" + provider.upper() + "_OAUTH_"
-                    client_id, redirect = os.environ.get(prefix + "CLIENT_ID", ""), os.environ.get(prefix + "REDIRECT_URI", "")
-                    if client_id or redirect:
-                        clients.append(ClientConfig(provider, client_id, redirect))
+                clients, status, sources = environment_clients(os.environ, packaged_client_manifest(), saved_client_manifest(accounts.integrations))
                 self._optional_account_service = OAuthService(accounts, clients)
+                self._optional_account_service.provider_status = status
+                self._optional_account_service.provider_sources = sources
             return self._optional_account_service
 
     def list_integrations(self) -> list[dict[str, Any]]:
@@ -2233,9 +2253,13 @@ class V2Daemon:
         return record.to_dict()
 
     def _collect_activity_events(self) -> None:
-        events = list(self.runtime.activity_events)
-        self.runtime.activity_events.clear()
+        events = self.runtime.activity_events.drain()
+        now = datetime.now(timezone.utc)
+        self._activity_event_journal = [event for event in self._activity_event_journal
+                                        if _journal_event_recent(event.get('occurred_at'), now)]
         for event in events:
+            if not _journal_event_recent(event.occurred_at, now):
+                continue
             self._activity_event_sequence += 1
             self._activity_event_journal.append(
                 {
@@ -2250,7 +2274,7 @@ class V2Daemon:
                     "integration_id": event.integration_id,
                     "channel_target": event.channel_target,
                     "progress": dict(event.progress),
-                    "occurred_at": event.occurred_at,
+                    "occurred_at": min(datetime.fromisoformat(event.occurred_at.replace('Z', '+00:00')).astimezone(timezone.utc), now).isoformat(),
                 }
             )
         if len(self._activity_event_journal) > 2000:
@@ -2315,17 +2339,22 @@ class V2Daemon:
                 for event in self._ui_event_journal
                 if int(event["sequence"]) > cursor and (not event["user"] or event["user"] == user)
             ][: max(1, min(int(limit or 100), 500))]
-            return matched, int(matched[-1]["sequence"]) if matched else cursor
+            return [{k: v for k, v in event.items() if k != '_retained_at'} for event in matched], int(matched[-1]["sequence"]) if matched else cursor
 
     def _collect_ui_events(self) -> None:
-        events = list(self.runtime.ui_events)
-        self.runtime.ui_events.clear()
+        events = self.runtime.ui_events.drain()
+        now = datetime.now(timezone.utc)
+        self._ui_event_journal = [event for event in self._ui_event_journal
+                                  if _journal_event_recent(event.get('_retained_at'), now)]
         for core_event in events:
+            if not _journal_event_recent(core_event.occurred_at, now):
+                continue
             for event in self._ag_ui.map_event(core_event):
                 self._ui_event_sequence += 1
                 self._ui_event_journal.append(
                     {
                         "sequence": self._ui_event_sequence,
+                        "_retained_at": min(datetime.fromisoformat(core_event.occurred_at.replace('Z', '+00:00')).astimezone(timezone.utc), now).isoformat(),
                         "user": _ui_event_user(core_event),
                         "event": event,
                     }
@@ -2819,6 +2848,19 @@ class V2Daemon:
         if db_path != ":memory:":
             deleted = prune_operational_data(db_path, now=now)
             logger.info("operational retention completed deleted=%s", deleted)
+            from alphonse.agent_v2.retention import truncate_wal_if_idle
+            if not truncate_wal_if_idle(db_path):
+                logger.info("operational retention WAL cleanup deferred")
+        # Pruning and draining use the same lock as producers, so a fresh event
+        # arriving during maintenance is not lost.
+        self.runtime.activity_events.prune(now=now)
+        self.runtime.ui_events.prune(now=now)
+        with self._event_lock:
+            self._activity_event_journal[:] = [event for event in self._activity_event_journal
+                                              if _journal_event_recent(event.get('occurred_at'), now)]
+        with self._ui_event_lock:
+            self._ui_event_journal[:] = [event for event in self._ui_event_journal
+                                        if _journal_event_recent(event.get('_retained_at'), now)]
         self._last_retention_at = now
 
     def _mark_snapshot_checkpoint_terminal(self, snapshot: Any, *, status: str) -> None:
@@ -2896,6 +2938,9 @@ class V2Daemon:
                 pass
         finally:
             self.stop()
+            # An IPC handler can already be stopping on another thread. Do not
+            # let the main thread exit and tear down the process mid-cleanup.
+            self._shutdown_complete.wait()
 
     def _emit_scheduled_task_card(self, snapshot: Any) -> None:
         metadata = getattr(snapshot, "metadata", {}) or {}
@@ -3042,6 +3087,19 @@ class V2Daemon:
             self.runtime.schedule_store.mark_occurrence_failed(occurrence_key, error=error)
             if isinstance(metadata, dict) and metadata.get("scheduled_task_id"):
                 self._notify_scheduled_task_failure(metadata, error=error)
+
+
+def _journal_event_recent(value: Any, now: datetime) -> bool:
+    """Bound transient UI evidence; malformed timestamps fail closed."""
+    try:
+        if not isinstance(value, str):
+            return False
+        stamp = datetime.fromisoformat(value.replace('Z', '+00:00'))
+        if stamp.tzinfo is None or stamp.utcoffset() is None:
+            return False
+        return now - min(stamp.astimezone(timezone.utc), now) < timedelta(days=30)
+    except (TypeError, ValueError, OverflowError):
+        return False
 
 
 def _without_sequence(event: dict[str, Any]) -> dict[str, Any]:
@@ -3281,6 +3339,9 @@ def _question_answer_text(payload: dict[str, Any] | None) -> str:
 
 
 def main() -> None:
+    from alphonse.agent_v2.account_recovery import reject_staged_database
+    from alphonse.agent_v2.database import default_database_path
+    reject_staged_database(default_database_path())
     daemon_id = f"daemon-{uuid4().hex[:12]}"
     startup_lock = _claim_single_instance_lock(daemon_id)
     try:

@@ -4,6 +4,20 @@ import threading
 from urllib.parse import parse_qs, urlsplit
 
 from alphonse.agent_v2.accounts import AccountSession
+from alphonse.agent_v2.integrations.credentials import CredentialError
+from alphonse.agent_v2.integrations.oauth import OAuthError
+
+_SAFE_ERRORS = {
+    'oauth_consent_denied': 'Consent was not granted. Return to Alphonse and reconnect if you want to try again.',
+    'oauth_state_expired': 'The consent attempt expired. Return to Alphonse and start a new attempt.',
+    'oauth_revision_conflict': 'The account changed during consent. Return to Alphonse, refresh accounts, and retry.',
+    'oauth_token_exchange_failed': 'The provider token exchange failed. Return to Alphonse and retry.',
+    'oauth_identity_lookup_failed': 'The provider identity check failed. Return to Alphonse and retry.',
+    'oauth_scopes_missing': 'The provider did not grant all selected permissions. Return to Alphonse and retry.',
+    'oauth_offline_consent_required': 'The provider did not issue offline access. Return to Alphonse and retry.',
+    'oauth_account_mismatch': 'The selected provider account does not match this connection.',
+    'credential_backend_unavailable': 'Secure credential storage is unavailable or locked. Return to Alphonse and retry.',
+}
 
 
 class OAuthLoopback:
@@ -47,6 +61,8 @@ class OAuthLoopback:
                                 owner.oauth.complete(AccountSession(pending.actor), redirects[0] + '?' + path.query)
                                 status = 200
                                 message = 'Account connected. You can close this window and return to Alphonse.'
+                            except (OAuthError, CredentialError) as error:
+                                message = _SAFE_ERRORS.get(str(error), message)
                             except Exception:
                                 pass
                     self.send_response(status)
@@ -56,7 +72,10 @@ class OAuthLoopback:
                     self.end_headers()
                     self.wfile.write(message.encode())
 
-            server = ThreadingHTTPServer(('127.0.0.1', uri.port), Handler)
+            try:
+                server = ThreadingHTTPServer(('127.0.0.1', uri.port), Handler)
+            except OSError:
+                raise ValueError('oauth_callback_listener_unavailable') from None
             self.servers[uri.port] = server
             threading.Thread(target=server.serve_forever, daemon=True, name='oauth-loopback').start()
 
