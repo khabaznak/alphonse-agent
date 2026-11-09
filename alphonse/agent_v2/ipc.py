@@ -363,7 +363,13 @@ class V2DaemonServer:
                     "ok": False,
                     "error": f"{type(exc).__name__}: {exc}",
                 }
-            connection.sendall((json.dumps(response, sort_keys=True) + "\n").encode("utf-8"))
+            try:
+                connection.sendall((json.dumps(response, sort_keys=True) + "\n").encode("utf-8"))
+            finally:
+                # Starting shutdown earlier can terminate the process before
+                # this handler sends its acknowledgement to the client.
+                if response.get('ok') and isinstance(request, dict) and request.get('method') == 'stop':
+                    threading.Thread(target=self.daemon.stop, name='alphonse-v2-stop', daemon=True).start()
 
     def _optional_management(self, connection, request):
         # The owner-only Unix socket and kernel peer identity authenticate the
@@ -488,7 +494,6 @@ class V2DaemonServer:
                 "intelligence_engine": runtime.intelligence_engine_settings_store.get().to_dict(),
             }
         if method == "stop":
-            threading.Thread(target=self.daemon.stop, name="alphonse-v2-stop", daemon=True).start()
             return {"status": "stopping"}
         if method == "trigger_killswitch":
             return self.daemon.trigger_killswitch(

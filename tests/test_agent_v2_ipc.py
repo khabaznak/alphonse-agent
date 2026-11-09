@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 from datetime import datetime, timezone
 from types import SimpleNamespace
+import json
+import threading
 
 import pytest
 
@@ -33,6 +35,28 @@ from alphonse.agent_v2.services.project_sessions import SQLiteProjectSessionStor
 from alphonse.agent_v2.runtime import build_runtime_host
 from alphonse.agent_v2.users import V2UserStore
 from alphonse.agent_v2.web_tools_settings import SQLiteWebToolsSettingsStore
+
+
+def test_stop_acknowledgement_is_sent_before_shutdown_starts():
+    from alphonse.agent_v2.ipc import V2DaemonServer
+
+    sent = threading.Event()
+    stopped = threading.Event()
+    order = []
+    class Connection:
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+        def recv(self, size): return b'{"version":1,"method":"stop"}\n'
+        def sendall(self, value):
+            order.append('response')
+            assert json.loads(value)['result'] == {'status': 'stopping'}
+            sent.set()
+    def stop():
+        order.append('stop')
+        stopped.set()
+    V2DaemonServer(SimpleNamespace(stop=stop))._handle(Connection())
+    assert sent.wait(1) and stopped.wait(1)
+    assert order == ['response', 'stop']
 from alphonse.agent_v2.code_mode_settings import SQLiteCodeModeSettingsStore
 from alphonse.agent_v2.system_one import SQLiteSystemOneSettingsStore
 
