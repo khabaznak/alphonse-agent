@@ -1,10 +1,11 @@
 use std::env;
-use std::path::PathBuf;
-use std::process::Command;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 
 use serde_json::{json, Value};
-use tauri::AppHandle;
-use tauri_plugin_shell::ShellExt;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 use tokio::time::{sleep, timeout, Duration, Instant};
@@ -28,6 +29,22 @@ fn should_spawn_daemon(result: &Result<Value, String>) -> bool {
     result.as_ref().err().is_some_and(|error| error != DAEMON_PING_TIMEOUT)
 }
 
+fn bundled_daemon_path(executable: &Path) -> Result<PathBuf, String> {
+    let directory = executable.parent().ok_or("Desktop executable directory unavailable")?;
+    Ok(directory.join(format!("alphonse-daemon{}", env::consts::EXE_SUFFIX)))
+}
+
+fn spawn_bundled_daemon() -> Result<(), String> {
+    let executable = env::current_exe().map_err(|_| "Desktop executable unavailable")?;
+    let daemon = bundled_daemon_path(&executable)?;
+    let home = dirs_home().filter(|path| path.is_dir()).ok_or("Home directory unavailable")?;
+    let mut command = Command::new(daemon);
+    command.current_dir(home).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    #[cfg(unix)]
+    command.process_group(0);
+    command.spawn().map(|_| ()).map_err(|error| format!("could not start bundled daemon: {error}"))
+}
+
 #[tauri::command]
 fn desktop_diagnostic_mode() -> String {
     env::var("ALPHONSE_DESKTOP_DIAGNOSTIC_MODE").unwrap_or_else(|_| "normal".to_owned())
@@ -39,7 +56,7 @@ fn desktop_diagnostic_project_id() -> String {
 }
 
 #[tauri::command]
-async fn ensure_daemon(app: AppHandle) -> Result<(), String> {
+async fn ensure_daemon() -> Result<(), String> {
     // Multiple UI effects may ask at once. Only one should launch a sidecar;
     // waiters recheck the socket after the first startup attempt completes.
     let _startup = DAEMON_START_LOCK.lock().await;
@@ -56,11 +73,7 @@ async fn ensure_daemon(app: AppHandle) -> Result<(), String> {
             .spawn()
             .map_err(|error| format!("could not start the development daemon: {error}"))?;
     } else if should_spawn_daemon(&existing) {
-        app.shell()
-            .sidecar("alphonse-daemon")
-            .map_err(|error| format!("bundled daemon unavailable: {error}"))?
-            .spawn()
-            .map_err(|error| format!("could not start bundled daemon: {error}"))?;
+        spawn_bundled_daemon()?;
     }
 
     // A packaged one-file daemon may need to unpack on a cold launch.
@@ -235,6 +248,15 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bundled_daemon_is_next_to_desktop_executable() {
+        let executable = Path::new("/tmp/Alphonse Desktop.app/Contents/MacOS/alphonse-desktop");
+        assert_eq!(
+            bundled_daemon_path(executable).unwrap(),
+            executable.parent().unwrap().join(format!("alphonse-daemon{}", env::consts::EXE_SUFFIX))
+        );
+    }
 
     #[test]
     fn only_ready_ping_completes_startup() {
