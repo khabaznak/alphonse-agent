@@ -594,8 +594,10 @@ class V2DaemonServer:
             return self.daemon.legacy_skill_migration(actor_user_id=str(params.get("actor_user_id") or ""), operation=str(params.get("operation") or "preview"), artifact_id=str(params.get("artifact_id") or ""), review_token=str(params.get("review_token") or ""), instructions=str(params.get("instructions") or ""), location=location)
         if method in {"artifacts", "relocate_artifact", "reconcile_artifacts", "update_artifact", "set_artifact_enabled", "delete_artifact", "unassigned_artifacts", "attach_artifact_to_skill"}:
             raise ValueError("artifact_catalog_retired: use legacy_skill_migration preview/apply/rollback; no files were changed")
+        if method == "skills_overview":
+            return self.daemon.list_skills_overview(actor_user_id=str(params.get("actor_user_id") or ""))
         if method == "skills":
-            return self.daemon.list_skills_workspace(actor_user_id=str(params.get("actor_user_id") or ""))
+            return self.daemon.list_skills_workspace(actor_user_id=str(params.get("actor_user_id") or ""), skill_id=str(params.get("skill_id") or ""))
         if method == "skill_appearance":
             return self.daemon.skill_appearance(actor_user_id=str(params.get("actor_user_id") or ""), skill_id=str(params.get("skill_id") or ""))
         if method == "set_skill_appearance":

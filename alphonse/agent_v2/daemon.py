@@ -868,7 +868,17 @@ class V2Daemon:
     def list_skills(self, *, actor_user_id: str) -> list[dict[str, Any]]:
         return self.list_skills_workspace(actor_user_id=actor_user_id)["skills"]
 
-    def list_skills_workspace(self, *, actor_user_id: str) -> dict[str, Any]:
+    def list_skills_overview(self, *, actor_user_id: str) -> dict[str, Any]:
+        from alphonse.agent_v2.skill_appearances import resolve_appearance
+
+        self._require_admin(actor_user_id)
+        records = self.runtime.skill_store.list_skills()
+        return {
+            "skills": [{**item.candidate(), "appearance": resolve_appearance(item)} for item in records],
+            "diagnostics": list(self.runtime.skill_store.diagnostics),
+        }
+
+    def list_skills_workspace(self, *, actor_user_id: str, skill_id: str = "") -> dict[str, Any]:
         from alphonse.agent_v2.skill_appearances import resolve_appearance
 
         self._require_admin(actor_user_id)
@@ -881,7 +891,7 @@ class V2Daemon:
                  "files": self.runtime.skill_store.files(item.skill_id),
                  "appearance": resolve_appearance(item), "appearance_configured": bool(item.appearance),
                  "artifacts": []}
-                for item in self.runtime.skill_store.list_skills()
+                for item in self.runtime.skill_store.list_skills() if not skill_id or item.skill_id == skill_id
             ],
             "diagnostics": list(self.runtime.skill_store.diagnostics),
             "unassigned_artifacts": [],

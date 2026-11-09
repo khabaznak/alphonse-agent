@@ -49,6 +49,11 @@ export function MascotImage({ state, appearance = null, className = "brand-masco
   </span>;
 }
 
+export function SkillAppearancePreview({ user, appearance }: { user: string; appearance: SkillAppearance | null }) {
+  const loaded = useAppearanceResource(user, appearance);
+  return <MascotImage state="idle" appearance={loaded} />;
+}
+
 export function SkillMascot({ state, user, context }: { state: AvatarState; user: string; context: AppearanceContext }) {
   const [preferences] = useAppearancePreferences(user);
   const [latch, setLatch] = useState(BASE_LATCH);
@@ -77,14 +82,12 @@ export function SkillAppearanceSettings({ user, skill, onSaved, beforeSave }: { 
     catch (cause) { setNotice(cause instanceof Error ? cause.message : "Appearance could not be saved."); }
     finally { setBusy(false); }
   };
-  return <section className="skill-appearance-settings"><h2>Mascot appearances</h2>
-    <label><input type="checkbox" checked={preferences.enabled} onChange={(event) => savePreferences({ ...preferences, enabled: event.target.checked })} /> Use skill appearances</label>
-    <p>Alphonse keeps its activity expressions. One leading skill chooses the outfit; ambiguous work uses the base mascot. Outfits convey context and do not represent professional credentials.</p>
+  return <section id="skill-appearance" className="skill-appearance-settings"><div className="skill-section-heading"><h2>Appearance</h2><p>Choose how Alphonse appears when this skill leads a task.</p></div>
+    <div className="skill-appearance-option"><div><strong>Use skill appearances</strong><p>Show skill appearances across your conversations.</p></div><label><input type="checkbox" checked={preferences.enabled} onChange={(event) => savePreferences({ ...preferences, enabled: event.target.checked })} aria-label="Use skill appearances" /></label></div>
     {skill && <>
-      <label><input type="checkbox" checked={!preferences.disabledSkills.includes(skill.id)} onChange={(event) => savePreferences({ ...preferences, disabledSkills: event.target.checked ? preferences.disabledSkills.filter((id) => id !== skill.id) : [...preferences.disabledSkills, skill.id] })} /> Allow {skill.title}’s appearance</label>
-      <p>{skill.appearance ? `Available: ${skill.appearance.label}` : skill.appearance_configured ? "Appearance unavailable or incompatible. Using the base mascot." : "This skill uses the base mascot."}</p>
+      <div className="skill-appearance-option"><div><strong>Allow {skill.title}’s appearance</strong><p>{skill.appearance ? `Available: ${skill.appearance.label}` : skill.appearance_configured ? "Appearance unavailable or incompatible. Using the base mascot." : "Currently using the base mascot."}</p></div><label><input type="checkbox" checked={!preferences.disabledSkills.includes(skill.id)} onChange={(event) => savePreferences({ ...preferences, disabledSkills: event.target.checked ? preferences.disabledSkills.filter((id) => id !== skill.id) : [...preferences.disabledSkills, skill.id] })} aria-label={`Allow ${skill.title}’s appearance`} /></label></div>
       <div className="mascot-previews" aria-label="Mascot activity previews">{(["idle", "planning", "doing", "checking", "acting", "error", "disconnected"] as AvatarState[]).map((state) => <figure key={state}><MascotImage state={state} appearance={appearance} className="mascot-preview" /><figcaption>{avatarStateLabel(state)}</figcaption></figure>)}</div>
-      {skill.editable && <><label>Skill outfit<select value={preset} onChange={(event) => setPreset(event.target.value)}>{skill.appearance && !skill.appearance.preset && <option value="custom" disabled>Custom package resources</option>}<option value="">Base mascot (remove binding)</option><option value="doctor">Family health assistant</option><option value="exercise-coach">Exercise coach</option></select></label><button type="button" disabled={busy || preset === "custom"} onClick={() => void bind()}>Save skill outfit</button><small>Saving replaces this skill’s optional appearance binding. Package updates may replace the binding.</small></>}
+      {skill.editable && <><div className="skill-appearance-actions"><label>Skill outfit<select value={preset} onChange={(event) => setPreset(event.target.value)}>{skill.appearance && !skill.appearance.preset && <option value="custom" disabled>Custom package resources</option>}<option value="">Base mascot (remove binding)</option><option value="doctor">Family health assistant</option><option value="exercise-coach">Exercise coach</option></select></label><button type="button" disabled={busy || preset === "custom"} onClick={() => void bind()}>Save skill outfit</button></div><small>Saving replaces this skill’s optional appearance binding. Package updates may replace the binding.</small></>}
     </>}
     {notice && <p role="status">{notice}</p>}
   </section>;

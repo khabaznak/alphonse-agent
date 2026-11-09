@@ -156,6 +156,34 @@ def test_ipc_metadata_diagnostics_export_and_authorization(store, tmp_path):
         daemon.ipc._dispatch({'method': 'export_skill', 'params': {**params, 'actor_user_id': 'stranger'}})
 
 
+def test_skill_overview_does_not_inventory_packages_and_detail_is_scoped(store, tmp_path, monkeypatch):
+    from alphonse.agent_v2.daemon import V2Daemon
+    from alphonse.agent_v2.runtime import build_runtime_host
+    from alphonse.agent_v2.users import V2UserStore
+
+    package(store.skills_dir, name='first')
+    package(store.skills_dir, name='second')
+    users = V2UserStore(':memory:')
+    users.set_workspace_root(tmp_path)
+    users.onboard(display_name='Alex', user_id='alex')
+    daemon = V2Daemon(build_runtime_host(user_store=users, skill_store=store))
+    original_files = store.files
+    inspected = []
+    def files(skill_id):
+        inspected.append(skill_id)
+        return original_files(skill_id)
+    monkeypatch.setattr(store, 'files', files)
+    params = {'actor_user_id': 'alex'}
+    overview = daemon.ipc._dispatch({'method': 'skills_overview', 'params': params})
+    assert [item['id'] for item in overview['skills']] == ['skill:first', 'skill:second']
+    assert inspected == []
+    detail = daemon.ipc._dispatch({'method': 'skills', 'params': {**params, 'skill_id': 'skill:second'}})
+    assert [item['id'] for item in detail['skills']] == ['skill:second']
+    assert inspected == ['skill:second']
+    with pytest.raises(PermissionError):
+        daemon.ipc._dispatch({'method': 'skills_overview', 'params': {'actor_user_id': 'stranger'}})
+
+
 def test_metadata_numeric_key_is_rejected(store, tmp_path):
     root = package(tmp_path / 'source', {'name': 'sample', 'description': 'A fixture', 'metadata': {1: 'value'}})
     with pytest.raises(ValueError, match='skill_metadata_invalid'):
