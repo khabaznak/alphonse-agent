@@ -99,6 +99,25 @@ class OutboundSelector:
     project_id: str | None = None
 
 
+def _validate_idempotent_result(request: OutboundMessage, row: sqlite3.Row) -> OutboundMessage:
+    """Do not silently bind an idempotency key to a different operation.
+
+    Delivery status and the runtime-owned delivery metadata change after
+    enqueue; payload, routing and operation metadata must still match. Never
+    put conflicting content or destinations in exceptions or logs.
+    """
+    existing = _message_from_row(row)
+    fields = ("integration_id", "provider_key", "channel_target", "message", "kind",
+              "audience_user_id", "correlation_id", "reply_to_provider_message_id",
+              "task_id", "question_id", "project_id")
+    mutable_metadata = {"last_error", "delivery_state", "finding_delivery_state", "unconfirmed_lease_owner"}
+    stable = lambda value: {k: v for k, v in value.items() if k not in mutable_metadata}
+    if (any(getattr(existing, key) != getattr(request, key) for key in fields)
+            or stable(existing.metadata) != stable(request.metadata)):
+        raise ValueError("outbox_idempotency_conflict")
+    return existing
+
+
 class SQLiteOutboundStore:
     """SQLite-backed outbound queue for v2 integration delivery."""
 
@@ -174,17 +193,17 @@ class SQLiteOutboundStore:
                     (record.outbox_message_id,),
                 ).fetchone()
                 if existing is not None:
-                    return _message_from_row(existing)
+                    return _validate_idempotent_result(record, existing)
         else:
             with self._connect() as conn:
                 self._insert(conn, record)
                 if dedupe_key:
                     existing = conn.execute(
-                        "SELECT * FROM v2_outbox WHERE outbox_message_id = ?",
+                        "SELECT * FROM main.v2_outbox WHERE outbox_message_id = ?",
                         (record.outbox_message_id,),
                     ).fetchone()
                     if existing is not None:
-                        return _message_from_row(existing)
+                        return _validate_idempotent_result(record, existing)
         return record
 
     def _validate_connection(self, connection: sqlite3.Connection) -> None:
@@ -205,12 +224,13 @@ class SQLiteOutboundStore:
     def _insert(conn: sqlite3.Connection, record: OutboundMessage) -> None:
         conn.execute(
             """
-            INSERT OR IGNORE INTO main.v2_outbox (
+            INSERT INTO main.v2_outbox (
               outbox_message_id, integration_id, provider_key, channel_target, message,
               kind, audience_user_id, correlation_id, status, provider_message_id,
               reply_to_provider_message_id, task_id, question_id, project_id, metadata_json,
               claimed_at, delivered_at, created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', '', ?, ?, ?, ?, ?, '', '', ?, ?)
+            ON CONFLICT(outbox_message_id) DO NOTHING
             """,
             (
                 record.outbox_message_id,
@@ -238,7 +258,7 @@ class SQLiteOutboundStore:
         """Return all ambiguous scheduled sends for restart reconciliation."""
         with self._connect() as conn:
             rows = conn.execute(
-                """SELECT * FROM v2_outbox WHERE status='unconfirmed'
+                """SELECT * FROM main.v2_outbox WHERE status='unconfirmed'
                    AND json_valid(metadata_json)
                    AND COALESCE(json_extract(metadata_json, '$.occurrence_key'), '') != ''"""
             ).fetchall()
@@ -247,7 +267,7 @@ class SQLiteOutboundStore:
     def list_confirmed_scheduled_evidence(self) -> list[OutboundMessage]:
         with self._connect() as conn:
             rows = conn.execute(
-                """SELECT * FROM v2_outbox WHERE status='delivered' AND json_valid(metadata_json)
+                """SELECT * FROM main.v2_outbox WHERE status='delivered' AND json_valid(metadata_json)
                    AND json_extract(metadata_json, '$.scheduled_delivery_evidence')=1"""
             ).fetchall()
         return [_message_from_row(row) for row in rows]
@@ -255,7 +275,7 @@ class SQLiteOutboundStore:
     def list_for_occurrence(self, occurrence_key: str) -> list[OutboundMessage]:
         with self._connect() as conn:
             rows = conn.execute(
-                """SELECT * FROM v2_outbox WHERE json_valid(metadata_json)
+                """SELECT * FROM main.v2_outbox WHERE json_valid(metadata_json)
                    AND json_extract(metadata_json, '$.occurrence_key') = ?
                    AND COALESCE(json_extract(metadata_json, '$.scheduled_question'), 0) != 1""",
                 (occurrence_key,),
@@ -265,7 +285,7 @@ class SQLiteOutboundStore:
     def status_counts(self) -> dict[str, int]:
         counts = {"pending": 0, "claimed": 0, "retry_wait": 0, "delivered": 0, "failed": 0, "unconfirmed": 0}
         with self._connect() as conn:
-            rows = conn.execute("SELECT status, COUNT(*) AS count FROM v2_outbox GROUP BY status").fetchall()
+            rows = conn.execute("SELECT status, COUNT(*) AS count FROM main.v2_outbox GROUP BY status").fetchall()
         for row in rows:
             status = str(row["status"] or "")
             if status in counts:
@@ -275,7 +295,7 @@ class SQLiteOutboundStore:
     def get(self, outbox_message_id: str) -> OutboundMessage | None:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT * FROM v2_outbox WHERE outbox_message_id = ?",
+                "SELECT * FROM main.v2_outbox WHERE outbox_message_id = ?",
                 (str(outbox_message_id or "").strip(),),
             ).fetchone()
         return _message_from_row(row) if row is not None else None
@@ -283,7 +303,7 @@ class SQLiteOutboundStore:
     def mark_scheduled_unconfirmed(self, outbox_message_id: str, *, task_id: str, occurrence_key: str, recipient_user_id: str) -> bool:
         with self._connect() as conn:
             return conn.execute(
-                """UPDATE v2_outbox SET status='unconfirmed', next_attempt_at='', lease_owner='', lease_expires_at='',
+                """UPDATE main.v2_outbox SET status='unconfirmed', next_attempt_at='', lease_owner='', lease_expires_at='',
                    metadata_json=json_set(metadata_json, '$.delivery_state', 'unconfirmed', '$.unconfirmed_lease_owner', lease_owner),
                    last_error='scheduled_delivery_wait_expired', updated_at=?
                    WHERE outbox_message_id=? AND task_id=? AND audience_user_id=?
@@ -298,7 +318,7 @@ class SQLiteOutboundStore:
         with self._connect() as conn:
             rows = conn.execute(
                 f"""
-                SELECT * FROM v2_outbox
+                SELECT * FROM main.v2_outbox
                 {where}
                 ORDER BY created_at ASC
                 LIMIT ?
@@ -327,7 +347,7 @@ class SQLiteOutboundStore:
                     allowed_schedule = False
                 if not allowed_schedule:
                     with self._connect() as conn:
-                        conn.execute("""UPDATE v2_outbox SET status='failed',
+                        conn.execute("""UPDATE main.v2_outbox SET status='failed',
                             metadata_json=json_set(metadata_json, '$.delivery_state', 'cancelled_or_unavailable'),
                             last_error='scheduled_delivery_not_authorized', lease_owner='', lease_expires_at=''
                             WHERE outbox_message_id=? AND status='claimed'""", (message.outbox_message_id,))
@@ -341,14 +361,14 @@ class SQLiteOutboundStore:
             if allowed:
                 return message
             with self._connect() as conn:
-                conn.execute("""UPDATE v2_outbox SET status='failed', message='[Finding unavailable]',
+                conn.execute("""UPDATE main.v2_outbox SET status='failed', message='[Finding unavailable]',
                     metadata_json=json_set(metadata_json, '$.finding_delivery_state', 'unavailable'),
                     lease_owner='', lease_expires_at='' WHERE outbox_message_id=?""", (message.outbox_message_id,))
         return None
 
     def redact_finding(self, finding_id: str) -> None:
         with self._connect() as conn:
-            conn.execute("""UPDATE v2_outbox SET message='[Finding unavailable]',
+            conn.execute("""UPDATE main.v2_outbox SET message='[Finding unavailable]',
                 status=CASE WHEN status='delivered' THEN status ELSE 'failed' END,
                 metadata_json=json_set(metadata_json, '$.finding_delivery_state', 'revoked'),
                 last_error='', lease_owner='', lease_expires_at=''
@@ -386,7 +406,7 @@ class SQLiteOutboundStore:
             self.reclaim_expired(conn=conn, now=now)
             row = conn.execute(
                 f"""
-                SELECT * FROM v2_outbox
+                SELECT * FROM main.v2_outbox
                 {where}
                 ORDER BY created_at ASC
                 LIMIT 1
@@ -398,7 +418,7 @@ class SQLiteOutboundStore:
             message_id = str(row["outbox_message_id"])
             cursor = conn.execute(
                 """
-                UPDATE v2_outbox
+                UPDATE main.v2_outbox
                 SET status = 'claimed',
                     claimed_at = ?,
                     updated_at = ?,
@@ -413,7 +433,7 @@ class SQLiteOutboundStore:
             )
             if cursor.rowcount != 1:
                 return None
-            updated = conn.execute("SELECT * FROM v2_outbox WHERE outbox_message_id = ?", (message_id,)).fetchone()
+            updated = conn.execute("SELECT * FROM main.v2_outbox WHERE outbox_message_id = ?", (message_id,)).fetchone()
         return _message_from_row(updated) if updated is not None else None
 
     def mark_delivered(self, outbox_message_id: str, *, provider_message_id: str = "") -> bool:
@@ -421,7 +441,7 @@ class SQLiteOutboundStore:
         with self._connect() as conn:
             cursor = conn.execute(
                 """
-                UPDATE v2_outbox
+                UPDATE main.v2_outbox
                 SET status = 'delivered',
                     metadata_json = CASE WHEN kind='finding'
                         THEN json_set(metadata_json, '$.finding_delivery_state', 'delivered')
@@ -454,7 +474,7 @@ class SQLiteOutboundStore:
     ) -> bool:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT metadata_json, attempt_count, max_attempts FROM v2_outbox WHERE outbox_message_id = ?",
+                "SELECT metadata_json, attempt_count, max_attempts FROM main.v2_outbox WHERE outbox_message_id = ?",
                 (str(outbox_message_id or "").strip(),),
             ).fetchone()
             if row is None:
@@ -484,7 +504,7 @@ class SQLiteOutboundStore:
             terminal = is_finding or scheduled or attempts >= max_attempts
             cursor = conn.execute(
                 """
-                UPDATE v2_outbox
+                UPDATE main.v2_outbox
                 SET status = ?,
                     metadata_json = ?,
                     updated_at = ?,
@@ -516,7 +536,7 @@ class SQLiteOutboundStore:
         def _reclaim(connection: sqlite3.Connection) -> int:
             cursor = connection.execute(
                 """
-                UPDATE v2_outbox
+                UPDATE main.v2_outbox
                 SET status = CASE WHEN kind='finding' THEN 'failed'
                     WHEN json_valid(metadata_json) AND COALESCE(json_extract(metadata_json, '$.occurrence_key'), '') != ''
                     THEN 'unconfirmed' ELSE 'pending' END,
@@ -537,6 +557,7 @@ class SQLiteOutboundStore:
             return int(cursor.rowcount)
 
         if conn is not None:
+            self._validate_connection(conn)
             return _reclaim(conn)
         with self._connect() as opened:
             return _reclaim(opened)

@@ -288,3 +288,89 @@ def test_opt_in_rejects_malformed_existing_generation(tmp_path):
     with pytest.raises(ValueError, match='generation_invalid'):
         SQLiteMessageQueue(path, lease_owner='worker', experimental_claim_fencing=True)
     assert queue.status_for('m') == 'pending'
+
+
+@pytest.mark.parametrize('first_mode', ['legacy', 'fenced'])
+def test_claim_modes_do_not_run_concurrently_in_this_binary(tmp_path, first_mode):
+    """A pending fenced handoff still belongs to its fenced lifecycle."""
+    path = tmp_path / 'queue.sqlite'
+    legacy = SQLiteMessageQueue(path, lease_owner='legacy-worker')
+    fenced = SQLiteMessageQueue(path, lease_owner='fenced-worker', experimental_claim_fencing=True)
+    legacy.enqueue(message(), message_id='first')
+    legacy.enqueue(message(), message_id='second')
+    first, other = (legacy, fenced) if first_mode == 'legacy' else (fenced, legacy)
+    claim = first.claim_next()
+    assert claim is not None
+    assert other.claim_next() is None
+    if first_mode == 'fenced':
+        with fenced._connect() as conn:
+            conn.execute('INSERT INTO v2_scheduled_handoffs(message_id,task_id,owner_id) VALUES(?,?,?)',
+                         (claim.message_id, 'task', 'alice'))
+        assert fenced.release_scheduled_handoff_fenced(claim.claim_receipt)
+        # Pending handoff retains its generation and must not admit legacy work.
+        assert legacy.claim_next() is None
+        from alphonse.agent_v2.core.messages.queue import MessageSelector
+        resumed = fenced.claim_next(selector=MessageSelector(message_id=claim.message_id))
+        assert fenced.ack_fenced(resumed.claim_receipt)
+    else:
+        assert legacy.ack(claim.message_id)
+    assert other.claim_next() is not None
+
+
+def test_claim_mode_race_allows_only_one_protocol_to_acquire(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    path = tmp_path / 'queue.sqlite'
+    legacy = SQLiteMessageQueue(path, lease_owner='legacy-worker')
+    fenced = SQLiteMessageQueue(path, lease_owner='fenced-worker', experimental_claim_fencing=True)
+    legacy.enqueue(message(), message_id='first')
+    legacy.enqueue(message(), message_id='second')
+    barrier = Barrier(2)
+    def acquire(queue):
+        barrier.wait(timeout=5)
+        return queue.claim_next()
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        claims = list(pool.map(acquire, (legacy, fenced)))
+    assert sum(claim is not None for claim in claims) == 1
+    with legacy._connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM v2_inbound_messages WHERE status='processing'").fetchone()[0] == 1
+
+
+def test_claim_mode_diagnostic_exposes_no_task_data_and_recovers_after_ack(tmp_path):
+    path = tmp_path / 'queue.sqlite'
+    legacy = SQLiteMessageQueue(path, lease_owner='legacy-worker')
+    fenced = SQLiteMessageQueue(path, lease_owner='fenced-worker', experimental_claim_fencing=True)
+    assert legacy.claim_mode_blocked() is False
+    legacy.enqueue(message(), message_id='secret-id')
+    claim = fenced.claim_next()
+    assert legacy.claim_mode_blocked() is True
+    assert fenced.claim_mode_blocked() is False
+    assert fenced.ack_fenced(claim.claim_receipt)
+    assert legacy.claim_mode_blocked() is False
+
+
+def test_claim_mode_diagnostic_does_not_hide_storage_error(tmp_path):
+    import sqlite3
+    queue = SQLiteMessageQueue(tmp_path / 'queue.sqlite')
+    with queue._connect() as conn:
+        conn.execute('DROP TABLE v2_inbound_messages')
+    with pytest.raises(sqlite3.Error):
+        queue.claim_mode_blocked()
+    with queue._connect() as conn:
+        conn.execute('CREATE TABLE v2_inbound_messages(message_id TEXT)')
+    with pytest.raises(sqlite3.Error):
+        queue.claim_mode_blocked()
+
+
+def test_claim_mode_rejects_generation_corrupted_after_migration(tmp_path):
+    path = tmp_path / 'shared.sqlite'
+    legacy = SQLiteMessageQueue(path, lease_owner='legacy')
+    fenced = SQLiteMessageQueue(path, lease_owner='fenced', experimental_claim_fencing=True)
+    legacy.enqueue(message(), message_id='first')
+    with legacy._connect() as conn:
+        conn.execute("UPDATE v2_inbound_messages SET claim_generation='not-a-generation' WHERE message_id='first'")
+    assert fenced.claim_mode_blocked() is True
+    assert legacy.claim_mode_blocked() is True
+    assert fenced.claim_next() is None
+    assert legacy.claim_next() is None

@@ -4,7 +4,63 @@ from __future__ import annotations
 
 import os
 import shutil
+import stat
 from pathlib import Path
+
+_SAFE_RMTREE_SUPPORTED = bool(getattr(shutil.rmtree, 'avoids_symlink_attacks', False))
+
+
+def remove_directory_beneath(root: Path, parts: tuple[str, ...], *, error: str) -> None:
+    """Remove one contained directory through pinned, no-follow descriptors.
+
+    The configured root is a trusted boundary; no descendant symlink is
+    followed. If the platform cannot provide fd-relative safe rmtree, fail
+    closed. A missing descendant is an idempotently completed removal.
+    """
+    if not parts or any(not isinstance(p, str) or not p or p in {'.', '..'} or '/' in p for p in parts):
+        raise ValueError(error)
+    if (not hasattr(os, 'O_NOFOLLOW') or not hasattr(os, 'O_DIRECTORY')
+            or os.open not in os.supports_dir_fd or os.stat not in os.supports_dir_fd
+            or not _SAFE_RMTREE_SUPPORTED):
+        raise ValueError('managed_cleanup_unsupported')
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    descriptors: list[int] = []
+    try:
+        try:
+            current = os.open(root, flags)
+        except OSError:
+            # The root may be unmounted or renamed; absence does not prove
+            # that the owner's data was removed. Do not expose host paths.
+            raise ValueError('managed_cleanup_root_unavailable') from None
+        descriptors.append(current)
+        for part in parts[:-1]:
+            try:
+                current = os.open(part, flags, dir_fd=current)
+            except FileNotFoundError:
+                return
+            except OSError:
+                raise ValueError(error) from None
+            descriptors.append(current)
+        try:
+            info = os.stat(parts[-1], dir_fd=current, follow_symlinks=False)
+        except FileNotFoundError:
+            return
+        if not stat.S_ISDIR(info.st_mode):
+            raise ValueError(error)
+        # rmtree's fd-based implementation rechecks the leaf after opening it.
+        try:
+            shutil.rmtree(parts[-1], dir_fd=current)
+        except FileNotFoundError:
+            # A concurrent removal of an inner entry may interrupt rmtree
+            # while the root remains. Only an absent root is complete.
+            try:
+                os.stat(parts[-1], dir_fd=current, follow_symlinks=False)
+            except FileNotFoundError:
+                return
+            raise
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
 
 
 def copy_tree_missing(source: str | Path, destination: str | Path) -> int:

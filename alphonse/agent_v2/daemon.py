@@ -617,18 +617,53 @@ class V2Daemon:
         # but that check happens only after the earlier deletion steps.
         if self.runtime.user_store.is_admin(user.user_id):
             raise ValueError("admin_user_cannot_be_deleted")
-        roots = self.runtime.project_store.delete_owned_by(user.user_id)
+        users_root = self.runtime.user_store.users_root().expanduser().resolve()
+        identity = user.user_id
+        if not identity or identity in {".", ".."} or Path(identity).name != identity:
+            raise ValueError("user_profile_path_invalid")
+        roots = self._delete_user_projects(identity, users_root)
         self.runtime.project_session_store.delete_user(user.user_id)
-        for root in roots:
-            path = Path(root)
-            if path.exists() and self.runtime.user_store.users_root() in path.parents:
-                shutil.rmtree(path)
         schedules = self._delete_user_schedule_data(user.user_id)
         questions = self._delete_user_question_data(user.user_id)
         inbound = self._delete_user_inbound_data(user.user_id)
         outbound = self._delete_user_outbound_data(user.user_id)
         deleted = self.runtime.user_store.delete_user(user.user_id)
         return {"deleted": int(deleted), "projects": len(roots), "schedules": schedules, "questions": questions, "inbound": inbound, "outbound": outbound}
+
+    def _delete_user_projects(self, identity: str, users_root: Path) -> list[str]:
+        profile = users_root / identity
+
+        def remove_managed_roots(roots: list[str]) -> None:
+            from alphonse.agent_v2.workspace import remove_directory_beneath
+            # A project may be a reference to an external location: retain the
+            # historical behavior of not deleting those directories. Within
+            # managed storage, reject paths owned by another user or involving
+            # a symlink rather than guessing what may be removed.
+            if profile.is_symlink():
+                raise ValueError("user_profile_symlink")
+            managed: list[Path] = []
+            for raw in roots:
+                path = Path(os.path.abspath(os.path.expanduser(raw)))
+                if users_root not in path.parents:
+                    continue
+                if profile not in path.parents:
+                    raise ValueError("project_cleanup_outside_owner_profile")
+                relative = path.relative_to(profile)
+                current = profile
+                for part in relative.parts:
+                    current = current / part
+                    if current.is_symlink():
+                        raise ValueError("project_cleanup_symlink")
+                if path.resolve() != profile / relative:
+                    raise ValueError("project_cleanup_escape")
+                managed.append(path)
+            # Validate every path before deleting the first one. The project
+            # write transaction keeps records discoverable on interruption.
+            for path in sorted(set(managed), key=lambda item: len(item.parts), reverse=True):
+                remove_directory_beneath(users_root, (identity, *path.relative_to(profile).parts),
+                                         error="project_cleanup_symlink")
+
+        return self.runtime.project_store.delete_owned_by(identity, before_delete=remove_managed_roots)
 
     def _delete_user_schedule_data(self, user_id: str) -> int:
         store = self.runtime.schedule_store

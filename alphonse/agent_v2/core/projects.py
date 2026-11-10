@@ -9,7 +9,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 from uuid import uuid4
 
 from alphonse.agent_v2.database import connect_database, default_database_path
@@ -471,9 +471,15 @@ class ProjectStore:
                 continue
         return updated
 
-    def delete_owned_by(self, user_id: str) -> list[str]:
+    def delete_owned_by(self, user_id: str, *, before_delete: Callable[[list[str]], None] | None = None) -> list[str]:
         with self._connect() as conn:
+            # Keep the identifying rows until managed filesystem cleanup has
+            # succeeded. A failed or interrupted cleanup can then be retried.
+            if before_delete is not None:
+                conn.execute("BEGIN IMMEDIATE")
             roots = [str(row[0]) for row in conn.execute("SELECT root_path FROM v2_projects WHERE owner_user_id=?", (str(user_id),)).fetchall()]
+            if before_delete is not None:
+                before_delete(list(roots))
             conn.execute("DELETE FROM v2_project_members WHERE user_id=? OR project_id IN (SELECT project_id FROM v2_projects WHERE owner_user_id=?)", (str(user_id), str(user_id)))
             conn.execute("DELETE FROM v2_projects WHERE owner_user_id=?", (str(user_id),))
         return roots

@@ -482,7 +482,7 @@ class HierarchicalCAPDProcessor:
         if safe is not True:
             return {"status": "review_rejected"}
         if context.delivery_sink is None:
-            return {"status": "delivery_unavailable", "message": message}
+            return {"status": "delivery_unavailable"}
         try:
             result = context.delivery_sink({
                 "event_type": "task.acknowledge",
@@ -491,9 +491,13 @@ class HierarchicalCAPDProcessor:
                 "idempotency_key": f"v3-early-ack:{task.task_id or task.message_id or ''}",
             })
         except Exception as exc:
-            return {"status": "delivery_failed", "error_type": type(exc).__name__, "message": message}
+            return {"status": "delivery_failed", "error_type": type(exc).__name__}
         rendered = dict(result) if isinstance(result, dict) else {"status": "delivery_unknown"}
-        rendered["message"] = message
+        # Only a queued or delivered acknowledgement is an observed message.
+        # In particular, an idempotency conflict must not make an unqueued
+        # regenerated draft appear in activity as if the user received it.
+        if rendered.get("status") in {"queued", "delivered"}:
+            rendered["message"] = message
         return rendered
 
     @staticmethod

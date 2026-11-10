@@ -120,6 +120,17 @@ class SQLiteMessageQueue:
     def dequeue(self, selector: MessageSelector | None = None) -> QueuedMessage | None:
         return self.claim_next(selector=selector)
 
+    def claim_mode_blocked(self) -> bool:
+        """Report incompatible same-binary claims without exposing task data.
+
+        This is a snapshot for diagnostics, not an ownership fence. The actual
+        claim repeats the check under its write transaction. Database errors must
+        propagate so a caller never treats unavailable storage as a clear queue.
+        Old binaries and raw SQL are not fenced by this helper.
+        """
+        with self._connect() as conn:
+            return _claim_mode_conflict(conn, fenced=self.experimental_claim_fencing)
+
     def stage_scheduled_handoff(self, task: Any, question_store: Any, schedule_store: Any) -> bool:
         """Atomically pin a checkpoint before yielding to a verified occurrence."""
         if self.experimental_claim_fencing:
@@ -312,6 +323,11 @@ class SQLiteMessageQueue:
             raise ValueError("claim_fencing_owned_claim_requires_receipt")
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            # Do not start work under both ownership protocols at once in this
+            # binary. The lock makes the check atomic with acquisition; it does
+            # not fence older binaries or writers using raw SQL.
+            if _claim_mode_conflict(conn, fenced=self.experimental_claim_fencing):
+                return None
             # Sample after obtaining the writer lock, not before a potentially
             # long lock wait that could otherwise create an expired claim.
             now = _now()
@@ -815,6 +831,29 @@ def _legacy_unfenced_guard(conn: sqlite3.Connection, alias: str = "") -> str:
         raise ValueError("claim_guard_alias_invalid")
     prefix = f"{alias}." if alias else ""
     return f" AND COALESCE({prefix}claim_generation, '') = ''"
+
+
+def _claim_mode_conflict(conn: sqlite3.Connection, *, fenced: bool) -> bool:
+    """Prevent concurrent claim modes among queue clients in this binary.
+
+    A dispatch caller must hold the SQLite write lock; a diagnostic caller gets
+    only a snapshot. Generation-bearing rows remain owned by the fenced lifecycle
+    even when pending or held. This does not protect against legacy binaries,
+    raw SQL, or external effects, and is not a mixed-version or production
+    activation barrier.
+    """
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(v2_inbound_messages)")}
+    if not {"message_id", "status"} <= columns:
+        raise sqlite3.OperationalError("claim_mode_schema_unavailable")
+    if "claim_generation" not in columns:
+        return fenced
+    if fenced:
+        condition = ("claim_generation IS NULL OR (claim_generation != '' AND "
+                     "(length(claim_generation) != 32 OR claim_generation GLOB '*[^0-9a-f]*')) OR "
+                     "(status = 'processing' AND claim_generation = '')")
+    else:
+        condition = "claim_generation IS NULL OR claim_generation != ''"
+    return conn.execute(f"SELECT 1 FROM v2_inbound_messages WHERE {condition} LIMIT 1").fetchone() is not None
 
 
 def _exclude_supersession_holds(conn: sqlite3.Connection) -> str:
