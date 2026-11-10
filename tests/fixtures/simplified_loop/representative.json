@@ -1,0 +1,388 @@
+{
+  "schema_version": 1,
+  "split": "representative",
+  "cases": [
+    {
+      "id": "gmail_es",
+      "goal": "Hola Alphonse, ¿puedes ver mi Gmail y decir cuántos correos tengo sin revisar?",
+      "fixture": {
+        "connection": "missing",
+        "permissions": []
+      },
+      "provider_script": [
+        {
+          "system_two": "check current connection; report limitation"
+        }
+      ],
+      "oracle": {
+        "allowed_statuses": [
+          "blocked",
+          "failed"
+        ],
+        "response_contains": [
+          "unavailable"
+        ],
+        "forbidden_tools": [
+          "search_memory"
+        ],
+        "max_questions": 0
+      }
+    },
+    {
+      "id": "mixed_search",
+      "goal": "Find a current synthetic record despite overlapping search results",
+      "fixture": {
+        "connection": "local",
+        "permissions": [
+          "read"
+        ]
+      },
+      "provider_script": [
+        {
+          "progress": [
+            0.83,
+            0.56,
+            0.18,
+            0.15,
+            0.59,
+            0.57,
+            0.44,
+            0.38
+          ]
+        }
+      ],
+      "oracle": {
+        "allowed_statuses": [
+          "completed",
+          "blocked"
+        ],
+        "max_questions": 0,
+        "by_status": {
+          "completed": {
+            "response_contains": [
+              "record 42"
+            ]
+          },
+          "blocked": {
+            "response_contains": [
+              "unknown"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "large_output",
+      "goal": "Summarize a large fixture result",
+      "fixture": {
+        "connection": "local",
+        "permissions": [
+          "read"
+        ],
+        "output_chars": 120000
+      },
+      "provider_script": [
+        {
+          "tool": "read",
+          "result": "large"
+        }
+      ],
+      "oracle": {
+        "allowed_statuses": [
+          "completed",
+          "blocked"
+        ],
+        "max_questions": 0,
+        "by_status": {
+          "completed": {
+            "response_contains": [
+              "fixture summary"
+            ]
+          },
+          "blocked": {
+            "response_contains": [
+              "unknown"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "multi_step",
+      "goal": "Read and update the synthetic counter, then verify it",
+      "fixture": {
+        "connection": "local",
+        "permissions": [
+          "read",
+          "write"
+        ],
+        "files": {
+          "counter.txt": "old"
+        }
+      },
+      "provider_script": [
+        {
+          "tool": "read"
+        },
+        {
+          "tool": "write"
+        },
+        {
+          "tool": "read_back"
+        }
+      ],
+      "oracle": {
+        "allowed_statuses": [
+          "completed"
+        ],
+        "effects": {
+          "counter.txt": "new"
+        },
+        "response_contains": [
+          "new"
+        ],
+        "max_questions": 0
+      }
+    },
+    {
+      "id": "denied",
+      "goal": "Read a denied source",
+      "fixture": {
+        "connection": "local",
+        "permissions": []
+      },
+      "provider_script": [
+        {
+          "tool": "read",
+          "result": "denied"
+        }
+      ],
+      "oracle": {
+        "allowed_statuses": [
+          "blocked",
+          "failed"
+        ],
+        "response_forbidden": [
+          "confirmed"
+        ],
+        "max_questions": 0
+      }
+    },
+    {
+      "id": "partial",
+      "goal": "One synthetic operation succeeds and another is unavailable",
+      "fixture": {
+        "connection": "local",
+        "permissions": [
+          "write",
+          "read"
+        ],
+        "files": {
+          "task.txt": "old"
+        }
+      },
+      "provider_script": [
+        {
+          "tool": "write",
+          "result": "verified"
+        },
+        {
+          "tool": "lookup",
+          "result": "unavailable"
+        }
+      ],
+      "oracle": {
+        "allowed_statuses": [
+          "partial",
+          "blocked",
+          "failed"
+        ],
+        "effects": {
+          "task.txt": "new"
+        },
+        "response_contains": [
+          "unknown"
+        ],
+        "max_questions": 0
+      }
+    },
+    {
+      "id": "uncertain_mutation",
+      "goal": "Resume after a synthetic write with unknown effect",
+      "fixture": {
+        "connection": "local",
+        "permissions": [
+          "write",
+          "read"
+        ],
+        "files": {
+          "result.txt": "new"
+        }
+      },
+      "provider_script": [
+        {
+          "checkpoint": "write_uncertain"
+        },
+        {
+          "tool": "read_back"
+        }
+      ],
+      "oracle": {
+        "allowed_statuses": [
+          "completed",
+          "blocked",
+          "failed"
+        ],
+        "effects": {},
+        "forbidden_tools": [
+          "write_again"
+        ],
+        "max_questions": 0,
+        "by_status": {
+          "completed": {
+            "response_contains": [
+              "verified"
+            ]
+          },
+          "blocked": {
+            "response_contains": [
+              "unknown"
+            ]
+          },
+          "failed": {
+            "response_contains": [
+              "unknown"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "cancel",
+      "goal": "Cancel between a synthetic read and a write",
+      "fixture": {
+        "connection": "local",
+        "permissions": [
+          "read",
+          "write"
+        ],
+        "files": {
+          "cancel.txt": "old"
+        }
+      },
+      "provider_script": [
+        {
+          "tool": "read"
+        },
+        {
+          "steering": "cancel"
+        }
+      ],
+      "oracle": {
+        "allowed_statuses": [
+          "cancelled"
+        ],
+        "effects": {},
+        "forbidden_tools": [
+          "write"
+        ],
+        "max_questions": 0
+      }
+    },
+    {
+      "id": "restart",
+      "goal": "Resume a synthetic task after a verified effect",
+      "fixture": {
+        "connection": "local",
+        "permissions": [
+          "read",
+          "write"
+        ],
+        "files": {
+          "restart.txt": "new"
+        }
+      },
+      "provider_script": [
+        {
+          "checkpoint": "verified_write"
+        },
+        {
+          "tool": "read_back"
+        }
+      ],
+      "oracle": {
+        "allowed_statuses": [
+          "completed",
+          "blocked"
+        ],
+        "effects": {},
+        "forbidden_tools": [
+          "write_again"
+        ],
+        "max_questions": 0,
+        "by_status": {
+          "completed": {
+            "response_contains": [
+              "verified"
+            ]
+          },
+          "blocked": {
+            "response_contains": [
+              "unknown"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "simple_reply",
+      "goal": "Answer a synthetic greeting",
+      "fixture": {
+        "connection": "none",
+        "permissions": []
+      },
+      "provider_script": [
+        {
+          "system_two": "respond"
+        }
+      ],
+      "oracle": {
+        "allowed_statuses": [
+          "completed"
+        ],
+        "max_questions": 0,
+        "response_contains": [
+          "hola"
+        ]
+      }
+    },
+    {
+      "id": "solar-v3-baseline",
+      "goal": "Mark the solar-cell project complete",
+      "fixture": {
+        "v3_replay_case": "solar-project-completion",
+        "permissions": [
+          "read",
+          "write"
+        ],
+        "files": {
+          "mejoras_hogar/backlog.md": "Solar: open\n"
+        }
+      },
+      "provider_script": [
+        {
+          "adapter": "deterministic_adapters:solar-project-completion",
+          "version": "working-tree"
+        }
+      ],
+      "oracle": {
+        "allowed_statuses": [
+          "completed"
+        ],
+        "effects": {
+          "mejoras_hogar/backlog.md": "Solar: complete\n"
+        }
+      }
+    }
+  ]
+}

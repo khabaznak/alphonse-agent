@@ -44,6 +44,9 @@ if TYPE_CHECKING:
 ActionSelector = Callable[[TacticalState, PhaseSubgoal, tuple["ToolDescriptor", ...]], dict[str, Any] | None]
 TACTICAL_RETRY_BASE_SECONDS = 1.0
 MAX_UPDATE_INSPECTION_ACTIONS = 6
+MAX_UNCERTAIN_PROGRESS_ACTIONS = 6
+class ScheduledHandoff(Exception):
+    """A durable checkpoint is ready for the daemon to yield its queue lease."""
 
 
 class PhaseExecutor:
@@ -63,14 +66,37 @@ class PhaseExecutor:
                 message=state.phase.objective,
                 progress={"phase_id": state.phase.phase_id, "subgoal_id": state.active_subgoal_id},
             )
+        if task.metadata.get("source") == "scheduled_task" and state.status == PhaseStatus.RUNNING:
+            recorded = {str(item.get("evidence_ref") or "") for item in state.evidence.entries}
+            uncertain = next((action for action in state.actions
+                              if action.tool_id in {"native.deliver_message", "native.send_attachment"}
+                              and action.status in {"planned", "running"}
+                              and f"tactical-action:{action.action_id}" not in recorded), None)
+            if uncertain is not None:
+                # A crash can occur after provider dispatch but before the
+                # result checkpoint. Never send again on that ambiguity.
+                task.metadata["v3_unconfirmed_delivery_action_id"] = uncertain.action_id
+                state.transition(PhaseStatus.BLOCKED)
+                self._checkpoint(task, state, context)
+                return self._outcome(state, "The scheduled delivery outcome is unconfirmed.",
+                                     blockers=("scheduled_delivery_outcome_unavailable",))
         while state.status == PhaseStatus.RUNNING:
             interruption = self._interruption(task, state, context)
             if interruption is not None:
                 self._checkpoint(task, state, context)
                 return interruption
+            stage_handoff = getattr(context.messages, "stage_scheduled_handoff", None)
+            if (context.scheduled_handoff_enabled and callable(stage_handoff) and context.question_store is not None and context.schedule_store is not None
+                    and stage_handoff(task, context.question_store, context.schedule_store)):
+                raise ScheduledHandoff()
             subgoal = self._active_subgoal(state)
             tools = self._revealed_tools(task, state, subgoal, context)
-            selected = self._select_action(task, state, subgoal, tools, context)
+            retry = task.metadata.pop("v3_tactical_delivery_retry", None)
+            selected = (retry.get("action") if isinstance(retry, dict)
+                        and retry.get("phase_id") == state.phase.phase_id
+                        and retry.get("subgoal_id") == subgoal.subgoal_id else None)
+            if not isinstance(selected, dict):
+                selected = self._select_action(task, state, subgoal, tools, context)
             interruption = self._interruption(task, state, context)
             if interruption is not None:
                 self._checkpoint(task, state, context)
@@ -111,6 +137,11 @@ class PhaseExecutor:
                 self._checkpoint(task, state, context)
                 reason = ("tactical_planning_error_repeated:" if repeated else "tactical_correction_exhausted:") + error
                 return self._outcome(state, reason, blockers=(reason,))
+            if _scheduled_delivery_may_repeat(task, state, action, context):
+                state.transition(PhaseStatus.BLOCKED)
+                self._checkpoint(task, state, context)
+                return self._outcome(state, "A similar scheduled message may already have been sent.",
+                                     blockers=("scheduled_delivery_repetition_unresolved",))
             recovery = (task.metadata.get("act_directive") or {}).get("outcome_review") or {}
             verified_refs = set(recovery.get("verified_evidence_refs") or ())
             if any(
@@ -190,6 +221,32 @@ class PhaseExecutor:
                         "acceptance_questions": [dict(item) for item in completed.acceptance_questions],
                     }
                 )
+                if task.metadata.get("source") == "scheduled_task" and completed.status == "success":
+                    from .delivery_evidence import delivery_receipt
+                    receipt = delivery_receipt(task, state.evidence.entries[-1], context)
+                    if isinstance(receipt, dict) and receipt.get("status") in {"pending", "claimed", "retry_wait", "unconfirmed", "failed"}:
+                        result = completed.result if isinstance(completed.result, dict) else {}
+                        task.metadata["v3_tactical_delivery_retry"] = {
+                            "phase_id": state.phase.phase_id, "subgoal_id": subgoal.subgoal_id,
+                            "action": {"tool_id": completed.tool_id, "arguments": completed.arguments,
+                                       "acceptance_questions": list(completed.acceptance_questions)},
+                        }
+                        self._checkpoint(task, state, context)
+                        from .processor import _await_scheduled_delivery
+                        if not _await_scheduled_delivery(task, context, {
+                            "outbox_message_id": result.get("outbox_message_id"),
+                            "recipient_user_id": result.get("recipient_user_id"),
+                        }):
+                            state.transition(PhaseStatus.BLOCKED)
+                            self._checkpoint(task, state, context)
+                            return self._outcome(state, "Scheduled delivery could not be confirmed.",
+                                                 blockers=("scheduled_delivery_outcome_unavailable",))
+                        task.metadata.pop("v3_tactical_delivery_retry", None)
+                        # The provider completed during staging; preserve the
+                        # original result while attaching the verified receipt.
+                        refreshed = delivery_receipt(task, state.evidence.entries[-1], context)
+                        if refreshed is not None:
+                            state.evidence.entries[-1]["result"] = {**result, "delivery_receipt": refreshed}
                 interruption = self._interruption(task, state, context)
                 if interruption is not None:
                     self._checkpoint(task, state, context)
@@ -206,6 +263,7 @@ class PhaseExecutor:
                     "complete": completion_met,
                     "confident": bool(progress_review.get("confident")),
                     "confidence": progress_review.get("confidence"),
+                    "confidence_kind": progress_review.get("confidence_kind"),
                     "retry_approved": retry_approved,
                     "context_complete": progress_review.get("context_complete", True),
                     "context_coverage": progress_review.get("context_coverage", {}),
@@ -238,13 +296,23 @@ class PhaseExecutor:
                         state.transition(PhaseStatus.BLOCKED)
                         self._checkpoint(task, state, context)
                         return self._outcome(state, "Inspection must now resolve into the authorized operation or a specific missing-information question; do not restart inspection.", blockers=(blocker,))
-                progress_threshold = float(getattr(getattr(context.system_one, "settings", None), "yes_threshold", 0.8))
-                if not completion_met and _consecutive_no_progress(state, subgoal.subgoal_id, progress_threshold) >= 3:
+                settings = getattr(context.system_one, "settings", None)
+                yes_threshold = float(getattr(settings, "yes_threshold", 0.8))
+                no_threshold = float(getattr(settings, "no_threshold", 0.2))
+                if not completion_met and _consecutive_no_progress(state, subgoal.subgoal_id, no_threshold) >= 3:
                     blocker = "tactical_stage_no_new_progress"
                     state.evidence.entries[-1]["no_progress_blocker"] = blocker
                     state.transition(PhaseStatus.BLOCKED)
                     self._checkpoint(task, state, context)
                     return self._outcome(state, "Repeated attempts added no useful evidence; a different strategy is required.", blockers=(blocker,))
+                if not completion_met and _consecutive_uncertain_progress(
+                    state, subgoal.subgoal_id, no_threshold, yes_threshold
+                ) >= MAX_UNCERTAIN_PROGRESS_ACTIONS:
+                    blocker = "tactical_progress_uncertain"
+                    state.evidence.entries[-1]["no_progress_blocker"] = blocker
+                    state.transition(PhaseStatus.BLOCKED)
+                    self._checkpoint(task, state, context)
+                    return self._outcome(state, "Progress remained uncertain after repeated attempts; review the evidence and choose a different strategy.", blockers=(blocker,))
                 repeated_evidence = (
                     _matching_prior_incomplete_result(state, completed)
                     if not completion_met and (completed.status == "success" or (completed.status == "failed" and not retry_approved))
@@ -434,16 +502,19 @@ class PhaseExecutor:
             reveal = self._reveal_policy.reveal(task, state, subgoal, candidates)
             state.revealed_capabilities = [item["capability"] for item in reveal.catalog]
             state.revealed_tool_ids = [item.tool_id for item in reveal.tools]
-            context.emit_ui_event(
-                "tactical_tools_revealed",
-                {
-                    "phase_id": state.phase.phase_id,
-                    "subgoal_id": subgoal.subgoal_id,
-                    "capabilities": list(state.revealed_capabilities),
-                    "tool_ids": list(state.revealed_tool_ids),
-                    "decisions": [item.__dict__ for item in reveal.decisions],
-                },
-            )
+            if str(task.user or "").strip():
+                context.emit_ui_event(
+                    "tactical_tools_revealed",
+                    {
+                        "user": str(task.user).strip(),
+                        "task_id": str(task.task_id or ""),
+                        "phase_id": state.phase.phase_id,
+                        "subgoal_id": subgoal.subgoal_id,
+                        "capabilities": list(state.revealed_capabilities),
+                        "tool_ids": list(state.revealed_tool_ids),
+                        "decisions": [item.__dict__ for item in reveal.decisions],
+                    },
+                )
             return reveal.tools
         allowed_ids = set(state.revealed_tool_ids)
         if not allowed_ids:
@@ -693,6 +764,49 @@ def _steering_is_pending(task: "TaskState", context: "CoreLoopContext") -> bool:
     return False
 
 
+def _scheduled_delivery_may_repeat(task: "TaskState", state: TacticalState, action: TacticalAction, context: "CoreLoopContext") -> bool:
+    """Stop on a likely or unresolved semantic repeat; relevance never authorizes a send."""
+    if task.metadata.get("source") != "scheduled_task" or action.tool_id != "native.deliver_message":
+        return False
+    prior = [entry for entry in state.evidence.entries
+             if entry.get("tool_id") == "native.deliver_message" and entry.get("status") == "success"
+             and isinstance(entry.get("result"), dict) and entry["result"].get("outbox_message_id")
+             and isinstance(entry.get("arguments"), dict) and isinstance(entry["arguments"].get("message"), str)]
+    if not prior:
+        return False
+    if not callable(context.delivery_sink):
+        return True
+    try:
+        resolved = context.delivery_sink({"event_type": "communication.resolve_recipient", "recipient": action.arguments.get("recipient")})
+        recipient = resolved.get("recipient_user_id") if isinstance(resolved, dict) and resolved.get("status") == "resolved" else None
+    except Exception:
+        return True
+    if not recipient:
+        return True
+    matching = [entry for entry in prior if entry["result"].get("recipient_user_id") == recipient]
+    if not matching:
+        return False
+    draft = str(action.arguments.get("message") or "")
+    # A byte-identical retry in the same subgoal has a deterministic outbox key.
+    matching = [entry for entry in matching if not (
+        entry.get("phase_id") == state.phase.phase_id and entry.get("subgoal_id") == action.subgoal_id
+        and entry["arguments"].get("message") == draft
+    )]
+    if not matching:
+        return False
+    review = getattr(context.system_one, "scheduled_delivery_similarity", None)
+    if not callable(review):
+        return True
+    try:
+        probabilities = review(goal=task.goal, draft=draft, prior_messages=[entry["arguments"]["message"] for entry in matching])
+        threshold = float(getattr(getattr(context.system_one, "settings", None), "no_threshold", 0.2))
+        return (len(probabilities) != len(matching) or any(
+            type(value) not in {int, float} or not 0 <= value <= threshold for value in probabilities
+        ))
+    except Exception:
+        return True
+
+
 def _tactical_prompt(
     state: TacticalState,
     subgoal: PhaseSubgoal,
@@ -822,13 +936,32 @@ def _is_update_inspection(state: TacticalState, subgoal: PhaseSubgoal, answers: 
     )
 
 
-def _consecutive_no_progress(state: TacticalState, subgoal_id: str, threshold: float = 0.8) -> int:
+def _consecutive_no_progress(state: TacticalState, subgoal_id: str, threshold: float = 0.2) -> int:
+    import math
+    count = 0
+    for entry in reversed(state.evidence.entries):
+        if entry.get("phase_id") != state.phase.phase_id or entry.get("subgoal_id") != subgoal_id:
+            continue
+        review = entry.get("progress_review") or {}
+        coverage = review.get("context_coverage") or {}
+        if (review.get("context_complete") is False or coverage.get("omitted_prior_count", 0)
+                or coverage.get("omitted_prior_result_count", 0) or coverage.get("omitted_prior_refs")):
+            break
+        answer = (review.get("answers") or {}).get("runtime_action_added_progress")
+        if type(answer) not in {int, float} or not math.isfinite(answer) or not 0 <= answer <= threshold:
+            break
+        count += 1
+    return count
+
+
+def _consecutive_uncertain_progress(state: TacticalState, subgoal_id: str, no_threshold: float, yes_threshold: float) -> int:
+    import math
     count = 0
     for entry in reversed(state.evidence.entries):
         if entry.get("phase_id") != state.phase.phase_id or entry.get("subgoal_id") != subgoal_id:
             continue
         answer = (entry.get("progress_review") or {}).get("answers", {}).get("runtime_action_added_progress")
-        if not isinstance(answer, (int, float)) or answer >= threshold:
+        if type(answer) not in {int, float} or not math.isfinite(answer) or not no_threshold < answer < yes_threshold:
             break
         count += 1
     return count

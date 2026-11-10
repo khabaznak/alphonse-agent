@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sqlite3
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -16,7 +18,10 @@ from alphonse.agent_v2.core.core import StateSnapshot
 from alphonse.agent_v2.core.io.channels import ChannelAddress
 from alphonse.agent_v2.core.io.channels import channel_address_from_metadata
 from alphonse.agent_v2.core.io.identity import V2IdentityResolver
-from alphonse.agent_v2.database import connect_database, default_database_path
+from alphonse.agent_v2.database import (
+    AlphonseSQLiteConnection, DEFAULT_BUSY_TIMEOUT_MS, connect_database,
+    default_database_path, ensure_schema_migrations,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -100,6 +105,7 @@ class SQLiteOutboundStore:
     def __init__(self, db_path: str | Path = ":memory:") -> None:
         self.db_path = str(db_path)
         self.finding_delivery_guard: Callable[[OutboundMessage], bool] | None = None
+        self.scheduled_delivery_guard: Callable[[OutboundMessage], bool] | None = None
         self._memory_connection: sqlite3.Connection | None = None
         if self.db_path == ":memory:":
             self._memory_connection = sqlite3.connect(":memory:", check_same_thread=False)
@@ -158,10 +164,13 @@ class SQLiteOutboundStore:
         if not record.channel_target:
             raise ValueError("outbound_channel_target_required")
         if connection is not None:
+            self._validate_connection(connection)
             self._insert(connection, record)
             if dedupe_key:
-                existing = connection.execute(
-                    "SELECT * FROM v2_outbox WHERE outbox_message_id = ?",
+                cursor = connection.cursor()
+                cursor.row_factory = sqlite3.Row
+                existing = cursor.execute(
+                    "SELECT * FROM main.v2_outbox WHERE outbox_message_id = ?",
                     (record.outbox_message_id,),
                 ).fetchone()
                 if existing is not None:
@@ -178,11 +187,25 @@ class SQLiteOutboundStore:
                         return _message_from_row(existing)
         return record
 
+    def _validate_connection(self, connection: sqlite3.Connection) -> None:
+        """Require supplied transactions to target this store's main database."""
+        if self._memory_connection is not None:
+            if connection is not self._memory_connection:
+                raise ValueError("outbox_connection_database_mismatch")
+            return
+        try:
+            databases = connection.execute("PRAGMA database_list").fetchall()
+            main_path = next((row[2] for row in databases if row[1] == "main"), "")
+            if not main_path or Path(main_path).resolve() != Path(self.db_path).expanduser().resolve():
+                raise ValueError("outbox_connection_database_mismatch")
+        except (sqlite3.Error, OSError, RuntimeError):
+            raise ValueError("outbox_connection_database_mismatch") from None
+
     @staticmethod
     def _insert(conn: sqlite3.Connection, record: OutboundMessage) -> None:
         conn.execute(
             """
-            INSERT OR IGNORE INTO v2_outbox (
+            INSERT OR IGNORE INTO main.v2_outbox (
               outbox_message_id, integration_id, provider_key, channel_target, message,
               kind, audience_user_id, correlation_id, status, provider_message_id,
               reply_to_provider_message_id, task_id, question_id, project_id, metadata_json,
@@ -211,8 +234,36 @@ class SQLiteOutboundStore:
     def list_pending(self, selector: OutboundSelector | None = None, *, limit: int = 100) -> list[OutboundMessage]:
         return self.list(selector or OutboundSelector(), limit=limit)
 
+    def list_unconfirmed_scheduled(self) -> list[OutboundMessage]:
+        """Return all ambiguous scheduled sends for restart reconciliation."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT * FROM v2_outbox WHERE status='unconfirmed'
+                   AND json_valid(metadata_json)
+                   AND COALESCE(json_extract(metadata_json, '$.occurrence_key'), '') != ''"""
+            ).fetchall()
+        return [_message_from_row(row) for row in rows]
+
+    def list_confirmed_scheduled_evidence(self) -> list[OutboundMessage]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT * FROM v2_outbox WHERE status='delivered' AND json_valid(metadata_json)
+                   AND json_extract(metadata_json, '$.scheduled_delivery_evidence')=1"""
+            ).fetchall()
+        return [_message_from_row(row) for row in rows]
+
+    def list_for_occurrence(self, occurrence_key: str) -> list[OutboundMessage]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT * FROM v2_outbox WHERE json_valid(metadata_json)
+                   AND json_extract(metadata_json, '$.occurrence_key') = ?
+                   AND COALESCE(json_extract(metadata_json, '$.scheduled_question'), 0) != 1""",
+                (occurrence_key,),
+            ).fetchall()
+        return [_message_from_row(row) for row in rows]
+
     def status_counts(self) -> dict[str, int]:
-        counts = {"pending": 0, "claimed": 0, "retry_wait": 0, "delivered": 0, "failed": 0}
+        counts = {"pending": 0, "claimed": 0, "retry_wait": 0, "delivered": 0, "failed": 0, "unconfirmed": 0}
         with self._connect() as conn:
             rows = conn.execute("SELECT status, COUNT(*) AS count FROM v2_outbox GROUP BY status").fetchall()
         for row in rows:
@@ -228,6 +279,18 @@ class SQLiteOutboundStore:
                 (str(outbox_message_id or "").strip(),),
             ).fetchone()
         return _message_from_row(row) if row is not None else None
+
+    def mark_scheduled_unconfirmed(self, outbox_message_id: str, *, task_id: str, occurrence_key: str, recipient_user_id: str) -> bool:
+        with self._connect() as conn:
+            return conn.execute(
+                """UPDATE v2_outbox SET status='unconfirmed', next_attempt_at='', lease_owner='', lease_expires_at='',
+                   metadata_json=json_set(metadata_json, '$.delivery_state', 'unconfirmed', '$.unconfirmed_lease_owner', lease_owner),
+                   last_error='scheduled_delivery_wait_expired', updated_at=?
+                   WHERE outbox_message_id=? AND task_id=? AND audience_user_id=?
+                     AND status IN ('pending','claimed','retry_wait') AND json_valid(metadata_json)
+                     AND json_extract(metadata_json, '$.occurrence_key')=?""",
+                (_now_iso(), outbox_message_id, task_id, recipient_user_id, occurrence_key),
+            ).rowcount == 1
 
     def list(self, selector: OutboundSelector | None = None, *, limit: int = 100) -> list[OutboundMessage]:
         where, values = _selector_where(selector)
@@ -255,7 +318,21 @@ class SQLiteOutboundStore:
         # without the authoritative finding service fails closed.
         for _ in range(100):
             message = self._claim_next_unchecked(selector, lease_owner=lease_owner, lease_seconds=lease_seconds)
-            if message is None or message.kind != 'finding':
+            if message is None:
+                return message
+            if message.metadata.get("scheduled_task_id") and message.metadata.get("occurrence_key"):
+                try:
+                    allowed_schedule = self.scheduled_delivery_guard is not None and self.scheduled_delivery_guard(message)
+                except Exception:
+                    allowed_schedule = False
+                if not allowed_schedule:
+                    with self._connect() as conn:
+                        conn.execute("""UPDATE v2_outbox SET status='failed',
+                            metadata_json=json_set(metadata_json, '$.delivery_state', 'cancelled_or_unavailable'),
+                            last_error='scheduled_delivery_not_authorized', lease_owner='', lease_expires_at=''
+                            WHERE outbox_message_id=? AND status='claimed'""", (message.outbox_message_id,))
+                    continue
+            if message.kind != 'finding':
                 return message
             try:
                 allowed = self.finding_delivery_guard is not None and self.finding_delivery_guard(message)
@@ -347,13 +424,16 @@ class SQLiteOutboundStore:
                 UPDATE v2_outbox
                 SET status = 'delivered',
                     metadata_json = CASE WHEN kind='finding'
-                        THEN json_set(metadata_json, '$.finding_delivery_state', 'delivered') ELSE metadata_json END,
+                        THEN json_set(metadata_json, '$.finding_delivery_state', 'delivered')
+                        WHEN json_valid(metadata_json) AND COALESCE(json_extract(metadata_json, '$.occurrence_key'), '') != ''
+                        THEN json_set(metadata_json, '$.delivery_state', 'confirmed') ELSE metadata_json END,
                     provider_message_id = ?,
                     delivered_at = ?,
                     updated_at = ?,
                     lease_owner = '',
                     lease_expires_at = '',
-                    next_attempt_at = ''
+                    next_attempt_at = '',
+                    last_error = ''
                 WHERE outbox_message_id = ?
                 """,
                 (
@@ -395,7 +475,13 @@ class SQLiteOutboundStore:
                 metadata["finding_delivery_state"] = "ambiguous"
                 metadata["last_error"] = "finding_send_outcome_unknown"
                 normalized_error = "finding_send_outcome_unknown"
-            terminal = is_finding or attempts >= max_attempts
+            # Once dispatch began, a provider exception can follow a successful
+            # send. A scheduled message needs explicit reconciliation, not an
+            # automatic resend that may duplicate the reminder.
+            scheduled = bool(metadata.get("occurrence_key"))
+            if scheduled:
+                metadata["delivery_state"] = "unconfirmed"
+            terminal = is_finding or scheduled or attempts >= max_attempts
             cursor = conn.execute(
                 """
                 UPDATE v2_outbox
@@ -409,7 +495,7 @@ class SQLiteOutboundStore:
                 WHERE outbox_message_id = ?
                 """,
                 (
-                    "failed" if terminal else "retry_wait",
+                    "unconfirmed" if scheduled else "failed" if terminal else "retry_wait",
                     json.dumps(metadata, sort_keys=True),
                     _now_iso(),
                     "" if terminal else next_attempt_at,
@@ -431,9 +517,13 @@ class SQLiteOutboundStore:
             cursor = connection.execute(
                 """
                 UPDATE v2_outbox
-                SET status = CASE WHEN kind='finding' THEN 'failed' ELSE 'pending' END,
+                SET status = CASE WHEN kind='finding' THEN 'failed'
+                    WHEN json_valid(metadata_json) AND COALESCE(json_extract(metadata_json, '$.occurrence_key'), '') != ''
+                    THEN 'unconfirmed' ELSE 'pending' END,
                     metadata_json = CASE WHEN kind='finding'
-                      THEN json_set(metadata_json, '$.finding_delivery_state', 'ambiguous') ELSE metadata_json END,
+                      THEN json_set(metadata_json, '$.finding_delivery_state', 'ambiguous')
+                      WHEN json_valid(metadata_json) AND COALESCE(json_extract(metadata_json, '$.occurrence_key'), '') != ''
+                      THEN json_set(metadata_json, '$.delivery_state', 'unconfirmed', '$.unconfirmed_lease_owner', lease_owner) ELSE metadata_json END,
                     lease_owner = '',
                     lease_expires_at = '',
                     claimed_at = '',
@@ -458,9 +548,42 @@ class SQLiteOutboundStore:
         path.parent.mkdir(parents=True, exist_ok=True)
         return connect_database(path)
 
+    @contextmanager
+    def _schema_connect(self):
+        if self._memory_connection is not None:
+            with _ConnectionProxy(self._memory_connection) as conn:
+                yield conn
+            return
+        # connect_database creates migration bookkeeping before returning. Use
+        # the same connection settings without DDL so an unsupported store is
+        # not modified before its outbox schema is checked under the lock.
+        path = Path(self.db_path).expanduser()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(path, timeout=DEFAULT_BUSY_TIMEOUT_MS / 1000, factory=AlphonseSQLiteConnection)
+        try:
+            conn.row_factory = sqlite3.Row
+            conn.execute('PRAGMA foreign_keys = ON')
+            conn.execute(f'PRAGMA busy_timeout = {DEFAULT_BUSY_TIMEOUT_MS}')
+            with conn:
+                yield conn
+        finally:
+            conn.close()
+
     def _ensure_schema(self) -> None:
-        with self._connect() as conn:
-            conn.executescript(
+        with self._schema_connect() as conn:
+            # Hold the write lock across inspection and DDL. executescript
+            # commits implicitly, so use individual statements below.
+            conn.execute("BEGIN IMMEDIATE")
+            existing = conn.execute(
+                "SELECT 1 FROM main.sqlite_master WHERE type='table' AND name='v2_outbox'"
+            ).fetchone()
+            if existing is not None:
+                _reject_unsupported_statuses(conn)
+                if _outbox_status_schema(conn) != _OUTBOX_STATUSES:
+                    _validate_outbox_rebuild(conn)
+            if self._memory_connection is None:
+                ensure_schema_migrations(conn)
+            conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS v2_outbox (
                   outbox_message_id TEXT PRIMARY KEY,
@@ -488,16 +611,14 @@ class SQLiteOutboundStore:
                   next_attempt_at TEXT NOT NULL DEFAULT '',
                   last_error TEXT NOT NULL DEFAULT '',
                   max_attempts INTEGER NOT NULL DEFAULT 5,
-                  CHECK (status IN ('pending', 'claimed', 'retry_wait', 'delivered', 'failed'))
-                ) STRICT;
-
-                CREATE INDEX IF NOT EXISTS idx_v2_outbox_consumer
-                  ON v2_outbox (integration_id, channel_target, status, created_at);
-
-                CREATE INDEX IF NOT EXISTS idx_v2_outbox_question
-                  ON v2_outbox (question_id, status);
+                  CHECK (status IN ('pending', 'claimed', 'retry_wait', 'delivered', 'failed', 'unconfirmed'))
+                ) STRICT
                 """
             )
+            conn.execute("""CREATE INDEX IF NOT EXISTS idx_v2_outbox_consumer
+                         ON v2_outbox (integration_id, channel_target, status, created_at)""")
+            conn.execute("""CREATE INDEX IF NOT EXISTS idx_v2_outbox_question
+                         ON v2_outbox (question_id, status)""")
             _ensure_columns(
                 conn,
                 {
@@ -521,12 +642,28 @@ class SQLiteOutboundStore:
                 """
             )
             _migrate_status_check(conn)
+            # Older versions automatically retried expired/failed sends. Once
+            # an attempt has begun, migration cannot prove the provider did
+            # not accept it, so do not resume those automatic retries.
+            conn.execute(
+                """UPDATE v2_outbox SET status='unconfirmed', next_attempt_at='',
+                   metadata_json=json_set(metadata_json, '$.delivery_state', 'unconfirmed'),
+                   last_error='scheduled_delivery_outcome_unknown'
+                   WHERE status IN ('pending','retry_wait') AND attempt_count>0
+                     AND json_valid(metadata_json)
+                     AND COALESCE(json_extract(metadata_json, '$.occurrence_key'), '') != ''"""
+            )
             conn.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_v2_outbox_project
                   ON v2_outbox (audience_user_id, project_id, status, created_at)
                 """
             )
+        if self._memory_connection is None:
+            # WAL cannot be enabled inside a transaction. It is intentionally
+            # configured only after a successful, committed schema preflight.
+            conn = connect_database(Path(self.db_path).expanduser())
+            conn.close()
 
 
 def build_outbox_delivery_sink(
@@ -541,6 +678,30 @@ def build_outbox_delivery_sink(
 
     def _sink(event: dict[str, Any]) -> dict[str, Any]:
         event_type = str(event.get("event_type") or "").strip()
+        if event_type == "communication.resolve_recipient":
+            if communication_router is None:
+                return {"status": "unavailable"}
+            recipient = communication_router._resolve_user(str(event.get("recipient") or "").strip())
+            if not recipient or recipient == "ambiguous":
+                return {"status": "unavailable"}
+            return {"status": "resolved", "recipient_user_id": recipient}
+        if event_type in {"communication.delivery_status", "communication.delivery_timeout"}:
+            task = event.get("task") if isinstance(event.get("task"), dict) else {}
+            metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+            outbound = outbox.get(str(event.get("outbox_message_id") or ""))
+            if (outbound is None or not task.get("task_id") or outbound.task_id != task.get("task_id")
+                    or not metadata.get("occurrence_key")
+                    or outbound.metadata.get("occurrence_key") != metadata.get("occurrence_key")
+                    or outbound.audience_user_id != event.get("recipient_user_id")):
+                return {"status": "unavailable"}
+            if event_type == "communication.delivery_timeout":
+                outbox.mark_scheduled_unconfirmed(
+                    outbound.outbox_message_id, task_id=str(task["task_id"]),
+                    occurrence_key=str(metadata["occurrence_key"]), recipient_user_id=outbound.audience_user_id,
+                )
+                outbound = outbox.get(outbound.outbox_message_id)
+            return {"status": outbound.status, "outbox_message_id": outbound.outbox_message_id,
+                    "provider_message_id": outbound.provider_message_id, "recipient_read": "unknown"}
         if event_type == "task.acknowledge":
             task = event.get("task") if isinstance(event.get("task"), dict) else {}
             task_metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
@@ -583,6 +744,9 @@ def build_outbox_delivery_sink(
             if communication_router is None:
                 return {"status": "delivery_unavailable"}
             task = event.get("task") if isinstance(event.get("task"), dict) else {}
+            task_metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+            tactical = task.get("hierarchical_state") if isinstance(task.get("hierarchical_state"), dict) else {}
+            phase = tactical.get("phase") if isinstance(tactical.get("phase"), dict) else {}
             origin_raw = event.get("origin") if isinstance(event.get("origin"), dict) else {}
             origin = ChannelAddress(**origin_raw) if origin_raw else channel_address_from_metadata(task.get("metadata") if isinstance(task.get("metadata"), dict) else {})
             if origin is None:
@@ -594,12 +758,21 @@ def build_outbox_delivery_sink(
                 message=str(event.get("message") or "").strip(),
                 expects_reply=bool(event.get("expects_reply")),
                 asset_ids=list(event.get("asset_ids") or []),
+                task_id=str(task.get("task_id") or ""),
+                occurrence_key=str(task_metadata.get("occurrence_key") or ""),
+                scheduled_task_id=str(task_metadata.get("scheduled_task_id") or ""),
+                phase_id=str(phase.get("phase_id") or ""),
+                subgoal_id=str(tactical.get("active_subgoal_id") or ""),
             )
         if event_type != "question.deliver":
             return {"ignored": True}
         question = event.get("question") if isinstance(event.get("question"), dict) else {}
         task = event.get("task") if isinstance(event.get("task"), dict) else {}
         task_metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+        scheduled_question = ({"scheduled_task_id": str(task_metadata.get("scheduled_task_id") or ""),
+                               "occurrence_key": str(task_metadata.get("occurrence_key") or ""),
+                               "scheduled_question": True}
+                              if task_metadata.get("source") == "scheduled_task" else {})
         origin = channel_address_from_metadata(task_metadata)
         respondent = str(question.get("respondent_user_id") or task.get("user") or "").strip()
         resolved = resolver.resolve_outbound_address(alphonse_user_id=respondent, fallback_address=origin)
@@ -618,6 +791,7 @@ def build_outbox_delivery_sink(
                     question_id=str(question.get("question_id") or "").strip(),
                     project_id=str(question.get("project_id") or task.get("project_id") or "").strip(),
                     metadata={
+                        **scheduled_question,
                         "reason": resolved.reason,
                         "respondent_user_id": respondent,
                         "question": dict(question),
@@ -646,6 +820,7 @@ def build_outbox_delivery_sink(
             question_id=str(question.get("question_id") or "").strip(),
             project_id=str(question.get("project_id") or task.get("project_id") or "").strip(),
             metadata={
+                **scheduled_question,
                 "question": dict(question),
                 "origin_channel": origin.to_dict() if origin is not None else {},
                 "respondent_channel": resolved.address.to_dict(),
@@ -920,15 +1095,136 @@ def _ensure_columns(conn: sqlite3.Connection, columns: dict[str, str]) -> None:
             conn.execute(f"ALTER TABLE v2_outbox ADD COLUMN {name} {definition}")
 
 
-def _migrate_status_check(conn: sqlite3.Connection) -> None:
+def _reject_unsupported_statuses(conn: sqlite3.Connection) -> None:
+    # A newer or corrupt store may contain a state this binary does not
+    # understand. Treating that row as pending could dispatch a message that
+    # was deliberately held or already has an uncertain delivery outcome.
+    # Reject before renaming the table or copying any message contents.
+    try:
+        unsupported = conn.execute(
+            """SELECT 1 FROM main.v2_outbox
+               WHERE status IS NULL OR status NOT IN
+                 ('pending', 'claimed', 'retry_wait', 'delivered', 'failed', 'unconfirmed')
+               LIMIT 1"""
+        ).fetchone()
+    except sqlite3.Error:
+        raise ValueError("outbox_status_schema_invalid") from None
+    if unsupported is not None:
+        raise ValueError("outbox_status_unsupported")
+
+
+_OUTBOX_STATUSES = frozenset({'pending', 'claimed', 'retry_wait', 'delivered', 'failed', 'unconfirmed'})
+
+
+def _outbox_status_schema(conn: sqlite3.Connection) -> frozenset[str]:
+    """Accept only known status CHECK grammars, including older subsets.
+
+    Unknown future states must not be accepted just because the schema also
+    mentions `unconfirmed`. This parser deliberately fails closed for a CHECK
+    expression it cannot recognize; it is not a mixed-version worker fence.
+    """
     row = conn.execute(
-        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'v2_outbox'"
+        "SELECT sql FROM main.sqlite_master WHERE type='table' AND name='v2_outbox'"
     ).fetchone()
-    sql = str(row["sql"] or "") if row is not None else ""
-    if "retry_wait" in sql:
+    sql = str(row[0] or '') if row is not None else ''
+    # SQLite retains comments in sqlite_master. A commented-out CHECK must not
+    # be mistaken for a real constraint. Known product schemas use none.
+    if any(marker in sql for marker in ('--', '/*', '*/')):
+        raise ValueError('outbox_status_schema_unsupported')
+    # Mask string literals before locating the CHECK; its wording may occur in
+    # a default string and is not itself a constraint. Preserve offsets to
+    # extract only the actual IN-list from the original schema.
+    masked = re.sub(r"'(?:''|[^'])*'", lambda match: ' ' * len(match.group()), sql)
+    # Known schemas use unquoted identifiers. Refuse other quoting rather than
+    # treating an identifier containing CHECK text as SQL syntax.
+    if any(char in masked for char in "'\"`[]"):
+        raise ValueError('outbox_status_schema_unsupported')
+    matches = list(re.finditer(r"\bCHECK\s*\(\s*status\s+IN\s*\(([^()]*)\)\s*\)", masked, re.IGNORECASE))
+    if len(matches) != 1:
+        raise ValueError('outbox_status_schema_unsupported')
+    raw = sql[matches[0].start(1):matches[0].end(1)]
+    parts = re.findall(r"'([a-z_]+)'", raw, re.IGNORECASE)
+    if (not parts or re.sub(r"'([a-z_]+)'|[\s,]", '', raw, flags=re.IGNORECASE)
+            or len(parts) != len(set(parts)) or not set(parts) <= _OUTBOX_STATUSES):
+        raise ValueError('outbox_status_schema_unsupported')
+    return frozenset(parts)
+
+
+_OUTBOX_REBUILD_COLUMNS = frozenset({
+    'outbox_message_id', 'integration_id', 'provider_key', 'channel_target', 'message', 'kind',
+    'audience_user_id', 'correlation_id', 'status', 'provider_message_id', 'reply_to_provider_message_id',
+    'task_id', 'question_id', 'project_id', 'metadata_json', 'claimed_at', 'delivered_at', 'created_at',
+    'updated_at', 'attempt_count', 'lease_owner', 'lease_expires_at', 'next_attempt_at', 'last_error', 'max_attempts',
+})
+_OUTBOX_ADDED_COLUMNS = frozenset({'project_id', 'attempt_count', 'lease_owner', 'lease_expires_at',
+                                   'next_attempt_at', 'last_error', 'max_attempts'})
+_OUTBOX_INDEX_COLUMNS = {
+    'idx_v2_outbox_consumer': ('integration_id', 'channel_target', 'status', 'created_at'),
+    'idx_v2_outbox_question': ('question_id', 'status'),
+    'idx_v2_outbox_project': ('audience_user_id', 'project_id', 'status', 'created_at'),
+}
+_OUTBOX_NO_DEFAULT = frozenset({'outbox_message_id', 'integration_id', 'provider_key', 'channel_target',
+                                 'message', 'kind', 'created_at', 'updated_at'})
+_OUTBOX_INTEGER_DEFAULTS = {'attempt_count': '0', 'max_attempts': '5'}
+
+
+def _validate_outbox_rebuild(conn: sqlite3.Connection) -> None:
+    """Refuse a rebuild that would discard schema objects or external links."""
+    info = list(conn.execute('PRAGMA main.table_xinfo(v2_outbox)'))
+    columns = {str(row[1]) for row in info}
+    if columns - _OUTBOX_REBUILD_COLUMNS or _OUTBOX_REBUILD_COLUMNS - columns - _OUTBOX_ADDED_COLUMNS:
+        raise ValueError('outbox_rebuild_schema_unsupported')
+    for row in info:
+        name = str(row[1])
+        expected_type = 'INTEGER' if name in _OUTBOX_INTEGER_DEFAULTS else 'TEXT'
+        expected_default = (_OUTBOX_INTEGER_DEFAULTS[name] if name in _OUTBOX_INTEGER_DEFAULTS else
+                            None if name in _OUTBOX_NO_DEFAULT else "'pending'" if name == 'status' else
+                            "'{}'" if name == 'metadata_json' else "''")
+        if (str(row[2]).upper() != expected_type or row[3] != 1 or row[4] != expected_default
+                or row[5] != int(name == 'outbox_message_id') or row[6] != 0):
+            raise ValueError('outbox_rebuild_schema_unsupported')
+    sql_row = conn.execute("SELECT sql FROM main.sqlite_master WHERE type='table' AND name='v2_outbox'").fetchone()
+    sql = str(sql_row[0] or '') if sql_row else ''
+    if (len(re.findall(r'\bCHECK\s*\(', sql, re.IGNORECASE)) != 1
+            or re.search(r'\b(?:COLLATE|GENERATED|UNIQUE)\b|\bWITHOUT\s+ROWID\b', sql, re.IGNORECASE)):
+        raise ValueError('outbox_rebuild_schema_unsupported')
+    # ALTER TABLE RENAME rewrites dependent views and triggers as well. Dropping
+    # the renamed table would leave those references broken; refuse rather than
+    # attempting to infer or rewrite household schema objects.
+    for dependency in conn.execute("SELECT tbl_name,sql FROM main.sqlite_master WHERE type IN ('trigger','view')"):
+        if (str(dependency[0]).casefold() == 'v2_outbox'
+                or re.search(r'\bv2_outbox\b', str(dependency[1] or ''), re.IGNORECASE)):
+            raise ValueError('outbox_rebuild_schema_unsupported')
+    for index in conn.execute('PRAGMA main.index_list(v2_outbox)'):
+        name, unique, origin, partial = str(index[1]), index[2], index[3], index[4]
+        if origin == 'pk':
+            continue
+        if name not in _OUTBOX_INDEX_COLUMNS or unique or partial:
+            raise ValueError('outbox_rebuild_schema_unsupported')
+        # Only known constant names are interpolated into PRAGMA.
+        key_columns = [row for row in conn.execute(f'PRAGMA main.index_xinfo({name})') if row[5] == 1]
+        actual = tuple(str(row[2]) for row in key_columns)
+        if (actual != _OUTBOX_INDEX_COLUMNS[name]
+                or any(row[3] != 0 or str(row[4]).upper() != 'BINARY' for row in key_columns)):
+            raise ValueError('outbox_rebuild_schema_unsupported')
+    tables = conn.execute("SELECT name FROM main.sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").fetchall()
+    for row in tables:
+        name = str(row[0])
+        quoted = name.replace('"', '""')
+        for foreign_key in conn.execute(f'PRAGMA main.foreign_key_list("{quoted}")'):
+            if name == 'v2_outbox' or str(foreign_key[2]).casefold() == 'v2_outbox':
+                raise ValueError('outbox_rebuild_schema_unsupported')
+
+
+def _migrate_status_check(conn: sqlite3.Connection) -> None:
+    _reject_unsupported_statuses(conn)
+    if _outbox_status_schema(conn) == _OUTBOX_STATUSES:
         return
+    if not conn.in_transaction:
+        raise ValueError('outbox_migration_requires_transaction')
+    _validate_outbox_rebuild(conn)
     conn.execute("ALTER TABLE v2_outbox RENAME TO v2_outbox_legacy")
-    conn.executescript(
+    conn.execute(
         """
         CREATE TABLE v2_outbox (
           outbox_message_id TEXT PRIMARY KEY,
@@ -956,7 +1252,7 @@ def _migrate_status_check(conn: sqlite3.Connection) -> None:
           next_attempt_at TEXT NOT NULL DEFAULT '',
           last_error TEXT NOT NULL DEFAULT '',
           max_attempts INTEGER NOT NULL DEFAULT 5,
-          CHECK (status IN ('pending', 'claimed', 'retry_wait', 'delivered', 'failed'))
+          CHECK (status IN ('pending', 'claimed', 'retry_wait', 'delivered', 'failed', 'unconfirmed'))
         ) STRICT;
         """
     )
@@ -972,7 +1268,7 @@ def _migrate_status_check(conn: sqlite3.Connection) -> None:
         SELECT
           outbox_message_id, integration_id, provider_key, channel_target, message,
           kind, audience_user_id, correlation_id,
-          CASE WHEN status IN ('pending', 'claimed', 'delivered', 'failed') THEN status ELSE 'pending' END,
+          status,
           provider_message_id, reply_to_provider_message_id, task_id, question_id,
           project_id, metadata_json, claimed_at, delivered_at, created_at, updated_at,
           attempt_count, lease_owner, lease_expires_at, next_attempt_at, last_error, max_attempts
@@ -980,15 +1276,8 @@ def _migrate_status_check(conn: sqlite3.Connection) -> None:
         """
     )
     conn.execute("DROP TABLE v2_outbox_legacy")
-    conn.executescript(
-        """
-        CREATE INDEX IF NOT EXISTS idx_v2_outbox_consumer
-          ON v2_outbox (integration_id, channel_target, status, created_at);
-
-        CREATE INDEX IF NOT EXISTS idx_v2_outbox_question
-          ON v2_outbox (question_id, status);
-        """
-    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_v2_outbox_consumer ON v2_outbox (integration_id, channel_target, status, created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_v2_outbox_question ON v2_outbox (question_id, status)")
 
 
 def _default_outbox_db_path() -> str:

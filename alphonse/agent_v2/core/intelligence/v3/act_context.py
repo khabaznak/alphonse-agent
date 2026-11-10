@@ -8,6 +8,7 @@ from alphonse.agent_v2.system_one import SystemOneUnavailableError
 
 from .act_evidence import link_readbacks, observation
 from .task_understanding import input_receipt, snapshot
+from .delivery_evidence import delivery_receipt
 
 # Conservative UTF-8 byte budgets leave room for questions/provider framing below
 # Jev's per-question context limit without assuming a chars-per-token ratio.
@@ -88,6 +89,8 @@ def mission_review_state(task, state, *, request_sources=(), context=None):
     for entry in entries.values():
         ref = entry['evidence_ref']
         row = observation(entry, criterion_ids.get(ref, []), task_id=str(task.task_id), actor_user_id=str(task.user), input_digest=str(understanding['input_digest']))
+        if (receipt := delivery_receipt(task, entry, context)) is not None:
+            row["delivery_receipt"] = receipt
         if entry.get('tool_id') == 'native.respond' and prepared.get('message') and ref == response_ref:
             row.pop('result', None)
             row['result_reference'] = 'prepared_response.message'

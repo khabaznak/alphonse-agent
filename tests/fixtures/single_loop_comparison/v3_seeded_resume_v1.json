@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "split": "lifecycle-seeded",
+  "cases": [
+    {
+      "id": "v3-seeded-resume",
+      "goal": "Resume the synthetic record update and verify it.",
+      "fixture": {
+        "permissions": [
+          "read",
+          "write"
+        ],
+        "files": {
+          "records/item.md": "Status: open\n"
+        },
+        "checkpoint": "prior successful lookup"
+      },
+      "provider_script": {
+        "baseline": "deterministic_adapters:restart-mid-phase"
+      },
+      "oracle": {
+        "allowed_statuses": [
+          "completed"
+        ],
+        "effects": {
+          "records/item.md": "Status: complete\n"
+        },
+        "restart_count": 1,
+        "forbidden_tools": [
+          "fixture.search"
+        ],
+        "max_questions": 0,
+        "response_contains": [
+          "verifi"
+        ]
+      }
+    }
+  ]
+}

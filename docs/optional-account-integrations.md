@@ -1,796 +1,585 @@
-# Optional accounts and project-directed checks
+# Optional account integrations and project-directed proactive checks
 
-Status: implementation contract for [#105](https://github.com/khabaznak/alphonse-agent/issues/105), 2026-10-31. Reconciles the October 30 design snapshot in [delivery index #104](https://github.com/khabaznak/alphonse-agent/issues/104).
-Baseline: `e224e368b7bb80f556b51b7b4411bb60e4c4a4a4` (current main inspected for this contract).
-This document is the delivery contract. Requirements below are future work unless
-identified as shipped. #109 secure credential storage and #110 member-owned account
-grants/binding resolution, #111 managed Google/Microsoft OAuth lifecycle APIs, and
-#112 validated project-policy persistence/lifecycle fences now ship; see
-[OAuth implementation](oauth-accounts.md), [project policies](project-config.md#authorized-proactive-checks-112)
-and [binding implementation](skill-bindings.md#member-owned-connections-and-bounded-grants-110).
-The per-issue dependencies in #104 govern delivery.
+Status: proposed design and implementation plan; no runtime changes implemented  
+Date: 2026-10-30  
+Initial providers: Gmail, Microsoft Outlook/Hotmail, Google Calendar, Google Classroom
 
-The dated [integration readiness review](integrations-readiness.md) records exact
-deployment evidence still required, processor disclosures, retention implementation
-gaps, and separate pilot/public-release checklists. Both release gates are blocked;
-merged provider implementations do not authorize real household account access.
+## Intended outcome
 
-## Outcome and non-negotiable boundaries
+A household member connects an optional account and creates a project with goals
+and an explicitly authorized checking schedule. Alphonse finds consequential
+information, reconciles it with previous findings, and alerts the right people
+with supporting evidence. Connecting an account alone starts no proactive work.
 
-A member can connect an optional account without starting any proactive work.
-Ordinary authorized one-off reads remain project-optional. A project owns proactive
-goals, duration, schedules, retrieval windows and recipients; account access is
-independently authorized. Conversation can create a project and configure its checks,
-without making people manually select a project for everyday questions.
+The first example is a project for a child's current school trimester: inspect
+authorized mailboxes on Monday mornings for school commitments, identify due
+dates and significant assignments, and notify the parent early enough to prepare.
+A separate project can look for overdue bills. An overdue notice is evidence of
+what the sender reports, not proof that a bill remains unpaid.
 
-The first acceptance slice is a finite school-trimester project checking a parent's
-chosen Gmail account on Monday mornings for consequential commitments. Household
-administration can later review overdue notices, which are evidence of a sender's
-claim, never proof that a bill remains unpaid. Outlook/Hotmail, Calendar and eligible
-Classroom extend the same contracts. No real-account connection, live retrieval or
-provider write is authorized by this document or its implementation tests.
+Ordinary conversation and one-off authorized account queries remain available
+without a project. Proactive checks require a project. Projects can be created
+through conversation; users need not manually select one before asking for help.
+Use finite efforts such as a trimester or billing period where possible, with
+explicit renewal or an explicitly configured ongoing duration.
 
-Reuse the existing event store, scheduler, inbound queue, V3 CAPD and outbox. Do not
-add a second event bus, polling LLM loop, scheduler or notification channel. Native
-optional adapters implement managed service boundaries. Standard skills supply
-expertise and ordinary resources/scripts; no per-script catalog, Artifact registry,
-script tools or tools per account are introduced. Project sharing, editable config,
-package installation, Jev relevance and account connection confer no new authority.
+## Decisions
 
-New project-check acquisition is read-only. Existing explicitly authorized Calendar
-creation/update remains supported by its shipped package; it is not activated by a
-read policy. Mail sending/marking/archiving, calendar writes from checks, payments,
-invitations and school submissions are outside this delivery.
+1. Reuse `EventAutomationStore`, daemon event ingestion, the scheduled worker,
+   inbound queue, V3 CAPD, and the existing outbox. Do not create another event bus,
+   scheduler, independent reasoning loop, or delivery channel.
+2. Ship native optional provider adapters behind a shared account-service API.
+   First-party provider support is maintained product code, not generated artifacts.
+3. A connection belongs to a household member and may have multiple capabilities.
+   Multiple accounts per provider and multiple owners are first-class cases.
+4. A project defines goals and proactive-check policy. Account grants are a
+   separate enforced record; project membership, config, and skill selection do
+   not grant mailbox access.
+5. Reuse skills for school coordination and household bills across providers.
+   Skills guide interpretation; deterministic services enforce access and timing.
+6. Initial delivery is read-only at providers. Sending mail, marking it read,
+   archiving, editing calendars, paying bills, and submitting schoolwork require
+   separately designed and authorized capabilities.
+7. Start with local daemon execution and scheduled polling. Continuous polling
+   or provider push requires an explicit event-driven project policy. Hosted
+   execution is a later deployment choice, not an implicit dependency.
+8. MCP is a possible adapter transport, not the policy or persistence layer.
+   A plugin can package optional adapters and skills without requiring an MCP
+   server or a general third-party plugin runtime for the first release.
 
-## Reconciliation with shipped foundations
+## Existing implementation and verified limits
 
-- [#32](https://github.com/khabaznak/alphonse-agent/issues/32): the accepted
-  [standard skills contract](standard-skills-contract.md) makes packages the
-  reusable unit. Preserve package/resource containment, provenance, update/export/
-  uninstall behavior and the [native script execution](skill-script-execution.md)
-  boundary. Generic Bash is trusted host execution, not an OS sandbox.
-- [#36](https://github.com/khabaznak/alphonse-agent/issues/36):
-  [SkillBindings](skill-bindings.md) already persists `v2_skill_bindings` and
-  `v2_skill_binding_choices` in `SQLiteIntegrationStore`. Choices map authenticated
-  `(actor, skill, role)` to an exact binding whose account target is an existing
-  integration ID. `configure`, `select`, `prepare` and `use` enforce actor/owner,
-  explicit audience, enabled account, installed skill and readiness. Extend this
-  resolver; do not build a second selection or sharing system. Today provisioning
-  is administrator-only, integration records lack member ownership, and credentials
-  reside in plaintext `secret_json` protected by host permissions. Masking is not
-  encryption. Managed process delivery/redaction exists; secure OAuth storage does not.
-- [#39](https://github.com/khabaznak/alphonse-agent/issues/39): the
-  [starter library](household-starter-skills.md) already supplies family coordination,
-  household administration and skill authoring. Extend these workflows or add a
-  focused portable school workflow; do not replace them with provider-specific
-  personas. No personal facts, credentials or live data belong in shipped packages.
-- [#41](https://github.com/khabaznak/alphonse-agent/issues/41):
-  [family-calendar](family-calendar.md) is a shipped reusable Google Calendar package,
-  with ordinary `scripts/google_calendar.py`, `calendar` binding and separate exact
-  `authorization` binding for writes. It lists events/availability and verifies
-  approved creates/updates by readback, stable operation IDs and ETags. There are
-  no Calendar tools/catalog entries. Extend this package and its service access
-  for bounded project reads/sync; do not rebuild Calendar or remove its write guards.
+The following are implementation anchors, not claims that the proposed work exists:
 
-These completed issues retain their completed state and original milestone.
-[Skills management](skill-management.md) already reports binding readiness in Desktop;
-full optional-account/grant/check management remains #121. Legacy Artifact migration
-is documented in [resource migration](skill-artifact-resources.md); this work does
-not revive that catalog or migrate household programs into product source.
+- [Local worker contract](local_event_workers.md): registered same-host workers
+  publish structured facts through the owner-only Unix socket.
+- [`automations.py`](../alphonse/agent_v2/automations.py): worker/type registration,
+  JSON Schema validation, event history, worker/event-ID deduplication, exact
+  top-level payload filters, and fan-out into automation execution records.
+- [`daemon.py`](../alphonse/agent_v2/daemon.py), `publish_event`: claims executions,
+  queues the stored prompt under its owner/project and system memory session,
+  attaches `metadata.event`, and records enqueueing.
+- [`ipc.py`](../alphonse/agent_v2/ipc.py): event registration/publication methods;
+  the socket is mode `0600`. A worker ID is currently a registry lookup, not an
+  independently authenticated process identity.
+- [`scheduled_worker.py`](../alphonse/agent_v2/services/scheduled_worker.py) and
+  [`scheduled_tasks.py`](../alphonse/agent_v2/core/scheduled_tasks.py): durable
+  occurrences, leases, retry handling, and queue dispatch to reuse.
+- [`channel.py`](../alphonse/agent_v2/core/messages/channel.py) stamps the configured
+  intelligence engine. V3 explicitly recognizes event/scheduled sources as
+  background work rather than new human admission turns.
+- [`context.py`](../alphonse/agent_v2/core/intelligence/v3/context.py) and
+  [`projections.py`](../alphonse/agent_v2/core/intelligence/v3/projections.py) do not
+  explicitly project `metadata.event` into decision context. Enqueueing a payload
+  is not sufficient proof that the model sees it.
+- [`integrations/store.py`](../alphonse/agent_v2/integrations/store.py) currently
+  persists secret JSON. Response masking is not encryption; new OAuth tokens
+  must use a credential backend rather than this field.
+- [Project configuration](project-config.md) already defines goals, duration,
+  ownership, sharing, and lifecycle; configuration is context, not authorization.
 
-Current runtime anchors and gaps, verified against the baseline:
+During exploration, all five tests in `tests/test_agent_v2_event_automations.py`
+passed. They verify validation, matching, deduplication, IPC, and queue metadata;
+they do not establish end-to-end V3 interpretation or restart recovery. In the
+adjacent `test_project_provenance_waiting.py` run, the event-routing case passed
+and two Home-project-creation expectations failed. Record that baseline separately
+when implementing; do not hide those failures or expand this change to repair
+unrelated project behavior without investigation.
 
-- [Local workers](local_event_workers.md), [`automations.py`](../alphonse/agent_v2/automations.py):
-  worker/type registration, schema validation, exact top-level filters, bounded
-  history and worker/event-ID deduplication exist. Worker ID is a registry lookup,
-  not process authentication. Matching/history lack private-account scope; pruning
-  deletes the row currently used for deduplication. Claims have no recovery lease.
-- [`daemon.py`](../alphonse/agent_v2/daemon.py) `publish_event` claims and queues
-  fixed automation prompts with `metadata.event`, then marks executions enqueued.
-  This is not restart-safe end-to-end completion. The owner-only Unix socket is a
-  same-OS-user boundary, not a restricted independently authenticated worker API.
-- [`scheduled_tasks.py`](../alphonse/agent_v2/core/scheduled_tasks.py) and
-  [`scheduled_worker.py`](../alphonse/agent_v2/services/scheduled_worker.py) already
-  have durable occurrences, leases/retries, stable queue IDs and `pdca`/`direct`
-  delivery. Today creation requires a prompt and accepts only those two modes.
-  Typed acquisition is an additive job interface, not an existing third mode.
-- [`context.py`](../alphonse/agent_v2/core/intelligence/v3/context.py) does not
-  explicitly render `metadata.event` as triggering evidence. There is no
-  `v3/projections.py` on this baseline, despite the old draft's reference. #108
-  must audit every actual context/input-manifest path when it lands; queue metadata
-  alone does not establish that Jev or System Two saw the evidence.
-- [Project configuration](project-config.md) already provides goals, duration,
-  lifecycle and explicit sharing. It is context, not operational authorization.
+## Runtime flow
 
-## Version 1 record and service contracts
+```mermaid
+flowchart TD
+    P[Project goals and approved checking policy] --> S[Existing scheduled worker]
+    P --> W[Optional event-driven worker]
+    S --> G[Deterministic account, project and timing gates]
+    W --> G
+    G --> A[Provider adapter: authorized retrieval]
+    A --> E[Scoped source evidence and durable check result]
+    E --> J[Optional bounded Jev judgments]
+    J --> B[Existing event store and matching automations]
+    E --> B
+    B --> Q[Recoverable dispatch to existing inbound queue]
+    Q --> V[V3 CAPD with explicit event evidence]
+    V --> F[Verified findings and reconciliation]
+    F --> O[Authorized delivery through existing outbox]
+```
 
-The following field names and invariants are the shared implementation contract,
-not claims of existing tables or IPC methods. All records have `schema_version: 1`,
-opaque stable string IDs, UTC RFC3339 creation/update timestamps and a monotonically
-increasing integer `revision` starting at 1 for mutable records. Provider timestamps
-are separate from observation timestamps; local schedules carry an IANA timezone.
-Never recycle IDs or retarget an existing ID to another account/owner. Store new
-operational records through validated services in the existing shared database;
-credentials/content reside behind references, never inside policy/event payloads.
+The two edges from evidence describe configurable deterministic-only or
+Jev-assisted admission. They must not create two publications for one result.
+No-match checks finish with a persisted coverage receipt and normally remain quiet.
+CAPD is invoked when interpretation, recovery, or a requested report is needed.
 
-### Connection — #109, #110, #111
+## Connections, grants, and project policies
 
-`connection_id` is the existing `integration_id`, not a parallel account identity.
-Add `owner_user_id`, `provider_key`, `provider_subject`, `display_name`,
-`granted_scopes`, normalized `capabilities`, `credential_ref`, `credential_generation`,
-`status`, `health_code`, `last_success_at` and `revocation_pending`. Provider subject
-is the provider's immutable identity (including tenant where needed); an address is
-only display metadata. Many connections per provider/member are valid. Status is
-`connected`, `paused`, `reauth_required` or `disconnected`. Only `connected` with
-healthy required capabilities permits managed retrieval. Tokens never appear in
-record projections. A newly connected account creates no policies or schedules.
+Introduce explicit persisted records with stable IDs and revisions:
 
-### Grant and existing binding — #110
+- **Account connection:** provider, provider subject, owner, display address,
+  capabilities/scopes granted, credential reference, connection status, and health.
+  Use statuses such as `connected`, `paused`, `reauth_required`, and `disconnected`.
+  Do not reuse messaging addresses as account ownership or select an account by
+  `get_by_provider`, which returns only one current record.
+- **Account grant:** grantor, connection, beneficiary/executing principal, project
+  when applicable, allowed read operations and resource constraints, expiry,
+  revision, and revocation state. Only an authorized owner/grant manager can
+  expand it. Consent in Google/Microsoft and an Alphonse grant are separate layers.
+- **Project check policy:** project and executing owner, goal snapshot/digest,
+  connection/grant references, bounded source query, skill hints, trigger mode,
+  schedule/timezone, retrieval window, lookback, catch-up behavior, resource/model
+  budgets, recipients, finding-sharing scope, and status. The default is disabled.
+- **Check run:** policy revision, occurrence identity, effective grants, source
+  coverage, page/cursor progress, timestamps, outcome, and publication identity.
+  Distinguish complete, partial, no-match, blocked, failed, and cancelled outcomes.
+- **Source evidence:** connection/owner scope, provider resource ID and version,
+  observed and source timestamps, safe source link, authorized content reference,
+  retention deadline, and deletion/tombstone state.
+- **Finding:** project/goal association, evidence references, bounded audience,
+  extracted facts and uncertainty, due date/timezone when known, state, related
+  finding IDs, and notification history. It is not a provider event or a task result.
 
-`grant_id`, `connection_id`, `grantor_user_id`, `beneficiary_user_id`, optional
-`project_id`, allowed `operations`, provider `resources`, permitted
-`recipient_user_ids`, `expires_at`, `revoked_at`, and revision define operation,
-resource, purpose and disclosure limits. Empty recipients authorize no delivery;
-no wildcard recipients or implicit project-member expansion. Only an authenticated
-owner/authorized grant manager may issue or expand grants. Administrator management
-rights remain subject to the explicit binding choice and service policy; they are
-not an account-selection fallback. Provider consent and Alphonse grants are separate.
+Store operational authority in the shared database through validated services.
+`project_config.json` remains editable goal/duration context; it may display
+policy references, but editing a file cannot activate monitoring or expand grants.
+Changing relevant goals marks the policy `needs_review` and suspends new checks
+until the user authorizes the revised scope. Conversation can create or revise
+policies when the user's instruction is sufficiently explicit; routine execution
+within the existing policy needs no repeated approval.
 
-Keep existing binding IDs, exact account targets and member choices. Extend account
-binding requirements with `grant_id`/capability requirements; service resolution
-returns a sanitized connection handle, selected resource constraints and effective
-grant revision. Multiple bindings may narrow the same connection for different
-skills/members. Binding ACLs and the grant both apply (intersection, never union).
-A legacy shared binding is not silently converted to broad new provider grants.
-No usable grant means setup/reconciliation, not implicit authorization.
-
-Every managed use resolves the existing explicit `(actor, skill, role)` choice,
-checks active actor/owner, installed available skill, binding access/enabled state,
-exact connection status, grant beneficiary/project/expiry/revocation, resource/
-operation constraints and actual provider scopes. `get_by_provider`, an address in
-a message and Jev selection may not pick an account. Missing or ambiguous choices
-fail visibly. A selection change cannot retarget an already authorized policy:
-pin its binding ID, connection and grant; require policy review before switching.
-
-### Project check policy — #112
-
-`policy_id`, `project_id`, `executing_user_id`, `goal_snapshot`, `goal_digest`,
-`source_bindings` (skill ID, role, binding ID, connection ID, grant ID and approved
-grant revision), `query`/`query_digest`, `skill_hints`, `trigger`, `retrieval_window`,
-`duration`, `initial_lookback_days`, `missed_run`, `budgets`,
-`recipient_user_ids`, `notification_mode`, `authorized_by`, `authorized_at` and
-revision are persisted authorization, separate from project files. Status is
-`disabled` (default), `active`, `paused`, `needs_review` or `ended`.
-
-Version 1 defaults: scheduled local execution, initial lookback 30 days, missed
-run `next_allowed_window`, notification `material_changes`, no recipients until
-explicitly selected. Activation requires a concrete reviewed timezone/window,
-finite duration or explicit ongoing choice, query/resources, grants, budgets and
-audience. Conversation may authorize this concrete summary; execution within it
-needs no repeated approval. No arbitrary prompt/script/credential in the trigger.
-Changes use expected-revision compare-and-swap; widening needs fresh authorization.
-Relevant goal, query, resource, account, recipient or duration edits invalidate old
-work and require review. Project file edits can invalidate scope but cannot activate
-or broaden it. Schedule/policy revisions must be installed atomically, never leave
-an old schedule pointing at a newly broadened policy.
-
-### Check run — #113, #114
-
-`check_run_id`, `policy_id`, `policy_revision`, `occurrence_key`, `executing_user_id`,
-`effective_grants` (IDs/revisions), `window_start`, `window_end`, `query_digest`,
-`coverage` (requested/covered ranges, resources, gaps), `acquisition_checkpoint`,
-`analysis_checkpoint`, `started_at`, `finished_at`, `outcome`, `error_code`,
-`publication_id` and revision establish an auditable receipt. Unique
-`(policy_id, policy_revision, occurrence_key)` identifies one logical run across
-retries. Lease/attempt IDs are not new run IDs. Cursor state is opaque and bound to
-connection, resource, query digest, scope and adapter version.
-
-Operational state is `pending`, `leased`, `retry_wait` or `terminal`; terminal
-outcome is `complete`, `no_match`, `partial`, `blocked`, `failed` or `cancelled`.
-`no_match` requires complete authorized acquisition and completed required triage,
-not empty output after an error. `complete` means required processing finished,
-not successful alert delivery. Window expiry with unfinished work is `partial`;
-revocation is `blocked`, explicit cancellation is `cancelled`. Terminal runs are
-immutable; subsequent permitted work gets a new occurrence with links to prior
-coverage. Acquisition progress and analysis progress never share a single cursor.
-
-### Source evidence — #114
-
-`evidence_id`, `connection_id`, `owner_user_id`, `resource_id`, `resource_version`,
-`provider_timestamp`, `observed_at`, `check_run_id`, `grant_id`, `grant_revision`,
-`content_ref`, `content_digest`, `safe_source_link`, `audience_user_ids`,
-`retention_deadline`, `state` and revision preserve provenance. The identity key is
-connection + provider resource + version; the same source can support independently
-authorized projects. Use an adapter-defined digest when a provider has no version.
-A source link is a convenience, never authority to browse or forward credentials.
-State is `available`, `expired`, `revoked` or `deleted`; terminal content removal
-retains only a content-free receipt. Scope-check references before loading bytes.
-
-### Finding and notification — #116
-
-`finding_id`, `project_id`, `goal_digest`, `evidence_ids`, `facts`, `uncertainty`,
-optional `due_at`/`due_date` and timezone, `audience_user_ids`, `state`,
-`supersedes_finding_id`, `related_finding_ids`, `material_revision` and notification
-history record an interpretation, not a provider event or a task-success claim.
-State is `open`, `resolved`, `corrected`, `withdrawn` or `unresolved`. Missing dates,
-grade weights and ambiguous children remain unknown. Do not merge two assignments
-or invoices merely because their wording matches. Prefer current authoritative
-notices to old quoted text; corrections link to prior findings.
-
-Audience is bounded by the policy and each supporting grant's allowed disclosure.
-Broader derived disclosure requires an explicit grant, not an assumption that a
-summary is public. Project membership alone never grants raw-source access or
-expands prior findings. Outbox idempotency is `(finding_id, material_revision,
-recipient_user_id, channel)`; store recipient-level pending/sent/failed/ambiguous
-outcomes separately. Do not announce delivery from queue acceptance.
-
-## Deterministic timing, lifecycle and execution
-
-Before dispatch, each provider call/page/attachment/retry/continuation, CAPD entry,
-evidence expansion and delivery, recheck trusted actor, grants, project lifecycle,
-policy/revision, cancellation and relevant timing/audience. A grant revision change
-fences queued work: resolve again and review scope, never reuse a cached credential
-payload as authority. Project pause/completion/archive/end invalidates queued
-checks. Connection pause/revocation blocks dependents only; resume never revives
-stale revisions or replays every missed run. Cancellation cannot recall an in-flight
-read or already delivered message; stop subsequent calls and report the boundary.
-
-“Only Mondays” restricts retrieval **and background analysis**, not merely alerts.
-A concrete example is Monday 08:00–09:00 America/Mexico_City, half-open window
-`[start, end)`. Stop/checkpoint at 09:00; no Tuesday continuation. Delivery is also
-window-bound by default; any separate delivery window needs explicit authorization.
-A one-off user read uses its own task authorization without altering the policy.
-Auth maintenance may refresh credentials outside a retrieval window but may not
-read source content. Human consent is required when reauthorization is needed.
-
-Use existing timezone-aware recurrence. Nonexistent local times skip with a visible
-gap; a repeated local time fires once using the earlier offset and stable occurrence
-key. #113 tests this contract against the scheduler and adds deterministic handling
-where necessary. Default catch-up is the next allowed window, with a visible missed
-coverage interval. Late catch-up requires an explicitly bounded authorized window.
-Disallow concurrent runs per policy; coalesce overlap into one recorded gap/next
-window, not an unbounded backlog. Separate projects can independently use the same
-account under their own grants and coverage receipts.
-
-### Typed scheduled-job interface — #113
-
-Extend the existing store/worker with `job_kind` and `job_version`, separate from
-legacy `delivery_mode`. Migrate existing schedules to `job_kind="prompt"`,
-`job_version=1`, preserving `pdca` and `direct`, prompts, IDs and recurrence exactly.
-A new `project_check`, version 1, has only this typed payload:
+An illustrative policy projection returned to the owner (not an authorization
+document, and not the existing project-config schema):
 
 ```json
 {
-  "job_kind": "project_check",
-  "job_version": 1,
-  "payload": {"policy_id": "check_school_trimester", "policy_revision": 1}
+  "policy_id": "check_school_trimester",
+  "revision": 1,
+  "project_id": "project_school_trimester",
+  "goal_snapshot": "Catch upcoming school commitments early enough to prepare",
+  "connection_ids": ["connection_parent_gmail"],
+  "grant_ids": ["grant_parent_school_read"],
+  "trigger": {
+    "kind": "schedule",
+    "weekdays": ["MO"],
+    "local_time": "08:00",
+    "timezone": "America/Mexico_City"
+  },
+  "retrieval_window": {
+    "weekdays": ["MO"],
+    "start": "08:00",
+    "end": "09:00"
+  },
+  "missed_run": "next_allowed_window",
+  "initial_lookback_days": 30,
+  "notification_mode": "material_changes",
+  "recipient_user_ids": ["parent"],
+  "status": "active"
 }
 ```
 
-The trusted scheduler creates the immutable occurrence context: `occurrence_key`,
-`scheduled_for`, `window_start`, `window_end`, lease token/generation and deadline.
-Actor/project/grants/query come from the persisted policy, never payload claims.
-Validate payload strictly, reject unknown fields/versions and require no prompt
-for typed acquisition. Preserve prompt validation for old jobs. Do not encode a
-provider poll as a prompt or fall through an unknown kind into CAPD.
-
-The handler contract is `dispatch(job, occurrence_context) -> {check_run_id,
-state, error_code?}`. Within a short transaction, validate revision and upsert the
-unique logical run, then wake a bounded acquisition worker outside scheduler ticks.
-No network/model calls in the scheduler transaction. Repeated dispatch reconnects
-to the same run. Fence all writes by lease generation; heartbeat active leases and
-reject stale worker commits. Reuse scheduled claim/retry/backoff conventions (five
-attempts maximum by default); retry only within the window. Record acceptance,
-processing, publication and outbox completion separately. Unknown versions are
-blocked with a static `unsupported_job_version`, visible for operator recovery.
-
-## Acquisition, events and V3
-
-Shared account service operations are `capabilities`, `health`, bounded
-`search/list`, `read`, permitted `read_attachment` and `iterate_changes`. Context
-contains authenticated actor, exact connection/binding/grant, task ID, optional
-policy/revision/run/occurrence, deadline, cancellation and remaining budgets.
-No project is required for an authorized ad hoc query. Return evidence references,
-coverage, continuation, counts and static typed errors, never credentials.
-
-Default run limits are 100 pages, 1,000 candidate resources, 10 MiB normalized
-content, 5 MiB per attachment, 10 minutes wall time and the occurrence end,
-whichever comes first. Default analysis limits are 1,000 bounded Jev candidate
-sets and 20 System Two calls. Persist consumed budgets across retries. Exceeding
-any limit yields partial coverage/pending counts, not no-match. #115 calibrates
-thresholds and #124 qualifies these conservative defaults on synthetic school/bill
-cases before a pilot; raising limits is an explicit policy revision.
-
-Persist accepted page evidence and replay identities before advancing acquisition.
-Only advance analysis after required processing is durable. Query/folder/scope or
-adapter-version changes require an explicit bounded baseline/backfill, not cursor
-reuse. Cursor expiry triggers bounded resync/overlap deduplication and a visible
-gap if completeness is unknown. Provider denial, inaccessible folders, throttling,
-attachment failures and model failure never become clean no-match.
-
-Normalize MIME/HTML deterministically, preserve needed quoted evidence, do not
-execute scripts or remote images. Fetch only permitted needed attachment types
-and sizes. Message links authorize no arbitrary browsing or credential forwarding.
-Provider text is external untrusted data, separate from runtime constraints and
-stored prompts; it cannot change permissions, recipients or tool activation.
-
-#106 implements the fail-closed event gate (see [managed event boundary](local_event_workers.md#managed-private-event-boundary-106)). Live authority services/adapters remain #110/#112/#113 and provider work. The server-owned versioned event envelope contains: `publication_id`, registered
-worker binding, authenticated owner, connection/grant, project/policy revision,
-check-run ID, type/version and occurrence/observation times. Bind from trusted run
-state, not worker payload assertions. Scope-filter matching/history/status before
-exact payload filters. Use bounded references and coverage, not whole messages or
-model-authored instructions. Daemon-controlled adapters are the initial workers;
-independent restricted worker authentication is a #126 decision, not a guarantee
-of the existing owner-only socket. Existing sensor schemas/fixed prompts survive.
-
-#107 adds atomic execution leases, retry deadlines, recovery ticks and idempotent
-queue insertion keyed by execution ID. Crash after queue insertion reconnects to
-the original message. Recover pending/expired work without needing another publish;
-no transaction spans network/model work. Publish at most one candidate/attention
-result per run with stable publication identity; no-match persists a quiet receipt.
-Use independent receipts for publication, run, source version, finding and delivery
-deduplication. Two authorized projects may legitimately consume one source.
-
-#108 renders bounded, scope-checked triggering evidence into every actual V3
-curation/planning/tactical/review path and records exact IDs/revisions/digests in
-input manifests. Explicit coverage/freshness/uncertainty and untrusted-source
-labels must survive clipping; truncated evidence is partial, not absent.
-
-[Jev/System One](v3-hierarchical-capd/06-system-one-check-act.md) answers only bounded
-Noul/Choice/Score relevance, commitment-presence, change and urgency questions on
-authorized content. Independent questions run in parallel. Record question/model
-versions and probabilities without private content in telemetry. System Two owns
-interpretation, extraction, reconciliation, strategy, calls and user language.
-Jev never extracts open-ended prose, grants access, composes calls or turns failed
-effects into success. Ambiguity retains pending candidates for bounded CAPD;
-unavailability yields degraded/retry state, never irrelevance or an automatic
-high-volume LLM replacement for bounded classification.
-
-[Progressive reveal](v3-hierarchical-capd/03-progressive-tool-revealing.md) continues
-to expose native capabilities, not scripts/accounts. Add stable provider-native
-read tools only when the managed service boundary needs them, with reviewed Jev
-questions and deterministic exposure/execution gates. Calendar remains its package
-workflow by default. Shared account management can be native; each connection is a
-resource argument, never another tool definition.
-
-## Credentials and supported deployment decision — #109, #111
-
-#109 implementation: [secure credential storage and operations](secure-credentials.md).
-Credential references, vault backends and generation fencing are available; OAuth
-consent, provider refresh serialization and account/grant services remain #110/#111.
-
-Desktop v1 targets macOS with the daemon's OS user accessing macOS Keychain.
-Headless v1 targets Linux with an explicitly configured encrypted file backend:
-AEAD-encrypted credential records, owner-only directory/file permissions and an
-independent 256-bit key supplied by a protected systemd credential or separately
-mounted owner-only key file outside the credential database/backups. Use a maintained
-cryptographic library, fresh nonces and authenticated connection/generation metadata;
-no homemade cipher or key stored beside ciphertext. #109 owns implementation and
-backend conformance tests. Other OS/backend combinations remain unsupported for new
-OAuth credentials until qualified; unrelated daemon functions still start normally.
-
-Backend interface: `put`, `get`, generation-checked `replace`, `delete`, `health`.
-Return opaque references to metadata clients; only trusted credential consumers
-receive bytes. Missing, locked or corrupt backend blocks account use with reconnect/
-unlock guidance; never fall back to plaintext `secret_json`. Secret backend/key
-configuration is operator setup, not a skill dependency or an LLM tool argument.
-
-Use provider-supported authorization-code + PKCE/state, exact registered callbacks
-and system-browser consent. Desktop uses a loopback callback, never a confidential
-client secret as proof of public-client identity. Headless uses an operator-assisted
-browser/loopback on the daemon host (SSH forwarding where needed); no deprecated
-out-of-band code paste. Unattended first consent is unsupported. Exact provider
-registration/client-type qualification is #111/#123, a pilot blocker, not assumed
-supported because a library supplies a flow.
-
-Serialize refresh per connection and use credential-generation compare-and-swap
-for rotation. Persist rotated refresh tokens securely before making them active;
-never let a stale refresh overwrite a newer token. Ambiguous rotation/storage
-failure blocks for reconciliation. Credentials must stay out of IPC, project/package
-files, event history, checkpoints, exports, inference, arguments and routine logs.
-Extend `SkillBindings.prepare/use` to dereference credentials inside trusted
-execution. Preserve narrowly requested `ALPHONSE_SKILL_BINDINGS` process delivery
-for compatible scripts; strip inherited payloads and redact before output clipping.
-Managed services should retain credentials in-process and return handles/results.
-Trusted Bash can still read OS-accessible files/process state: this is not
-host-level household isolation or a sandbox against malicious package code.
-
-Disconnect first fences local use/revokes dependent grants, then deletes active
-credential/cache references and attempts provider revocation. An offline disconnect
-is locally effective with `revocation_pending=true`; use a separately protected,
-short-lived backend revocation record for retries (maximum seven days), never a
-usable connection token. After expiry erase it and show manual provider-revocation
-guidance. Do not claim provider revocation succeeded offline.
-
-## Retention and replay defaults — #107, #114, #116, #123
-
-Defaults are maximum lifetimes, never a promise to retain content after revocation.
-Services enforce deadlines on reads and cleanup; event history count limits remain
-additional bounds. All backup/checkpoint/export paths must respect the same scope.
-
-- Raw/normalized source cache, attachments and excerpts: seven days from acquisition.
-  No active-run pin or extension is qualified. Reacquisition requires current
-  authority/window. Provider cache limits may require a shorter lifetime.
-- Optional-account event payloads, terminal run diagnostics and content-free input
-  manifests: 30 days. Active references pin only the minimum metadata required for
-  recovery; purge terminal diagnostics after 30 days. Never put message bodies,
-  subjects, addresses or attachment names into telemetry/diagnostic receipts.
-- Content-free deduplication receipts/tombstones: 90 days after acceptance/terminal
-  completion, whichever is later. Maximum replay age is 90 days from original
-  trusted acceptance time, not a retriable caller timestamp. Old publications are
-  rejected as expired even after receipts are pruned. Over-horizon recovery is an
-  explicit new authorized run, not an exactly-once promise. Keep minimal live source
-  identity references while a retained finding needs them, independently of replay.
-- Findings: project lifetime plus 90 days by default; ongoing projects review retained
-  findings annually. Explicit durable retention is a separate user choice, with
-  audience/source restrictions retained. Do not copy mailboxes into Memory Ledger.
-- Private evidence in CAPD checkpoints/prompt caches: same seven-day deadline (or
-  bounded active-run pin), references preferred. Expiration/revocation invalidates
-  dependent views before resume. No private account content in routine exports;
-  explicit authorized data exports carry scope/expiry metadata and explain that an
-  already downloaded or delivered copy cannot be recalled.
-
-Source deletion or revoked access immediately denies expansion and invalidates
-cached views, pending tasks and outbox deliveries. Cleanup removes/redacts dependent
-excerpts, prompt caches and checkpoints; findings become withdrawn/unavailable or
-retain only separately authorized facts with independent surviving evidence. Backups
-are encrypted, expire within 30 days, and are not readable serving stores; a restore
-must apply deletion/revocation tombstones before enabling any reads. #123 rehearses
-this across recovery/export paths before any private-data pilot. Provider rules may
-require shorter retention; #123 records deployment-specific restrictions and blockers.
-Longer content retention requires explicit user authorization and provider allowance.
-These are the adopted limits, not a claim that every metadata/backup path already
-enforces them. See the #123 [runtime gaps and blockers](integrations-readiness.md#adopted-retention-replay-and-recovery-boundary)
-before any real-account pilot; event history is currently count-bounded and replay
-acceptance receipts are retained to preserve deduplication.
-
-## Provider extensions and rollout ownership
-
-- #117 Gmail: optional read-only retrieval/history, bounded baseline and expired-history
-  resync; do not request send/modify access. Synthetic buried assignment, correction,
-  quoted old notice, missing due date, attachment-only notice and malicious message
-  must produce source-backed uncertainty and one material-change alert.
-- #118 Outlook/Hotmail: delegated Graph mail reads for qualified personal/work/school
-  registrations, folder-aware delta and throttling. Inbox-only coverage cannot claim
-  to include mail moved by rules; partial folder access stays visible.
-- #119 Calendar: extend the shipped family-calendar package and managed binding path
-  for selected-calendar project read context, incremental sync, exceptions,
-  cancellations, recurring-instance identity and all-day/timezone semantics. Preserve
-  its existing explicit write authorization/readback and no-invitation behavior.
-  Do not invoke its current token-refresh/pagination script unchanged as if it already
-  enforced per-page background windows; managed acquisition must add those checks.
-- #120 Classroom: validate course/account role and administrator restrictions before
-  read access. Guardian status is not student API permission; guardian-summary email
-  can use mail adapters. Missing due dates, submission status or grade weight remain
-  unknown; points alone do not establish a percentage of the course grade.
-- #122 extends family-coordination/household-administration or supplies focused school
-  guidance atop the same provider-independent evidence/finding contracts. Scripts
-  remain ordinary package files, live data and credentials remain user-owned.
-
-Provider scopes, registrations, account eligibility, public distribution verification
-and processor retention/training terms must be verified against current provider
-requirements by #111/#123 before live use. Remote Jev and System Two receive private
-data and count as off-host processors. #123 publishes separate dated personal-test
-and public-release readiness evidence; missing approvals remain blockers. This
-contract does not assert provider approval or qualified production OAuth support.
-
-Optional provider modules/dependencies load only when enabled. Missing SDK/backend
-cannot break unrelated daemon startup, existing sensors, reminders or messaging.
-The [#126 extension decision](optional-integration-extensions.md) defers continuous
-polling, provider push, independent restricted workers and MCP transport for this
-milestone. Local scheduled operation is the first path to qualify. That decision
-records reopening triggers, conformance gates and rollout ownership; it implements
-none of the deferred interfaces. Hosted availability and a general third-party
-plugin marketplace require separate explicit user approval outside this milestone.
-No connection implicitly enables monitoring; any future push is only a validated
-hint to retrieve within existing grants/windows.
-
-## Supported surfaces and terminal retirement
-
-#121 owns Desktop connections (owner, consent, explicit grants, health, pause,
-reconnect/disconnect), project policy review/activation, last/next run and coverage,
-findings and per-recipient delivery. Reuse existing settings, Skills readiness,
-project and work/automation views plus authenticated daemon/IPC services. Conversation
-uses the same validated services with a concrete policy summary. Display natural
-schedules, not RRULE/scope strings. Healthy no-change checks stay quiet; surface
-meaningful findings/corrections, persistent failure and required user action.
-Offline/sleeping hosts display stale coverage and the selected catch-up behavior.
-
-Coordinate with [#79](https://github.com/khabaznak/alphonse-agent/issues/79) terminal
-inventory, [#80](https://github.com/khabaznak/alphonse-agent/issues/80) setup/recovery
-gaps, [#81](https://github.com/khabaznak/alphonse-agent/issues/81) shared runtime/
-identity decoupling, [#82](https://github.com/khabaznak/alphonse-agent/issues/82)
-retirement and [#83](https://github.com/khabaznak/alphonse-agent/issues/83) supported
-operations documentation. No new TUI screens/parity requirement. Preserve necessary
-daemon/status/diagnostic/admin commands, Telegram and shared identities/APIs until
-their consumers are accounted for. #121/#127 supply account/check setup and recovery
-evidence to those owners; this document neither retires a client nor blocks useful
-account work on completion of the entire terminal milestone.
-
-## Migration, compatibility and verification ownership
-
-Use additive versioned schema changes with features disabled by default. Schema
-version describes serialization; record revision fences authority; credential
-generation fences rotation; job/event version selects a handler. These are distinct.
-Unknown major versions fail closed without dropping work; additive optional fields
-may be read compatibly only when their defaults cannot broaden scope. Management
-mutations require expected revision; actor comes from trusted session context,
-never a model-supplied owner field. Return static typed errors and sanitized IDs.
-
-#109 owns credential-reference migration and rollback. #110 owns member ownership,
-grants and binding-choice compatibility. Inventory exact existing integration IDs
-and bindings; an administrator/owner explicitly reconciles missing/ambiguous ownership
-or multiple account copies. Preserve IDs, choices, audiences and files. No inference
-from project sharing, worker payloads or guessed email addresses. For an opted-in
-legacy Calendar account: securely write/verify credentials, atomically switch its
-reference, then remove plaintext values; recover interrupted migration without
-falling back or losing the account. Existing #41 behavior is legacy protected-host
-support until explicitly migrated, not proof of secure new OAuth storage. Unrelated
-Telegram/Discord secrets are not prerequisites and must not be migrated here.
-
-#106/#107 own sensor/event scope and receipt migrations; preserve existing IDs,
-schemas and fixed-prompt subscriptions. Legacy trusted sensors stay in their current
-local scope; no private-account event is allowed through an unscoped registration.
-#112/#113 own policy/schedule migrations; old prompts remain old jobs, never new
-account checks. #114/#116 own evidence/finding schema and deletion handling. #127
-rehearses backups, restart, feature-disable and downgrade: stop/fence new job kinds,
-finish/cancel active runs, preserve records and use a compatible binary/database.
-Never downgrade OAuth references back to plaintext or replay unsupported jobs as
-prompts. Document irreversible schema changes before rollout; no household file
-moves/deletions or generated-program adoption are part of metadata upgrades.
-
-Validation gates belong to the indexed implementation issues, not to claims of
-runtime completion in #105:
-
-- #106–#108: spoofed owner, cross-user history, concurrent claims, crash at every
-  handoff, replay after pruning, pending-history protection, restart recovery,
-  cancellation and exact V3 evidence manifests; existing sensors still work.
-- #109–#112: two owners/two same-provider accounts, explicit selection, revoked or
-  expired grants, narrowed scope, inactive members, missing/locked backend, OAuth
-  state/PKCE/rotation races, goal/config edits and no secret-bearing projections.
-- #113–#116: Monday-only zero off-window fetches/analysis, DST, pagination/retry
-  crossing boundaries, overlap, cursor expiry/query changes, acquisition/model
-  failure independence, budgets, deletion/retention and recipient-level deduplication.
-- #117–#125: shared synthetic adapter conformance; recurring events, guardian denial,
-  cross-source identity/uncertainty, no-match/partial distinction, Jev outage and
-  prompt injection. #124 qualifies the Gmail school slice; #125 qualifies providers
-  and household isolation. Real-account tests require separate explicit opt-in.
-- #123/#126/#127: processor/provider readiness, optional transport decision, supported
-  client setup/recovery, disconnected startup, migration/rollback and staged release.
-  Index #104 remains open until release; contract publication completes only #105.
-
-Baseline validation on 2026-10-31 at the revision above used disposable fixtures:
-
-```sh
-python -m pytest -q tests/test_agent_v2_event_automations.py tests/test_project_provenance_waiting.py tests/test_family_calendar.py tests/test_agent_v2_skill_bindings.py tests/test_skill_script_execution.py tests/test_agent_v2_skills.py
-```
-
-Result: **154 passed, 35 skipped, 2 failed**. The existing failures are
-`test_new_conversation_creates_protected_home_project` and
-`test_independent_message_receives_exact_turns_ahead_notice` in
-`test_project_provenance_waiting.py`, both expecting an automatically created Home
-project that is absent. Event-routing tests pass. This reproduces the draft's
-baseline rather than attributing those failures to this documentation change.
-Skipped legacy cases and these synthetic tests establish no real-provider effects,
-secure-backend implementation or end-to-end proactive-check readiness. Record the
-final documentation commit and relevant checks on the implementation PR.
-
-## Deterministic project-check scheduling (#113)
-
-`ScheduledTaskStore` now migrates old rows to `job_kind=prompt`, version 1,
-without changing prompts, IDs, direct delivery or PDCA recurrence. The daemon's
-existing scheduler installs revision-specific `project_check` schedules from
-persisted active policies. Installation is recoverable and idempotent: payloads
-are immutable `{policy_id, policy_revision}` references, and dispatch always
-rechecks current authority. A crash between the policy and schedule databases
-cannot authorize an old revision against new scope. A connection by itself
-creates no schedule.
-
-`ProjectCheckDispatcher` upserts one durable receipt per occurrence in the
-scheduler database. It records the actor/project, pinned grants, query digest,
-original retrieval window, independent acquisition/analysis checkpoints, consumed
-budgets, gaps and terminal outcome. Duplicate scheduler handoffs reconnect to
-that receipt. One live run per policy is enforced by a unique SQLite index;
-overlaps become terminal partial receipts, while independently authorized
-policies sharing an account remain independent.
-
-`ProjectCheckWorker` runs on a separate daemon-managed thread. Scheduler ticks
-perform no source acquisition or inference. Pending, leased and retry-wait runs
-recover without a new publication. Claims increment a lease generation; every
-checkpoint and terminal write compares generation, owner, unexpired lease and
-state. Operations heartbeat their leases while in flight. Cancellation is
-owner-scoped and invalidates the generation. Consumed read/model/runtime budgets
-survive retries; continuations do not reset them. Retries use five attempts and
-5-second exponential backoff and never spill outside the original window.
-
-Trusted adapters use `CheckContext.perform` for **each** fetch, page, attachment,
-retry, continuation and analysis operation. It checks window, cancellation,
-revision, account/grant, project lifecycle and remaining budgets before the call
-and again afterwards. Adapters must pass `context.deadline` and remaining budgets
-to their transport, disable transport-level implicit retries, persist accepted
-evidence before returning checkpoints, and use separately scoped provider
-cursors. In-flight reads cannot be recalled. Valid results are checkpointed before
-the post-call time fence, leaving partial progress at the boundary; an expired or
-superseded lease cannot commit. No analysis or subsequent read starts off-window.
-The #114 acquisition framework is installed with an empty provider registry until
-#117–#120 supply qualified adapters: execution records
-`blocked/acquisition_adapter_unavailable`, never successful no-match.
-
-Windows are half-open local-day intervals, bounded by policy and project duration.
-Default missed-run behavior skips late triggers and advances to the next allowed
-occurrence; one second of scheduler polling tolerance is allowed. A wider late
-start requires the policy's explicitly authorized `bounded_late` interval and
-still cannot extend retrieval past the original window. Offline backlogs coalesce
-into one missed-window receipt rather than replaying every occurrence. Unfinished
-runs expire as partial; the next window creates a new logical run and never
-silently resumes an old cursor.
-
-Recurrence skips nonexistent DST local times and records a durable owner-scoped
-`nonexistent_local_time` gap (`list_schedule_gaps`); repeated times fire once at
-the earlier offset. `ProjectCheckDispatcher.status` requires an authenticated
-owner session and reports stale pending work and expired/offline leases. These
-are trusted service APIs; they are not exposed through unauthenticated legacy
-IPC. Provider evidence, publication and outbox completion remain separate stages
-owned by #114 and its dependent issues; scheduler acceptance is not completion.
-
-### Bounded source acquisition — #114
-
-`integrations/acquisition.py` defines the native read-only adapter contract for
-health, capabilities, search, change iteration, source expansion and attachments.
-`ReadContext` contains the authenticated executing session, resolved account
-handle, exact resource constraints, deadline and remaining page/item/byte limits.
-Adapters must honor these limits at their transport, including response decoding,
-and must disable implicit retries and redirects/credential forwarding. Adapter
-versions are mandatory and invalidate old cursors. No provider adapter is enabled
-by this framework; #117–#120 supply and qualify those implementations. An optional
-connection alone still creates no job and performs no read.
-
-`services/source_acquisition.py` runs through the existing leased
-`ProjectCheckWorker`. It reuses account binding resolution and policy guards;
-provider exceptions remain content-free operational error codes. Every accepted
-page, normalized evidence record, source-stream cursor and run acquisition
-checkpoint commits in one SQLite transaction fenced by the active lease generation.
-A crash before commit repeats the read; a crash after commit resumes at the saved
-cursor, including a final page accepted before process death. Source identity is
-connection/resource/provider-ID/version; scoped evidence references additionally
-bind the run and policy. Page receipts preserve accepted evidence IDs and coverage.
-No provider cursor or content is used as an analysis checkpoint.
-
-Cursor scope includes the policy, executing principal, exact source binding and
-grants, query digest and adapter version. A changed query, resource, grant/binding
-scope or adapter version starts the policy's explicit bounded initial lookback.
-Expired cursors permit one bounded resync per source/run and record a coverage gap;
-resync cannot certify coverage outside that bounded history. Incomplete provider
-coverage, budget stops and cursor stalls are partial/failure conditions. Empty,
-fully covered acquisition requires no triage and records quiet `no_match`.
-Nonempty completed acquisition records `coverage.processing=pending`: the existing
-scoped event passes references to downstream required triage/CAPD, supplied by
-#115/#116. Acquisition completion does not claim model processing or delivery
-success. Classification and CAPD record separate monotonic sets of evidence IDs
-in `v2_source_processing`, with current authority and analysis-window checks;
-failed processing cannot rewind acquisition or discard accepted messages.
-
-Normalized MIME is inert structured text with alternative parts and quotes
-preserved. Script/style/embedded-object contents and image/link execution are
-excluded; source links are HTTPS conveniences without embedded credentials.
-Attachments require exact granted resources, an explicit supported content type
-(text, CSV or PDF), and at most 5 MiB within remaining run limits. Reads return
-bytes to trusted native code, never execute them. Provider adapters must validate
-the actual attachment type and scope; declared names/links are not authority.
-Raw MIME is not retained. Normalized content expires after seven days; the worker
-redacts expired, cancelled or revoked evidence while retaining content-free
-provenance. Source tombstones redact prior cached versions. Expiry, revoked access
-and off-window analysis deny content expansion before returning bytes. Cleanup
-also runs on worker ticks when no new job is available. No active-run retention
-extension is enabled by this implementation.
-
-`account.check_result` is a managed private event with one stable
-`source-result:<check-run-id>` identity. The aggregate policy envelope is resolved
-from the durable run; all contributing grants and sources must still validate.
-Events contain run references and coverage, never messages or opaque cursors.
-Publication is retried from terminal receipts through the existing event store's
-replay deduplication. Crash after event acceptance and before local publication
-receipt therefore produces one event. No-match/cancellation stays quiet. A result
-whose authority was revoked remains visible only through authorized operational
-status; revocation never grants permission to publish private evidence. Existing
-event dispatch, subscriptions, queue and outbox remain the downstream path.
-
-### Source-backed findings — #116
-
-`services/findings.py` provides the trusted `FindingService` on `V2Daemon.findings`.
-It shares the acquisition run database and existing outbound queue. This service
-performs no provider read, model call or background monitoring. System Two/workflow
-code supplies a bounded structured interpretation to `record(AccountSession,
-run_id, evidence_ids=..., interpretation=..., audience_user_ids=...)`. Recording
-requires currently expandable, window-authorized evidence and policy authority.
-The independent CAPD checkpoint stores evidence IDs only. Failed checkpoint writes
-can replay the same observation without creating another finding/version.
-
-Interpretations require a kind, bounded summary, explicit canonical subject and
-commitment IDs when known, facts and uncertainty, with optional due date/timezone.
-An unknown date/timezone stays null. Fact predicates distinguish notices, payment
-or submission reports, presence, requirements, deadlines and grades. Every fact
-records its basis (`sender_reported` or `source_observed`) and explicit unit;
-points and percentages are distinct. Current read-only source adapters provide no
-trusted payment/submission outcome verifier, so this API rejects verified-outcome
-predicates and resolved states. A sender statement can never mark a commitment
-completed or a balance unpaid. Extraction remains System Two's responsibility;
-Jev supplies bounded judgments and never canonical IDs, prose or permission.
-
-The implemented finding uses `version` for material revision, `correction_of`
-(finding ID + prior version) for correction relationships, `source_refs` for
-provenance, and `goal_digest` for project-goal association. States are `open`,
-`unresolved`, `withdrawn` and a content-free `redacted` tombstone. Immutable versions
-preserve earlier interpretations. Identity includes policy/project, audience,
-kind, canonical subject and commitment; matching titles never merge records.
-Uncertain identities and quoted-only notices remain separate unresolved findings
-and do not emit automatic commitment alerts. Cross-source duplicates add provenance
-without a material revision. Only strictly newer unquoted source timestamps can
-replace material facts. Summary wording and coverage changes alone do not alert;
-older notices and equal-time conflicting assertions cannot overwrite current facts.
-
-`notify` requires the executing principal and rechecks active policy/revision,
-project lifecycle, every contributing grant and each recipient. It uses the
-existing preferred-channel resolver and outbox. Idempotency is finding/version/
-recipient, deliberately independent of a subsequent preferred-channel change:
-changing a channel does not resend an already queued alert. Queue acceptance is
-pending, never delivery success. `delivery_status` reads each recipient's actual
-outbox outcome; recipients can inspect only their own delivery, and the executing
-principal can inspect all authorized recipients. `view` supports current or exact
-historical versions after current audience/source checks.
-
-Every outbox claim of a finding rechecks authority and current material version.
-Consumers without the authoritative service installed fail closed. Superseded
-pending versions cannot displace newer alerts. A provider send error or expired
-claimed lease is recorded as `ambiguous`, excluded from automatic retries and
-preserved across restart. A later confirmed delivery receipt may mark it delivered;
-no exactly-once provider effect is inferred from an absent acknowledgement. These
-rules apply only to findings; existing reminder/sensor retry behavior is preserved.
-A send already in flight or a recipient's delivered copy cannot be recalled.
-
-Findings retain minimal interpreted facts separately from the seven-day source
-cache: finite policy lifetime plus 90 days, or a one-year review deadline for
-ongoing policies. Raw-cache expiration and policy pause do not delete authorized
-history. New notifications still require an active policy. Current source grants,
-recipient scope, source tombstones and finding retention are checked at every view
-and delivery; project membership is insufficient. Deletion, revocation, grant
-narrowing or finding expiry deny reads immediately, and acquisition cleanup ticks
-remove every dependent version and redact local pending/delivered outbox text.
-Content-free observation hashes and identity tombstones remain for replay safety.
-
-Other memory/cache/checkpoint/UI consumers must retain only the returned
-`{finding_id, version}` reference and resolve through the service each time;
-they must not copy interpreted facts into general memory or task results. The
-implementation creates no whole-mailbox ledger or private-content checkpoint.
-Supported client management is owned by #121 and provider-independent workflow
-composition by #122; this service does not itself perform free-form extraction.
-Deployment backup/export/recovery qualification remains #123's release gate.
-
-### Gmail read-only adapter — #117
-
-The optional Google `mail_read` adapter is implemented on the shared acquisition
-contract. See [Gmail setup, coverage and readiness](gmail-readonly.md) for exact
-label/mailbox resource grants, query semantics, history-driven bounded refresh,
-attachment expansion and the synthetic validation command. Connections alone
-start no monitoring; a real-account pilot remains behind milestone readiness
-and explicit consent gates.
-
-
-### Calendar project read/sync extension — #119
-
-The shipped family-calendar skill now has managed Google `calendar_read` support
-through the existing acquisition service, with independent discovery consent and
-operation-specific routing alongside mail. Policies explicitly bound the calendar
-event window; the existing worker bounds retrieval/analysis time and budgets.
-See [Calendar context and sync](family-calendar.md) for recurring-instance identity,
-all-day/timezone semantics, selected-calendar delta consent, cursor invalidation,
-partial coverage, legacy compatibility and cross-source finding constraints.
-
-
-### Classroom student reads — #120
-
-Optional Google `classroom_read` and separately consented
-`classroom_announcements_read` capabilities use the shared acquisition contract.
-See [Classroom setup, enrollment and coverage](classroom-readonly.md) for exact
-scopes, school restrictions, guardian-only fallback to summary mail, unknown
-assignment fields and bounded refresh limitations. Connections start no monitoring.
+The actual API validates recipient IDs, grants, project access, and duration before
+producing this projection. User interfaces show natural-language schedules; the
+existing scheduler remains responsible for recurrence calculation.
+
+### Timing and lifecycle semantics
+
+“Check email only on Mondays” restricts provider content retrieval and background
+analysis, not just alert delivery. Offer a clear time/window when creating the
+policy. Every background fetch, pagination step, attachment read, retry, and
+continuation rechecks its occurrence window. Stop at the boundary and persist
+partial coverage; never silently continue on Tuesday.
+
+Default missed-run behavior is the next allowed window, with a gap notice in the
+status UI. A user can explicitly authorize a bounded late catch-up policy. Use
+timezone-aware recurrence and test daylight-saving transitions. Authentication
+maintenance is distinct from reading mail; reconnect requires user interaction
+when provider consent has expired or been revoked.
+
+Initial history is bounded and visible. Subsequent checks cover changes since
+the last successfully covered position, even if a message's deadline is much
+later. Query changes require a new baseline or an explicit overlap/backfill;
+never reuse a cursor from a different query/folder/scope. A user-requested one-off
+query is separately authorized work and does not alter the background policy.
+
+Project pause/end/completion/archive suspends new retrieval and invalidates
+queued background work. Recheck at dispatch, provider call, CAPD entry, and
+delivery. Cancellation stops subsequent calls and suppresses delivery; it cannot
+recall bytes already returned by an in-flight read. Resume does not replay every
+missed occurrence or revive stale policy revisions. Connection pause/revocation
+blocks dependent policies without changing unrelated projects or accounts.
+
+Sharing a project never shares its connected accounts. Recipients can receive
+explicitly authorized derived findings without receiving raw-message access.
+Changing project members cannot expand an existing finding's audience.
+
+## Event framework changes
+
+### 1. Bind events to trusted scope
+
+Add a versioned server-owned envelope with publication ID, worker identity,
+owner, connection/grant or household-resource binding, project policy/revision,
+check-run ID, event type/version, and occurrence/observation timestamps. Bind
+these fields from trusted registration and the active authorized run. Payload
+claims about ownership or grants never establish access.
+
+Match subscriptions only within authorized scope before applying existing exact
+payload filters. Recheck grants and active project/policy status at dispatch and
+evidence expansion. Catalog/history/status IPC must filter by authenticated actor;
+the current unscoped automation catalog must not expose private mail metadata.
+
+Initially run native adapters under daemon control. The owner-only socket is a
+same-OS-user trust boundary, not per-worker authentication or a sandbox. Before
+supporting independent limited workers, provide a restricted publication endpoint
+with daemon-issued, revocable worker credentials bound to permitted resources and
+event types; it must not offer registration or general daemon methods. Same-user
+malicious host processes remain outside this isolation guarantee.
+
+Use events such as `account.check_candidates_ready` or
+`account.check_attention_required`. Keep the prompt fixed in the approved
+automation. Publish bounded references and check coverage rather than full
+mailboxes, OAuth tokens, or model-authored instructions. A claimed probability
+is advisory metadata, never a fact about a deadline or successful operation.
+
+### 2. Make dispatch recoverable
+
+Extend existing automation executions with atomic claiming, lease owner/expiry,
+attempt count, next retry time, policy revision, stable queue ID, terminal state,
+and redacted failure code. Reuse the scheduled-worker lease/backoff conventions.
+A daemon dispatch tick drains pending work and recovers expired claims even when
+no new event arrives; `publish_event` can wake that dispatcher rather than own
+the only drain loop. Do not hold a database transaction across network/model work.
+
+Use an idempotent enqueue keyed by execution ID. Test a crash after queue insertion
+but before marking enqueued: recovery must reconnect to the original message,
+not create a second CAPD task. Track queued, processing, completed, cancelled,
+and failed outcomes separately; acceptance/enqueueing is not successful analysis
+or successful notification. Outbox delivery gets its own stable idempotency key
+and recipient-level outcome; document any provider channel that cannot guarantee
+duplicate suppression after an ambiguous send.
+
+### 3. Separate retention from deduplication
+
+Keep deduplication receipts independently of payload history. Today deduplication
+depends on a history row that pruning can delete. Retain receipt/tombstone IDs for
+the supported replay horizon and reject expired replays; avoid a claim of eternal
+exactly-once processing. Never prune evidence or events required by pending,
+leased, retryable, or active executions. Preserve required evidence until those
+runs finish, subject to revocation/deletion rules that invalidate access.
+
+Separate publication deduplication, policy/check-run deduplication, provider
+resource-version deduplication, finding reconciliation, and notification
+deduplication. One source event may legitimately serve two authorized projects.
+Repeated unrelated wording must not merge distinct assignments or invoices.
+
+### 4. Project event evidence into V3 explicitly
+
+Create a shared bounded renderer for triggering evidence, used by the legacy V3
+context path and the projection path. Include source IDs, coverage/freshness,
+scope-checked source excerpts, and uncertainty for curation, planning, tactical
+execution, and review as needed. Extend input manifests/receipts so tests can
+prove which evidence reached each decision.
+
+Authenticate and validate references before loading. Mark provider text and
+attachments as external untrusted data, separate from the stored prompt and
+runtime constraints. Subject lines, quoted messages, calendar descriptions, and
+attachments cannot grant permissions, change recipients, or activate skills/tools.
+Source expansion rechecks access and timing. Oversized evidence uses bounded
+pagination or explicit partial status; truncation cannot become “nothing found.”
+
+## Provider adapter contract
+
+Expose common operations for capabilities/health, bounded search/list, source
+read, permitted attachment read, and change iteration. Each call requires an
+execution context with authenticated actor, connection, grant, optional active
+project policy/occurrence, deadline, cancellation, and budget. No implicit account.
+Ad hoc reads use the same service with their own authenticated task scope.
+
+Adapters preserve provider IDs, timestamps, versions, and provenance. Normalize
+transport/MIME/HTML deterministically; do not remove quoted evidence needed for
+interpretation or execute scripts/remote images. Fetch attachments only when
+allowed and needed, with size/type limits and existing authorized asset handling.
+Links in messages do not authorize arbitrary browsing or credential forwarding.
+
+Provider-specific cursors remain opaque. Persist accepted page results and their
+replay identities durably before advancing progress. Track acquisition separately
+from classification/analysis so a model failure cannot make a message disappear
+behind a committed cursor. An expired cursor causes an explicitly bounded resync
+and overlap deduplication, with a visible coverage gap if completeness is unknown.
+Provider errors, throttling, inaccessible folders, and missing attachments produce
+partial/blocked/failed results rather than a clean no-match.
+
+- **Gmail:** initial bounded retrieval and incremental mailbox history; recover
+  from expired history IDs. Use `gmail.readonly`; do not request send/modify scopes.
+  See [scopes](https://developers.google.com/workspace/gmail/api/auth/scopes) and
+  [synchronization](https://developers.google.com/workspace/gmail/api/guides/sync).
+- **Outlook/Hotmail:** Microsoft Graph with delegated `Mail.Read` for personal
+  Outlook.com/Hotmail and eligible work/school accounts. Delta is folder-scoped;
+  persist folder coverage and continuation/delta links separately. An Inbox-only
+  baseline must not claim to cover school messages moved by rules. See
+  [mail permissions](https://learn.microsoft.com/en-us/graph/api/user-list-messages?view=graph-rest-1.0)
+  and [message delta](https://learn.microsoft.com/en-us/graph/api/message-delta?view=graph-rest-1.0).
+- **Google Calendar:** separately consented calendar discovery and event reading
+  for selected calendars. Preserve recurring-instance identity, exceptions,
+  cancellations, all-day dates, and timezones. Calendar presence is context, not
+  proof an assignment is done. See [scopes](https://developers.google.com/workspace/calendar/api/auth)
+  and [incremental sync](https://developers.google.com/workspace/calendar/api/guides/sync).
+- **Google Classroom:** validate account/course role and school restrictions.
+  Use only necessary read scopes for course discovery, coursework and explicitly
+  needed submission/announcement metadata. A parent's guardian relationship must
+  not be interpreted as student API access. Guardian summary mail can be handled
+  by the email adapters. Preserve missing due dates and missing grading weights;
+  never infer the “30%” example from points alone. See
+  [roles](https://developers.google.com/workspace/classroom/guides/key-concepts/user-types)
+  and [coursework listing](https://developers.google.com/workspace/classroom/reference/rest/v1/courses.courseWork/list).
+
+Optional dependencies load only for enabled providers. Missing configuration or
+an SDK cannot prevent daemon startup or unrelated integrations from working.
+Future MCP adapters must meet this same scope, provenance, error, cancellation,
+and timing contract; opaque tools without those guarantees are insufficient.
+
+## OAuth and data handling
+
+Use provider-supported OAuth authorization-code flows with PKCE/state, exact
+registered callbacks, expiry checking, and established client libraries. Use a
+system browser and a supported local callback for the local deployment; a desktop
+public client must not rely on a bundled client secret. Request provider-supported
+offline access as needed. Handle refresh rotation/concurrency and reauthorization
+without exposing credentials to models, skills, project folders, IPC responses,
+event history, logs, or generic tool arguments.
+
+Implement an OS credential-store backend for desktop installations. Headless hosts
+need an explicitly configured encrypted credential backend with a separately
+protected key; no plaintext fallback. Account metadata stores only references.
+Disconnect invalidates grants, stops work, clears tokens/local caches according
+to the declared policy, and attempts provider revocation where supported. If
+offline, report local disconnection and remaining provider-side revocation work.
+Do not migrate existing Telegram/Discord secrets as an unrelated prerequisite.
+
+Google marks Gmail read access restricted. Public distribution must complete
+the applicable verification; transmitting/storing restricted data can require
+a security assessment. Remote Jev and System Two processing counts as data
+leaving the host and must be included in the deployment review. Explain enabled
+processors to the user and evaluate retention/training terms before rollout.
+See [restricted-scope verification](https://developers.google.com/identity/protocols/oauth2/production-readiness/restricted-scope-verification)
+and [Workspace data-use policy](https://developers.google.com/workspace/workspace-api-user-data-developer-policy).
+
+Separate short-lived source caches, operational receipts, and user-authorized
+durable findings. Specify allowed retention/deletion for each under provider
+requirements; do not copy whole mailboxes into the Memory Ledger. Derived findings
+retain source/audience restrictions and correction/deletion behavior. A deleted
+or revoked source cannot remain secretly readable from a prompt cache, checkpoint,
+export, or memory entry. Restrict stored excerpts and scrub/redact or invalidate
+dependent views under the applicable retention policy.
+
+## System One, System Two, and findings
+
+Use reviewed bounded questions with Noul/Choice/Score for message relevance,
+presence of an actionable commitment, evidence of a material change, and urgency
+relative to explicit project criteria. Run independent questions in parallel on
+bounded authorized content. Record question/model version, probabilities, and
+source IDs without recording private content in telemetry.
+
+Jev does not extract free-form assignment descriptions, invent dates, compose
+prompts/tool calls, authorize recipients, or declare provider effects successful.
+System Two performs open-ended interpretation, structured extraction when needed,
+reconciliation, planning, and user-facing language. Skills provide reusable
+expertise without containing account credentials or personal grants. Follow
+[System One boundaries](v3-hierarchical-capd/06-system-one-check-act.md) and
+[progressive reveal](v3-hierarchical-capd/03-progressive-tool-revealing.md).
+
+Deterministic filters can publish directly when they establish relevance. When
+Jev is ambiguous, defer to bounded CAPD interpretation within policy. When Jev
+fails, retain the candidate as pending/degraded for retry or CAPD interpretation;
+do not mark it irrelevant, bypass required V3 System One checks, or silently
+replace all bounded classification with a high-volume LLM scan. Saturated budgets
+produce partial coverage and a visible pending count.
+
+Findings distinguish reported statements from verified outcomes. Reconcile a
+deadline correction against the prior finding and notify once about the material
+change; an older quoted email must not overwrite the latest authoritative notice.
+Ambiguous child/assignment identity remains unresolved. Overdue-bill notices are
+not payment verification. No-match notification is quiet by default; user-requested
+digests may include a truthful coverage summary. Important findings include the
+source, date, why they meet the project goal, and remaining uncertainty.
+
+Provider-native read tools receive stable native IDs and capabilities such as
+`mail_read`, `calendar_read`, and `classroom_read`, reviewed Jev questions, and
+deterministic service checks before exposure and again on execution. Account IDs
+are runtime resources, not one registered tool per account. Registry changes
+follow the existing restart/versioning contract. No artifact IDs enter curation.
+
+## User surfaces and operational visibility
+
+Desktop and TUI expose the same service contracts:
+
+- Connections: add account, capability consent, owner, health, pause, reconnect,
+  disconnect, and explicit account grants. No credentials returned after entry.
+- Project checks: goals, source accounts/resources, natural-language schedule,
+  retrieval window, initial lookback, duration, skills, recipients, activate/pause,
+  last/next run, coverage, and pending authorization or reconnect needs.
+- Work/automation views: check runs, partial failures, missed windows, candidate
+  counts, CAPD handoff, findings, notification delivery, and retry/cancellation.
+- Conversation: configure and revise these through authorized native management
+  capabilities; display a concrete policy summary and resolve missing information
+  before activation. Do not require users to enter RRULEs or provider scope strings.
+
+Healthy no-change runs stay quiet. Notify on requested findings, meaningful
+corrections, persistent failures, or required action. Metrics include checks/pages,
+coverage, candidate counts, model calls, handoff latency, retries, delivery outcome,
+and suppressed duplicates; logs exclude message bodies, subjects, tokens, and
+attachment names. Sleeping/offline hosts show stale status and apply the selected
+missed-run policy; they cannot promise continuous coverage.
+
+## Implementation sequence and acceptance gates
+
+Each stage is a reviewable change with disposable fixtures. No household-account
+read is needed for unit/integration tests. Complete prerequisite gates before
+enabling private-data pilot use; this document is not authorization to connect
+or read any real account.
+
+### Stage 1 — Strengthen the shared event framework
+
+- [ ] Add scoped envelope/worker bindings and actor-filtered catalog/history APIs.
+- [ ] Add execution leases, recovery tick, idempotent queue insertion, lifecycle
+  callbacks, independent replay receipts, and safe history retention.
+- [ ] Add explicit bounded event-evidence context and manifests for both V3 paths.
+- [ ] Preserve existing sensor event schemas and fixed-prompt subscriptions.
+  Legacy unscoped workers can continue only for their existing trusted local
+  use; private account event types require scoped registration. Require explicit
+  reconciliation for ambiguous scope rather than guessing owners.
+
+Primary files: `automations.py`, `daemon.py`, `ipc.py`, `runtime.py`, queue/storage
+interfaces, V3 `context.py`/`projections.py`, and retention/migration code. Add a
+small dispatch service under `services/` rather than a second event subsystem.
+
+Gate: existing event tests plus cross-owner denial, spoofed scope, disabled
+subscription, concurrent claim, crash at each handoff, duplicate after pruning,
+pending-history preservation, bounded backlog, cancellation, and exact evidence
+receipt tests. A synthetic sensor event must reach the selected V3 engine with
+its evidence visible and no duplicate task after restart.
+
+### Stage 2 — Account connections and credential boundary
+
+- [ ] Add provider capabilities, connection/grant stores, credential-backend API,
+  account service authorization, health, OAuth lifecycle, and redacted IPC.
+- [ ] Implement native optional provider registration without changing messaging
+  channel routing or making providers mandatory at startup.
+- [ ] Add connection/grant management in Desktop and TUI.
+
+Primary areas: `integrations/`, `daemon.py`, `ipc.py`, runtime wiring, Desktop
+settings, and TUI integrations. New modules should separate accounts/credentials
+from existing message-channel configuration.
+
+Gate: two owners/two accounts of one provider, grant narrowing/revocation,
+scope denial, account-selection ambiguity, OAuth state/PKCE errors, refresh races,
+missing secure store, reconnect, disconnect during a run, and absence of secrets
+from logs, persisted project files, IPC, and inference requests.
+
+### Stage 3 — Project policies and scheduled acquisition
+
+- [ ] Add validated policies/check runs and lifecycle guards with revision fencing.
+- [ ] Extend existing scheduled dispatch with a typed deterministic `project_check`
+  job handler, rather than using an LLM merely to poll an account. Preserve
+  `direct` reminder and `pdca` modes. Provider fetches run outside scheduler ticks
+  with bounded concurrency and durable claims.
+- [ ] Persist acquisition progress and publish scoped results into the hardened
+  event mechanism. Add truthful no-match/partial completion and quiet status.
+- [ ] Add project configuration flow and versioned APIs shared by all clients.
+
+Primary areas: project services/stores, `core/scheduled_tasks.py`,
+`services/scheduled_worker.py`, the new acquisition service, daemon/IPC,
+`desktop/src/`, and TUI. Update `docs/project-config.md` to distinguish project
+intent from authorized operational policies.
+
+Gate: Monday-only zero off-window reads (including retries/attachments), timezone
+transitions, missed runs, overlap, pagination, changed queries, stale revisions,
+end dates, goal edits, pause/archive/completion, revoked grants, and two projects
+using one account without duplicating delivery or bypassing either policy.
+
+### Stage 4 — Gmail and the first vertical slice
+
+- [ ] Implement Gmail read adapter, opaque history handling, bounded initial scan,
+  MIME normalization, source expansion, and permitted attachment reads.
+- [ ] Add reviewed System One questions and native read-tool reveal/execution gates.
+- [ ] Add provider-independent school-coordination skill, findings reconciliation,
+  audience-scoped persistence, and idempotent outbox notifications.
+
+Gate: synthetic buried assignment notice saying “30%”, irrelevant newsletter,
+missing due date, corrected deadline, quoted old notice, ambiguous child,
+duplicate notice, attachment-only deadline, expired history, revoked source,
+malicious email instructions, Jev ambiguity/outage, and a no-match run. Assert
+source-backed output, one material-change alert, visible coverage, and no writes
+to Gmail. Run an explicitly consented local read-only pilot after provider and
+processor prerequisites pass.
+
+### Stage 5 — Outlook/Hotmail and provider interchangeability
+
+- [ ] Implement delegated Graph mail access, folder coverage, delta recovery,
+  provider IDs, rate limits, and account health.
+- [ ] Add bills workflow using the same policy/evidence/finding services.
+
+Gate: shared conformance fixtures for both mail adapters; personal and eligible
+work/school account flows; school mail moved outside Inbox; expired delta token;
+partial folder access; 429/backoff; immutable-source mapping where needed; and
+overdue notice followed by payment/correction evidence. Skills must not require
+provider-specific mailbox syntax.
+
+### Stage 6 — Google Calendar and Classroom
+
+- [ ] Implement Calendar read context with explicit selected calendars and sync.
+- [ ] Implement Classroom read access only for validated account/course roles,
+  with precise unavailable/permission-denied states.
+- [ ] Reconcile cross-source evidence without treating missing access as absence.
+
+Gate: recurring calendar exceptions/cancellations, all-day/timezone semantics,
+expired sync token, calendar permission changes, guardian-only denial, permitted
+student/course access, school-admin restriction, unknown submission status, and
+grade weight absent from coursework. Cross-source duplicates yield one finding
+while preserving separate supporting evidence and audiences.
+
+### Stage 7 — Release and optional event-driven operation
+
+- [ ] Complete provider verification, processor/retention review, install guidance,
+  migration rehearsal, observability, and permission-focused client acceptance.
+- [ ] Add explicitly authorized continuous polling/provider push if needed,
+  through existing scoped publication and dispatch; enforce policy windows and
+  validate provider notifications. Push is a hint to retrieve permitted changes,
+  never trusted assignment content or permission to read.
+- [ ] Evaluate MCP transport only against adapter conformance and operational
+  needs. Generic plugin installation and hosted infrastructure are separate work.
+
+Gate: restart/offline/catch-up exercises, household account separation,
+revocation/deletion propagation, notification delivery ambiguity, feature-disabled
+startup, staged opt-in, and rollback without losing existing sensor automations.
+
+## Migration, rollout, and remaining decisions
+
+Use additive/versioned schema migrations and feature flags disabled by default.
+Preserve worker, event, automation, project, schedule, and account identities;
+never infer account grants from old payloads or project sharing. Migrate trusted
+legacy sensor records explicitly without silently sharing their history. Existing
+scheduled prompts remain valid; typed acquisition jobs are new records. Disabling
+account checks stops dispatch and retrieval while leaving existing tools and
+channels usable. Before downgrading binaries, stop new job kinds and document
+the supported database compatibility path.
+
+The first deliverable is Stages 1–4: one local, project-scoped weekly school-mail
+review through Gmail, with the adapter interface and tests prepared for Outlook.
+Ship Outlook before describing the experience as provider-independent in release
+materials. Calendar and Classroom add context after the mail path is reliable.
+
+Resolve these before the relevant implementation stage; the recommended local
+defaults above allow framework work to start:
+
+- Supported headless credential backends and OS support (Stage 2).
+- Exact provider registrations, production OAuth publication model, and permitted
+  inference-provider data terms (before real-account pilot/public release).
+- Default evidence/finding retention, replay horizon, and redaction of existing
+  checkpoints/exports (Stages 1–2, before private data persists).
+- Numeric Jev thresholds, batch/page/model budgets, retry limits, and overload
+  policy, calibrated on held-out synthetic school/bill cases before Stage 4 pilot.
+- Whether users need continuous observation or hosted availability after the
+  scheduled local experience is validated (Stage 7).
+
+Success means detecting a consequential notice within the authorized checking
+window, explaining its significance with evidence, preserving uncertainty,
+recognizing corrections, delivering only to permitted people, and recovering
+from interruptions without losing work or repeatedly notifying the household.

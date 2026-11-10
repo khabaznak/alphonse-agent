@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "split": "holdout",
+  "cases": [
+    {
+      "id": "fixture-note-heldout",
+      "goal": "Read the synthetic health note and report the medicine in Spanish.",
+      "fixture": {
+        "permissions": [
+          "read"
+        ],
+        "files": {
+          "Receta.md": "Medicine: cetirizine\n"
+        },
+        "expected_response": "La nota dice cetirizine.",
+        "expected_content": "Medicine: cetirizine"
+      },
+      "provider_script": {
+        "baseline": "deterministic_adapters:markdown-prescription-no-ocr, adapted synthetic task understanding",
+        "candidate": [
+          {
+            "kind": "tool",
+            "tool_id": "native.fixture_read",
+            "arguments": {
+              "path": "Receta.md"
+            }
+          },
+          {
+            "kind": "answer",
+            "text": "La nota dice cetirizine."
+          }
+        ]
+      },
+      "oracle": {
+        "allowed_statuses": [
+          "completed"
+        ],
+        "response_contains": [
+          "cetirizine"
+        ],
+        "effects": {},
+        "max_questions": 0
+      }
+    }
+  ]
+}

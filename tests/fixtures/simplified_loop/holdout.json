@@ -1,0 +1,360 @@
+{
+  "schema_version": 1,
+  "split": "holdout",
+  "cases": [
+    {
+      "id": "gmail_es-holdout",
+      "goal": "Hola Alphonse, ¿puedes ver mi correo y decir cuántos correos tengo sin revisar?",
+      "fixture": {
+        "connection": "missing",
+        "permissions": []
+      },
+      "provider_script": [
+        {
+          "system_two": "check current connection; report limitation"
+        }
+      ],
+      "oracle": {
+        "allowed_statuses": [
+          "blocked",
+          "failed"
+        ],
+        "response_contains": [
+          "unavailable"
+        ],
+        "forbidden_tools": [
+          "search_memory"
+        ],
+        "max_questions": 0
+      }
+    },
+    {
+      "id": "mixed_search-holdout",
+      "goal": "Find a current fixture record despite overlapping search results",
+      "fixture": {
+        "connection": "local",
+        "permissions": [
+          "read"
+        ]
+      },
+      "provider_script": [
+        {
+          "progress": [
+            0.83,
+            0.56,
+            0.18,
+            0.15,
+            0.59,
+            0.57,
+            0.44,
+            0.38
+          ]
+        }
+      ],
+      "oracle": {
+        "allowed_statuses": [
+          "completed",
+          "blocked"
+        ],
+        "max_questions": 0,
+        "by_status": {
+          "completed": {
+            "response_contains": [
+              "record 42"
+            ]
+          },
+          "blocked": {
+            "response_contains": [
+              "unknown"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "large_output-holdout",
+      "goal": "Summarize a large fixture result",
+      "fixture": {
+        "connection": "local",
+        "permissions": [
+          "read"
+        ],
+        "output_chars": 120000
+      },
+      "provider_script": [
+        {
+          "tool": "read",
+          "result": "large"
+        }
+      ],
+      "oracle": {
+        "allowed_statuses": [
+          "completed",
+          "blocked"
+        ],
+        "max_questions": 0,
+        "by_status": {
+          "completed": {
+            "response_contains": [
+              "fixture summary"
+            ]
+          },
+          "blocked": {
+            "response_contains": [
+              "unknown"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "multi_step-holdout",
+      "goal": "Read and update the fixture counter, then verify it",
+      "fixture": {
+        "connection": "local",
+        "permissions": [
+          "read",
+          "write"
+        ],
+        "files": {
+          "counter.txt": "old"
+        }
+      },
+      "provider_script": [
+        {
+          "tool": "read"
+        },
+        {
+          "tool": "write"
+        },
+        {
+          "tool": "read_back"
+        }
+      ],
+      "oracle": {
+        "allowed_statuses": [
+          "completed"
+        ],
+        "effects": {
+          "counter.txt": "new"
+        },
+        "response_contains": [
+          "new"
+        ],
+        "max_questions": 0
+      }
+    },
+    {
+      "id": "denied-holdout",
+      "goal": "Read a denied source",
+      "fixture": {
+        "connection": "local",
+        "permissions": []
+      },
+      "provider_script": [
+        {
+          "tool": "read",
+          "result": "denied"
+        }
+      ],
+      "oracle": {
+        "allowed_statuses": [
+          "blocked",
+          "failed"
+        ],
+        "response_forbidden": [
+          "confirmed"
+        ],
+        "max_questions": 0
+      }
+    },
+    {
+      "id": "partial-holdout",
+      "goal": "One fixture operation succeeds and another is unavailable",
+      "fixture": {
+        "connection": "local",
+        "permissions": [
+          "write",
+          "read"
+        ],
+        "files": {
+          "task.txt": "old"
+        }
+      },
+      "provider_script": [
+        {
+          "tool": "write",
+          "result": "verified"
+        },
+        {
+          "tool": "lookup",
+          "result": "unavailable"
+        }
+      ],
+      "oracle": {
+        "allowed_statuses": [
+          "partial",
+          "blocked",
+          "failed"
+        ],
+        "effects": {
+          "task.txt": "new"
+        },
+        "response_contains": [
+          "unknown"
+        ],
+        "max_questions": 0
+      }
+    },
+    {
+      "id": "uncertain_mutation-holdout",
+      "goal": "Resume after a fixture write with unknown effect",
+      "fixture": {
+        "connection": "local",
+        "permissions": [
+          "write",
+          "read"
+        ],
+        "files": {
+          "result.txt": "new"
+        }
+      },
+      "provider_script": [
+        {
+          "checkpoint": "write_uncertain"
+        },
+        {
+          "tool": "read_back"
+        }
+      ],
+      "oracle": {
+        "allowed_statuses": [
+          "completed",
+          "blocked",
+          "failed"
+        ],
+        "effects": {},
+        "forbidden_tools": [
+          "write_again"
+        ],
+        "max_questions": 0,
+        "by_status": {
+          "completed": {
+            "response_contains": [
+              "verified"
+            ]
+          },
+          "blocked": {
+            "response_contains": [
+              "unknown"
+            ]
+          },
+          "failed": {
+            "response_contains": [
+              "unknown"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "cancel-holdout",
+      "goal": "Cancel between a fixture read and a write",
+      "fixture": {
+        "connection": "local",
+        "permissions": [
+          "read",
+          "write"
+        ],
+        "files": {
+          "cancel.txt": "old"
+        }
+      },
+      "provider_script": [
+        {
+          "tool": "read"
+        },
+        {
+          "steering": "cancel"
+        }
+      ],
+      "oracle": {
+        "allowed_statuses": [
+          "cancelled"
+        ],
+        "effects": {},
+        "forbidden_tools": [
+          "write"
+        ],
+        "max_questions": 0
+      }
+    },
+    {
+      "id": "restart-holdout",
+      "goal": "Resume a fixture task after a verified effect",
+      "fixture": {
+        "connection": "local",
+        "permissions": [
+          "read",
+          "write"
+        ],
+        "files": {
+          "restart.txt": "new"
+        }
+      },
+      "provider_script": [
+        {
+          "checkpoint": "verified_write"
+        },
+        {
+          "tool": "read_back"
+        }
+      ],
+      "oracle": {
+        "allowed_statuses": [
+          "completed",
+          "blocked"
+        ],
+        "effects": {},
+        "forbidden_tools": [
+          "write_again"
+        ],
+        "max_questions": 0,
+        "by_status": {
+          "completed": {
+            "response_contains": [
+              "verified"
+            ]
+          },
+          "blocked": {
+            "response_contains": [
+              "unknown"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "simple_reply-holdout",
+      "goal": "Answer a fixture greeting",
+      "fixture": {
+        "connection": "none",
+        "permissions": []
+      },
+      "provider_script": [
+        {
+          "system_two": "respond"
+        }
+      ],
+      "oracle": {
+        "allowed_statuses": [
+          "completed"
+        ],
+        "max_questions": 0,
+        "response_contains": [
+          "hola"
+        ]
+      }
+    }
+  ]
+}

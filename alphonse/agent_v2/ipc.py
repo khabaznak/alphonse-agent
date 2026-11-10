@@ -303,6 +303,7 @@ class V2DaemonServer:
         self._server: socket.socket | None = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._socket_identity: tuple[int, int] | None = None
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -314,6 +315,8 @@ class V2DaemonServer:
             pass
         self._server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self._server.bind(str(self.socket_path))
+        bound_stat = self.socket_path.lstat()
+        self._socket_identity = (bound_stat.st_dev, bound_stat.st_ino)
         os.chmod(self.socket_path, 0o600)
         self._server.listen(16)
         self._server.settimeout(0.5)
@@ -329,10 +332,21 @@ class V2DaemonServer:
             self._server.close()
         if self._thread is not None and self._thread.is_alive():
             self._thread.join(timeout=5)
-        try:
-            self.socket_path.unlink()
-        except FileNotFoundError:
-            pass
+        # A server may be stopped without having bound this path, or another
+        # owner may have replaced the socket since it was bound. Never remove
+        # an endpoint that this instance did not create.
+        identity = self._socket_identity
+        self._socket_identity = None
+        if identity is not None:
+            try:
+                current = self.socket_path.lstat()
+                if (current.st_dev, current.st_ino) == identity:
+                    self.socket_path.unlink()
+            except FileNotFoundError:
+                pass
+
+    def is_serving(self) -> bool:
+        return self._thread is not None and self._thread.is_alive() and not self._stop.is_set()
 
     def _serve(self) -> None:
         assert self._server is not None
@@ -594,8 +608,10 @@ class V2DaemonServer:
             return self.daemon.legacy_skill_migration(actor_user_id=str(params.get("actor_user_id") or ""), operation=str(params.get("operation") or "preview"), artifact_id=str(params.get("artifact_id") or ""), review_token=str(params.get("review_token") or ""), instructions=str(params.get("instructions") or ""), location=location)
         if method in {"artifacts", "relocate_artifact", "reconcile_artifacts", "update_artifact", "set_artifact_enabled", "delete_artifact", "unassigned_artifacts", "attach_artifact_to_skill"}:
             raise ValueError("artifact_catalog_retired: use legacy_skill_migration preview/apply/rollback; no files were changed")
+        if method == "skills_overview":
+            return self.daemon.list_skills_overview(actor_user_id=str(params.get("actor_user_id") or ""))
         if method == "skills":
-            return self.daemon.list_skills_workspace(actor_user_id=str(params.get("actor_user_id") or ""))
+            return self.daemon.list_skills_workspace(actor_user_id=str(params.get("actor_user_id") or ""), skill_id=str(params.get("skill_id") or ""))
         if method == "skill_appearance":
             return self.daemon.skill_appearance(actor_user_id=str(params.get("actor_user_id") or ""), skill_id=str(params.get("skill_id") or ""))
         if method == "set_skill_appearance":

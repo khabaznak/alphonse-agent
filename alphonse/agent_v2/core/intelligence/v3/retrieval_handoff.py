@@ -23,7 +23,9 @@ INSTRUCTIONS = (
 
 def prepare_handoff(task, state, outcome):
     """Offer one remaining-source pass and one synthesis pass, without changing criteria."""
-    if outcome.status != PhaseStatus.BLOCKED or set(outcome.blockers) != {'tactical_stage_no_new_progress'}:
+    if outcome.status != PhaseStatus.BLOCKED or set(outcome.blockers) not in (
+        {'tactical_stage_no_new_progress'}, {'tactical_progress_uncertain'},
+    ):
         return None
     allowed = {SideEffectClass.READ_ONLY, SideEffectClass.USER_RESPONSE}
     if any(set(stage.allowed_side_effects) - allowed for stage in state.phase.subgoals):

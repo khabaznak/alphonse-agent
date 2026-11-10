@@ -1146,3 +1146,56 @@ def test_desktop_progress_retry_wait_and_non_desktop_terminal_guard(tmp_path):
     task.metadata["channel"]["integration_id"] = "telegram"
     daemon._publish_task_progress(StateSnapshot(metadata={"task_state": task.to_dict()}), status="failed")
     assert not runtime.activity_events
+
+
+def test_ipc_stop_does_not_remove_another_servers_socket():
+    import socket
+    import tempfile
+    from pathlib import Path
+    from alphonse.agent_v2.ipc import V2DaemonServer
+
+    with tempfile.TemporaryDirectory(dir="/tmp", prefix="alp-ipc-") as directory:
+        path = Path(directory) / "daemon.sock"
+        server = V2DaemonServer(SimpleNamespace(), path)
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            listener.bind(str(path))
+            server.stop()
+            assert path.exists()
+        finally:
+            listener.close()
+
+
+def test_ipc_stop_preserves_replacement_socket():
+    import socket
+    import tempfile
+    from pathlib import Path
+    from alphonse.agent_v2.ipc import V2DaemonServer
+
+    with tempfile.TemporaryDirectory(dir="/tmp", prefix="alp-ipc-") as directory:
+        path = Path(directory) / "daemon.sock"
+        server = V2DaemonServer(SimpleNamespace(), path)
+        replacement = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            server.start()
+            path.unlink()
+            replacement.bind(str(path))
+            server.stop()
+            assert path.exists()
+        finally:
+            server.stop()
+            replacement.close()
+
+
+def test_daemon_exits_when_ipc_listener_dies():
+    import threading
+    daemon = object.__new__(V2Daemon)
+    daemon._stop = threading.Event()
+    daemon.ipc = SimpleNamespace(is_serving=lambda: False)
+    calls = []
+    daemon.start = lambda: calls.append("start")
+    daemon.stop = lambda: calls.append("stop")
+
+    daemon.run_forever()
+
+    assert calls == ["start", "stop"]

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sqlite3
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -134,6 +135,8 @@ class V2RuntimeHost:
     communication_router: CommunicationRouter
     conversation_store: SQLiteConversationStore
     project_checks: ProjectCheckService | None = None
+    coding_skill_service: Any | None = None
+    coding_skill_error: str = ""
     integration_management: Any | None = None
     # #6 installs the protected native adapter; skill selection grants no access.
     care_records: CareRecords | None = None
@@ -177,6 +180,7 @@ def build_runtime_host(
     communication_thread_store: SQLiteCommunicationThreadStore | None = None,
     conversation_store: SQLiteConversationStore | None = None,
     skill_store: SkillStore | None = None,
+    coding_skill_service: Any | None = None,
 ) -> V2RuntimeHost:
     reset_state()
     provided_tools = tools is not None
@@ -184,6 +188,15 @@ def build_runtime_host(
     user_store = user_store or V2UserStore()
     conversation_store = conversation_store or SQLiteConversationStore()
     skill_store = skill_store or SkillStore(user_store.skills_root())
+    coding_skill_error = ""
+    if coding_skill_service is None:
+        from alphonse.agent_v2.coding_skill_runtime import build_configured_coding_skill_service
+        try:
+            coding_skill_service = build_configured_coding_skill_service(users=user_store, skills=skill_store)
+        except (ValueError, OSError, sqlite3.Error) as exc:
+            reason = str(exc)
+            coding_skill_error = reason if reason.startswith(('coding_skill_', 'coding_container_', 'coding_agent_')) else 'coding_skill_configuration_unavailable'
+            logger.warning('Codex skill delegation unavailable: %s', coding_skill_error)
     intelligence_engine_settings_store = intelligence_engine_settings_store or SQLiteIntelligenceEngineSettingsStore()
     channel = CommunicationChannel(
         queue,
@@ -218,6 +231,45 @@ def build_runtime_host(
     # Legacy rows remain solely for migration/provenance and privacy guards.
     schedule_store = schedule_store or ScheduledTaskStore()
     outbox = outbox or SQLiteOutboundStore()
+    def _scheduled_delivery_allowed(message: Any) -> bool:
+        metadata = message.metadata
+        scheduled = schedule_store.get_task(str(metadata.get("scheduled_task_id") or ""))
+        if scheduled is None:
+            return False
+        if scheduled.status == "cancelled":
+            schedule_store.mark_occurrence_cancelled(str(metadata.get("occurrence_key") or ""))
+            return False
+        if (scheduled.status not in {"active", "paused", "completed"}
+                or not schedule_store.occurrence_belongs_to_schedule(
+                    occurrence_key=str(metadata.get("occurrence_key") or ""),
+                    scheduled_task_id=scheduled.scheduled_task_id,
+                )):
+            return False
+        if metadata.get("scheduled_question"):
+            question = question_store.get_question(message.question_id) if message.question_id else None
+            if question is None or question.status != "pending":
+                if question is not None and question.status in {"cancelled", "expired"}:
+                    schedule_store.mark_occurrence_cancelled(str(metadata.get("occurrence_key") or ""))
+                return False
+        recipient = str(scheduled.origin_channel.get("reminder_recipient_user_id") or "").strip()
+        if metadata.get("scheduled_delivery_evidence") or metadata.get("scheduled_question"):
+            recipient = str(message.audience_user_id or "")
+        if recipient:
+            if recipient != message.audience_user_id:
+                schedule_store.mark_occurrence_failed(str(metadata.get("occurrence_key") or ""), error="scheduled_delivery_recipient_changed")
+                return False
+            resolved = communication_router.resolver.resolve_outbound_address(
+                alphonse_user_id=recipient, preferred_integration_id=message.integration_id,
+            )
+            address = resolved.address if resolved.resolved else None
+            permitted = bool(address is not None and address.alphonse_user_id == recipient and
+                             (address.integration_id, address.provider_key, address.channel_target) ==
+                             (message.integration_id, message.provider_key, message.channel_target))
+            if not permitted:
+                schedule_store.mark_occurrence_failed(str(metadata.get("occurrence_key") or ""), error="scheduled_delivery_recipient_unavailable")
+            return permitted
+        return True
+    outbox.scheduled_delivery_guard = _scheduled_delivery_allowed
     integration_store = integration_store or SQLiteIntegrationStore()
     skill_bindings = SkillBindings(integration_store, user_store, skill_store)
     artifact_resources.bindings = skill_bindings
@@ -394,6 +446,8 @@ def build_runtime_host(
         memory_settings_store=memory_settings_store,
         system_one_settings_store=system_one_settings_store,
         skill_store=skill_store,
+        coding_skill_service=coding_skill_service,
+        coding_skill_error=coding_skill_error,
         communication_router=communication_router,
         conversation_store=conversation_store,
         ui_events=ui_events,
@@ -419,7 +473,7 @@ def refresh_runtime_media_tools(runtime: V2RuntimeHost) -> None:
 
 def refresh_runtime_artifacts(runtime: V2RuntimeHost) -> None:
     """Refresh native management tools after artifact catalog or skill changes."""
-    registry = build_native_tool_registry(runtime.web_tools_settings_store.get(), runtime.asset_store, runtime.media_tools_settings_store.get(), runtime.artifact_store, lambda: refresh_runtime_artifacts(runtime), runtime.user_store, runtime.skill_store, management_runtime=runtime)
+    registry = build_native_tool_registry(runtime.web_tools_settings_store.get(), runtime.asset_store, runtime.media_tools_settings_store.get(), runtime.artifact_store, lambda: refresh_runtime_artifacts(runtime), runtime.user_store, runtime.skill_store, management_runtime=runtime, coding_skill_service=runtime.coding_skill_service)
     # Artifact programs are not members of the executable tool registry.
     runtime.core.tools = registry
 

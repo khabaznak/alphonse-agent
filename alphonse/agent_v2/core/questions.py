@@ -252,12 +252,21 @@ class SQLiteQuestionStore:
                     """,
                     (task_id, child_task_id, interrupt.question_id, now.isoformat(), now.isoformat()),
                 )
-                conn.execute(
+                # A generated child ID must never replace the experimental
+                # engine's transactional state, even on an ID collision.
+                child_cursor = conn.execute(
                     """
                     INSERT OR REPLACE INTO v2_task_checkpoints (
                       task_id, task_state_json, status, owner_id, project_id, correlation_id,
                       version, created_at, updated_at
-                    ) VALUES (?, ?, 'waiting_user', ?, ?, ?, 1, ?, ?)
+                    ) SELECT ?, ?, 'waiting_user', ?, ?, ?, 1, ?, ?
+                      WHERE NOT EXISTS (
+                        SELECT 1 FROM v2_task_checkpoints
+                        WHERE task_id = ? AND CASE WHEN json_valid(task_state_json)
+                          AND json_type(task_state_json) = 'object'
+                          THEN COALESCE(json_extract(task_state_json, '$.intelligence_engine'), '') = 'single_loop_experimental'
+                          ELSE 1 END
+                      )
                     """,
                     (
                         child_task_id,
@@ -276,8 +285,11 @@ class SQLiteQuestionStore:
                         task.correlation_id,
                         now.isoformat(),
                         now.isoformat(),
+                        child_task_id,
                     ),
                 )
+                if child_cursor.rowcount != 1:
+                    raise ValueError("task_checkpoint_experimental_writer_required")
         return interrupt
 
     def bind_delivery_metadata(self, *, question_id: str, metadata: dict[str, Any]) -> bool:
@@ -324,7 +336,9 @@ class SQLiteQuestionStore:
         version = int(existing["version"]) + 1 if existing is not None else 1
         created_at = str(existing["created_at"]) if existing is not None else now
         checkpoint_status = str(status or task.status or "running")
-        # A stale parked writer must not overwrite the queued checkpoint created by an answer.
+        # A stale parked writer must not overwrite the queued checkpoint created
+        # by an answer. Experimental single-loop snapshots additionally require
+        # their version-fenced writer, never this legacy replacement path.
         cursor = conn.execute(
             """
             INSERT OR REPLACE INTO v2_task_checkpoints (
@@ -332,6 +346,13 @@ class SQLiteQuestionStore:
               version, created_at, updated_at
             ) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
               WHERE NOT EXISTS (SELECT 1 FROM v2_questions WHERE question_id = ? AND status = 'answered')
+                AND NOT EXISTS (
+                    SELECT 1 FROM v2_task_checkpoints
+                    WHERE task_id = ? AND CASE WHEN json_valid(task_state_json)
+                      AND json_type(task_state_json) = 'object'
+                      THEN COALESCE(json_extract(task_state_json, '$.intelligence_engine'), '') = 'single_loop_experimental'
+                      ELSE 1 END
+                )
             """,
             (
                 task_id,
@@ -344,8 +365,22 @@ class SQLiteQuestionStore:
                 created_at,
                 now,
                 task.metadata.get("pending_question_id") if checkpoint_status == "waiting_user" else None,
+                task_id,
             ),
         )
+        if not cursor.rowcount:
+            protected = conn.execute(
+                "SELECT task_state_json FROM v2_task_checkpoints WHERE task_id = ?", (task_id,),
+            ).fetchone()
+            if protected is not None:
+                try:
+                    saved = json.loads(protected["task_state_json"])
+                except (TypeError, ValueError):
+                    raise ValueError("task_checkpoint_existing_state_invalid") from None
+                if not isinstance(saved, dict):
+                    raise ValueError("task_checkpoint_existing_state_invalid")
+                if saved.get("intelligence_engine") == "single_loop_experimental":
+                    raise ValueError("task_checkpoint_experimental_writer_required")
         return version if cursor.rowcount else version - 1
 
     def list_work_checkpoints(self, *, owner_id: str, view: str = "active", limit: int = 50, offset: int = 0, project_id: str = "") -> list[dict[str, Any]]:
@@ -408,8 +443,12 @@ class SQLiteQuestionStore:
                 UPDATE v2_task_checkpoints
                 SET status=?, updated_at=?
                 WHERE task_id=? AND status IN ('queued','running','waiting_user')
+                  AND (? = 'cancelled' OR CASE WHEN json_valid(task_state_json)
+                    AND json_type(task_state_json) = 'object'
+                    THEN COALESCE(json_extract(task_state_json, '$.intelligence_engine'), '') != 'single_loop_experimental'
+                    ELSE 0 END)
                 """,
-                (normalized, _now().isoformat(), str(task_id or "").strip()),
+                (normalized, _now().isoformat(), str(task_id or "").strip(), normalized),
             )
         return cursor.rowcount == 1
 

@@ -20,15 +20,39 @@ from alphonse.agent_v2.database import connect_database, default_database_path
 class SQLiteMessageQueue:
     """SQLite-backed queue with processing recovery and explicit acknowledgement."""
 
-    def __init__(self, db_path: str | Path = ":memory:", *, lease_owner: str = "default") -> None:
+    def __init__(self, db_path: str | Path = ":memory:", *, lease_owner: str = "default",
+                 experimental_claim_fencing: bool = False) -> None:
         self.db_path = str(db_path)
         self._lock = RLock()
         self.lease_owner = str(lease_owner or "default").strip() or "default"
+        if type(experimental_claim_fencing) is not bool:
+            raise ValueError("claim_fencing_invalid")
+        if experimental_claim_fencing and self.db_path == ":memory:":
+            raise ValueError("claim_fencing_file_database_required")
+        self.experimental_claim_fencing = experimental_claim_fencing
         self._memory_connection: sqlite3.Connection | None = None
         if self.db_path == ":memory:":
             self._memory_connection = sqlite3.connect(":memory:", check_same_thread=False)
             self._memory_connection.row_factory = sqlite3.Row
         self._ensure_schema()
+        if self.experimental_claim_fencing:
+            self._enable_experimental_claim_fencing()
+
+    def _enable_experimental_claim_fencing(self) -> None:
+        """Test-only entry point; old workers must be drained before any use."""
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            _ensure_columns(conn, "v2_inbound_messages", {"claim_generation": "TEXT NOT NULL DEFAULT ''"})
+            column = next(row for row in conn.execute("PRAGMA table_info(v2_inbound_messages)")
+                          if row["name"] == "claim_generation")
+            if str(column["type"]).upper() != "TEXT" or column["notnull"] != 1 or column["dflt_value"] != "''":
+                raise ValueError("claim_fencing_schema_invalid")
+            if conn.execute("""SELECT 1 FROM v2_inbound_messages WHERE claim_generation IS NULL
+                OR (claim_generation != '' AND (length(claim_generation) != 32
+                    OR claim_generation GLOB '*[^0-9a-f]*')) LIMIT 1""").fetchone():
+                raise ValueError("claim_fencing_generation_invalid")
+            if conn.execute("SELECT 1 FROM v2_inbound_messages WHERE status='processing' AND claim_generation='' LIMIT 1").fetchone():
+                raise ValueError("claim_fencing_legacy_inflight")
 
     @classmethod
     def default(cls, *, lease_owner: str = "default") -> "SQLiteMessageQueue":
@@ -96,6 +120,185 @@ class SQLiteMessageQueue:
     def dequeue(self, selector: MessageSelector | None = None) -> QueuedMessage | None:
         return self.claim_next(selector=selector)
 
+    def stage_scheduled_handoff(self, task: Any, question_store: Any, schedule_store: Any) -> bool:
+        """Atomically pin a checkpoint before yielding to a verified occurrence."""
+        if self.experimental_claim_fencing:
+            raise RuntimeError("claim_fencing_scheduled_handoff_unavailable")
+        if (self.db_path == ":memory:" or self.db_path != str(getattr(question_store, "db_path", ""))
+                or self.db_path != str(getattr(schedule_store, "db_path", ""))):
+            return False
+        metadata = task.metadata if isinstance(task.metadata, dict) else {}
+        if not task.message_id or not task.task_id:
+            return False
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            guard = _legacy_unfenced_guard(conn, "q")
+            active = conn.execute(
+                f"""SELECT q.user_id FROM v2_inbound_messages q WHERE q.message_id=? AND q.status='processing' AND q.lease_owner=? {guard}
+                   AND (q.user_id=? OR (json_valid(q.metadata_json) AND EXISTS (
+                     SELECT 1 FROM v2_questions question WHERE question.question_id=json_extract(q.metadata_json, '$.answered_question_id')
+                       AND question.task_id=? AND question.respondent_user_id=q.user_id AND question.status='answered')))""",
+                (task.message_id, self.lease_owner, task.user, task.task_id),
+            ).fetchone()
+            due = conn.execute(
+                """SELECT 1 FROM v2_inbound_messages q
+                   JOIN v2_scheduled_task_executions e ON e.queued_message_id=q.message_id
+                   JOIN v2_scheduled_tasks s ON s.scheduled_task_id=e.scheduled_task_id
+                   WHERE ((q.status='pending' AND e.status='enqueued') OR
+                          (q.status='retry_wait' AND q.next_attempt_at<=? AND e.status='processing'))
+                     AND s.status='active' AND s.owner_user_id=q.user_id
+                     AND json_valid(q.metadata_json)
+                     AND json_extract(q.metadata_json, '$.source')='scheduled_task'
+                     AND json_extract(q.metadata_json, '$.occurrence_key')=e.occurrence_key
+                   LIMIT 1""", (_now_iso(),),
+            ).fetchone()
+            if active is None or due is None:
+                return False
+            if "v3_handoff_history_source_ids" not in metadata:
+                sources = metadata.get("conversation_sources") or []
+                metadata["v3_handoff_history_source_ids"] = [
+                    str(item.get("source_id")) for item in sources
+                    if isinstance(item, dict) and item.get("source_id")
+                ]
+            question_store.save_task_checkpoint(task, status="queued", connection=conn)
+            conn.execute(
+                "INSERT OR REPLACE INTO v2_scheduled_handoffs(message_id, task_id, owner_id) VALUES(?,?,?)",
+                (task.message_id, task.task_id, str(active["user_id"])),
+            )
+            return True
+
+    def handoff_task_id(self, message_id: str, owner_id: str) -> str:
+        with self._connect() as conn:
+            row = conn.execute("SELECT task_id FROM v2_scheduled_handoffs WHERE message_id=? AND owner_id=?",
+                               (message_id, owner_id)).fetchone()
+        return str(row[0]) if row else ""
+
+    def stage_delivery_wait(self, task: Any, question_store: Any, outbox_message_id: str, recipient_user_id: str) -> bool:
+        if self.experimental_claim_fencing:
+            raise RuntimeError("claim_fencing_delivery_wait_unavailable")
+        if self.db_path == ":memory:" or self.db_path != str(getattr(question_store, "db_path", "")):
+            return False
+        occurrence = str(task.metadata.get("occurrence_key") or "")
+        if not occurrence or not task.task_id or not task.message_id:
+            return False
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            guard = _legacy_unfenced_guard(conn, "q")
+            if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_outbox'").fetchone() is None:
+                return False
+            row = conn.execute(
+                f"""SELECT q.user_id FROM v2_inbound_messages q JOIN v2_outbox o ON o.outbox_message_id=?
+                   WHERE q.message_id=? AND q.status='processing' AND q.lease_owner=? {guard}
+                     AND (q.user_id=? OR (json_valid(q.metadata_json) AND EXISTS (
+                       SELECT 1 FROM v2_questions question WHERE question.question_id=json_extract(q.metadata_json, '$.answered_question_id')
+                         AND question.task_id=? AND question.respondent_user_id=q.user_id AND question.status='answered')))
+                     AND o.task_id=? AND o.audience_user_id=? AND o.status IN ('pending','claimed','retry_wait')
+                     AND json_valid(o.metadata_json) AND json_extract(o.metadata_json, '$.occurrence_key')=?""",
+                (outbox_message_id, task.message_id, self.lease_owner, task.user, task.task_id,
+                 task.task_id, recipient_user_id, occurrence),
+            ).fetchone()
+            if row is None:
+                return False
+            question_store.save_task_checkpoint(task, status="queued", connection=conn)
+            conn.execute(
+                "INSERT OR REPLACE INTO v2_scheduled_handoffs(message_id, task_id, owner_id, wait_outbox_id) VALUES(?,?,?,?)",
+                (task.message_id, task.task_id, str(row["user_id"]), outbox_message_id),
+            )
+            return True
+
+    def release_scheduled_handoff(self, message_id: str, *, lease_owner: str) -> bool:
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            guard = _legacy_unfenced_guard(conn)
+            handoff = conn.execute("SELECT wait_outbox_id FROM v2_scheduled_handoffs WHERE message_id=?", (message_id,)).fetchone()
+            wait = bool(handoff and handoff["wait_outbox_id"])
+            retry_at = (_now() + timedelta(seconds=5)).isoformat() if wait else ""
+            cursor = conn.execute(
+                f"""UPDATE v2_inbound_messages SET status=?, processing_at='', lease_owner='',
+                   lease_expires_at='', next_attempt_at=?,
+                   attempt_count=MAX(attempt_count-1, 0),
+                   sequence=(SELECT MAX(sequence)+1 FROM v2_inbound_messages)
+                   WHERE message_id=? AND status='processing' AND lease_owner=? {guard}
+                     AND EXISTS (SELECT 1 FROM v2_scheduled_handoffs WHERE message_id=?)""",
+                ("retry_wait" if wait else "pending", retry_at, message_id, lease_owner, message_id),
+            )
+            return cursor.rowcount == 1
+
+    def cancel_scheduled_handoff(self, task: Any, question_store: Any, *, lease_owner: str) -> bool:
+        """Cancel the checkpoint and queued task in the same transaction."""
+        if self.db_path != str(getattr(question_store, "db_path", "")):
+            return False
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            guard = _legacy_unfenced_guard(conn, "q")
+            row = conn.execute(
+                f"""SELECT 1 FROM v2_inbound_messages q JOIN v2_scheduled_handoffs h ON h.message_id=q.message_id
+                   WHERE q.message_id=? AND q.status='processing' AND q.lease_owner=? AND h.task_id=? AND h.owner_id=q.user_id {guard}""",
+                (task.message_id, lease_owner, task.task_id),
+            ).fetchone()
+            if row is None:
+                return False
+            task.status = "cancelled"
+            task.outcome = {"status": "cancelled", "reason": "Execution was cancelled by the kill switch."}
+            question_store.save_task_checkpoint(task, status="cancelled", connection=conn)
+            conn.execute("DELETE FROM v2_inbound_messages WHERE message_id=?", (task.message_id,))
+            conn.execute("DELETE FROM v2_scheduled_handoffs WHERE message_id=?", (task.message_id,))
+            conn.execute("UPDATE v2_inbound_receipts SET status='cancelled', updated_at=? WHERE message_id=?", (_now_iso(), task.message_id))
+            return True
+
+    def resume_confirmed_scheduled_delivery(self, outbox_message_id: str, question_store: Any) -> bool:
+        """Resume only a previously unconfirmed task after matching provider evidence."""
+        if self.db_path == ":memory:" or self.db_path != str(getattr(question_store, "db_path", "")):
+            return False
+        from alphonse.agent_v2.core.intelligence.task_state import TaskState
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            guard = _legacy_unfenced_guard(conn, "q")
+            if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_outbox'").fetchone() is None:
+                return False
+            row = conn.execute(
+                """SELECT c.task_state_json, c.task_id, c.owner_id, e.occurrence_key
+                   FROM v2_outbox o
+                   JOIN v2_task_checkpoints c ON c.task_id=o.task_id AND c.status='failed'
+                   JOIN v2_scheduled_task_executions e ON e.queued_message_id=c.task_id
+                   JOIN v2_scheduled_tasks s ON s.scheduled_task_id=e.scheduled_task_id AND s.owner_user_id=c.owner_id
+                   WHERE o.outbox_message_id=? AND o.status='delivered' AND s.status='active' AND e.status='unconfirmed'
+                     AND json_valid(o.metadata_json) AND json_extract(o.metadata_json, '$.occurrence_key')=e.occurrence_key
+                     AND json_valid(c.task_state_json)
+                     AND json_extract(c.task_state_json, '$.outcome.reason')='scheduled_delivery_outcome_unavailable'
+                     AND json_extract(c.task_state_json, '$.metadata.v3_unconfirmed_delivery_outbox_id')=o.outbox_message_id""",
+                (outbox_message_id,),
+            ).fetchone()
+            if row is None:
+                return False
+            task = TaskState.from_dict(json.loads(row["task_state_json"]))
+            queued = conn.execute(
+                f"""SELECT q.user_id FROM v2_inbound_messages q WHERE q.message_id=? AND q.status='failed' {guard}
+                   AND (q.user_id=? OR (json_valid(q.metadata_json) AND EXISTS (
+                       SELECT 1 FROM v2_questions question
+                       WHERE question.question_id=json_extract(q.metadata_json, '$.answered_question_id')
+                         AND question.task_id=? AND question.respondent_user_id=q.user_id AND question.status='answered'
+                   )))""", (task.message_id, task.user, task.task_id),
+            ).fetchone()
+            if queued is None or task.user != row["owner_id"]:
+                return False
+            retry = task.metadata.get("v3_tactical_delivery_retry")
+            if isinstance(retry, dict) and task.hierarchical_state.get("status") == "blocked":
+                task.hierarchical_state["status"] = "running"
+            task.status = "running"
+            task.outcome = None
+            for key in ("v3_failure_response", "v3_terminal_error_type", "v3_unconfirmed_delivery_outbox_id", "v3_route"):
+                task.metadata.pop(key, None)
+            question_store.save_task_checkpoint(task, status="queued", connection=conn)
+            conn.execute("INSERT OR REPLACE INTO v2_scheduled_handoffs(message_id,task_id,owner_id,wait_outbox_id) VALUES(?,?,?,'')",
+                         (task.message_id, task.task_id, str(queued["user_id"])))
+            conn.execute("""UPDATE v2_inbound_messages SET status='pending', attempt_count=0, last_error='',
+                next_attempt_at='', sequence=(SELECT MAX(sequence)+1 FROM v2_inbound_messages) WHERE message_id=? AND status='failed'""",
+                (task.message_id,))
+            conn.execute("""UPDATE v2_scheduled_task_executions SET status='processing', error='', last_error='', updated_at=?
+                WHERE occurrence_key=? AND status='unconfirmed'""", (_now_iso(), row["occurrence_key"]))
+            return True
+
     def claim_next(
         self,
         selector: MessageSelector | None = None,
@@ -105,14 +308,26 @@ class SQLiteMessageQueue:
         include_owned: bool = False,
     ) -> QueuedMessage | None:
         owner = str(lease_owner or self.lease_owner or "default").strip() or "default"
-        now = _now()
-        lease_expires_at = (now + timedelta(seconds=max(1, int(lease_seconds)))).isoformat()
+        if self.experimental_claim_fencing and include_owned:
+            raise ValueError("claim_fencing_owned_claim_requires_receipt")
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            # Sample after obtaining the writer lock, not before a potentially
+            # long lock wait that could otherwise create an expired claim.
+            now = _now()
+            lease_expires_at = (now + timedelta(seconds=max(1, int(lease_seconds)))).isoformat()
+            legacy_guard = "" if self.experimental_claim_fencing else _legacy_unfenced_guard(conn)
+            holds = _exclude_supersession_holds(conn)
+            # Event receipts currently lack a generation after queue-row removal;
+            # fenced event claims are unsupported until that lifecycle is fenced.
+            identity_guard = (" AND trim(user_id) != '' AND trim(message_id) != '' AND message_id NOT LIKE 'event:%'"
+                              if self.experimental_claim_fencing else "")
             if include_owned:
                 owned = conn.execute(
                     f"""
                     SELECT * FROM v2_inbound_messages
                     WHERE status = 'processing' AND lease_owner = ?
+                      {legacy_guard} {holds}
                       {_where(selector)}
                     ORDER BY sequence LIMIT 1
                     """,
@@ -124,6 +339,7 @@ class SQLiteMessageQueue:
                 f"""
                 SELECT * FROM v2_inbound_messages
                 WHERE (status = 'pending' OR (status = 'retry_wait' AND next_attempt_at <= ?))
+                  {legacy_guard} {holds} {identity_guard}
                   {_where(selector)}
                 ORDER BY sequence LIMIT 1
                 """,
@@ -131,18 +347,27 @@ class SQLiteMessageQueue:
             ).fetchone()
             if row is None:
                 return None
+            generation_assignment = ", claim_generation = ?" if self.experimental_claim_fencing else ""
+            generation_values = ()
+            if self.experimental_claim_fencing:
+                from .claim_fence import new_claim_generation
+                generation = new_claim_generation()
+                if generation == str(row["claim_generation"] or ""):
+                    raise ValueError("claim_generation_reused")
+                generation_values = (generation,)
             cursor = conn.execute(
-                """
+                f"""
                 UPDATE v2_inbound_messages
                 SET status = 'processing',
                     processing_at = ?,
                     lease_owner = ?,
                     lease_expires_at = ?,
-                    attempt_count = attempt_count + 1
+                    attempt_count = attempt_count + 1 {generation_assignment}
                 WHERE message_id = ?
                   AND (status = 'pending' OR (status = 'retry_wait' AND next_attempt_at <= ?))
+                  {legacy_guard} {holds} {identity_guard}
                 """,
-                (now.isoformat(), owner, lease_expires_at, str(row["message_id"]), now.isoformat()),
+                (now.isoformat(), owner, lease_expires_at, *generation_values, str(row["message_id"]), now.isoformat()),
             )
             if cursor.rowcount != 1:
                 return None
@@ -150,26 +375,144 @@ class SQLiteMessageQueue:
                 "SELECT * FROM v2_inbound_messages WHERE message_id = ?",
                 (str(row["message_id"]),),
             ).fetchone()
-        return _row_to_message(updated) if updated is not None else None
+        return _row_to_message(updated, include_claim=self.experimental_claim_fencing) if updated is not None else None
 
     def ack(self, message_id: str, lease_owner: str | None = None, *, outcome: str = "completed") -> bool:
         if outcome not in {"completed", "cancelled", "processing"}:
             raise ValueError("invalid_queue_outcome")
         owner = str(lease_owner or self.lease_owner or "default").strip() or "default"
         with self._connect() as conn:
-            cursor = conn.execute("""DELETE FROM v2_inbound_messages
-                WHERE message_id=? AND status='processing' AND lease_owner=?""", (message_id, owner))
+            conn.execute("BEGIN IMMEDIATE")
+            guard = _legacy_unfenced_guard(conn)
+            cursor = conn.execute(f"""DELETE FROM v2_inbound_messages
+                WHERE message_id=? AND status='processing' AND lease_owner=? {guard}""", (message_id, owner))
             if cursor.rowcount:
+                conn.execute("DELETE FROM v2_scheduled_handoffs WHERE message_id=?", (message_id,))
                 conn.execute("UPDATE v2_inbound_receipts SET status=?,updated_at=? WHERE message_id=?",
                              (outcome, _now_iso(), message_id))
             return cursor.rowcount == 1
+
+    def ack_fenced(self, receipt: Any, *, outcome: str = "completed", clock: Any = None) -> bool:
+        """Experimental same-database ack; not yet wired to the daemon."""
+        from .claim_fence import ClaimReceipt, ClaimSuperseded, ClaimFenceUnavailable, _read_claim, _time
+        if outcome not in {"completed", "cancelled", "processing"}:
+            raise ValueError("invalid_queue_outcome")
+        if not self.experimental_claim_fencing or not isinstance(receipt, ClaimReceipt):
+            return False
+        clock = clock or _now
+        try:
+            with self._connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                start = _time(clock())
+                expiry = _read_claim(conn, receipt, start)
+                holds = _exclude_supersession_holds(conn)
+                cursor = conn.execute(f"""DELETE FROM v2_inbound_messages WHERE message_id=? AND user_id=?
+                    AND status='processing' AND lease_owner=? AND claim_generation=? {holds}""",
+                    (receipt.message_id, receipt.user_id, receipt.lease_owner, receipt.claim_generation))
+                if cursor.rowcount:
+                    conn.execute("DELETE FROM v2_scheduled_handoffs WHERE message_id=?", (receipt.message_id,))
+                    conn.execute("UPDATE v2_inbound_receipts SET status=?,updated_at=? WHERE message_id=?",
+                                 (outcome, _now_iso(), receipt.message_id))
+                    end = _time(clock())
+                    if end < start or end >= expiry:
+                        raise ClaimSuperseded("claim_expired_or_clock_reversed")
+                return cursor.rowcount == 1
+        except (ClaimSuperseded, ClaimFenceUnavailable):
+            return False
+
+    def release_scheduled_handoff_fenced(self, receipt: Any, *, clock: Any = None) -> bool:
+        """Experimental release of a staged handoff; staging is not yet wired."""
+        from .claim_fence import ClaimReceipt, ClaimSuperseded, ClaimFenceUnavailable, _read_claim, _time
+        if not self.experimental_claim_fencing or not isinstance(receipt, ClaimReceipt):
+            return False
+        clock = clock or _now
+        try:
+            with self._connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                start = _time(clock())
+                expiry = _read_claim(conn, receipt, start)
+                handoff = conn.execute("SELECT wait_outbox_id FROM v2_scheduled_handoffs WHERE message_id=? AND owner_id=?",
+                                       (receipt.message_id, receipt.user_id)).fetchone()
+                if handoff is None:
+                    return False
+                wait = bool(handoff["wait_outbox_id"])
+                retry_at = (_now() + timedelta(seconds=5)).isoformat() if wait else ""
+                holds = _exclude_supersession_holds(conn)
+                cursor = conn.execute(f"""UPDATE v2_inbound_messages SET status=?, processing_at='', lease_owner='',
+                    lease_expires_at='', next_attempt_at=?, attempt_count=MAX(attempt_count-1, 0),
+                    sequence=(SELECT MAX(sequence)+1 FROM v2_inbound_messages)
+                    WHERE message_id=? AND user_id=? AND status='processing' AND lease_owner=? AND claim_generation=? {holds}""",
+                    ("retry_wait" if wait else "pending", retry_at, receipt.message_id, receipt.user_id,
+                     receipt.lease_owner, receipt.claim_generation))
+                if cursor.rowcount:
+                    end = _time(clock())
+                    if end < start or end >= expiry:
+                        raise ClaimSuperseded("claim_expired_or_clock_reversed")
+                return cursor.rowcount == 1
+        except (ClaimSuperseded, ClaimFenceUnavailable):
+            return False
+
+    def renew_claim_fenced(self, receipt: Any, *, lease_seconds: int,
+                           is_cancelled: Any, clock: Any = None) -> bool:
+        """Renew one exact live experimental lease; no heartbeat is started.
+
+        The caller must supply a nonblocking cancellation check bound to the
+        active task and stop renewing before relinquishing ownership. Its
+        correctness and the scheduler lifecycle are not established here.
+        """
+        from .claim_fence import ClaimReceipt, ClaimSuperseded, ClaimFenceUnavailable, _read_claim, _time
+        if not self.experimental_claim_fencing or not isinstance(receipt, ClaimReceipt):
+            return False
+        if type(lease_seconds) is not int or not 1 <= lease_seconds <= 3600 or not callable(is_cancelled):
+            raise ValueError("claim_renewal_arguments_invalid")
+        clock = clock or _now
+        if not callable(clock):
+            raise ValueError("claim_renewal_arguments_invalid")
+
+        def ensure_not_cancelled() -> None:
+            try:
+                allowed = is_cancelled() is False
+            except Exception:
+                allowed = False
+            if not allowed:
+                raise ClaimSuperseded("claim_cancelled_or_unavailable")
+
+        try:
+            ensure_not_cancelled()
+            with self._connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                ensure_not_cancelled()
+                start = _time(clock())
+                expiry = _read_claim(conn, receipt, start)
+                renewed_expiry = max(expiry, start + timedelta(seconds=lease_seconds))
+                holds = _exclude_supersession_holds(conn)
+                cursor = conn.execute(f"""UPDATE v2_inbound_messages SET lease_expires_at=?
+                    WHERE message_id=? AND user_id=? AND status='processing'
+                    AND lease_owner=? AND claim_generation=? {holds}""",
+                    (renewed_expiry.isoformat(), receipt.message_id, receipt.user_id,
+                     receipt.lease_owner, receipt.claim_generation))
+                if cursor.rowcount != 1:
+                    return False
+                ensure_not_cancelled()
+                end = _time(clock())
+                if end < start or end >= expiry:
+                    raise ClaimSuperseded("claim_expired_or_clock_reversed")
+                _read_claim(conn, receipt, end)
+                return True
+        except (ClaimSuperseded, ClaimFenceUnavailable):
+            return False
 
     def finish_event(self, message_id: str, outcome: str) -> None:
         if outcome not in {"completed", "cancelled", "failed"}:
             raise ValueError("invalid_queue_outcome")
         with self._connect() as conn:
-            conn.execute("""UPDATE v2_inbound_receipts SET status=?,updated_at=?
-                WHERE message_id=? AND status='processing'""", (outcome, _now_iso(), message_id))
+            conn.execute("BEGIN IMMEDIATE")
+            guard = _legacy_unfenced_guard(conn, "q")
+            conn.execute(f"""UPDATE v2_inbound_receipts SET status=?,updated_at=?
+                WHERE message_id=? AND status='processing' AND NOT EXISTS (
+                  SELECT 1 FROM v2_inbound_messages q WHERE q.message_id=v2_inbound_receipts.message_id
+                  {('AND NOT (' + guard.removeprefix(' AND ') + ')') if guard else 'AND 0'}
+                )""", (outcome, _now_iso(), message_id))
 
     def cancel_event(self, message_id: str) -> bool:
         """Create a tombstone even if cancellation races the first insertion."""
@@ -177,10 +520,13 @@ class SQLiteMessageQueue:
             raise ValueError("event_message_required")
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            guard = _legacy_unfenced_guard(conn)
             receipt = conn.execute("SELECT status FROM v2_inbound_receipts WHERE message_id=?", (message_id,)).fetchone()
             if receipt is not None and receipt[0] in {"completed", "failed", "processing"}:
                 return False
-            row = conn.execute("SELECT status FROM v2_inbound_messages WHERE message_id=?", (message_id,)).fetchone()
+            row = conn.execute(f"SELECT status FROM v2_inbound_messages WHERE message_id=? {guard}", (message_id,)).fetchone()
+            if row is None and conn.execute("SELECT 1 FROM v2_inbound_messages WHERE message_id=?", (message_id,)).fetchone():
+                return False  # A generation-bearing row belongs to its fenced lifecycle.
             if row is not None and row[0] == "processing":
                 return False  # Active CAPD cancellation uses the daemon kill switch.
             conn.execute("DELETE FROM v2_inbound_messages WHERE message_id=?", (message_id,))
@@ -202,10 +548,12 @@ class SQLiteMessageQueue:
         owner = str(lease_owner or self.lease_owner or "default").strip() or "default"
         retry_at = _coerce_iso(next_attempt_at or _now())
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            guard = _legacy_unfenced_guard(conn)
             row = conn.execute(
-                """
+                f"""
                 SELECT attempt_count FROM v2_inbound_messages
-                WHERE message_id = ? AND status = 'processing' AND lease_owner = ?
+                WHERE message_id = ? AND status = 'processing' AND lease_owner = ? {guard}
                 """,
                 (str(message_id or "").strip(), owner),
             ).fetchone()
@@ -214,7 +562,7 @@ class SQLiteMessageQueue:
             attempts = int(row["attempt_count"] or 0)
             terminal = max_attempts is not None and attempts >= max(1, int(max_attempts))
             cursor = conn.execute(
-                """
+                f"""
                 UPDATE v2_inbound_messages
                 SET status = ?,
                     processing_at = '',
@@ -222,7 +570,7 @@ class SQLiteMessageQueue:
                     lease_expires_at = '',
                     next_attempt_at = ?,
                     last_error = ?
-                WHERE message_id = ? AND status = 'processing' AND lease_owner = ?
+                WHERE message_id = ? AND status = 'processing' AND lease_owner = ? {guard}
                 """,
                 (
                     "failed" if terminal else "retry_wait",
@@ -242,14 +590,18 @@ class SQLiteMessageQueue:
     def reclaim_expired(self, *, now: datetime | None = None, exclude_owner: str = "") -> int:
         timestamp = (now or _now()).isoformat()
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            guard = " AND COALESCE(claim_generation, '') != ''" if self.experimental_claim_fencing else _legacy_unfenced_guard(conn)
+            holds = _exclude_supersession_holds(conn)
             cursor = conn.execute(
-                """
+                f"""
                 UPDATE v2_inbound_messages
                 SET status = 'pending',
                     processing_at = '',
                     lease_owner = '',
                     lease_expires_at = ''
                 WHERE status = 'processing'
+                  {guard} {holds}
                   AND (? = '' OR lease_owner != ?)
                   AND (
                     (lease_expires_at != '' AND lease_expires_at <= ?)
@@ -337,6 +689,10 @@ class SQLiteMessageQueue:
                 CREATE TABLE IF NOT EXISTS v2_inbound_receipts (
                   message_id TEXT PRIMARY KEY,status TEXT NOT NULL,updated_at TEXT NOT NULL
                 ) STRICT;
+                CREATE TABLE IF NOT EXISTS v2_scheduled_handoffs (
+                  message_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, owner_id TEXT NOT NULL,
+                  wait_outbox_id TEXT NOT NULL DEFAULT ''
+                ) STRICT;
                 CREATE TABLE IF NOT EXISTS v2_inbound_messages (
                   message_id TEXT PRIMARY KEY,
                   sequence INTEGER NOT NULL,
@@ -362,6 +718,7 @@ class SQLiteMessageQueue:
             )
             conn.execute("""INSERT OR IGNORE INTO v2_inbound_receipts
                 SELECT message_id,status,queued_at FROM v2_inbound_messages WHERE message_id LIKE 'event:%'""")
+            _ensure_columns(conn, "v2_scheduled_handoffs", {"wait_outbox_id": "TEXT NOT NULL DEFAULT ''"})
             _ensure_columns(
                 conn,
                 "v2_inbound_messages",
@@ -422,10 +779,15 @@ def _values(selector: MessageSelector | None) -> tuple[str, ...]:
     return tuple(values)
 
 
-def _row_to_message(row: sqlite3.Row) -> QueuedMessage:
+def _row_to_message(row: sqlite3.Row, *, include_claim: bool = False) -> QueuedMessage:
     timestamp = datetime.fromisoformat(str(row["timestamp"]))
     queued_at = datetime.fromisoformat(str(row["queued_at"]))
     metadata = json.loads(str(row["metadata_json"] or "{}"))
+    claim = None
+    if include_claim:
+        from .claim_fence import ClaimReceipt
+        claim = ClaimReceipt(str(row["message_id"]), str(row["user_id"]), str(row["lease_owner"]),
+                             str(row["claim_generation"]))
     return QueuedMessage(
         message=CoreMessage(
             timestamp=timestamp,
@@ -440,7 +802,25 @@ def _row_to_message(row: sqlite3.Row) -> QueuedMessage:
         message_id=str(row["message_id"]),
         queued_at=queued_at,
         sequence=int(row["sequence"]),
+        claim_receipt=claim,
     )
+
+
+def _legacy_unfenced_guard(conn: sqlite3.Connection, alias: str = "") -> str:
+    """Do not let this binary's legacy operations consume fenced rows."""
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(v2_inbound_messages)")}
+    if "claim_generation" not in columns:
+        return ""
+    if alias not in {"", "q"}:
+        raise ValueError("claim_guard_alias_invalid")
+    prefix = f"{alias}." if alias else ""
+    return f" AND COALESCE({prefix}claim_generation, '') = ''"
+
+
+def _exclude_supersession_holds(conn: sqlite3.Connection) -> str:
+    if conn.execute("SELECT 1 FROM main.sqlite_master WHERE type='table' AND name='v2_supersession_holds'").fetchone():
+        return " AND NOT EXISTS (SELECT 1 FROM main.v2_supersession_holds h WHERE h.message_id=v2_inbound_messages.message_id)"
+    return ""
 
 
 def _ensure_columns(conn: sqlite3.Connection, table: str, columns: dict[str, str]) -> None:

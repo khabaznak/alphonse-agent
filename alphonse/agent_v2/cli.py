@@ -22,6 +22,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers.add_parser("status", help="Show v2 daemon health and queue status")
     subparsers.add_parser("stop", help="Gracefully stop the v2 daemon")
+    coding = subparsers.add_parser("configure-codex-sandbox", help="Select a trusted immutable coding sandbox image")
+    coding.add_argument("image_id", help="Docker image ID (sha256:...), or 'off' to disable")
     return parser
 
 
@@ -35,6 +37,17 @@ def main(argv: list[str] | None = None) -> int:
         return show_status()
     if args.command == "stop":
         return stop_daemon()
+    if args.command == "configure-codex-sandbox":
+        from alphonse.agent_v2.users import V2UserStore
+        value = '' if args.image_id == 'off' else args.image_id
+        try:
+            V2UserStore.default().set_coding_sandbox_image_id(value)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        print('Codex sandbox configured; restart the daemon for the change to take effect.' if value
+              else 'Codex sandbox disabled; restart the daemon for the change to take effect.')
+        return 0
     return 2
 
 

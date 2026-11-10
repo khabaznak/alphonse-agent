@@ -131,6 +131,14 @@
         "false": "The supplied passages already suffice or no historical information is involved."
       }
     },
+    "native.coding_skill_build": {
+      "type": "noul",
+      "instructions": "Does this request require creating a reusable skill that includes software?",
+      "criteria": {
+        "true": "A reusable skill needs software built for the requested workflow.",
+        "false": "The request only uses an existing skill, needs no new software, or asks only for a draft."
+      }
+    },
     "native.skill_maintain": {
       "type": "noul",
       "instructions": "Does this request or phase need to repair or extend an existing skill package?",

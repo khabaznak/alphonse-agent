@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -103,7 +104,7 @@ class CommunicationRouter:
         self.outbox = outbox
         self.threads = threads
 
-    def deliver(self, *, sender_user_id: str, origin: ChannelAddress, recipient_reference: str, message: str, expects_reply: bool = False, asset_ids: list[str] | None = None) -> dict[str, Any]:
+    def deliver(self, *, sender_user_id: str, origin: ChannelAddress, recipient_reference: str, message: str, expects_reply: bool = False, asset_ids: list[str] | None = None, task_id: str = "", occurrence_key: str = "", scheduled_task_id: str = "", phase_id: str = "", subgoal_id: str = "") -> dict[str, Any]:
         recipient = self._resolve_user(recipient_reference)
         if recipient is None:
             return {"status": "recipient_not_found"}
@@ -114,9 +115,29 @@ class CommunicationRouter:
             return {"status": "recipient_unreachable", "reason": resolved.reason}
         sender = self.users.get_user(sender_user_id)
         sender_name = str(getattr(sender, "display_name", "") or sender_user_id)
-        outbound = self.outbox.enqueue(address=resolved.address, message=f"{sender_name} says: {message}", kind="person_message", audience_user_id=recipient, metadata={"communication": True, "expects_reply": bool(expects_reply), "asset_ids": [str(item) for item in (asset_ids or []) if str(item)]})
-        thread = self.threads.create(sender_user_id=sender_user_id, recipient_user_id=recipient, origin=origin, recipient=resolved.address, outbox_message_id=outbound.outbox_message_id)
-        return {"status": "queued", "thread_id": thread.thread_id, "outbox_message_id": outbound.outbox_message_id, "recipient_user_id": recipient}
+        metadata = {"communication": True, "expects_reply": bool(expects_reply), "asset_ids": [str(item) for item in (asset_ids or []) if str(item)]}
+        if occurrence_key:
+            metadata.update(occurrence_key=occurrence_key, scheduled_task_id=scheduled_task_id,
+                            scheduled_delivery_evidence=True)
+        key = ""
+        if occurrence_key and task_id and phase_id and subgoal_id:
+            operation = [occurrence_key, task_id, phase_id, subgoal_id, recipient, message, bool(expects_reply), metadata["asset_ids"]]
+            key = "scheduled-communication:" + hashlib.sha256(json.dumps(operation, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
+        outbound = self.outbox.enqueue(address=resolved.address, message=f"{sender_name} says: {message}", kind="person_message", audience_user_id=recipient, task_id=task_id, metadata=metadata, idempotency_key=key)
+        thread = self.threads.by_outbox(outbound.outbox_message_id) if key else None
+        if thread is None:
+            if (outbound.integration_id, outbound.provider_key, outbound.channel_target) != (
+                    resolved.address.integration_id, resolved.address.provider_key, resolved.address.channel_target):
+                return {"status": "delivery_unconfirmed", "outbox_message_id": outbound.outbox_message_id,
+                        "recipient_user_id": recipient}
+            try:
+                thread = self.threads.create(sender_user_id=sender_user_id, recipient_user_id=recipient, origin=origin, recipient=resolved.address, outbox_message_id=outbound.outbox_message_id)
+            except sqlite3.IntegrityError:
+                thread = self.threads.by_outbox(outbound.outbox_message_id)
+                if thread is None:
+                    raise
+        status = {"delivered": "delivered", "unconfirmed": "delivery_unconfirmed", "failed": "delivery_failed"}.get(outbound.status, "queued")
+        return {"status": status, "thread_id": thread.thread_id, "outbox_message_id": outbound.outbox_message_id, "recipient_user_id": recipient}
 
     def relay_inbound(self, *, sender_user_id: str, address: ChannelAddress, text: str) -> bool:
         thread = self.threads.consume_reply(sender_user_id=sender_user_id, address=address)

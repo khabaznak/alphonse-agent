@@ -58,7 +58,7 @@ def do_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskStat
             task.append_update("Do skipped tool execution because the administrator kill switch was engaged.")
             return task
         context.record_memory_event(task, "Tool Call", {"tool_id": tool_id, "tool_name": tool_name, "arguments": arguments})
-        context.emit_ui_event(
+        _emit_task_ui(context, task,
             "tool_call_started",
             {
                 "tool_call_id": call_id,
@@ -70,7 +70,7 @@ def do_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskStat
         result: Any = ToolInvocationService(context=context, task=task).execute_or_raise(tool_id, dict(arguments))
     except Exception as exc:
         context.record_memory_event(task, "Tool Result", {"status": "exception", "error": f"{type(exc).__name__}: {exc}"})
-        context.emit_ui_event(
+        _emit_task_ui(context, task,
             "tool_call_result",
             {
                 "tool_call_id": call_id,
@@ -92,7 +92,7 @@ def do_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskStat
 
     if tool_id == ASK_QUESTION_TOOL_ID or _result_waits_for_answer(result):
         context.record_memory_event(task, "Tool Result", {"status": "waiting", "result": result})
-        context.emit_ui_event(
+        _emit_task_ui(context, task,
             "tool_call_result",
             {
                 "tool_call_id": call_id,
@@ -117,7 +117,7 @@ def do_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskStat
     failure = _tool_result_failure(tool_id, result)
     if failure is not None:
         context.record_memory_event(task, "Tool Result", {"status": "failed", "result": result, "error": failure})
-        context.emit_ui_event(
+        _emit_task_ui(context, task,
             "tool_call_result",
             {
                 "tool_call_id": call_id,
@@ -134,7 +134,7 @@ def do_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskStat
         task.append_update(f"Do recorded failed result from planned tool call: {call_id}.")
         return task
 
-    context.emit_ui_event(
+    _emit_task_ui(context, task,
         "tool_call_result",
         {
             "tool_call_id": call_id,
@@ -200,7 +200,7 @@ def _execute_program(task: TaskState, context: CoreLoopContext | None, planned_c
     source = str(program.get("source") or "").strip()
     tool_name = "program"
     context.emit_activity(phase=ImprovementPhase.DO, label="working", message="Running a bounded program phase.")
-    context.emit_ui_event("program_execution_started", {"tool_call_id": call_id, "source_language": "python"})
+    _emit_task_ui(context, task, "program_execution_started", {"tool_call_id": call_id, "source_language": "python"})
     try:
         outcome = context.program_runner.run(source=source, invocation_service=ToolInvocationService(context=context, task=task))
     except Exception as exc:
@@ -213,14 +213,14 @@ def _execute_program(task: TaskState, context: CoreLoopContext | None, planned_c
         task.metadata["do_executed_since_last_act"] = True
         task.metadata["task_parked"] = True
         task.status = "waiting_user"
-        context.emit_ui_event("program_execution_finished", {"tool_call_id": call_id, "status": "waiting", "result": result})
+        _emit_task_ui(context, task, "program_execution_finished", {"tool_call_id": call_id, "status": "waiting", "result": result})
         task.append_update("Do parked task after a program tool call requested human input.")
         return task
     if status != "success":
         error = outcome.get("error") if isinstance(outcome.get("error"), dict) else {}
         task.record_plan_call_exception(call_id, str(error.get("message") or "Program execution failed."))
         task.metadata["do_executed_since_last_act"] = True
-        context.emit_ui_event("program_execution_finished", {"tool_call_id": call_id, "status": "failed", "error": error, "tool_calls": child_calls})
+        _emit_task_ui(context, task, "program_execution_finished", {"tool_call_id": call_id, "status": "failed", "error": error, "tool_calls": child_calls})
         task.append_update("Do recorded a failed program execution.")
         return task
     task.record_plan_call_success(call_id, result)
@@ -231,10 +231,18 @@ def _execute_program(task: TaskState, context: CoreLoopContext | None, planned_c
     elif child_calls:
         task.metadata.pop("prepared_user_response", None)
     task.metadata["do_executed_since_last_act"] = True
-    context.emit_ui_event("program_execution_finished", {"tool_call_id": call_id, "status": "success", "result": result})
+    _emit_task_ui(context, task, "program_execution_finished", {"tool_call_id": call_id, "status": "success", "result": result})
     context.emit_activity(phase=ImprovementPhase.DO, label="tool completed", message=f"{tool_name} completed.")
     task.append_update(f"Do executed program call: {call_id}.")
     return task
+
+
+
+def _emit_task_ui(context: CoreLoopContext, task: TaskState, event_type: str, payload: dict[str, Any]) -> None:
+    """Avoid broadcasting task-specific data when the actor is unavailable."""
+    actor = str(task.user or "").strip()
+    if actor:
+        context.emit_ui_event(event_type, {**payload, "user": actor, "task_id": str(task.task_id or "")})
 
 
 def _result_waits_for_answer(result: Any) -> bool:

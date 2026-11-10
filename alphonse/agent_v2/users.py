@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import sqlite3
 import unicodedata
@@ -176,6 +177,16 @@ class V2UserStore:
             return workspace / "skills"
         configured = str(os.getenv("ALPHONSE_SKILLS_DIR") or "").strip()
         return Path(configured).expanduser() if configured else Path.home() / ".alphonse" / "skills"
+
+    def coding_sandbox_image_id(self) -> str:
+        return self._setting('coding_sandbox_image_id')
+
+    def set_coding_sandbox_image_id(self, image_id: str) -> str:
+        value = str(image_id or '').strip()
+        if value and not re.fullmatch(r'sha256:[0-9a-f]{64}', value):
+            raise ValueError('coding_container_image_id_invalid')
+        self._set_setting('coding_sandbox_image_id', value)
+        return value
 
     def artifacts_root(self) -> Path:
         workspace = self.workspace_root()

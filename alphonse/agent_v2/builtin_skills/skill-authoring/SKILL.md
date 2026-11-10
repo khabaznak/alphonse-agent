@@ -98,6 +98,18 @@ account/data access or changing an existing package's behavior.
    import step; do not invent a tool or claim installation. Verify the installed
    name, instructions and supporting files through the managed store after import.
 
+   When the user has authorized building and using a new software-backed skill,
+   use `native.coding_skill_build` if available. Provide a focused, sanitized brief,
+   a stable operation ID, and independent checks that exercise the requested
+   behavior with synthetic inputs. The coding job and its checks run without shell
+   network access; supply any necessary authorized public-source observations in
+   the brief. Do not put household records, credentials or live account data in the
+   brief, package or checks. Missing runtimes and dependencies require explicit setup.
+   Installation activates the verified skill for this task, but it does not complete
+   the user's request: follow the new instructions and verify the actual outcome.
+   If the coding capability is unavailable, explain the setup limitation; do not
+   bypass its isolation by starting a host Codex process through generic Bash.
+
 Jev supplies bounded relevance judgments. System Two reasons and composes native
 calls; deterministic code enforces authorization, prerequisites, cancellation and
 verified effects. Skills never override those controls.

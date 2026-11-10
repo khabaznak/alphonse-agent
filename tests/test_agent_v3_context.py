@@ -37,6 +37,37 @@ def test_recent_conversation_keeps_mixed_and_historical_project_events() -> None
     assert "Current project request" in rendered
 
 
+def test_scheduled_task_keeps_its_own_messages_separate_from_recent_turns() -> None:
+    from alphonse.agent_v2.core.memory.transcript import conversation_transcript
+
+    task = TaskState(user="alex", goal="Scheduled goal", metadata={"source": "scheduled_task"})
+    task.append_conversation_message("alex", "Scheduled goal")
+    task.append_conversation_message("alex", "Authenticated answer")
+    rendered = conversation_transcript(task, _ConversationStore())
+    assert "Scheduled goal" in rendered
+    assert "Authenticated answer" in rendered
+    assert "Earlier unassociated question" not in rendered
+    assert "Current project request" not in rendered
+    assert task.metadata["conversation_projection"]["independent_scheduled_task"] is True
+    assert any(item["reason"] == "independent_scheduled_task" for item in task.metadata["conversation_projection"]["omitted"])
+
+
+def test_resumed_task_keeps_checkpointed_history_but_excludes_reminder_turns() -> None:
+    from alphonse.agent_v2.core.memory.transcript import conversation_transcript
+
+    task = TaskState(user="alex")
+    conversation_transcript(task, _ConversationStore())
+    original_sources = [item["source_id"] for item in task.metadata["conversation_sources"]]
+    task.metadata["v3_handoff_history_source_ids"] = original_sources
+    class Store(_ConversationStore):
+        def list_recent(self, **kwargs):
+            return super().list_recent(**kwargs) + [event(event_id="reminder", content="Unrelated reminder request")]
+    rendered = conversation_transcript(task, Store())
+    assert "Earlier unassociated question" in rendered
+    assert "Unrelated reminder request" not in rendered
+    assert any(item["reason"] == "handoff_context_boundary" for item in task.metadata["conversation_projection"]["omitted"])
+
+
 def test_memory_recall_searches_user_history_without_project_scope() -> None:
     class _SearchStore:
         def search(self, *, owner_user_id: str, query: str, limit: int):

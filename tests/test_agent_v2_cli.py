@@ -12,6 +12,7 @@ def test_cli_exposes_daemon_lifecycle_commands() -> None:
     assert build_parser().parse_args(["start", "tui"]).start_target == "tui"
     assert build_parser().parse_args(["status"]).command == "status"
     assert build_parser().parse_args(["stop"]).command == "stop"
+    assert build_parser().parse_args(["configure-codex-sandbox", "off"]).image_id == "off"
 
 
 def test_format_status_renders_daemon_and_scheduler_health() -> None:

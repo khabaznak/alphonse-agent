@@ -38,12 +38,18 @@ export function avatarStateLabel(state: AvatarState): string {
 
 export type Workspace = "conversation" | "household" | "projects" | "agenda" | "attention" | "settings";
 export const SETTINGS_SECTIONS = [
-  ["general", "General"], ["appearance", "Appearance"], ["tools", "Tools"],
-  ["integrations", "Integrations"], ["automations", "Automations"],
-  ["model", "Model"], ["system-one", "System One"], ["agent-config", "Agent configuration"], ["skills", "Skills"], ["members", "Members"],
+  ["appearance", "Appearance"], ["general", "General"], ["skills", "Skills & appearances"],
+  ["members", "Household members"], ["integrations", "Integrations"], ["notifications", "Notifications"],
+  ["agent-config", "Agent & diagnostics"], ["tools", "Tools"], ["automations", "Automations"],
+  ["model", "Model"], ["system-one", "System One"],
 ] as const;
 
 
 export function canOpenSettingsSection(section: (typeof SETTINGS_SECTIONS)[number][0], isAdmin: boolean): boolean {
-  return isAdmin || section === "general" || section === "appearance" || section === "integrations";
+  return isAdmin || section === "general" || section === "appearance" || section === "integrations" || section === "notifications" || section === "members";
+}
+
+/** current_user returns the configured desktop administrator, independently of their profile role. */
+export function isCurrentDesktopAdmin(current: { onboarded: boolean; user: { is_active?: boolean } | null }): boolean {
+  return current.onboarded && !!current.user && current.user.is_active !== false;
 }

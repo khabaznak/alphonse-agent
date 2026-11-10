@@ -5,6 +5,8 @@ export const ALPHONSE_NOTIFICATION_ICON = "/alphonse-mascot.png";
 
 export type DesktopNotificationPreferences = {
   enabled: boolean;
+  questions: boolean;
+  workProblems: boolean;
   sound: boolean;
   soundFile: string;
   onlyWhenUnfocused: boolean;
@@ -18,6 +20,8 @@ export type DesktopAlert = {
 
 export const DEFAULT_DESKTOP_NOTIFICATION_PREFERENCES: DesktopNotificationPreferences = {
   enabled: true,
+  questions: true,
+  workProblems: true,
   sound: true,
   soundFile: "",
   onlyWhenUnfocused: true,
@@ -28,6 +32,8 @@ export function readDesktopNotificationPreferences(storage: Storage): DesktopNot
     const value = JSON.parse(storage.getItem(DESKTOP_NOTIFICATION_PREFERENCES_KEY) || "{}");
     return {
       enabled: value.enabled !== false,
+      questions: value.questions !== false,
+      workProblems: value.workProblems !== false,
       sound: value.sound !== false,
       soundFile: typeof value.soundFile === "string" ? value.soundFile : "",
       onlyWhenUnfocused: value.onlyWhenUnfocused !== false,

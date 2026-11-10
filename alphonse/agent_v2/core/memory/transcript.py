@@ -45,8 +45,20 @@ def conversation_transcript(task: Any, store: Any, *, max_chars: int = 9000) -> 
                 duplicate_ids.append(item.source.source_id)
             seen_ids.add(item.source.source_id)
     rows = []
+    isolated_automation = (isinstance(getattr(task, "metadata", None), dict)
+                           and task.metadata.get("source") == "scheduled_task")
+    handoff_sources = (task.metadata.get("v3_handoff_history_source_ids")
+                       if isinstance(getattr(task, "metadata", None), dict) else None)
+    allowed_handoff_sources = set(handoff_sources) if isinstance(handoff_sources, list) else None
+    isolated_ids = []
     for item in items:
         event = event_by_id[item.source.source_id]
+        if isolated_automation or (allowed_handoff_sources is not None and item.source.source_id not in allowed_handoff_sources):
+            # A scheduled prompt and any authenticated answers live in the
+            # task's own records. Unrelated recent turns are not steering for
+            # this occurrence; explicit, access-checked recall remains available.
+            isolated_ids.append(item.source.source_id)
+            continue
         role = str(getattr(event, "role", "")).strip().lower()
         content = str(getattr(event, "content", "")).strip()
         if role not in {"user", "assistant"} or not content:
@@ -89,6 +101,7 @@ def conversation_transcript(task: Any, store: Any, *, max_chars: int = 9000) -> 
             exchanges.append([])
         exchanges[-1].append(row)
     omitted = []
+    omitted.extend({"source_id": identity, "reason": "independent_scheduled_task" if isolated_automation else "handoff_context_boundary"} for identity in isolated_ids)
     for exchange in exchanges[:-3]:
         omitted.extend({"source_id": r["source"]["source_id"], "reason": "continuity_window"} for r in exchange)
     exchanges = exchanges[-3:]
@@ -129,6 +142,7 @@ def conversation_transcript(task: Any, store: Any, *, max_chars: int = 9000) -> 
             "omitted_current_record_ids": current_omitted_ids,
             "included_current_record_ids": [r["record_id"] for r in selected_current],
             "history_unavailable": unavailable, "window_may_have_earlier_events": len(events) >= 30,
+            "independent_scheduled_task": isolated_automation,
         }
     from alphonse.agent_v2.core.context_inventory import ContextText, combined, source
     pieces = [OMITTED] if has_omissions and len(OMITTED) <= limit else []

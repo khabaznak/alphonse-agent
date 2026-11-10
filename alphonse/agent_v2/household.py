@@ -15,7 +15,10 @@ def household_overview(runtime: Any, *, actor: str, include_personal: bool = Fal
     result: dict[str, Any] = {
         "member": {"user_id": actor, "display_name": member.display_name},
         "day": now.astimezone(zone).date().isoformat(), "timezone": str(zone),
-        "generated_at": now.isoformat(), "projects": [], "plans": [], "routines": [],
+        "generated_at": now.isoformat(),
+        "members": [{"user_id": user.user_id, "display_name": user.display_name, "role": user.role, "is_active": user.is_active}
+                    for user in runtime.user_store.list_users(active_only=True)],
+        "projects": [], "plans": [], "routines": [],
         "tasks": [], "questions": [], "unavailable": [], "bounded": [],
     }
     try:
