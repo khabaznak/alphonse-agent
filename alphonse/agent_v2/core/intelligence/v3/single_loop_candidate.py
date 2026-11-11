@@ -79,6 +79,7 @@ class CandidateHost:
     input_reservation: int = 512
     output_reservation: int = 128
     projection_budget: int = 4096
+    deadline_checker: Callable[[], bool] | None = None
 
 
 def _save(host: CandidateHost, state: CandidateState) -> None:
@@ -95,6 +96,18 @@ def _cancelled(host: CandidateHost) -> bool:
     # Missing/erroring cancellation controls cannot authorize dispatch.
     try:
         return host.context.is_cancelled() is not False
+    except Exception:
+        return True
+
+
+def _deadline_elapsed(host: CandidateHost) -> bool:
+    # Optional deadline controls are deterministic host policy, not model
+    # judgments. Missing controls preserve existing prototype behavior; a
+    # configured but erroring or ambiguous control fails closed.
+    if host.deadline_checker is None:
+        return False
+    try:
+        return host.deadline_checker() is not False
     except Exception:
         return True
 
@@ -168,6 +181,8 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
         if _cancelled(host):
             # Proven undispatched here; retain the reservation conservatively.
             return _terminal(host, state, 'cancelled', 'cancelled')
+        if _deadline_elapsed(host):
+            return _terminal(host, state, 'blocked', 'candidate_deadline_exceeded')
         try:
             decision = host.choose(projection.text, host.output_reservation)
         except Exception:
@@ -201,6 +216,8 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
             if not isinstance(text, str) or not text.strip():
                 return _terminal(host, state, 'blocked', 'candidate_empty_communication')
             if kind == 'question':
+                if _deadline_elapsed(host):
+                    return _terminal(host, state, 'blocked', 'candidate_deadline_exceeded')
                 return _terminal(host, state, 'waiting_user', 'question_delivery_not_integrated', text)
             try:
                 # Re-read under the current actor before accepting any response.
@@ -211,6 +228,10 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
                 return _terminal(host, state, 'cancelled', 'cancelled')
             if not _is_fresh(host, state, fingerprint):
                 return _terminal(host, state, 'blocked', 'candidate_evidence_changed_or_revoked')
+            if _cancelled(host):
+                return _terminal(host, state, 'cancelled', 'cancelled')
+            if _deadline_elapsed(host):
+                return _terminal(host, state, 'blocked', 'candidate_deadline_exceeded')
             if not grounded:
                 return _terminal(host, state, 'blocked', 'candidate_answer_unsupported')
             return _terminal(host, state, 'completed', response=text)
@@ -252,6 +273,10 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
             return _terminal(host, state, 'blocked', 'candidate_read_denied')
         if not _is_fresh(host, state, fingerprint):
             return _terminal(host, state, 'blocked', 'candidate_evidence_changed_or_revoked')
+        if _cancelled(host):
+            return _terminal(host, state, 'cancelled', 'cancelled')
+        if _deadline_elapsed(host):
+            return _terminal(host, state, 'blocked', 'candidate_deadline_exceeded')
         result = ToolInvocationService(context=host.context, task=host.task).invoke(tool_id, args, call_id=action_id)
         budget = host.budgets.load(state.task_id)
         revision = budget.revision

@@ -6,10 +6,10 @@ does not approve API calls, payments, access to household data, or publication.
 
 ## Scope for a future approval
 
-Use exactly six fresh Codex CLI sessions: three attempts of one invented
-traffic-ticket lookup and three of one invented prescription-memory task.
+Use exactly six fresh Codex CLI sessions: two attempts each of one invented
+fixed-clock question, traffic-ticket lookup and prescription-memory task.
 The external agent would be Codex CLI `0.156.1`, pinned to OpenAI
-`gpt-6.1-sol` and a recorded reasoning setting, with no silent fallback.
+`gpt-6-luna` and a recorded reasoning setting, with no silent fallback.
 The requested user ceiling would be **US $10 total incremental provider
 charges** for the six attempts. No automatic reruns are included. The limit is a
 proposed approval boundary, not currently enforceable by this implementation.
@@ -56,7 +56,7 @@ Before requesting final approval:
    execution boundary must be checked; setting a working directory or using an
    in-process allowlist alone does not establish read or network isolation.
 3. Pin and verify the actual installed Codex executable, account/authentication
-   mode, `gpt-6.1-sol` access, model identity returned at execution, tool
+   mode, `gpt-6-luna` access, model identity returned at execution, tool
    availability, price schedule and usage visibility without printing secrets.
    `codex --version` only confirms the local CLI is installed; it does not
    prove account entitlement, provider charging or isolation. Record API vs
@@ -78,7 +78,7 @@ Before requesting final approval:
    environment or unapproved network destinations. Treat failure or an
    inability to prove containment as a stop condition.
 6. Freeze the protocol, fixture and oracle digests, executable/model/tool and
-   permission settings, 3+3 order, timing boundaries, prices, budget control,
+   permission settings, 2+2+2 order, timing boundaries, prices, budget control,
    retained traces and explicit approval before dispatch. Persist start and
    terminal records; an interrupted attempt has unknown outcome and is never
    silently retried. Audit first useful response, independent outcome,
@@ -96,7 +96,7 @@ those terms cannot be assumed to describe a ChatGPT-authenticated Codex session.
 
 Official OpenAI documentation describes [Codex model selection](https://learn.chatgpt.com/docs/models)
 and [non-interactive JSON output](https://learn.chatgpt.com/docs/non-interactive-mode).
-The published [model page](https://developers.openai.com/api/docs/models/gpt-6.1-sol)
+The published [model page](https://developers.openai.com/api/docs/models/gpt-6-luna)
 lists API token prices, which must be rechecked against the actual service and
 include applicable cached-input/cache-write rates and other charges. OpenAI's
 [spend-limit documentation](https://developers.openai.com/api/docs/guides/spend-limits)
@@ -118,3 +118,14 @@ The first two only inspect the installed client. The pytest command exercises
 public synthetic scripted fixtures. A live launch command will be documented
 only after the fixture interface, isolation and enforceable cost control exist;
 there is currently no safe command to supply for the proposed live pilot.
+
+`alphonse.agent_v2.evaluation.external_codex_pilot` prepares fixed
+noninteractive argument vectors, public output schemas and offline JSONL usage
+summaries for the three task families. Its tests do not launch Codex. Raw
+commands and answers are omitted from its summary, CLI-reported token counts
+remain unknown when absent, and a completed turn is not a verified fixture effect. Constructing
+an argument vector does not establish a safe or authorized launch. An evaluator
+must retain approved sanitized traces, time the actual attempt and grade its
+response using the separately controlled source/effect oracle. Per-agent
+fixture attribution, model identity, isolation, provider billing and retention
+remain unverified.

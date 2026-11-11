@@ -75,6 +75,15 @@ def test_no_fabricated_completion_without_grounding(fixture):
     assert (result.status, result.blocker) == ('blocked', 'candidate_answer_unsupported')
 
 
+@pytest.mark.parametrize('checker', [lambda: None, lambda: (_ for _ in ()).throw(RuntimeError('clock failed'))])
+def test_ambiguous_or_failed_deadline_checker_stops_before_model_dispatch(fixture, checker):
+    def no_dispatch(*_args):
+        pytest.fail('deadline control did not fail closed')
+    result = run_candidate(fixture.state, replace(fixture.host, choose=no_dispatch, deadline_checker=checker))
+    assert (result.status, result.blocker) == ('blocked', 'candidate_deadline_exceeded')
+    assert fixture.calls == []
+
+
 def test_effectful_action_is_never_dispatched(fixture):
     host = replace(fixture.host, choose=lambda _, cap: {'kind': 'tool', 'tool_id': 'native.write', 'arguments': {},
                    'usage': {'input_tokens': 10, 'output_tokens': 10}})

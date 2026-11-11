@@ -12,6 +12,13 @@ The owner favors the simpler architecture even for a marginal improvement,
 because reducing complexity has value and the current experience is often
 unusable. In particular, the owner reports that even asking the time can fail.
 That report is a reason to prioritize a clock case; it is not a measured result.
+The owner is interested primarily in whether Alphonse solves tasks, responds
+promptly and follows through—not in optimizing or benchmarking Jev token burn.
+Keep Jev active in the V3 arms so the comparison exercises the actual V3
+architecture; this is not a separate evaluation of Jev's model quality. Record
+only the usage and attempts needed to disclose experiment costs and failures,
+and do not make a reduction in Jev usage a success criterion. If Jev is
+unavailable or fails, report that outcome and its effect on the V3 attempt.
 
 Use two decisions with different evidence needs:
 

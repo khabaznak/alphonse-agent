@@ -18,6 +18,19 @@ from alphonse.agent_v2.core.inference import InferenceRequest, InferenceResult
 _URL = 'https://api.openai.com/v1/responses'
 
 
+class PilotProviderResultError(ValueError):
+    """A sanitized failure with any individually valid reported token counts.
+
+    The provider payload and response text are deliberately not retained.
+    Counts are telemetry, not authority to settle a candidate reservation.
+    """
+    def __init__(self, code: str, usage: Any = None):
+        super().__init__(code)
+        raw = usage if isinstance(usage, dict) else {}
+        self.provider_usage = {key: raw.get(key) if type(raw.get(key)) is int and raw[key] >= 0 else None
+                               for key in ('input_tokens', 'output_tokens')}
+
+
 def requests_sender(url: str, body: dict[str, Any], api_key: str) -> dict[str, Any]:
     """Single non-redirecting HTTP request; never called until a pilot enables it.
 
@@ -167,24 +180,31 @@ class ResponsesPilotTransport:
             sender_failed = True
         if sender_failed:
             raise ValueError('pilot_sender_failed')
-        if not isinstance(payload, dict) or payload.get('status') != 'completed':
-            raise ValueError('pilot_response_not_completed')
+        if not isinstance(payload, dict):
+            raise PilotProviderResultError('pilot_response_not_completed')
+        raw_usage = payload.get('usage')
+        if payload.get('status') != 'completed':
+            raise PilotProviderResultError('pilot_response_not_completed', raw_usage)
         if payload.get('model') != self._model:
-            raise ValueError('pilot_response_model_mismatch')
-        usage = payload.get('usage')
+            raise PilotProviderResultError('pilot_response_model_mismatch', raw_usage)
+        usage = raw_usage
         if not isinstance(usage, dict):
-            raise ValueError('pilot_provider_usage_missing')
+            raise PilotProviderResultError('pilot_provider_usage_missing')
         input_used, output_used = usage.get('input_tokens'), usage.get('output_tokens')
         if (type(input_used) is not int or type(output_used) is not int or
                 input_used < 0 or output_used < 0 or input_used > max_input_tokens or output_used > max_output_tokens):
-            raise ValueError('pilot_provider_usage_invalid_or_overrun')
-        texts = [part.get('text') for item in payload.get('output', []) if isinstance(item, dict)
+            raise PilotProviderResultError('pilot_provider_usage_invalid_or_overrun', usage)
+        output = payload.get('output')
+        if not isinstance(output, list):
+            raise PilotProviderResultError('pilot_output_unavailable', usage)
+        texts = [part.get('text') for item in output if isinstance(item, dict)
                  and item.get('type') == 'message' and item.get('role') == 'assistant'
-                 for part in item.get('content', []) if isinstance(part, dict) and part.get('type') == 'output_text']
+                 for part in (item.get('content') if isinstance(item.get('content'), list) else [])
+                 if isinstance(part, dict) and part.get('type') == 'output_text']
         if len(texts) != 1 or not isinstance(texts[0], str):
-            raise ValueError('pilot_output_unavailable')
+            raise PilotProviderResultError('pilot_output_unavailable', usage)
         if request.cancel_checker and request.cancel_checker():
-            raise ValueError('pilot_cancelled_after_dispatch')
+            raise PilotProviderResultError('pilot_cancelled_after_dispatch', usage)
         usage_out = {'input_tokens': input_used, 'output_tokens': output_used}
         if mode == 'json':
             invalid_json = False
@@ -194,9 +214,9 @@ class ResponsesPilotTransport:
             except (ValueError, TypeError):
                 invalid_json = True
             if invalid_json:
-                raise ValueError('pilot_output_invalid_json')
+                raise PilotProviderResultError('pilot_output_invalid_json', usage)
             if not isinstance(value, dict):
-                raise ValueError('pilot_output_not_object')
+                raise PilotProviderResultError('pilot_output_not_object', usage)
             return InferenceResult(json_value=value, usage=usage_out, model_profile=request.model_profile)
         return InferenceResult(content=texts[0], usage=usage_out, model_profile=request.model_profile)
 

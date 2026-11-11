@@ -27,7 +27,7 @@ three public cases, five repeated schedule entries per arm, and the draft
 protocol. Its corpus and oracle digests intentionally refer to the same public
 fixture: that fixture keeps answers in its JSON and offers no evaluator/arm
 sequestration. No agent run or outcome is implied. Its recorded digest was
-`56cf63509a606dade42b1b355e1bedaf85a2ef53c426ffadbd5319126f61dfe4`
+`613157eb8813905620f29b3527f9274a27f51b74099ccd5ce4b4cd96c4939388`
 at creation; the source file and this document are not an independent anchor.
 Changing the protocol, corpus, plan or arm configuration invalidates this
 snapshot. Creating a valid held-out run additionally requires genuinely
@@ -55,7 +55,7 @@ commit or source edit requires a fresh development snapshot:
 ```sh
 .venv/bin/python -m alphonse.agent_v2.evaluation.read_only_development_manifest verify \
   tests/fixtures/single_loop_comparison/read_only_v2_development_plan_v1.json \
-  --expected-digest 84f591997fdc05e7d37efa57692963535adadea191d33af83d6243baf9717dd9
+  --expected-digest 3b93a2977985c2a35e5f0bbe15abf3bc7c4979f19e78e9f9d62cb8b5efdb624a
 ```
 
 The inventory hashes all Python files in `alphonse/agent_v2`, including
