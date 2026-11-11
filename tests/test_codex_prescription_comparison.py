@@ -155,6 +155,8 @@ def test_early_answer_recovers_without_disclosing_oracle(monkeypatch):
     result = comparison.run_prescription_arm(arm='simple', provider=CodexSubscriptionProvider(model=MODEL), model=MODEL)
     assert result['passed'] is True
     assert all('A previous answer was not verified' in prompt for prompt in prompts[1:])
+    assert all('candidate_complete' not in prompt for prompt in prompts)
+    assert 'Started the prescribed course' in prompts[2]
     assert json.dumps(ANSWER) not in prompts[1]
     feedback = prompts[1].split('A previous answer was not verified', 1)[1]
     assert 'conversation' not in feedback and 'treatment-status' not in feedback
@@ -216,3 +218,55 @@ def test_invalid_matched_mode_fails_before_dispatch():
     with pytest.raises(ValueError, match='invalid_verification_mode'):
         comparison.run_prescription_arm(arm='simple', provider=CodexSubscriptionProvider(model=MODEL),
             model=MODEL, verification_mode='unknown')
+
+
+def test_v2_fixture_supplies_identical_explicit_records_and_goal_to_both_arms(monkeypatch):
+    expected_answer, expected_records = comparison._expected('v2')
+    received = []
+    def fake_arm(*, url, goal, **_kwargs):
+        records = {}
+        for name in ('index', 'conversation', 'prescription', 'treatment-status'):
+            suffix = '' if name == 'index' else name
+            with urlopen(url + suffix, timeout=2) as response:
+                records[name] = json.load(response)
+        received.append((goal, records))
+        return Run(status='completed', response=json.dumps(expected_answer))
+    monkeypatch.setattr(comparison, '_run_v3', fake_arm)
+    monkeypatch.setattr(comparison, '_run_simple', fake_arm)
+    report = comparison.compare_prescription(provider=CodexSubscriptionProvider(model=MODEL), model=MODEL,
+        jev_factory=lambda: object(), verification_mode='matched_provenance', fixture_version='v2')
+    assert report['fixture_version'] == 'v2'
+    assert len(received) == 2 and received[0] == received[1]
+    goal, records = received[0]
+    assert records == expected_records
+    assert records['prescription']['frequency'] == 'daily'
+    assert records['prescription']['timezone'] == 'America/Mexico_City'
+    assert records['treatment-status']['as_of'] == '2026-04-12T07:30:00-06:00'
+    assert '"schedule"' in goal and '"unknown"' in goal
+    assert all(row['passed'] and row['fixture_version'] == 'v2' for row in report['runs'])
+    assert comparison._sources().prescription == {'name': 'Asterin', 'dose': '10 mg', 'time': '08:00', 'days': 5}
+
+
+@pytest.mark.parametrize(('response', 'expected'), [
+    ('', {'format': 'no_answer'}),
+    ('secret-invalid', {'format': 'invalid_json'}),
+    ('[1]', {'format': 'not_object'}),
+    ('{"status":"unknown","medications":[]}',
+     {'format': 'object', 'status': 'unknown', 'medications': 'other', 'exact_answer': False}),
+    ('{"status":"secret", "medications":"secret"}',
+     {'format': 'object', 'status': 'other', 'medications': 'invalid_type', 'exact_answer': False}),
+    (json.dumps(ANSWER), {'format': 'object', 'status': 'expected', 'medications': 'expected', 'exact_answer': True,
+                          'name': 'expected', 'dose': 'expected', 'time': 'expected'}),
+    ('{"status":"schedule","medications":[{"name":"Asterin","dose":"secret","time":"08:00"}]}',
+     {'format': 'object', 'status': 'expected', 'medications': 'other', 'exact_answer': False,
+      'name': 'expected', 'dose': 'other', 'time': 'expected'}),
+])
+def test_answer_diagnostics_are_closed_set_and_retain_no_response_content(response, expected):
+    assert comparison._answer_diagnostics(response, ANSWER) == expected
+    assert 'secret' not in repr(comparison._answer_diagnostics(response, ANSWER))
+
+
+def test_invalid_fixture_version_fails_before_dispatch():
+    with pytest.raises(ValueError, match='invalid_fixture_version'):
+        comparison.run_prescription_arm(arm='simple', provider=CodexSubscriptionProvider(model=MODEL),
+            model=MODEL, fixture_version='future')

@@ -228,7 +228,9 @@ def _run_simple(*, url: str, provider: Any, model: str,
     def record(actor, result):
         payload = result['result']
         ref = 'read:' + payload['source']
-        evidence[ref] = json.dumps(payload, ensure_ascii=False)
+        # candidate_complete is a host-only observation-integrity marker; it
+        # does not describe task completion or establish answer sufficiency.
+        evidence[ref] = json.dumps({'source': payload['source'], 'content': payload['content']}, ensure_ascii=False)
         return ref
     def remaining_advertised(actor, refs):
         if actor != ACTOR:

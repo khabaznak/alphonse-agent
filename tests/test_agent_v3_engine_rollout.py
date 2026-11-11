@@ -177,6 +177,55 @@ def test_engine_router_uses_task_stamp_not_current_global_setting() -> None:
     assert (v2.calls, v3.calls) == (0, 1)
 
 
+@pytest.mark.parametrize("engine", ["single_loop_experimental", "unknown", ""])
+def test_engine_router_rejects_unregistered_stamp_without_dispatch(engine: str) -> None:
+    v2, v3 = _Processor("v2"), _Processor("v3")
+    router = EngineRoutingProcessor(v2=v2, v3=v3)
+    context = CoreLoopContext(messages=InMemoryMessageQueue())
+
+    with pytest.raises(ValueError, match="^intelligence_engine_unregistered$"):
+        router.process(TaskState(intelligence_engine=engine), context)
+
+    assert (v2.calls, v3.calls) == (0, 0)
+
+
+def test_engine_router_still_dispatches_explicit_v2_stamp() -> None:
+    v2, v3 = _Processor("v2"), _Processor("v3")
+    router = EngineRoutingProcessor(v2=v2, v3=v3)
+
+    result = router.process(TaskState(intelligence_engine=TACTICAL_V2), CoreLoopContext(messages=InMemoryMessageQueue()))
+
+    assert result.snapshot.metadata["engine"] == "v2"
+    assert (v2.calls, v3.calls) == (1, 0)
+
+
+@pytest.mark.parametrize("raw", [{}, {"intelligence_engine": ""}, {"intelligence_engine": None}])
+def test_legacy_task_state_without_usable_stamp_restores_as_v2(raw: dict) -> None:
+    # Existing pre-engine checkpoints rely on this fallback. Explicit blank
+    # and null are also treated as absent by the current deserializer.
+    assert TaskState.from_dict(raw).intelligence_engine == TACTICAL_V2
+
+
+@pytest.mark.parametrize("metadata", [{}, {"intelligence_engine": ""}, {"intelligence_engine": None}])
+def test_legacy_message_without_usable_stamp_creates_v2_task(metadata: dict) -> None:
+    from datetime import datetime, timezone
+    from alphonse.agent_v2.core.core import CoreMessage
+
+    task = TaskState.from_message(CoreMessage(datetime.now(timezone.utc), "hello", "alex", metadata=metadata))
+
+    assert task.intelligence_engine == TACTICAL_V2
+
+
+def test_unknown_checkpoint_stamp_survives_restore_and_is_rejected() -> None:
+    task = TaskState.from_dict({"intelligence_engine": "single_loop_experimental"})
+    v2, v3 = _Processor("v2"), _Processor("v3")
+
+    with pytest.raises(ValueError, match="^intelligence_engine_unregistered$"):
+        EngineRoutingProcessor(v2=v2, v3=v3).process(task, CoreLoopContext(messages=InMemoryMessageQueue()))
+
+    assert (v2.calls, v3.calls) == (0, 0)
+
+
 def test_hierarchical_processor_completes_one_phase_without_v2_tool_cycles() -> None:
     provider = StubInferenceProvider(
         markdown_by_purpose={

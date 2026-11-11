@@ -695,7 +695,15 @@ class EngineRoutingProcessor:
         self.v3 = v3
 
     def process(self, task: "TaskState", context: "CoreLoopContext") -> ProcessingResult:
-        return (self.v3 if task.intelligence_engine == "hierarchical_v3" else self.v2).process(task, context)
+        if task.intelligence_engine == "hierarchical_v3":
+            return self.v3.process(task, context)
+        if task.intelligence_engine == "tactical_v2":
+            return self.v2.process(task, context)
+        # An unregistered engine must never silently execute under a different
+        # processor, especially on queue retry or checkpoint resumption. The
+        # core loop turns this into a failed processing result without running
+        # the normal successful-task finalization path.
+        raise ValueError("intelligence_engine_unregistered")
 
 
 def _await_scheduled_delivery(task: "TaskState", context: "CoreLoopContext", waiting: dict) -> bool:

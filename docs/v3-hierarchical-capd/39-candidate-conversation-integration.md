@@ -77,3 +77,19 @@ queue retries, questions and restart, even if settings change later.
 
 Until these checks pass, the existing candidate and its subscription-backed
 fixture runs are development evidence, not a production-ready alternative.
+
+## Engine-stamp compatibility boundary
+
+The router now rejects unregistered stamps before calling either processor.
+This includes a restored `single_loop_experimental` stamp; it does not register
+the candidate. A legacy compatibility exception remains earlier in task
+construction: `TaskState.from_message` and `TaskState.from_dict` convert a
+missing, empty or null engine value to `tactical_v2`. A whitespace-only value is
+stripped to an empty stamp and rejected by the router; a nonempty unknown value
+survives restoration and is rejected. Thus the router's rejection does not
+establish that all malformed incoming stamps are rejected. Existing unstamped
+checkpoints can rely on this fallback, so changing it requires a versioned
+migration or another explicit way to distinguish legacy records from invalid
+new records. Focused tests cover restored missing/empty/null compatibility and
+unknown stamps, but do not qualify the full queue/resume path or mismatched
+engine/schema handling.

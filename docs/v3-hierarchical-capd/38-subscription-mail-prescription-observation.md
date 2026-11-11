@@ -82,3 +82,33 @@ hidden-source feedback; this diagnostic used the original `fixture_diagnostic`
 mode and is not a matched comparison. In the new mode, completion alone does
 not establish that an answer is correct; the independent post-run oracle must
 also pass. It is synthetic-only and is not a production medical safeguard.
+
+After removing the host-only `candidate_complete` marker from model-visible
+observations and clarifying that projection coverage concerns selected sources,
+one further candidate-only attempt used `matched_provenance` mode. The processor
+returned `completed` after 11.43 seconds, two Codex calls and one prescription
+read, but the independent oracle **failed**: the answer did not match and the
+conversation and treatment status were not read. Estimated visible input was
+1,224 tokens. The test-mode completion does not verify semantic grounding or
+medical safety and is not user delivery. The result is a failure, not a pass.
+This was a tuned development case and is not a matched V3 pair or held-out
+evaluation. It used no Jev, direct OpenAI API or real health data.
+
+## Clarified fixture, candidate-only diagnostic
+
+An audit found the v1 goal did not specify the expected status value and its
+prescription did not explicitly say daily dosing. Its exact-answer mismatch
+therefore cannot by itself establish a wrong or unsafe answer; the original
+model text was not retained. Its missing observed source reads remain recorded.
+
+The separately versioned v2 fixture states daily frequency, timezone, status
+as-of time and response status values. One candidate-only `matched_provenance`
+run completed in 13.88 seconds with two Codex calls, one prescription read and
+approximately 1,329 estimated visible input tokens. Its structured answer
+matched the expected medicine, dose, time and status, but the independent
+oracle **failed** because it did not observe the required conversation and
+treatment-status reads. A matching answer alone does not establish it was
+grounded in the required evidence. The test-mode completion is not a medical
+safety or delivery check. This is one development-case observation, not a
+matched V3 pair or held-out result. It used Codex subscription, no Jev, no
+direct OpenAI API and no actual health data.

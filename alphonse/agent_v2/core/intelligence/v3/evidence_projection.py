@@ -24,9 +24,9 @@ _KIND_ORDER = {
 }
 _REQUIRED_KINDS = frozenset({"goal", "constraint", "effect", "current_result"})
 _COVERAGE_TEXT = (
-    "The following is a bounded selection of authorized evidence. Missing, "
-    "omitted, clipped or unavailable evidence does not establish absence, "
-    "failure or success. Expand an authorized source when necessary."
+    "Coverage applies only to selected sources, not all relevant evidence. "
+    "Missing, omitted, clipped or unavailable evidence proves neither absence "
+    "nor outcome. Expand authorized sources as needed."
 )
 
 

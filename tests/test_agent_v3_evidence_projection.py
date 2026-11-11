@@ -30,6 +30,12 @@ def test_bounded_growing_history_keeps_goal_current_effect_and_reports_omissions
             assert p.manifest["coverage"]["omitted_count"] > 0
 
 
+def test_complete_projection_does_not_claim_complete_task_evidence():
+    result = make_projection([EvidenceSource('goal:1', 'goal')], {'goal:1': 'find the answer'})
+    assert result.manifest['coverage']['complete'] is True
+    assert 'Coverage applies only to selected sources, not all relevant evidence' in result.text
+
+
 def test_mixed_visibility_never_loads_or_exposes_denied_identifier():
     loads = []
     refs = [EvidenceSource("goal:1", "goal"), EvidenceSource("secret:other", "observation")]
