@@ -12,7 +12,7 @@ from alphonse.agent_v2.database import connect_database, default_database_path
 
 TACTICAL_V2 = "tactical_v2"
 HIERARCHICAL_V3 = "hierarchical_v3"
-VALID_ENGINES = {TACTICAL_V2, HIERARCHICAL_V3}
+VALID_ENGINES = {HIERARCHICAL_V3}
 
 
 @dataclass(frozen=True)
@@ -50,7 +50,9 @@ class SQLiteIntelligenceEngineSettingsStore:
         if row is None:
             return IntelligenceEngineSettings()
         return IntelligenceEngineSettings(
-            default_engine=str(row["default_engine"]),
+            # Retired preferences affect new work only, never saved tasks.
+            default_engine=(HIERARCHICAL_V3 if str(row["default_engine"]) == TACTICAL_V2
+                            else str(row["default_engine"])),
             v3_project_ids=tuple(str(item) for item in json.loads(str(row["v3_project_ids_json"]))),
             updated_at=str(row["updated_at"]),
         )

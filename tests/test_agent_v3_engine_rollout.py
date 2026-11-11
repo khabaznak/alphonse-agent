@@ -53,14 +53,19 @@ class _TestJev:
     def judge_act(self, *, state):
         return act_judgments()
 
-def test_engine_settings_default_to_v3_and_allow_v2_rollback(tmp_path: Path) -> None:
+def test_engine_settings_default_to_v3_and_reject_v2(tmp_path: Path) -> None:
     store = SQLiteIntelligenceEngineSettingsStore(tmp_path / "settings.sqlite3")
     assert store.get().default_engine == HIERARCHICAL_V3
 
-    saved = store.save(IntelligenceEngineSettings(default_engine=TACTICAL_V2, v3_project_ids=("home",)))
+    with pytest.raises(ValueError, match="intelligence_engine_invalid"):
+        store.save(IntelligenceEngineSettings(default_engine=TACTICAL_V2))
 
-    assert saved.engine_for("home") == HIERARCHICAL_V3
-    assert saved.engine_for("health") == TACTICAL_V2
+
+def test_legacy_v2_preference_selects_v3_for_new_tasks(tmp_path: Path) -> None:
+    store = SQLiteIntelligenceEngineSettingsStore(tmp_path / "settings.sqlite3")
+    with store._connect() as conn:
+        conn.execute("INSERT INTO v2_intelligence_engine_settings VALUES (1, ?, '[]', '')", (TACTICAL_V2,))
+    assert store.get().engine_for("home") == HIERARCHICAL_V3
 
 
 def test_channel_stamps_engine_at_ingestion_so_later_setting_changes_do_not_move_task() -> None:
@@ -83,6 +88,18 @@ def test_channel_defaults_new_messages_to_v3_without_a_settings_provider() -> No
 
     assert queued.message.metadata["intelligence_engine"] == HIERARCHICAL_V3
     assert queued.message.metadata["intelligence_schema_version"] == 3
+
+
+def test_channel_rejects_retired_engine_and_mismatched_schema() -> None:
+    channel = CommunicationChannel(InMemoryMessageQueue())
+    for metadata in ({"intelligence_engine": TACTICAL_V2}, {"intelligence_schema_version": 2}):
+        with pytest.raises(ValueError):
+            channel.queue_message(prompt="Do work", user="alex", metadata=metadata)
+
+
+def test_new_direct_task_defaults_to_v3() -> None:
+    task = TaskState()
+    assert (task.intelligence_engine, task.intelligence_schema_version) == (HIERARCHICAL_V3, 3)
 
 
 def test_v3_cumulative_phase_evidence_is_deduplicated_by_reference() -> None:
@@ -167,36 +184,26 @@ class _Processor:
 
 
 def test_engine_router_uses_task_stamp_not_current_global_setting() -> None:
-    v2, v3 = _Processor("v2"), _Processor("v3")
-    router = EngineRoutingProcessor(v2=v2, v3=v3)
+    v3 = _Processor("v3")
+    router = EngineRoutingProcessor(v3=v3)
     context = CoreLoopContext(messages=InMemoryMessageQueue())
 
     result = router.process(TaskState(intelligence_engine=HIERARCHICAL_V3), context)
 
     assert result.snapshot.metadata["engine"] == "v3"
-    assert (v2.calls, v3.calls) == (0, 1)
+    assert v3.calls == 1
 
 
-@pytest.mark.parametrize("engine", ["single_loop_experimental", "unknown", ""])
+@pytest.mark.parametrize("engine", ["tactical_v2", "single_loop_experimental", "unknown", ""])
 def test_engine_router_rejects_unregistered_stamp_without_dispatch(engine: str) -> None:
-    v2, v3 = _Processor("v2"), _Processor("v3")
-    router = EngineRoutingProcessor(v2=v2, v3=v3)
+    v3 = _Processor("v3")
+    router = EngineRoutingProcessor(v3=v3)
     context = CoreLoopContext(messages=InMemoryMessageQueue())
 
     with pytest.raises(ValueError, match="^intelligence_engine_unregistered$"):
         router.process(TaskState(intelligence_engine=engine), context)
 
-    assert (v2.calls, v3.calls) == (0, 0)
-
-
-def test_engine_router_still_dispatches_explicit_v2_stamp() -> None:
-    v2, v3 = _Processor("v2"), _Processor("v3")
-    router = EngineRoutingProcessor(v2=v2, v3=v3)
-
-    result = router.process(TaskState(intelligence_engine=TACTICAL_V2), CoreLoopContext(messages=InMemoryMessageQueue()))
-
-    assert result.snapshot.metadata["engine"] == "v2"
-    assert (v2.calls, v3.calls) == (1, 0)
+    assert v3.calls == 0
 
 
 @pytest.mark.parametrize("raw", [{}, {"intelligence_engine": ""}, {"intelligence_engine": None}])
@@ -218,12 +225,12 @@ def test_legacy_message_without_usable_stamp_creates_v2_task(metadata: dict) -> 
 
 def test_unknown_checkpoint_stamp_survives_restore_and_is_rejected() -> None:
     task = TaskState.from_dict({"intelligence_engine": "single_loop_experimental"})
-    v2, v3 = _Processor("v2"), _Processor("v3")
+    v3 = _Processor("v3")
 
     with pytest.raises(ValueError, match="^intelligence_engine_unregistered$"):
-        EngineRoutingProcessor(v2=v2, v3=v3).process(task, CoreLoopContext(messages=InMemoryMessageQueue()))
+        EngineRoutingProcessor(v3=v3).process(task, CoreLoopContext(messages=InMemoryMessageQueue()))
 
-    assert (v2.calls, v3.calls) == (0, 0)
+    assert v3.calls == 0
 
 
 def test_hierarchical_processor_completes_one_phase_without_v2_tool_cycles() -> None:

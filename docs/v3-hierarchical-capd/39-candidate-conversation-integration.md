@@ -80,7 +80,13 @@ fixture runs are development evidence, not a production-ready alternative.
 
 ## Engine-stamp compatibility boundary
 
-The router now rejects unregistered stamps before calling either processor.
+The production router no longer constructs or dispatches the V2 processor.
+An existing V2 default preference is interpreted as V3 for new tasks; a new
+request cannot select V2. Previously queued or restored V2 tasks are not
+silently converted to V3 and are rejected at dispatch. Their records remain
+intact, but they need a separate, explicit recovery strategy.
+
+The router rejects unregistered stamps before calling the processor.
 This includes a restored `single_loop_experimental` stamp; it does not register
 the candidate. A legacy compatibility exception remains earlier in task
 construction: `TaskState.from_message` and `TaskState.from_dict` convert a
@@ -91,5 +97,8 @@ establish that all malformed incoming stamps are rejected. Existing unstamped
 checkpoints can rely on this fallback, so changing it requires a versioned
 migration or another explicit way to distinguish legacy records from invalid
 new records. Focused tests cover restored missing/empty/null compatibility and
-unknown stamps, but do not qualify the full queue/resume path or mismatched
-engine/schema handling.
+unknown stamps, but do not qualify the full queue/resume path. The old PDCA
+implementation and historical evaluation adapters still exist in the repository;
+removing their code requires separating shared components and retiring those
+evaluation paths. The `agent_v2` package and database-table prefix do not by
+themselves select the old V2 intelligence processor.

@@ -22,7 +22,6 @@ from alphonse.agent_v2.core.core import StateSnapshot
 from alphonse.agent_v2.core.core import ToolDescriptor
 from alphonse.agent_v2.core.core import ToolRegistry
 from alphonse.agent_v2.core.inference import InferenceRouter
-from alphonse.agent_v2.core.intelligence import PDCAIntelligenceProcessor
 from alphonse.agent_v2.core.io import OutboundSelector
 from alphonse.agent_v2.core.io import IntegrationIdentity
 from alphonse.agent_v2.core.io import SQLiteOutboundStore

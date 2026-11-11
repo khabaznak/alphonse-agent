@@ -67,12 +67,16 @@ class CommunicationChannel:
         )
         merged_metadata.setdefault("alphonse_user_id", user_value)
         engine = (
-            str(self.intelligence_engine_provider(project_value) or "tactical_v2")
+            str(self.intelligence_engine_provider(project_value) or "hierarchical_v3")
             if self.intelligence_engine_provider is not None
             else "hierarchical_v3"
         )
+        if engine != "hierarchical_v3" or merged_metadata.get("intelligence_engine", engine) != engine:
+            raise ValueError("intelligence_engine_unregistered")
+        if merged_metadata.get("intelligence_schema_version", 3) != 3:
+            raise ValueError("intelligence_schema_invalid")
         merged_metadata.setdefault("intelligence_engine", engine)
-        merged_metadata.setdefault("intelligence_schema_version", 3 if engine == "hierarchical_v3" else 2)
+        merged_metadata.setdefault("intelligence_schema_version", 3)
 
         message = CoreMessage(
             timestamp=timestamp or datetime.now().astimezone(),

@@ -20,7 +20,6 @@ from alphonse.agent_v2.core.core import StateSnapshot
 from alphonse.agent_v2.core.core import ToolDescriptor
 from alphonse.agent_v2.core.core import ToolRegistry
 from alphonse.agent_v2.core.inference import InferenceRouter
-from alphonse.agent_v2.core.intelligence import PDCAIntelligenceProcessor
 from alphonse.agent_v2.core.intelligence.v3 import EngineRoutingProcessor, HierarchicalCAPDProcessor
 from alphonse.agent_v2.intelligence_engine_settings import SQLiteIntelligenceEngineSettingsStore
 from alphonse.agent_v2.core.io import IntegrationIdentity
@@ -204,7 +203,7 @@ def build_runtime_host(
         intelligence_engine_provider=lambda project_id: intelligence_engine_settings_store.get().engine_for(project_id),
     )
     visible_state = InMemoryInternalState()
-    processor = processor or EngineRoutingProcessor(v2=PDCAIntelligenceProcessor(), v3=HierarchicalCAPDProcessor())
+    processor = processor or EngineRoutingProcessor(v3=HierarchicalCAPDProcessor())
     web_tools_settings_store = web_tools_settings_store or SQLiteWebToolsSettingsStore()
     code_mode_settings_store = code_mode_settings_store or SQLiteCodeModeSettingsStore()
     media_tools_settings_store = media_tools_settings_store or SQLiteMediaToolsSettingsStore()

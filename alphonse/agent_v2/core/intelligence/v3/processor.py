@@ -690,15 +690,12 @@ class HierarchicalCAPDProcessor:
 class EngineRoutingProcessor:
     """Delegate to the engine stamped on the queued task."""
 
-    def __init__(self, *, v2: "IntelligenceProcessor", v3: "IntelligenceProcessor") -> None:
-        self.v2 = v2
+    def __init__(self, *, v3: "IntelligenceProcessor") -> None:
         self.v3 = v3
 
     def process(self, task: "TaskState", context: "CoreLoopContext") -> ProcessingResult:
         if task.intelligence_engine == "hierarchical_v3":
             return self.v3.process(task, context)
-        if task.intelligence_engine == "tactical_v2":
-            return self.v2.process(task, context)
         # An unregistered engine must never silently execute under a different
         # processor, especially on queue retry or checkpoint resumption. The
         # core loop turns this into a failed processing result without running

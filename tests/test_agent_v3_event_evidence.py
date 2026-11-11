@@ -163,7 +163,7 @@ def test_synthetic_sensor_runs_through_selected_engine_and_reaches_all_decisions
     })
     context = CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry, event_store=store, system_one=Jev(),
         inference=InferenceRouter(provider=provider, default_profile=ModelProfile("test", "test", "default")))
-    result = EngineRoutingProcessor(v2=None, v3=HierarchicalCAPDProcessor()).process(task, context)
+    result = EngineRoutingProcessor(v3=HierarchicalCAPDProcessor()).process(task, context)
     assert result.status.value == "completed"
     assert observed == ["curation", "progress_review", "review"]
     for purpose in (InferencePurpose.PHASE_PLANNING, InferencePurpose.TACTICAL_ACTION):
