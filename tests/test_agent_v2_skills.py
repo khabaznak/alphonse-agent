@@ -146,6 +146,7 @@ def test_ipc_metadata_diagnostics_export_and_authorization(store, tmp_path):
     result = daemon.ipc._dispatch({'method': 'skills', 'params': {'actor_user_id': 'alex'}})
     assert result['skills'][0]['metadata']['version'] == '1.0'
     assert result['skills'][0]['allowed-tools'] == 'Bash Read'
+    assert 'scripts/nested' in result['skills'][0]['directories']
     assert result['diagnostics'][0]['category'] == 'specification'
     destination = tmp_path / 'export'
     destination.mkdir()
@@ -154,6 +155,7 @@ def test_ipc_metadata_diagnostics_export_and_authorization(store, tmp_path):
     assert (Path(exported['directory']) / 'scripts/nested/read.sh').is_file()
     with pytest.raises(PermissionError):
         daemon.ipc._dispatch({'method': 'export_skill', 'params': {**params, 'actor_user_id': 'stranger'}})
+
 
 
 def test_skill_overview_does_not_inventory_packages_and_detail_is_scoped(store, tmp_path, monkeypatch):
@@ -183,6 +185,15 @@ def test_skill_overview_does_not_inventory_packages_and_detail_is_scoped(store, 
     with pytest.raises(PermissionError):
         daemon.ipc._dispatch({'method': 'skills_overview', 'params': {'actor_user_id': 'stranger'}})
 
+
+def test_package_directory_listing_includes_empty_and_excludes_symlinks(store, tmp_path):
+    root = package(store.skills_dir, name='sample')
+    (root / 'references' / 'empty').mkdir(parents=True)
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    (outside / 'private').mkdir()
+    (root / 'linked').symlink_to(outside, target_is_directory=True)
+    assert store.directories('skill:sample') == ['references', 'references/empty']
 
 def test_metadata_numeric_key_is_rejected(store, tmp_path):
     root = package(tmp_path / 'source', {'name': 'sample', 'description': 'A fixture', 'metadata': {1: 'value'}})

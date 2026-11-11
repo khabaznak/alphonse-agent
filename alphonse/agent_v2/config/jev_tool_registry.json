@@ -59,6 +59,22 @@
         "false": "Records, available resources, or supplied facts can resolve the missing detail."
       }
     },
+    "native.project_todo_list": {
+      "type": "noul",
+      "instructions": "Does `request.text` require looking up project information for a to-do?",
+      "criteria": {
+        "true": "The requester asks to see or find an item on a project to-do list, or the named target project for a requested to-do needs to be identified.",
+        "false": "The project is already identified and no to-do list needs inspection, or the request concerns only a timed reminder or general conversation."
+      }
+    },
+    "native.project_todo": {
+      "type": "noul",
+      "instructions": "Does `request.text` ask to create an explicit project to-do?",
+      "criteria": {
+        "true": "The requester wants an item added to a project to-do list.",
+        "false": "The requester is conversing, updating an existing item, or requesting a timed reminder without asking for a new to-do."
+      }
+    },
     "native.scheduled_task": {
       "type": "noul",
       "instructions": "Does this phase need to create or change future or recurring work?",
@@ -113,6 +129,14 @@
       "criteria": {
         "true": "An original passage or surrounding exchange is needed to interpret or verify recalled information.",
         "false": "The supplied passages already suffice or no historical information is involved."
+      }
+    },
+    "native.coding_skill_build": {
+      "type": "noul",
+      "instructions": "Does this request require creating a reusable skill that includes software?",
+      "criteria": {
+        "true": "A reusable skill needs software built for the requested workflow.",
+        "false": "The request only uses an existing skill, needs no new software, or asks only for a draft."
       }
     },
     "native.skill_maintain": {

@@ -1,7 +1,7 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { AgendaPreviewContent } from "./Agenda";
+import { AgendaPreviewContent, AgendaTodayContent } from "./Agenda";
 import type { AgendaResult } from "./agendaDates";
 
 const result: AgendaResult = { timezone: "America/Mexico_City", truncated: false, unavailable_sources: [], items: [
@@ -33,5 +33,22 @@ describe("compact Agenda content", () => {
     expect(html).toContain("No scheduled work.");
     expect(html).not.toContain("Dinner planning");
     expect(html).not.toContain("Trip reminder");
+  });
+});
+
+
+describe("Today agenda", () => {
+  it("renders accessible event rows with the available status and schedule target", () => {
+    const html = renderToStaticMarkup(<AgendaTodayContent items={result.items} timezone="America/Mexico_City" onSchedule={() => {}} />);
+    expect(html.match(/class="agenda-today-event"/g)).toHaveLength(2);
+    expect(html).toContain('dateTime="2026-10-30T18:00:00Z"');
+    expect(html).toContain("Dinner planning");
+    expect(html).toContain("Scheduled · paused");
+    expect(html).toContain("Actual execution · active · failed");
+  });
+  it("shows an empty state inside the list", () => {
+    const html = renderToStaticMarkup(<AgendaTodayContent items={[]} timezone="UTC" onSchedule={() => {}} />);
+    expect(html).toContain('class="agenda-today-list"');
+    expect(html).toContain("No scheduled work on this day.");
   });
 });

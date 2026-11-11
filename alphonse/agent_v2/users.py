@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import sqlite3
 import unicodedata
@@ -176,6 +177,16 @@ class V2UserStore:
             return workspace / "skills"
         configured = str(os.getenv("ALPHONSE_SKILLS_DIR") or "").strip()
         return Path(configured).expanduser() if configured else Path.home() / ".alphonse" / "skills"
+
+    def coding_sandbox_image_id(self) -> str:
+        return self._setting('coding_sandbox_image_id')
+
+    def set_coding_sandbox_image_id(self, image_id: str) -> str:
+        value = str(image_id or '').strip()
+        if value and not re.fullmatch(r'sha256:[0-9a-f]{64}', value):
+            raise ValueError('coding_container_image_id_invalid')
+        self._set_setting('coding_sandbox_image_id', value)
+        return value
 
     def artifacts_root(self) -> Path:
         workspace = self.workspace_root()
@@ -419,18 +430,28 @@ class V2UserStore:
 
     def delete_user(self, user_id: str) -> bool:
         """Permanently remove a non-admin user and their managed profile tree."""
-        user = self.get_user(user_id)
-        if user is None:
-            return False
-        if self.is_admin(user.user_id):
-            raise ValueError("admin_user_cannot_be_deleted")
-        profile = self.users_root() / user.user_id
+        identity = str(user_id or "").strip()
+        if not identity or identity in {".", ".."} or Path(identity).name != identity:
+            raise ValueError("user_profile_path_invalid")
+        users_root = self.users_root().expanduser().resolve()
+        profile = users_root / identity
         with self._connect() as conn:
-            conn.execute("DELETE FROM v2_user_addresses WHERE user_id=?", (user.user_id,))
-            conn.execute("DELETE FROM v2_user_aliases WHERE user_id=?", (user.user_id,))
-            deleted = conn.execute("DELETE FROM v2_users WHERE user_id=?", (user.user_id,)).rowcount > 0
-        if profile.exists():
-            shutil.rmtree(profile)
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT user_id FROM v2_users WHERE user_id=?", (identity,)).fetchone()
+            if row is None:
+                return False
+            admin = conn.execute("SELECT value FROM v2_user_settings WHERE key='admin_user_id'").fetchone()
+            if admin is not None and str(admin[0]) == identity:
+                raise ValueError("admin_user_cannot_be_deleted")
+            if profile.is_symlink():
+                raise ValueError("user_profile_symlink")
+            # Retain the row until filesystem cleanup succeeds. On interruption,
+            # the operation can locate the same profile and be retried.
+            from alphonse.agent_v2.workspace import remove_directory_beneath
+            remove_directory_beneath(users_root, (identity,), error="user_profile_symlink")
+            conn.execute("DELETE FROM v2_user_addresses WHERE user_id=?", (identity,))
+            conn.execute("DELETE FROM v2_user_aliases WHERE user_id=?", (identity,))
+            deleted = conn.execute("DELETE FROM v2_users WHERE user_id=?", (identity,)).rowcount > 0
         return deleted
 
     def list_addresses(self, user_id: str) -> list[UserAddress]:

@@ -273,7 +273,16 @@ class CoreLoopContext:
     def emit_ui_event(self, event_type: str, payload: dict[str, Any] | None = None) -> None:
         if self.ui_event_sink is None:
             return
-        self.ui_event_sink(CoreUiEvent(event_type=event_type, payload=dict(payload or {})))
+        event_payload = dict(payload or {})
+        if event_type in {"run_started", "run_finished", "state_snapshot"}:
+            # These events carry a full task, which must never be published as
+            # an unscoped UI event when its actor is absent.
+            raw_task = event_payload.get("task") or event_payload.get("task_state")
+            public_status = (event_type == "state_snapshot" and set(event_payload) == {"status"} and isinstance(event_payload["status"], str)
+                             and event_payload["status"] in {"working", "idle", "paused", "stopped"})
+            if not public_status and (not isinstance(raw_task, dict) or not str(raw_task.get("user") or "").strip()):
+                return
+        self.ui_event_sink(CoreUiEvent(event_type=event_type, payload=event_payload))
 
     def emit_telemetry(self, event: dict[str, Any]) -> None:
         if self.telemetry_sink is not None:
@@ -591,6 +600,17 @@ class AlphonseCore:
                 status=LoopStepStatus.BUSY,
                 state_before=state_before,
                 state_after=state_before,
+            )
+
+        # Fenced queue receipts are not yet carried through the processor,
+        # publication sinks or daemon acknowledgements. Never claim a message
+        # under that mode until those ownership boundaries are implemented.
+        if getattr(self.messages, "experimental_claim_fencing", False) is True:
+            return LoopStepResult(
+                status=LoopStepStatus.BUSY,
+                state_before=state_before,
+                state_after=state_before,
+                error="claim_fencing_runtime_unavailable",
             )
 
         queued = self.messages.dequeue(selector)

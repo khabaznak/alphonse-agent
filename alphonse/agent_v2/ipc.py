@@ -303,6 +303,7 @@ class V2DaemonServer:
         self._server: socket.socket | None = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._socket_identity: tuple[int, int] | None = None
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -314,6 +315,8 @@ class V2DaemonServer:
             pass
         self._server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self._server.bind(str(self.socket_path))
+        bound_stat = self.socket_path.lstat()
+        self._socket_identity = (bound_stat.st_dev, bound_stat.st_ino)
         os.chmod(self.socket_path, 0o600)
         self._server.listen(16)
         self._server.settimeout(0.5)
@@ -329,10 +332,21 @@ class V2DaemonServer:
             self._server.close()
         if self._thread is not None and self._thread.is_alive():
             self._thread.join(timeout=5)
-        try:
-            self.socket_path.unlink()
-        except FileNotFoundError:
-            pass
+        # A server may be stopped without having bound this path, or another
+        # owner may have replaced the socket since it was bound. Never remove
+        # an endpoint that this instance did not create.
+        identity = self._socket_identity
+        self._socket_identity = None
+        if identity is not None:
+            try:
+                current = self.socket_path.lstat()
+                if (current.st_dev, current.st_ino) == identity:
+                    self.socket_path.unlink()
+            except FileNotFoundError:
+                pass
+
+    def is_serving(self) -> bool:
+        return self._thread is not None and self._thread.is_alive() and not self._stop.is_set()
 
     def _serve(self) -> None:
         assert self._server is not None
@@ -710,9 +724,24 @@ class V2DaemonServer:
             return self.daemon.work_items(
                 actor_user_id=str(params.get("actor_user_id") or ""),
                 owner_user_id=str(params.get("owner_user_id") or ""),
-                view=str(params.get("view") or "active"),
+                view=str(params.get("view") or "active"), project_id=str(params.get("project_id") or ""),
                 limit=int(params.get("limit") or 50), offset=int(params.get("offset") or 0),
             )
+        if method == "project_records":
+            current = self.daemon.current_user().get("user")
+            actor = str(current.get("user_id") or "") if isinstance(current, dict) else ""
+            return self.daemon.project_records(
+                actor_user_id=actor, owner_user_id=str(params.get("owner_user_id") or ""),
+                project_id=str(params.get("project_id") or ""),
+                schedules_offset=int(params.get("schedules_offset") or 0), executions_offset=int(params.get("executions_offset") or 0), todos_offset=int(params.get("todos_offset") or 0),
+                limit=int(params.get("limit") or 50),
+            )
+        if method == "mutate_project_todo":
+            current = self.daemon.current_user().get("user")
+            actor = str(current.get("user_id") or "") if isinstance(current, dict) else ""
+            return {"todo": self.daemon.mutate_project_todo(actor_user_id=actor, project_id=str(params.get("project_id") or ""),
+                action=str(params.get("action") or ""), title=str(params.get("title") or ""),
+                todo_id=str(params.get("todo_id") or ""), request_key=str(params.get("request_key") or ""))}
         if method == "manageable_projects":
             return {"projects": self.daemon.manageable_projects(user=str(params.get("user") or ""), status=str(params.get("status") or ""))}
         if method == "create_project":

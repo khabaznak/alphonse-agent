@@ -231,3 +231,25 @@ def test_v3_reveals_bash_for_local_shell_work() -> None:
 
     assert [item.tool_id for item in result.tools] == ["native.bash"]
     assert result.decisions[0].reason == "relevant_and_authorized"
+
+
+def test_project_todo_mutation_requires_project_mutation_effect():
+    from alphonse.agent_v2.core.tools.registry.native.project_todo import build_project_todo_tool_definition, build_project_todo_list_tool_definition
+    from alphonse.agent_v2.core.intelligence.v3.revealing import action_compatibility_error
+    read = PhaseSubgoal("read-todos", "Read to-dos", "items", allowed_capabilities=("project_todos",), allowed_side_effects=(SideEffectClass.READ_ONLY,))
+    write = PhaseSubgoal("add-todo", "Add a to-do", "todo", allowed_capabilities=("project_todos",), allowed_side_effects=(SideEffectClass.PROJECT_MUTATION,))
+    mutation = build_project_todo_tool_definition().descriptor
+    listing = build_project_todo_list_tool_definition().descriptor
+    assert action_compatibility_error(read, mutation)
+    assert not action_compatibility_error(read, listing)
+    assert not action_compatibility_error(write, mutation)
+
+
+def test_project_todo_tool_is_revealed_for_projectless_conversation():
+    from alphonse.agent_v2.core.tools.registry.native.project_todo import build_project_todo_tool_definition
+    subgoal = PhaseSubgoal("add", "Add a to-do to the named project", "todo", allowed_capabilities=("project_todos",), allowed_side_effects=(SideEffectClass.PROJECT_MUTATION,))
+    task = TaskState(user="alex", project_id="", goal="Add book trains to Weekend Away")
+    descriptor = build_project_todo_tool_definition().descriptor_with_schema()
+    revealed = ToolRevealPolicy().reveal(task, _state(subgoal), subgoal, (descriptor,))
+    assert [tool.tool_id for tool in revealed.tools] == ["native.project_todo"]
+    assert "project_name" in revealed.tools[0].argument_schema["properties"]

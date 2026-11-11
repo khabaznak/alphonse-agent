@@ -14,6 +14,7 @@ _NATIVE_READBACK = {
     "native.exact_text_edit": "file_readback",
     "native.skill_install": "skill_store_readback",
     "native.scheduled_task": "schedule_store_readback",
+    "native.project_todo": "project_todo_store_readback",
 }
 _OUTBOX_TOOLS = {"native.deliver_message", "native.send_attachment"}
 _ARTIFACT_TOOLS = {"native.skill_artifact_register", "native.artifact_metadata_update"}
@@ -109,7 +110,9 @@ def _shell_operation(arguments, result):
 
 
 def _native_target(tool_id, arguments, result):
-    if tool_id in {"native.scheduled_task", "native.scheduled_task_delivery"}:
+    if tool_id == "native.project_todo":
+        kind, identity = "project_todo", result.get("todo_id") or arguments.get("todo_id")
+    elif tool_id in {"native.scheduled_task", "native.scheduled_task_delivery"}:
         kind, identity = "schedule", result.get("scheduled_task_id") or arguments.get("scheduled_task_id")
     elif tool_id in _OUTBOX_TOOLS:
         kind, identity = "recipient", result.get("recipient_user_id") or arguments.get("recipient")

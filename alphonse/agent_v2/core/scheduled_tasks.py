@@ -310,6 +310,58 @@ class ScheduledTaskStore:
             ).fetchall()
         return [_task_from_row(row) for row in rows if _task_from_row(row) is not None]
 
+    def create_project_todo(self, *, owner_user_id: str, project_id: str, title: str, idempotency_key: str) -> dict[str, Any]:
+        owner, project, name, key = (str(value or "").strip() for value in (owner_user_id, project_id, title, idempotency_key))
+        if not owner or not project or not name or len(name) > 300 or not key or len(key) > 256:
+            raise ValueError("project_todo_invalid")
+        now = _now_iso()
+        with self._connect() as conn:
+            conn.execute("INSERT OR IGNORE INTO v2_project_todos (todo_id, owner_user_id, project_id, title, status, idempotency_key, created_at, updated_at) VALUES (?, ?, ?, ?, 'pending', ?, ?, ?)",
+                         (f"todo_{uuid4().hex}", owner, project, name, key, now, now))
+            row = conn.execute("SELECT * FROM v2_project_todos WHERE owner_user_id=? AND project_id=? AND idempotency_key=?", (owner, project, key)).fetchone()
+            if row is None or row["title"] != name:
+                raise ValueError("project_todo_idempotency_conflict")
+        return dict(row)
+
+    def project_todos_page(self, *, owner_user_id: str, project_id: str, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute("SELECT todo_id, owner_user_id, project_id, title, status, created_at, updated_at FROM v2_project_todos WHERE owner_user_id=? AND project_id=? ORDER BY created_at DESC, todo_id DESC LIMIT ? OFFSET ?", (owner_user_id, project_id, max(1, min(limit, 101)), max(0, offset))).fetchall()
+        return [dict(row) for row in rows]
+
+    def update_project_todo(self, *, owner_user_id: str, project_id: str, todo_id: str, status: str) -> dict[str, Any]:
+        if status not in {"pending", "completed", "cancelled"}:
+            raise ValueError("project_todo_status_invalid")
+        with self._connect() as conn:
+            cursor = conn.execute("UPDATE v2_project_todos SET status=?, updated_at=? WHERE todo_id=? AND owner_user_id=? AND project_id=?", (status, _now_iso(), todo_id, owner_user_id, project_id))
+            if cursor.rowcount != 1:
+                raise KeyError("project_todo_not_found")
+            row = conn.execute("SELECT todo_id, owner_user_id, project_id, title, status, created_at, updated_at FROM v2_project_todos WHERE todo_id=? AND owner_user_id=? AND project_id=?", (todo_id, owner_user_id, project_id)).fetchone()
+        if row is None or row["status"] != status:
+            raise RuntimeError("project_todo_readback_failed")
+        return dict(row)
+
+    def project_tasks_page(self, *, owner_user_id: str, project_id: str, limit: int = 50, offset: int = 0) -> list[ScheduledTaskRecord]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM v2_scheduled_tasks WHERE owner_user_id=? AND project_id=? "
+                "ORDER BY created_at DESC, scheduled_task_id DESC LIMIT ? OFFSET ?",
+                (owner_user_id, project_id, max(1, min(limit, 101)), max(0, offset)),
+            ).fetchall()
+        return [task for row in rows if (task := _task_from_row(row)) is not None]
+
+    def project_executions_page(self, *, owner_user_id: str, project_id: str, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT e.*, t.name AS task_name FROM v2_scheduled_task_executions e "
+                "JOIN v2_scheduled_tasks t ON t.scheduled_task_id=e.scheduled_task_id "
+                "WHERE t.owner_user_id=? AND t.project_id=? AND e.project_id=t.project_id "
+                "ORDER BY e.started_at DESC, e.run_id DESC LIMIT ? OFFSET ?",
+                (owner_user_id, project_id, max(1, min(limit, 101)), max(0, offset)),
+            ).fetchall()
+        return [{"run_id": row["run_id"], "scheduled_task_id": row["scheduled_task_id"],
+                 "task_name": row["task_name"], "status": row["status"], "started_at": row["started_at"],
+                 "finished_at": row["finished_at"]} for row in rows]
+
     def due_tasks(self, *, now: datetime | None = None) -> list[ScheduledTaskRecord]:
         current = _as_utc(now or _now_utc()).isoformat()
         with self._connect() as conn:
@@ -1062,6 +1114,13 @@ class ScheduledTaskStore:
         with self._connect() as conn:
             conn.executescript(
                 """
+                CREATE TABLE IF NOT EXISTS v2_project_todos (
+                  todo_id TEXT PRIMARY KEY, owner_user_id TEXT NOT NULL, project_id TEXT NOT NULL,
+                  title TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('pending','completed','cancelled')),
+                  idempotency_key TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                  UNIQUE(owner_user_id, project_id, idempotency_key)
+                ) STRICT;
+                CREATE INDEX IF NOT EXISTS idx_v2_project_todos_owner_project ON v2_project_todos(owner_user_id, project_id, created_at);
                 CREATE TABLE IF NOT EXISTS v2_scheduled_task_gaps (
                   scheduled_task_id TEXT NOT NULL, local_time TEXT NOT NULL,
                   timezone TEXT NOT NULL, reason TEXT NOT NULL,

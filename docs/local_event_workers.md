@@ -199,3 +199,11 @@ rows with neither a queue row nor a receipt remain queued for explicit
 reconciliation: absence is insufficient evidence to replay or declare success.
 The migration cannot recover deduplication identities already deleted before
 this upgrade.
+
+## Proposed account integration extensions
+
+The [optional account integrations design](optional-account-integrations.md)
+plans project-directed email, calendar, and Classroom checks using this mechanism.
+It specifies scoped publication/subscriptions, recoverable dispatch, independent
+deduplication receipts, and explicit V3 event evidence. Those extensions are
+proposed; the current publish contract above remains unchanged.

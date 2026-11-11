@@ -670,16 +670,19 @@ class PhaseExecutor:
             reveal = self._reveal_policy.reveal(task, state, subgoal, candidates)
             state.revealed_capabilities = [item["capability"] for item in reveal.catalog]
             state.revealed_tool_ids = [item.tool_id for item in reveal.tools]
-            context.emit_ui_event(
-                "tactical_tools_revealed",
-                {
-                    "phase_id": state.phase.phase_id,
-                    "subgoal_id": subgoal.subgoal_id,
-                    "capabilities": list(state.revealed_capabilities),
-                    "tool_ids": list(state.revealed_tool_ids),
-                    "decisions": [item.__dict__ for item in reveal.decisions],
-                },
-            )
+            if str(task.user or "").strip():
+                context.emit_ui_event(
+                    "tactical_tools_revealed",
+                    {
+                        "user": str(task.user).strip(),
+                        "task_id": str(task.task_id or ""),
+                        "phase_id": state.phase.phase_id,
+                        "subgoal_id": subgoal.subgoal_id,
+                        "capabilities": list(state.revealed_capabilities),
+                        "tool_ids": list(state.revealed_tool_ids),
+                        "decisions": [item.__dict__ for item in reveal.decisions],
+                    },
+                )
             return reveal.tools
         allowed_ids = set(state.revealed_tool_ids)
         if not allowed_ids:

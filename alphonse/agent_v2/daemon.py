@@ -219,6 +219,11 @@ class V2Daemon:
         self.ipc = V2DaemonServer(self)
 
     def start(self) -> None:
+        # A daemon startup also performs migrations, reclamation and starts
+        # background workers. The run_once guard alone cannot protect those
+        # paths while experimental claim receipts are not propagated end to end.
+        if getattr(self.runtime.queue, "experimental_claim_fencing", False) is True:
+            raise RuntimeError("claim_fencing_runtime_unavailable")
         with self._lifecycle_lock:
             if self._stopped:
                 raise RuntimeError("alphonse_v2_daemon_stopped")
@@ -470,7 +475,7 @@ class V2Daemon:
         from alphonse.agent_v2.household import household_overview
         return household_overview(self.runtime, actor=str(actor_user_id or "").strip(), include_personal=include_personal)
 
-    def work_items(self, *, actor_user_id: str, owner_user_id: str = "", view: str = "active", limit: int = 50, offset: int = 0) -> dict[str, Any]:
+    def work_items(self, *, actor_user_id: str, owner_user_id: str = "", view: str = "active", limit: int = 50, offset: int = 0, project_id: str = "") -> dict[str, Any]:
         from alphonse.agent_v2.work_items import project_work_items
         actor = str(actor_user_id or "").strip()
         if not actor or self.runtime.user_store.get_user(actor) is None:
@@ -480,7 +485,57 @@ class V2Daemon:
             raise PermissionError("work_owner_forbidden")
         if self.runtime.user_store.get_user(owner) is None:
             raise KeyError("work_owner_not_found")
-        return project_work_items(self.runtime, actor=actor, owner=owner, view=view, limit=limit, offset=offset)
+        project_id = str(project_id or "").strip()
+        if project_id and not self.runtime.project_store.get_project(project_id, requester_user_id=actor, requester_is_admin=self.runtime.user_store.is_admin(actor), include_archived=True):
+            raise PermissionError("work_project_forbidden")
+        return project_work_items(self.runtime, actor=actor, owner=owner, view=view, limit=limit, offset=offset, project_id=project_id)
+
+    def project_records(self, *, actor_user_id: str, owner_user_id: str, project_id: str,
+                        schedules_offset: int = 0, executions_offset: int = 0, todos_offset: int = 0,
+                        limit: int = 50) -> dict[str, Any]:
+        actor = str(actor_user_id or "").strip()
+        owner = str(owner_user_id or actor).strip()
+        project = str(project_id or "").strip()
+        if not actor or self.runtime.user_store.get_user(actor) is None:
+            raise PermissionError("work_actor_required")
+        if owner != actor and not self.runtime.user_store.is_admin(actor):
+            raise PermissionError("work_owner_forbidden")
+        if self.runtime.user_store.get_user(owner) is None:
+            raise KeyError("work_owner_not_found")
+        if not project or not self.runtime.project_store.get_project(project, requester_user_id=actor,
+                requester_is_admin=self.runtime.user_store.is_admin(actor), include_archived=True):
+            raise PermissionError("work_project_forbidden")
+        size = max(1, min(int(limit), 100))
+        schedules = self.runtime.schedule_store.project_tasks_page(owner_user_id=owner, project_id=project, limit=size + 1, offset=schedules_offset)
+        executions = self.runtime.schedule_store.project_executions_page(owner_user_id=owner, project_id=project, limit=size + 1, offset=executions_offset)
+        todos = self.runtime.schedule_store.project_todos_page(owner_user_id=owner, project_id=project, limit=size + 1, offset=todos_offset)
+        return {
+            "todos": todos[:size], "todos_more": len(todos) > size,
+            "schedules": [{"scheduled_task_id": task.scheduled_task_id, "name": task.name, "status": task.status, "next_run_at": task.next_run_at, "schedule_kind": task.schedule.get("kind", "")} for task in schedules[:size]],
+            "schedules_more": len(schedules) > size,
+            "executions": executions[:size], "executions_more": len(executions) > size,
+        }
+
+    def mutate_project_todo(self, *, actor_user_id: str, project_id: str, action: str,
+                            title: str = "", todo_id: str = "", request_key: str = "") -> dict[str, Any]:
+        actor = str(actor_user_id or "").strip()
+        user = self.runtime.user_store.get_user(actor) if actor else None
+        if user is None or not user.is_active:
+            raise PermissionError("project_todo_actor_forbidden")
+        project = self.runtime.project_store.get_project(project_id, requester_user_id=actor,
+                    requester_is_admin=self.runtime.user_store.is_admin(actor))
+        if project is None or project.status != "active":
+            raise PermissionError("project_todo_project_forbidden")
+        if action == "create":
+            key = str(request_key or "").strip()
+            if not key or len(key) > 200:
+                raise ValueError("project_todo_request_key_required")
+            return self.runtime.schedule_store.create_project_todo(owner_user_id=actor, project_id=project.project_id,
+                         title=title, idempotency_key="desktop:" + key)
+        if action in {"complete", "reopen", "cancel"}:
+            return self.runtime.schedule_store.update_project_todo(owner_user_id=actor, project_id=project.project_id,
+                         todo_id=todo_id, status={"complete": "completed", "reopen": "pending", "cancel": "cancelled"}[action])
+        raise ValueError("project_todo_action_invalid")
 
     def scheduled_tasks(
         self,
@@ -557,12 +612,17 @@ class V2Daemon:
             raise KeyError("user_not_found")
         if str(confirmation or "") != user.user_id:
             raise ValueError("delete_confirmation_must_match_user_id")
-        roots = self.runtime.project_store.delete_owned_by(user.user_id)
+        # Reject protected targets before removing any project, schedule, queue,
+        # or filesystem state. V2UserStore also enforces this at its boundary,
+        # but that check happens only after the earlier deletion steps.
+        if self.runtime.user_store.is_admin(user.user_id):
+            raise ValueError("admin_user_cannot_be_deleted")
+        users_root = self.runtime.user_store.users_root().expanduser().resolve()
+        identity = user.user_id
+        if not identity or identity in {".", ".."} or Path(identity).name != identity:
+            raise ValueError("user_profile_path_invalid")
+        roots = self._delete_user_projects(identity, users_root)
         self.runtime.project_session_store.delete_user(user.user_id)
-        for root in roots:
-            path = Path(root)
-            if path.exists() and self.runtime.user_store.users_root() in path.parents:
-                shutil.rmtree(path)
         schedules = self._delete_user_schedule_data(user.user_id)
         questions = self._delete_user_question_data(user.user_id)
         inbound = self._delete_user_inbound_data(user.user_id)
@@ -570,12 +630,48 @@ class V2Daemon:
         deleted = self.runtime.user_store.delete_user(user.user_id)
         return {"deleted": int(deleted), "projects": len(roots), "schedules": schedules, "questions": questions, "inbound": inbound, "outbound": outbound}
 
+    def _delete_user_projects(self, identity: str, users_root: Path) -> list[str]:
+        profile = users_root / identity
+
+        def remove_managed_roots(roots: list[str]) -> None:
+            from alphonse.agent_v2.workspace import remove_directory_beneath
+            # A project may be a reference to an external location: retain the
+            # historical behavior of not deleting those directories. Within
+            # managed storage, reject paths owned by another user or involving
+            # a symlink rather than guessing what may be removed.
+            if profile.is_symlink():
+                raise ValueError("user_profile_symlink")
+            managed: list[Path] = []
+            for raw in roots:
+                path = Path(os.path.abspath(os.path.expanduser(raw)))
+                if users_root not in path.parents:
+                    continue
+                if profile not in path.parents:
+                    raise ValueError("project_cleanup_outside_owner_profile")
+                relative = path.relative_to(profile)
+                current = profile
+                for part in relative.parts:
+                    current = current / part
+                    if current.is_symlink():
+                        raise ValueError("project_cleanup_symlink")
+                if path.resolve() != profile / relative:
+                    raise ValueError("project_cleanup_escape")
+                managed.append(path)
+            # Validate every path before deleting the first one. The project
+            # write transaction keeps records discoverable on interruption.
+            for path in sorted(set(managed), key=lambda item: len(item.parts), reverse=True):
+                remove_directory_beneath(users_root, (identity, *path.relative_to(profile).parts),
+                                         error="project_cleanup_symlink")
+
+        return self.runtime.project_store.delete_owned_by(identity, before_delete=remove_managed_roots)
+
     def _delete_user_schedule_data(self, user_id: str) -> int:
         store = self.runtime.schedule_store
         with store._connect() as conn:
             ids = [str(row[0]) for row in conn.execute("SELECT scheduled_task_id FROM v2_scheduled_tasks WHERE owner_user_id=?", (user_id,)).fetchall()]
             if ids:
                 conn.executemany("DELETE FROM v2_scheduled_task_executions WHERE scheduled_task_id=?", [(task_id,) for task_id in ids])
+            conn.execute("DELETE FROM v2_project_todos WHERE owner_user_id=?", (user_id,))
             return conn.execute("DELETE FROM v2_scheduled_tasks WHERE owner_user_id=?", (user_id,)).rowcount
 
     def _delete_user_question_data(self, user_id: str) -> int:
@@ -889,6 +985,7 @@ class V2Daemon:
                  "lifecycle": self.runtime.skill_store.management_status(item.skill_id),
                  "bindings": self.runtime.core.skill_bindings.management_status(actor_id=actor_user_id, skill_id=item.skill_id),
                  "files": self.runtime.skill_store.files(item.skill_id),
+                 "directories": self.runtime.skill_store.directories(item.skill_id),
                  "appearance": resolve_appearance(item), "appearance_configured": bool(item.appearance),
                  "artifacts": []}
                 for item in self.runtime.skill_store.list_skills() if not skill_id or item.skill_id == skill_id
@@ -2331,12 +2428,29 @@ class V2Daemon:
         events = list(self.runtime.ui_events)
         self.runtime.ui_events.clear()
         for core_event in events:
+            event_type = str(core_event.event_type or "")
+            actor = _ui_event_user(core_event)
+            payload = core_event.payload or {}
+            public_status = (event_type == "state_snapshot" and set(payload) == {"status"} and isinstance(payload["status"], str)
+                             and payload["status"] in {"working", "idle", "paused", "stopped"})
+            # Any event that contains a task can carry private state, including
+            # event types added by schedulers or future producers.
+            if ("task" in payload or "task_state" in payload) and not actor:
+                continue
+            # These events may contain full task, tool or answer data. Other
+            # unscoped global status events remain supported, but private
+            # payloads without an identifiable actor are never broadcast.
+            if (event_type in {"run_started", "run_finished", "state_snapshot", "tool_call_started",
+                               "tool_call_result", "program_execution_started", "program_execution_finished",
+                               "tactical_tools_revealed", "question_answer_rejected"}
+                    or event_type.startswith("question_interrupt_")) and not actor and not public_status:
+                continue
             for event in self._ag_ui.map_event(core_event):
                 self._ui_event_sequence += 1
                 self._ui_event_journal.append(
                     {
                         "sequence": self._ui_event_sequence,
-                        "user": _ui_event_user(core_event),
+                        "user": actor,
                         "event": event,
                     }
                 )
@@ -2371,6 +2485,20 @@ class V2Daemon:
             return dict(self._activity_status)
 
     def run_once(self) -> Any:
+        # The experimental queue can issue fenced claims, but this daemon does
+        # not yet carry their receipts through publication and acknowledgement.
+        # Refuse the entire turn before retention, reconciliation, presence,
+        # queue inspection, or any other work can mutate household state.
+        if getattr(self.runtime.queue, "experimental_claim_fencing", False) is True:
+            from alphonse.agent_v2.core.core import LoopStepResult
+            from alphonse.agent_v2.core.state.runtime import State
+            state = State.snapshot()
+            return LoopStepResult(
+                status=LoopStepStatus.BUSY,
+                state_before=state,
+                state_after=state,
+                error="claim_fencing_runtime_unavailable",
+            )
         self._run_retention_if_due()
         self._reconcile_unconfirmed_scheduled_deliveries()
         queued = self.runtime.queue.peek()
@@ -2903,7 +3031,9 @@ class V2Daemon:
         self.start()
         try:
             while not self._stop.wait(0.5):
-                pass
+                if not self.ipc.is_serving():
+                    logger.error("Daemon IPC listener stopped unexpectedly; shutting down to release the instance lock.")
+                    break
         finally:
             self.stop()
 
@@ -3081,12 +3211,16 @@ def _conversation_message_id(source_message_id: str, fallback_event_id: str) -> 
 
 def _ui_event_user(event: CoreUiEvent) -> str:
     payload = dict(event.payload or {})
+    task_keys = [key for key in ("task", "task_state") if key in payload]
+    if task_keys:
+        tasks = [payload[key] for key in task_keys]
+        if any(not isinstance(task, dict) for task in tasks):
+            return ""
+        owners = {str(task.get("user") or "").strip() for task in tasks}
+        return owners.pop() if len(owners) == 1 and "" not in owners else ""
     question = payload.get("question")
     if isinstance(question, dict):
         return str(question.get("respondent_user_id") or "").strip()
-    task = payload.get("task") or payload.get("task_state")
-    if isinstance(task, dict):
-        return str(task.get("user") or "").strip()
     return str(payload.get("user") or "").strip()
 
 

@@ -132,3 +132,250 @@ def test_project_summary_covers_history_outside_active_page_without_cross_owner_
     page = daemon.work_items(actor_user_id=admin, limit=1)
     assert len(page["items"]) == 1
     assert page["project_summaries"]["effort"] == {"total": 6, "completed": 2, "failed": 1, "cancelled": 1}
+
+
+def test_project_filter_applies_before_paging_and_enforces_access(work):
+    daemon, admin, member, stranger, tmp_path = work
+    project = daemon.runtime.project_store.create_project(name="Plan", root_path=str(tmp_path / "plan"), owner_user_id=member)
+    other = daemon.runtime.project_store.create_project(name="Other", root_path=str(tmp_path / "other"), owner_user_id=member)
+    for task_id in ("first", "second"):
+        save(daemon, member, task_id, project_id=project.project_id)
+    save(daemon, member, "unrelated", project_id=other.project_id)
+    first = daemon.work_items(actor_user_id=member, project_id=project.project_id, limit=1)
+    second = daemon.work_items(actor_user_id=member, project_id=project.project_id, limit=1, offset=1)
+    assert first["has_more"] and not second["has_more"]
+    assert {first["items"][0]["task_id"], second["items"][0]["task_id"]} == {"first", "second"}
+    with pytest.raises(PermissionError, match="work_project_forbidden"):
+        daemon.work_items(actor_user_id=stranger, project_id=project.project_id)
+    with pytest.raises(PermissionError, match="work_owner_forbidden"):
+        daemon.work_items(actor_user_id=stranger, owner_user_id=member, project_id=project.project_id)
+    server = object.__new__(V2DaemonServer)
+    server.daemon = daemon
+    result = server._dispatch({"method": "work_items", "params": {"actor_user_id": member, "project_id": project.project_id}})
+    assert {item["task_id"] for item in result["items"]} == {"first", "second"}
+
+
+def test_project_records_are_scoped_paginated_and_exclude_conversation(work):
+    from alphonse.agent_v2.conversations import SQLiteConversationStore
+    from alphonse.agent_v2.core.scheduled_tasks import ScheduledTaskStore
+
+    daemon, admin, member, stranger, tmp_path = work
+    daemon.runtime.conversation_store = SQLiteConversationStore(":memory:")
+    daemon.runtime.schedule_store = ScheduledTaskStore(":memory:")
+    project = daemon.runtime.project_store.create_project(name="Plan", root_path=str(tmp_path / "plan-records"), owner_user_id=member)
+    other = daemon.runtime.project_store.create_project(name="Other", root_path=str(tmp_path / "other-records"), owner_user_id=member)
+    for n in range(3):
+        daemon.runtime.conversation_store.record(owner_user_id=member, project_id=project.project_id, role="user", content=f"Request {n}", source="test", source_message_id=f"message-{n}")
+        task = daemon.runtime.schedule_store.create_task(owner_user_id=member, project_id=project.project_id, name=f"Schedule {n}", prompt="Work", schedule_kind="once", run_at="2030-01-01T10:00:00+00:00")
+        daemon.runtime.schedule_store.record_execution(scheduled_task_id=task.scheduled_task_id, run_id=f"run-{n}", status="queued")
+    daemon.runtime.conversation_store.record(owner_user_id=member, project_id=other.project_id, role="user", content="Other project", source="test", source_message_id="other")
+    first = daemon.project_records(actor_user_id=member, owner_user_id=member, project_id=project.project_id, limit=2)
+    assert first["schedules_more"] and first["executions_more"]
+    assert "conversation" not in first
+    assert len(first["schedules"]) == len(first["executions"]) == 2
+    assert all(task["schedule_kind"] == "once" for task in first["schedules"])
+    assert "Other project" not in str(first)
+    second = daemon.project_records(actor_user_id=member, owner_user_id=member, project_id=project.project_id, limit=2, schedules_offset=2, executions_offset=2)
+    assert len(second["schedules"]) == len(second["executions"]) == 1
+    assert not second["schedules_more"] and not second["executions_more"]
+    admin_page = daemon.project_records(actor_user_id=admin, owner_user_id=member, project_id=project.project_id)
+    assert "conversation" not in admin_page
+    with pytest.raises(PermissionError):
+        daemon.project_records(actor_user_id=stranger, owner_user_id=member, project_id=project.project_id)
+    with pytest.raises(PermissionError):
+        daemon.project_records(actor_user_id=stranger, owner_user_id=stranger, project_id=project.project_id)
+
+
+def test_project_todos_are_explicit_scoped_idempotent_and_verified(work):
+    from alphonse.agent_v2.core.core import ToolExecutionContext
+    from alphonse.agent_v2.core.io.identity import V2IdentityResolver
+    from alphonse.agent_v2.core.messages import InMemoryMessageQueue
+    from alphonse.agent_v2.core.scheduled_tasks import ScheduledTaskStore
+    from alphonse.agent_v2.core.tools.registry.native.project_todo import execute_project_todo, execute_project_todo_list
+
+    daemon, admin, member, stranger, tmp_path = work
+    daemon.runtime.schedule_store = ScheduledTaskStore(":memory:")
+    project = daemon.runtime.project_store.create_project(name="Trip", root_path=str(tmp_path / "todo-trip"), owner_user_id=member)
+    task = TaskState(task_id="request-1", user=member, project_id=project.project_id, goal="Add packing")
+    context = ToolExecutionContext(task=task, messages=InMemoryMessageQueue(), project_store=daemon.runtime.project_store,
+        schedule_store=daemon.runtime.schedule_store, identity_resolver=V2IdentityResolver(user_store=daemon.runtime.user_store))
+    first = execute_project_todo({"action": "create", "title": "Pack bags"}, context=context)
+    retry = execute_project_todo({"action": "create", "title": "Pack bags"}, context=context)
+    assert first["todo_id"] == retry["todo_id"]
+    assert first["verification"] == {"status": "verified", "source": "project_todo_store_readback"}
+    assert execute_project_todo_list({}, context=context)["items"][0]["title"] == "Pack bags"
+    assert daemon.project_records(actor_user_id=member, owner_user_id=member, project_id=project.project_id)["todos"][0]["todo_id"] == first["todo_id"]
+    with pytest.raises(ValueError, match="project_todo_action_invalid"):
+        execute_project_todo({"action": "complete", "todo_id": first["todo_id"]}, context=context)
+    with pytest.raises(KeyError, match="project_todo_not_found"):
+        daemon.mutate_project_todo(actor_user_id=admin, project_id=project.project_id, action="complete", todo_id=first["todo_id"])
+    done = daemon.mutate_project_todo(actor_user_id=member, project_id=project.project_id, action="complete", todo_id=first["todo_id"])
+    assert done["status"] == "completed"
+    reopened = daemon.mutate_project_todo(actor_user_id=member, project_id=project.project_id, action="reopen", todo_id=first["todo_id"])
+    assert reopened["status"] == "pending"
+    task.user = stranger
+    with pytest.raises(PermissionError, match="project_todo_project_forbidden"):
+        execute_project_todo({"action": "create", "title": "No access"}, context=context)
+    with pytest.raises(PermissionError, match="project_todo_project_forbidden"):
+        daemon.mutate_project_todo(actor_user_id=stranger, project_id=project.project_id, action="create", title="No access", request_key="one")
+    task.user = member
+    cancelled = ToolExecutionContext(task=task, messages=InMemoryMessageQueue(), project_store=daemon.runtime.project_store,
+        schedule_store=daemon.runtime.schedule_store, identity_resolver=V2IdentityResolver(user_store=daemon.runtime.user_store), cancellation_checker=lambda: True)
+    with pytest.raises(RuntimeError, match="project_todo_cancelled"):
+        execute_project_todo({"action": "create", "title": "Cancelled"}, context=cancelled)
+
+
+def test_project_todos_survive_restart_and_require_exact_owner_project_and_id(tmp_path):
+    from alphonse.agent_v2.core.scheduled_tasks import ScheduledTaskStore
+    path = tmp_path / "todos.sqlite"
+    first = ScheduledTaskStore(path)
+    saved = first.create_project_todo(owner_user_id="alex", project_id="trip", title="Pack", idempotency_key="request-1")
+    with pytest.raises(ValueError, match="project_todo_idempotency_conflict"):
+        first.create_project_todo(owner_user_id="alex", project_id="trip", title="Different", idempotency_key="request-1")
+    reopened = ScheduledTaskStore(path)
+    assert reopened.project_todos_page(owner_user_id="alex", project_id="trip")[0]["todo_id"] == saved["todo_id"]
+    assert not reopened.project_todos_page(owner_user_id="alex", project_id="other")
+    assert not reopened.project_todos_page(owner_user_id="other", project_id="trip")
+    for owner, project in [("other", "trip"), ("alex", "other")]:
+        with pytest.raises(KeyError, match="project_todo_not_found"):
+            reopened.update_project_todo(owner_user_id=owner, project_id=project, todo_id=saved["todo_id"], status="completed")
+    assert reopened.project_todos_page(owner_user_id="alex", project_id="trip")[0]["status"] == "pending"
+
+
+def test_project_todo_ipc_binds_actor_and_does_not_accept_spoofed_owner(work):
+    from alphonse.agent_v2.core.scheduled_tasks import ScheduledTaskStore
+    daemon, admin, member, stranger, tmp_path = work
+    daemon.runtime.schedule_store = ScheduledTaskStore(":memory:")
+    project = daemon.runtime.project_store.create_project(name="Trip", root_path=str(tmp_path / "ipc-todos"), owner_user_id=member)
+    daemon.current_user = lambda: {"user": {"user_id": member}}
+    server = object.__new__(V2DaemonServer)
+    server.daemon = daemon
+    result = server._dispatch({"method": "mutate_project_todo", "params": {"actor_user_id": admin, "owner_user_id": admin, "project_id": project.project_id, "action": "create", "title": "Pack", "request_key": "request-1"}})
+    assert result["todo"]["owner_user_id"] == member
+    assert not daemon.runtime.schedule_store.project_todos_page(owner_user_id=admin, project_id=project.project_id)
+    daemon.current_user = lambda: {"user": {"user_id": stranger}}
+    with pytest.raises(PermissionError, match="project_todo_project_forbidden"):
+        server._dispatch({"method": "mutate_project_todo", "params": {"actor_user_id": member, "project_id": project.project_id, "action": "complete", "todo_id": result["todo"]["todo_id"]}})
+
+
+def test_ordinary_conversation_creates_todo_in_named_project_without_changing_conversation_scope(work):
+    from alphonse.agent_v2.core.core import ToolExecutionContext
+    from alphonse.agent_v2.core.io.identity import V2IdentityResolver
+    from alphonse.agent_v2.core.messages import InMemoryMessageQueue
+    from alphonse.agent_v2.core.scheduled_tasks import ScheduledTaskStore
+    from alphonse.agent_v2.core.tools.registry.native.project_todo import execute_project_todo
+
+    daemon, admin, member, stranger, tmp_path = work
+    daemon.runtime.schedule_store = ScheduledTaskStore(":memory:")
+    project = daemon.runtime.project_store.create_project(name="Weekend Away", root_path=str(tmp_path / "weekend"), owner_user_id=member)
+    task = TaskState(task_id="request-in-conversation", user=member, goal="Please add book the train to my Weekend Away project.")
+    context = ToolExecutionContext(task=task, messages=InMemoryMessageQueue(), project_store=daemon.runtime.project_store,
+        schedule_store=daemon.runtime.schedule_store, identity_resolver=V2IdentityResolver(user_store=daemon.runtime.user_store))
+    result = execute_project_todo({"action": "create", "title": "Book the train", "project_name": "Weekend Away"}, context=context)
+    assert result["project_id"] == project.project_id and result["project_name"] == "Weekend Away"
+    assert not task.project_id
+    assert daemon.project_records(actor_user_id=member, owner_user_id=member, project_id=project.project_id)["todos"][0]["title"] == "Book the train"
+    assert execute_project_todo({"action": "create", "title": "Book the train"}, context=context)["todo_id"] == result["todo_id"]
+
+
+def test_projectless_todo_fails_closed_for_ambiguous_unmentioned_and_inaccessible_projects(work):
+    from alphonse.agent_v2.core.core import ToolExecutionContext
+    from alphonse.agent_v2.core.io.identity import V2IdentityResolver
+    from alphonse.agent_v2.core.messages import InMemoryMessageQueue
+    from alphonse.agent_v2.core.scheduled_tasks import ScheduledTaskStore
+    from alphonse.agent_v2.core.tools.registry.native.project_todo import execute_project_todo
+
+    daemon, admin, member, stranger, tmp_path = work
+    daemon.runtime.schedule_store = ScheduledTaskStore(":memory:")
+    alpha = daemon.runtime.project_store.create_project(name="Alpha", root_path=str(tmp_path / "alpha"), owner_user_id=member)
+    beta = daemon.runtime.project_store.create_project(name="Beta", root_path=str(tmp_path / "beta"), owner_user_id=member)
+    private = daemon.runtime.project_store.create_project(name="Secret", root_path=str(tmp_path / "secret"), owner_user_id=stranger)
+    task = TaskState(task_id="req", user=member, goal="Add packing to Alpha or Beta.")
+    context = ToolExecutionContext(task=task, messages=InMemoryMessageQueue(), project_store=daemon.runtime.project_store,
+        schedule_store=daemon.runtime.schedule_store, identity_resolver=V2IdentityResolver(user_store=daemon.runtime.user_store))
+    with pytest.raises(ValueError, match="project_todo_project_ambiguous"):
+        execute_project_todo({"action": "create", "title": "Pack", "project_name": "Alpha"}, context=context)
+    task.append_conversation_message(member, "Beta")  # Authenticated clarification in this task.
+    result = execute_project_todo({"action": "create", "title": "Pack", "project_name": "Beta"}, context=context)
+    assert result["project_id"] == beta.project_id
+    with pytest.raises(ValueError, match="project_todo_project_mismatch"):
+        execute_project_todo({"action": "create", "title": "Wrong", "project_name": "Alpha"}, context=context)
+    task.goal = "Add a to-do to Secret"
+    task.conversation_records = []
+    with pytest.raises(ValueError, match="project_todo_project_reference_required"):
+        execute_project_todo({"action": "create", "title": "Private", "project_id": private.project_id}, context=context)
+    task.goal = "Add a to-do"
+    task.append_conversation_message("Alphonse", "I suggest Alpha")
+    with pytest.raises(ValueError, match="project_todo_project_reference_required"):
+        execute_project_todo({"action": "create", "title": "Unmentioned", "project_name": "Alpha"}, context=context)
+    assert daemon.runtime.schedule_store.project_todos_page(owner_user_id=member, project_id=alpha.project_id) == []
+
+
+def test_projectless_todo_disambiguates_duplicate_names_only_with_user_supplied_id(work):
+    from alphonse.agent_v2.core.core import ToolExecutionContext
+    from alphonse.agent_v2.core.io.identity import V2IdentityResolver
+    from alphonse.agent_v2.core.messages import InMemoryMessageQueue
+    from alphonse.agent_v2.core.scheduled_tasks import ScheduledTaskStore
+    from alphonse.agent_v2.core.tools.registry.native.project_todo import execute_project_todo
+
+    daemon, admin, member, _, tmp_path = work
+    daemon.runtime.schedule_store = ScheduledTaskStore(":memory:")
+    first = daemon.runtime.project_store.create_project(name="Trip", root_path=str(tmp_path / "trip1"), owner_user_id=member)
+    second = daemon.runtime.project_store.create_project(name="Trip", root_path=str(tmp_path / "trip2"), owner_user_id=member)
+    task = TaskState(task_id="req", user=member, goal="Add packing to Trip")
+    context = ToolExecutionContext(task=task, messages=InMemoryMessageQueue(), project_store=daemon.runtime.project_store,
+        schedule_store=daemon.runtime.schedule_store, identity_resolver=V2IdentityResolver(user_store=daemon.runtime.user_store))
+    with pytest.raises(ValueError, match="project_todo_project_ambiguous"):
+        execute_project_todo({"action": "create", "title": "Pack", "project_id": first.project_id}, context=context)
+    task.append_conversation_message(member, second.project_id)
+    assert execute_project_todo({"action": "create", "title": "Pack", "project_id": second.project_id}, context=context)["project_id"] == second.project_id
+
+
+def test_projectless_todo_lookup_returns_only_accessible_projects_when_clarification_needed(work):
+    from alphonse.agent_v2.core.core import ToolExecutionContext
+    from alphonse.agent_v2.core.io.identity import V2IdentityResolver
+    from alphonse.agent_v2.core.messages import InMemoryMessageQueue
+    from alphonse.agent_v2.core.scheduled_tasks import ScheduledTaskStore
+    from alphonse.agent_v2.core.tools.registry.native.project_todo import execute_project_todo_list
+
+    daemon, admin, member, stranger, tmp_path = work
+    daemon.runtime.schedule_store = ScheduledTaskStore(":memory:")
+    visible = daemon.runtime.project_store.create_project(name="Repairs", root_path=str(tmp_path / "repairs"), owner_user_id=member)
+    daemon.runtime.project_store.create_project(name="Private", root_path=str(tmp_path / "private-records"), owner_user_id=stranger)
+    task = TaskState(task_id="req", user=member, goal="Add a to-do to my project")
+    context = ToolExecutionContext(task=task, messages=InMemoryMessageQueue(), project_store=daemon.runtime.project_store,
+        schedule_store=daemon.runtime.schedule_store, identity_resolver=V2IdentityResolver(user_store=daemon.runtime.user_store))
+    result = execute_project_todo_list({}, context=context)
+    assert result["project_selection_required"]
+    assert [row["project_id"] for row in result["projects"]] == [visible.project_id]
+    assert "Private" not in str(result)
+    task.append_conversation_message(member, "Repairs")
+    resolved = execute_project_todo_list({}, context=context)
+    assert resolved["project_id"] == visible.project_id and resolved["items"] == []
+
+
+def test_project_todo_uses_requester_turns_and_rechecks_project_access_after_clarification(work):
+    from alphonse.agent_v2.core.core import CoreMessage, ToolExecutionContext
+    from alphonse.agent_v2.core.io.identity import V2IdentityResolver
+    from alphonse.agent_v2.core.messages import InMemoryMessageQueue
+    from alphonse.agent_v2.core.scheduled_tasks import ScheduledTaskStore
+    from alphonse.agent_v2.core.tools.registry.native.project_todo import execute_project_todo
+    from datetime import datetime, timezone
+
+    daemon, admin, member, stranger, tmp_path = work
+    daemon.runtime.schedule_store = ScheduledTaskStore(":memory:")
+    project = daemon.runtime.project_store.create_project(name="House", root_path=str(tmp_path / "house"), owner_user_id=stranger, visibility="shared")
+    daemon.runtime.project_store.add_member(project.project_id, member)
+    message = CoreMessage(timestamp=datetime.now(timezone.utc), prompt="Add paint the door to House", user=member)
+    task = TaskState.from_message(message, message_id="ordinary-message")
+    context = ToolExecutionContext(task=task, messages=InMemoryMessageQueue(), project_store=daemon.runtime.project_store,
+        schedule_store=daemon.runtime.schedule_store, identity_resolver=V2IdentityResolver(user_store=daemon.runtime.user_store))
+    daemon.runtime.project_store.remove_member(project.project_id, member)
+    with pytest.raises(ValueError, match="project_todo_project_reference_required"):
+        execute_project_todo({"action": "create", "title": "Paint the door", "project_name": "House"}, context=context)
+    assert not daemon.runtime.schedule_store.project_todos_page(owner_user_id=member, project_id=project.project_id)
+    daemon.runtime.project_store.add_member(project.project_id, member)
+    result = execute_project_todo({"action": "create", "title": "Paint the door", "project_name": "House"}, context=context)
+    assert result["project_id"] == project.project_id
+    assert task.project_id == ""
+    assert daemon.runtime.schedule_store.project_todos_page(owner_user_id=member, project_id=project.project_id)[0]["title"] == "Paint the door"

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { avatarState, avatarStateLabel, capdActivityLabel, canOpenSettingsSection, projectKey } from "./layoutState";
+import { avatarState, avatarStateLabel, capdActivityLabel, canOpenSettingsSection, isCurrentDesktopAdmin, projectKey, SETTINGS_SECTIONS } from "./layoutState";
 
 describe("Desktop layout state helpers", () => {
   it("maps CAPD activity into compact node labels", () => {
@@ -21,9 +21,19 @@ describe("Desktop layout state helpers", () => {
   });
 
   it("keeps optional account settings available to a household member", () => {
+    expect(SETTINGS_SECTIONS.slice(0, 6).map(([id]) => id)).toEqual(["appearance", "general", "skills", "members", "integrations", "notifications"]);
+    expect(canOpenSettingsSection("notifications", false)).toBe(true);
+    expect(canOpenSettingsSection("members", false)).toBe(true);
     expect(canOpenSettingsSection("integrations", false)).toBe(true);
     expect(canOpenSettingsSection("skills", false)).toBe(false);
     expect(canOpenSettingsSection("skills", true)).toBe(true);
+  });
+
+  it("recognizes the configured desktop administrator independently of profile role", () => {
+    expect(isCurrentDesktopAdmin({ onboarded: true, user: { is_active: true } })).toBe(true);
+    expect(isCurrentDesktopAdmin({ onboarded: true, user: { is_active: false } })).toBe(false);
+    expect(isCurrentDesktopAdmin({ onboarded: false, user: { is_active: true } })).toBe(false);
+    expect(isCurrentDesktopAdmin({ onboarded: true, user: null })).toBe(false);
   });
 
   it("uses a stable home bucket for blank projects", () => {

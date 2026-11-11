@@ -1,0 +1,139 @@
+{
+  "schema_version": 1,
+  "split": "representative",
+  "cases": [
+    {
+      "id": "fixture-note-read",
+      "goal": "Read the medicine named in the synthetic note and reply in Spanish.",
+      "fixture": {
+        "permissions": [
+          "read"
+        ],
+        "files": {
+          "Receta.md": "Medicine: amoxicillin\n"
+        },
+        "expected_response": "La nota dice amoxicillin.",
+        "expected_content": "Medicine: amoxicillin"
+      },
+      "provider_script": {
+        "baseline": "deterministic_adapters:markdown-prescription-no-ocr, adapted synthetic task understanding",
+        "candidate": [
+          {
+            "kind": "tool",
+            "tool_id": "native.fixture_read",
+            "arguments": {
+              "path": "Receta.md"
+            }
+          },
+          {
+            "kind": "answer",
+            "text": "La nota dice amoxicillin."
+          }
+        ]
+      },
+      "oracle": {
+        "allowed_statuses": [
+          "completed"
+        ],
+        "response_contains": [
+          "amoxicillin"
+        ],
+        "minimum_source_read_counts": {"Receta.md": 1},
+        "effects": {},
+        "max_questions": 0
+      }
+    },
+    {
+      "id": "fixture-note-denied",
+      "goal": "Read the medicine named in the synthetic note and reply in Spanish.",
+      "fixture": {
+        "permissions": [],
+        "files": {
+          "Receta.md": "Medicine: amoxicillin\n"
+        },
+        "expected_response": "La nota dice amoxicillin.",
+        "expected_content": "Medicine: amoxicillin"
+      },
+      "provider_script": {
+        "baseline": "deterministic_adapters:markdown-prescription-no-ocr, adapted synthetic task understanding",
+        "candidate": [
+          {
+            "kind": "tool",
+            "tool_id": "native.fixture_read",
+            "arguments": {
+              "path": "Receta.md"
+            }
+          },
+          {
+            "kind": "answer",
+            "text": "La nota dice amoxicillin."
+          }
+        ]
+      },
+      "oracle": {
+        "allowed_statuses": [
+          "blocked",
+          "failed"
+        ],
+        "forbidden_accesses": [
+          "Receta.md"
+        ],
+        "response_forbidden": [
+          "amoxicillin"
+        ],
+        "effects": {},
+        "max_questions": 0,
+        "reason_contains": [
+          "denied"
+        ]
+      }
+    },
+    {
+      "id": "fixture-note-cancelled",
+      "goal": "Read the medicine named in the synthetic note and reply in Spanish.",
+      "fixture": {
+        "permissions": [
+          "read"
+        ],
+        "files": {
+          "Receta.md": "Medicine: amoxicillin\n"
+        },
+        "expected_response": "La nota dice amoxicillin.",
+        "expected_content": "Medicine: amoxicillin",
+        "cancelled": true
+      },
+      "provider_script": {
+        "baseline": "deterministic_adapters:markdown-prescription-no-ocr, adapted synthetic task understanding",
+        "candidate": [
+          {
+            "kind": "tool",
+            "tool_id": "native.fixture_read",
+            "arguments": {
+              "path": "Receta.md"
+            }
+          },
+          {
+            "kind": "answer",
+            "text": "La nota dice amoxicillin."
+          }
+        ]
+      },
+      "oracle": {
+        "allowed_statuses": [
+          "cancelled"
+        ],
+        "forbidden_accesses": [
+          "Receta.md"
+        ],
+        "response_forbidden": [
+          "amoxicillin"
+        ],
+        "effects": {},
+        "max_questions": 0,
+        "reason_contains": [
+          "cancelled"
+        ]
+      }
+    }
+  ]
+}

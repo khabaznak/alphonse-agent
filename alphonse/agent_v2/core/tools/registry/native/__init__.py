@@ -2,6 +2,7 @@
 
 from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry
 from alphonse.agent_v2.core.tools.registry.native.memory import build_search_memory_tool_definition, build_read_memory_source_tool_definition
+from alphonse.agent_v2.core.tools.registry.native.project_todo import build_project_todo_tool_definition, build_project_todo_list_tool_definition
 from alphonse.agent_v2.core.tools.registry.native.ask_question import ASK_QUESTION_TOOL_ID
 from alphonse.agent_v2.core.tools.registry.native.ask_question import ASK_QUESTION_TOOL_NAME
 from alphonse.agent_v2.core.tools.registry.native.ask_question import build_ask_question_tool_definition
@@ -38,7 +39,7 @@ from alphonse.agent_v2.core.tools.registry.native.skill_maintain import build_sk
 from alphonse.agent_v2.core.tools.registry.native.browser_workflow import build_browser_workflow_tools
 
 
-def build_native_tool_registry(web_tools_settings: WebToolsSettings | None = None, asset_store: object | None = None, media_tools_settings: MediaToolsSettings | None = None, artifact_store: object | None = None, on_artifact_changed: object | None = None, user_store: object | None = None, skill_store: SkillStore | None = None, management_runtime: object | None = None) -> InMemoryToolRegistry:
+def build_native_tool_registry(web_tools_settings: WebToolsSettings | None = None, asset_store: object | None = None, media_tools_settings: MediaToolsSettings | None = None, artifact_store: object | None = None, on_artifact_changed: object | None = None, user_store: object | None = None, skill_store: SkillStore | None = None, management_runtime: object | None = None, coding_skill_service: object | None = None) -> InMemoryToolRegistry:
     """Build the default v2-native tool registry."""
     from alphonse.agent_v2.core.tools.registry.native.integration_manage import build_integration_manage_tool_definition
     registry = InMemoryToolRegistry()
@@ -52,6 +53,8 @@ def build_native_tool_registry(web_tools_settings: WebToolsSettings | None = Non
     registry.register(build_deliver_message_tool_definition())
     registry.register(build_send_attachment_tool_definition(asset_store))
     registry.register(build_ask_question_tool_definition())
+    registry.register(build_project_todo_tool_definition())
+    registry.register(build_project_todo_list_tool_definition())
     registry.register(build_scheduled_task_tool_definition())
     registry.register(build_scheduled_task_delivery_tool_definition())
     if skill_store is not None:
@@ -62,6 +65,14 @@ def build_native_tool_registry(web_tools_settings: WebToolsSettings | None = Non
         registry.register(build_skill_install_tool_definition(
             skill_store, is_admin=getattr(user_store, "is_admin", None),
         ))
+        if coding_skill_service is not None:
+            if getattr(coding_skill_service, 'skills', None) is not skill_store:
+                raise ValueError('coding_skill_store_mismatch')
+            if (getattr(coding_skill_service, 'provider', None) is None
+                    or getattr(coding_skill_service, 'verifier', None) is None):
+                raise ValueError('coding_skill_isolated_provider_unavailable')
+            from alphonse.agent_v2.core.tools.registry.native.coding_skill import build_coding_skill_tool_definition
+            registry.register(build_coding_skill_tool_definition(coding_skill_service))
     settings = web_tools_settings or WebToolsSettings()
     registry.register(build_web_search_tool_definition(settings))
     registry.register(build_web_fetch_tool_definition(settings))

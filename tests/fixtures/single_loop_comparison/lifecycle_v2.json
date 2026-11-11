@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "split": "lifecycle",
+  "cases": [
+    {
+      "id": "fixture-note-restart",
+      "goal": "Resume the fixture read after interruption before evidence was recorded.",
+      "fixture": {
+        "permissions": [
+          "read"
+        ],
+        "files": {
+          "Receta.md": "Medicine: amoxicillin\n"
+        },
+        "expected_response": "La nota dice amoxicillin.",
+        "expected_content": "Medicine: amoxicillin",
+        "interrupt_before_evidence": true
+      },
+      "provider_script": {
+        "baseline": "deterministic_adapters:markdown-prescription-no-ocr, adapted synthetic task understanding",
+        "candidate": [
+          {
+            "kind": "tool",
+            "tool_id": "native.fixture_read",
+            "arguments": {
+              "path": "Receta.md"
+            }
+          },
+          {
+            "kind": "answer",
+            "text": "La nota dice amoxicillin."
+          }
+        ]
+      },
+      "oracle": {
+        "allowed_statuses": [
+          "blocked"
+        ],
+        "reason_contains": [
+          "unresolved_inflight"
+        ],
+        "effects": {},
+        "max_questions": 0,
+        "source_read_counts": {
+          "Receta.md": 1
+        },
+        "restart_count": 1,
+        "response_forbidden": [
+          "amoxicillin"
+        ]
+      }
+    },
+    {
+      "id": "fixture-question-unavailable",
+      "goal": "Ask the user which synthetic note to use.",
+      "fixture": {
+        "permissions": [
+          "read"
+        ],
+        "files": {
+          "Receta.md": "Medicine: amoxicillin\n"
+        },
+        "expected_response": "La nota dice amoxicillin.",
+        "expected_content": "Medicine: amoxicillin"
+      },
+      "provider_script": {
+        "baseline": "deterministic_adapters:markdown-prescription-no-ocr, adapted synthetic task understanding",
+        "candidate": [
+          {
+            "kind": "question",
+            "text": "Which synthetic note should I use?"
+          }
+        ]
+      },
+      "oracle": {
+        "allowed_statuses": [
+          "waiting_user"
+        ],
+        "reason_contains": [
+          "question_delivery_not_integrated"
+        ],
+        "effects": {},
+        "max_questions": 1,
+        "source_read_counts": {
+          "Receta.md": 0
+        }
+      }
+    }
+  ]
+}

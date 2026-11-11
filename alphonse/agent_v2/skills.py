@@ -130,6 +130,15 @@ class SkillStore:
             result.append({"path": path.relative_to(root).as_posix(), "size_bytes": size, "text_editable": text})
         return result
 
+    def directories(self, skill_id: str) -> list[str]:
+        """List package directories, including empty ones, without following links."""
+        record = self.get(skill_id)
+        if record is None:
+            raise KeyError("skill_not_found")
+        root = Path(record.directory)
+        return sorted(path.relative_to(root).as_posix() for path in root.rglob("*")
+                      if not path.is_symlink() and path.is_dir())
+
     def inspect_file(self, skill_id: str, relative_path: str) -> dict[str, Any]:
         record = self.get(skill_id)
         if record is None:

@@ -1,0 +1,460 @@
+{
+  "schema_version": 1,
+  "experiment_kind": "development",
+  "protocol_sha256": "722af0bd6022c9acc21003d344b94067480a9e2fb9c03279bba687fcabe937bf",
+  "corpus_sha256": "e59bdc885c01fe6d1dea4314a9002251e71a20a28f3ca20bed2045f51591aa9e",
+  "oracle_sha256": "e59bdc885c01fe6d1dea4314a9002251e71a20a28f3ca20bed2045f51591aa9e",
+  "case_ids": [
+    "fixture-note-read",
+    "fixture-note-denied",
+    "fixture-note-cancelled"
+  ],
+  "arms": {
+    "v3": {
+      "status": "available",
+      "revision": "07c1e65d043ed7e578d0cb2f4c876b9d7cdb0738",
+      "source_sha256": "1de8ff6954ea9b8d956495a83f137ba948aad2f37591e6fbdb043b04d42fb104",
+      "prompt_sha256": "9e437b6a6d3e0413336394947ebc616b2f7e2c6555f5590d894482b7c06cfed5",
+      "tool_catalog_sha256": "f790e09ce84e485fe8fc299c1c730716cf398d1d34cb7fb54fd0a7bb62025cae",
+      "authorization_policy_sha256": "f790e09ce84e485fe8fc299c1c730716cf398d1d34cb7fb54fd0a7bb62025cae",
+      "provider": "offline scripted doubles",
+      "model": "no model call",
+      "runtime": {
+        "python": "3.12.11 | packaged by conda-forge | (main, Jun  4 2025, 14:38:53) [Clang 18.1.8 ]",
+        "platform": "macOS-26.6.2-arm64-arm-64bit"
+      },
+      "decoding": "not applicable: scripted deterministic actions",
+      "timezone": "not pinned by adapter; not relevant to this fixture",
+      "network": "no provider calls; not an OS network sandbox",
+      "capabilities": [
+        "synthetic read",
+        "synthetic denial",
+        "pre-execution cancellation"
+      ],
+      "environment": "disposable fixture directory; dependencies and host environment not fully pinned",
+      "timeout_seconds": 30,
+      "limits": "isolated worker timeout; scripted V3 fixture limits",
+      "projection_flag": "off"
+    },
+    "targeted_v3": {
+      "status": "available",
+      "revision": "07c1e65d043ed7e578d0cb2f4c876b9d7cdb0738",
+      "source_sha256": "1de8ff6954ea9b8d956495a83f137ba948aad2f37591e6fbdb043b04d42fb104",
+      "prompt_sha256": "9e437b6a6d3e0413336394947ebc616b2f7e2c6555f5590d894482b7c06cfed5",
+      "tool_catalog_sha256": "f790e09ce84e485fe8fc299c1c730716cf398d1d34cb7fb54fd0a7bb62025cae",
+      "authorization_policy_sha256": "f790e09ce84e485fe8fc299c1c730716cf398d1d34cb7fb54fd0a7bb62025cae",
+      "provider": "offline scripted doubles",
+      "model": "no model call",
+      "runtime": {
+        "python": "3.12.11 | packaged by conda-forge | (main, Jun  4 2025, 14:38:53) [Clang 18.1.8 ]",
+        "platform": "macOS-26.6.2-arm64-arm-64bit"
+      },
+      "decoding": "not applicable: scripted deterministic actions",
+      "timezone": "not pinned by adapter; not relevant to this fixture",
+      "network": "no provider calls; not an OS network sandbox",
+      "capabilities": [
+        "synthetic read",
+        "synthetic denial",
+        "pre-execution cancellation"
+      ],
+      "environment": "disposable fixture directory; dependencies and host environment not fully pinned",
+      "timeout_seconds": 30,
+      "limits": "isolated worker timeout; scripted V3 fixture limits",
+      "projection_flag": "on"
+    },
+    "single_loop": {
+      "status": "available",
+      "revision": "07c1e65d043ed7e578d0cb2f4c876b9d7cdb0738",
+      "source_sha256": "1de8ff6954ea9b8d956495a83f137ba948aad2f37591e6fbdb043b04d42fb104",
+      "prompt_sha256": "9e437b6a6d3e0413336394947ebc616b2f7e2c6555f5590d894482b7c06cfed5",
+      "tool_catalog_sha256": "f790e09ce84e485fe8fc299c1c730716cf398d1d34cb7fb54fd0a7bb62025cae",
+      "authorization_policy_sha256": "f790e09ce84e485fe8fc299c1c730716cf398d1d34cb7fb54fd0a7bb62025cae",
+      "provider": "offline scripted doubles",
+      "model": "no model call",
+      "runtime": {
+        "python": "3.12.11 | packaged by conda-forge | (main, Jun  4 2025, 14:38:53) [Clang 18.1.8 ]",
+        "platform": "macOS-26.6.2-arm64-arm-64bit"
+      },
+      "decoding": "not applicable: scripted deterministic actions",
+      "timezone": "not pinned by adapter; not relevant to this fixture",
+      "network": "no provider calls; not an OS network sandbox",
+      "capabilities": [
+        "synthetic read",
+        "synthetic denial",
+        "pre-execution cancellation"
+      ],
+      "environment": "disposable fixture directory; dependencies and host environment not fully pinned",
+      "timeout_seconds": "unbounded",
+      "limits": "candidate TaskBudget fixture limits; no wall-clock process timeout"
+    },
+    "external": {
+      "status": "unavailable",
+      "reason": "No measured or approved external agent"
+    }
+  },
+  "seed": "read-only-v2-development",
+  "repetitions": 5,
+  "schedule": [
+    {
+      "case_id": "fixture-note-read",
+      "repetition": 1,
+      "arm": "external",
+      "position": 0
+    },
+    {
+      "case_id": "fixture-note-read",
+      "repetition": 1,
+      "arm": "targeted_v3",
+      "position": 1
+    },
+    {
+      "case_id": "fixture-note-read",
+      "repetition": 1,
+      "arm": "single_loop",
+      "position": 2
+    },
+    {
+      "case_id": "fixture-note-read",
+      "repetition": 1,
+      "arm": "v3",
+      "position": 3
+    },
+    {
+      "case_id": "fixture-note-read",
+      "repetition": 2,
+      "arm": "single_loop",
+      "position": 0
+    },
+    {
+      "case_id": "fixture-note-read",
+      "repetition": 2,
+      "arm": "targeted_v3",
+      "position": 1
+    },
+    {
+      "case_id": "fixture-note-read",
+      "repetition": 2,
+      "arm": "external",
+      "position": 2
+    },
+    {
+      "case_id": "fixture-note-read",
+      "repetition": 2,
+      "arm": "v3",
+      "position": 3
+    },
+    {
+      "case_id": "fixture-note-read",
+      "repetition": 3,
+      "arm": "single_loop",
+      "position": 0
+    },
+    {
+      "case_id": "fixture-note-read",
+      "repetition": 3,
+      "arm": "targeted_v3",
+      "position": 1
+    },
+    {
+      "case_id": "fixture-note-read",
+      "repetition": 3,
+      "arm": "external",
+      "position": 2
+    },
+    {
+      "case_id": "fixture-note-read",
+      "repetition": 3,
+      "arm": "v3",
+      "position": 3
+    },
+    {
+      "case_id": "fixture-note-read",
+      "repetition": 4,
+      "arm": "v3",
+      "position": 0
+    },
+    {
+      "case_id": "fixture-note-read",
+      "repetition": 4,
+      "arm": "targeted_v3",
+      "position": 1
+    },
+    {
+      "case_id": "fixture-note-read",
+      "repetition": 4,
+      "arm": "external",
+      "position": 2
+    },
+    {
+      "case_id": "fixture-note-read",
+      "repetition": 4,
+      "arm": "single_loop",
+      "position": 3
+    },
+    {
+      "case_id": "fixture-note-read",
+      "repetition": 5,
+      "arm": "external",
+      "position": 0
+    },
+    {
+      "case_id": "fixture-note-read",
+      "repetition": 5,
+      "arm": "v3",
+      "position": 1
+    },
+    {
+      "case_id": "fixture-note-read",
+      "repetition": 5,
+      "arm": "single_loop",
+      "position": 2
+    },
+    {
+      "case_id": "fixture-note-read",
+      "repetition": 5,
+      "arm": "targeted_v3",
+      "position": 3
+    },
+    {
+      "case_id": "fixture-note-denied",
+      "repetition": 1,
+      "arm": "external",
+      "position": 0
+    },
+    {
+      "case_id": "fixture-note-denied",
+      "repetition": 1,
+      "arm": "v3",
+      "position": 1
+    },
+    {
+      "case_id": "fixture-note-denied",
+      "repetition": 1,
+      "arm": "single_loop",
+      "position": 2
+    },
+    {
+      "case_id": "fixture-note-denied",
+      "repetition": 1,
+      "arm": "targeted_v3",
+      "position": 3
+    },
+    {
+      "case_id": "fixture-note-denied",
+      "repetition": 2,
+      "arm": "external",
+      "position": 0
+    },
+    {
+      "case_id": "fixture-note-denied",
+      "repetition": 2,
+      "arm": "targeted_v3",
+      "position": 1
+    },
+    {
+      "case_id": "fixture-note-denied",
+      "repetition": 2,
+      "arm": "v3",
+      "position": 2
+    },
+    {
+      "case_id": "fixture-note-denied",
+      "repetition": 2,
+      "arm": "single_loop",
+      "position": 3
+    },
+    {
+      "case_id": "fixture-note-denied",
+      "repetition": 3,
+      "arm": "external",
+      "position": 0
+    },
+    {
+      "case_id": "fixture-note-denied",
+      "repetition": 3,
+      "arm": "v3",
+      "position": 1
+    },
+    {
+      "case_id": "fixture-note-denied",
+      "repetition": 3,
+      "arm": "single_loop",
+      "position": 2
+    },
+    {
+      "case_id": "fixture-note-denied",
+      "repetition": 3,
+      "arm": "targeted_v3",
+      "position": 3
+    },
+    {
+      "case_id": "fixture-note-denied",
+      "repetition": 4,
+      "arm": "external",
+      "position": 0
+    },
+    {
+      "case_id": "fixture-note-denied",
+      "repetition": 4,
+      "arm": "targeted_v3",
+      "position": 1
+    },
+    {
+      "case_id": "fixture-note-denied",
+      "repetition": 4,
+      "arm": "v3",
+      "position": 2
+    },
+    {
+      "case_id": "fixture-note-denied",
+      "repetition": 4,
+      "arm": "single_loop",
+      "position": 3
+    },
+    {
+      "case_id": "fixture-note-denied",
+      "repetition": 5,
+      "arm": "v3",
+      "position": 0
+    },
+    {
+      "case_id": "fixture-note-denied",
+      "repetition": 5,
+      "arm": "targeted_v3",
+      "position": 1
+    },
+    {
+      "case_id": "fixture-note-denied",
+      "repetition": 5,
+      "arm": "external",
+      "position": 2
+    },
+    {
+      "case_id": "fixture-note-denied",
+      "repetition": 5,
+      "arm": "single_loop",
+      "position": 3
+    },
+    {
+      "case_id": "fixture-note-cancelled",
+      "repetition": 1,
+      "arm": "external",
+      "position": 0
+    },
+    {
+      "case_id": "fixture-note-cancelled",
+      "repetition": 1,
+      "arm": "v3",
+      "position": 1
+    },
+    {
+      "case_id": "fixture-note-cancelled",
+      "repetition": 1,
+      "arm": "targeted_v3",
+      "position": 2
+    },
+    {
+      "case_id": "fixture-note-cancelled",
+      "repetition": 1,
+      "arm": "single_loop",
+      "position": 3
+    },
+    {
+      "case_id": "fixture-note-cancelled",
+      "repetition": 2,
+      "arm": "v3",
+      "position": 0
+    },
+    {
+      "case_id": "fixture-note-cancelled",
+      "repetition": 2,
+      "arm": "targeted_v3",
+      "position": 1
+    },
+    {
+      "case_id": "fixture-note-cancelled",
+      "repetition": 2,
+      "arm": "external",
+      "position": 2
+    },
+    {
+      "case_id": "fixture-note-cancelled",
+      "repetition": 2,
+      "arm": "single_loop",
+      "position": 3
+    },
+    {
+      "case_id": "fixture-note-cancelled",
+      "repetition": 3,
+      "arm": "external",
+      "position": 0
+    },
+    {
+      "case_id": "fixture-note-cancelled",
+      "repetition": 3,
+      "arm": "single_loop",
+      "position": 1
+    },
+    {
+      "case_id": "fixture-note-cancelled",
+      "repetition": 3,
+      "arm": "v3",
+      "position": 2
+    },
+    {
+      "case_id": "fixture-note-cancelled",
+      "repetition": 3,
+      "arm": "targeted_v3",
+      "position": 3
+    },
+    {
+      "case_id": "fixture-note-cancelled",
+      "repetition": 4,
+      "arm": "v3",
+      "position": 0
+    },
+    {
+      "case_id": "fixture-note-cancelled",
+      "repetition": 4,
+      "arm": "external",
+      "position": 1
+    },
+    {
+      "case_id": "fixture-note-cancelled",
+      "repetition": 4,
+      "arm": "targeted_v3",
+      "position": 2
+    },
+    {
+      "case_id": "fixture-note-cancelled",
+      "repetition": 4,
+      "arm": "single_loop",
+      "position": 3
+    },
+    {
+      "case_id": "fixture-note-cancelled",
+      "repetition": 5,
+      "arm": "external",
+      "position": 0
+    },
+    {
+      "case_id": "fixture-note-cancelled",
+      "repetition": 5,
+      "arm": "targeted_v3",
+      "position": 1
+    },
+    {
+      "case_id": "fixture-note-cancelled",
+      "repetition": 5,
+      "arm": "single_loop",
+      "position": 2
+    },
+    {
+      "case_id": "fixture-note-cancelled",
+      "repetition": 5,
+      "arm": "v3",
+      "position": 3
+    }
+  ],
+  "manifest_sha256": "d0d727460c085d7ac4281e9872b3682dccbc41b160feedc59cbb08545791efb6"
+}

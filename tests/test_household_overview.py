@@ -175,3 +175,13 @@ def test_card_limits_count_only_authorized_shared_records(home):
     result = daemon.household_overview(actor_user_id=admin)
     assert len(result["projects"]) == 12 and result["bounded"] == ["projects"]
     assert "SECRET" not in str(result)
+
+
+def test_household_roster_shows_active_members_without_private_details(home):
+    daemon, admin, member, other, _ = home
+    fourth = daemon.runtime.user_store.create_user(display_name="Fourth")
+    result = daemon.household_overview(actor_user_id=member)
+    assert {row["user_id"] for row in result["members"]} == {admin, member, other, fourth.user_id}
+    assert all(set(row) == {"user_id", "display_name", "role", "is_active"} for row in result["members"])
+    with pytest.raises(PermissionError):
+        daemon.household_overview(actor_user_id="unknown")

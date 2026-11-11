@@ -171,3 +171,16 @@ def test_cross_channel_reply_resumes_pending_question_with_original_task_context
     assert 'Alphonse: "¿Quieres que te recuerde hoy o mañana?"' in resumed.recent_conversation_md
     assert 'alex: "Hoy"' in resumed.recent_conversation_md
     assert questions.get_question(question.question_id).status == "answered"
+
+
+def test_explicit_desktop_project_request_is_new_work_and_checks_access(tmp_path) -> None:
+    router, queue, _, projects = _router()
+    project = projects.create_project(name="Trip", root_path=str(tmp_path / "trip-new-request"), owner_user_id="alex")
+    class PendingQuestion:
+        def route_answer(self, **kwargs):
+            raise AssertionError("A deliberately delegated request must not answer a pending question")
+    router.question_store = PendingQuestion()
+    result = router.ingest(prompt="Arrange the train", user="alex", project_id=project.project_id, integration_id="desktop", provider_key="tui", channel_target="alex", metadata={"desktop_project_request": True})
+    assert result.queued.message.project_id == project.project_id
+    with pytest.raises(ValueError, match="project_not_accessible"):
+        router.ingest(prompt="Private work", user="gaby", project_id=project.project_id, integration_id="desktop", provider_key="tui", channel_target="gaby", metadata={"desktop_project_request": True})

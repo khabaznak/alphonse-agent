@@ -59,8 +59,8 @@ class TaskState:
     evidence_journal: list[dict[str, Any]] = field(default_factory=list)
     check_new_message_count: int = 0
     pdca_cycle_count: int = 0
-    intelligence_engine: str = "tactical_v2"
-    intelligence_schema_version: int = 2
+    intelligence_engine: str = "hierarchical_v3"
+    intelligence_schema_version: int = 3
     hierarchical_state: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
 

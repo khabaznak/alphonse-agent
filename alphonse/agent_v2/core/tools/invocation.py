@@ -86,8 +86,13 @@ class ToolInvocationService:
         if parallel and not descriptor.read_only:
             return _failure(call_id, tool_id, "tool_not_parallel_safe", "This tool may only be called sequentially in program mode.")
 
+        actor = str(self.task.user or "").strip()
+        # Tool arguments and results may contain private household data. A UI
+        # event without an actor is broadcast to all Desktop users, so omit it
+        # rather than projecting an unscoped payload.
         recorded_arguments = {"redacted": True} if sensitive else dict(arguments)
-        self.context.emit_ui_event("tool_call_started", {"tool_call_id": call_id, "tool_id": tool_id, "tool_name": descriptor.name, "arguments": recorded_arguments, "programmatic": True})
+        if actor:
+            self.context.emit_ui_event("tool_call_started", {"user": actor, "task_id": str(self.task.task_id or ""), "tool_call_id": call_id, "tool_id": tool_id, "tool_name": descriptor.name, "arguments": recorded_arguments, "programmatic": True})
         self.context.record_memory_event(self.task, "Tool Call", {"tool_id": tool_id, "tool_name": descriptor.name, "arguments": recorded_arguments, "programmatic": True})
         try:
             result = self.execute_or_raise(tool_id, arguments)
@@ -118,7 +123,8 @@ class ToolInvocationService:
                        "result": {"redacted": True} if outcome["status"] != "failed" else None,
                        "error": {"code": "sensitive_tool_failed", "message": "sensitive_tool_failed"} if outcome["status"] == "failed" else None}
         event_outcome = {"call_id": call_id, "tool_id": tool_id, "status": outcome["status"], "redacted": True} if sensitive else outcome
-        self.context.emit_ui_event("tool_call_result", {"tool_call_id": call_id, "tool_id": tool_id, "tool_name": descriptor.name, **event_outcome, "programmatic": True})
+        if actor:
+            self.context.emit_ui_event("tool_call_result", {"user": actor, "task_id": str(self.task.task_id or ""), "tool_call_id": call_id, "tool_id": tool_id, "tool_name": descriptor.name, **event_outcome, "programmatic": True})
         self.context.record_memory_event(self.task, "Tool Result", {**event_outcome, "programmatic": True})
         return outcome
 

@@ -6,9 +6,13 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from itertools import count
 from threading import RLock
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from alphonse.agent_v2.core.core import CoreMessage
+
+if TYPE_CHECKING:
+    from alphonse.agent_v2.core.messages.claim_fence import ClaimReceipt
 
 
 def _now_utc() -> datetime:
@@ -23,6 +27,8 @@ class QueuedMessage:
     message_id: str = field(default_factory=lambda: str(uuid4()))
     queued_at: datetime = field(default_factory=_now_utc)
     sequence: int = 0
+    # Internal ownership receipt; never expose it in prompts, UI or telemetry.
+    claim_receipt: "ClaimReceipt | None" = field(default=None, repr=False, compare=False)
 
 
 @dataclass(frozen=True)

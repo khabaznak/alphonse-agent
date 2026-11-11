@@ -65,17 +65,23 @@ class HierarchicalCAPDProcessor:
             # Provider/transport errors can occur at admission, planning or
             # action composition. Persist an honest terminal state and retain
             # completed evidence rather than leaking a still-running checkpoint.
-            task.status = "cancelled" if context.is_cancelled() else "failed"
-            if isinstance(exc, SystemOneUnavailableError):
+            cancelled = context.is_cancelled()
+            task.status = "cancelled" if cancelled else "failed"
+            if cancelled:
+                reason = "Task cancelled."
+            elif isinstance(exc, SystemOneUnavailableError):
                 reason = str(exc)
             elif type(exc) is ValueError and str(exc) in _SAFE_INFERENCE_ERROR_CODES:
-                # Only exact provider-owned codes are safe to persist. Arbitrary
-                # provider messages can contain private prompts or tool output.
+                # Persist only exact provider-owned codes; arbitrary messages
+                # may contain private prompts or tool output.
                 reason = "v3_runtime_error:" + str(exc)
             else:
                 reason = "v3_runtime_error:" + type(exc).__name__
             task.outcome = {"status": task.status, "reason": reason}
-            task.metadata["v3_terminal_error_type"] = type(exc).__name__
+            if cancelled:
+                task.metadata.pop("v3_terminal_error_type", None)
+            else:
+                task.metadata["v3_terminal_error_type"] = type(exc).__name__
             task.metadata["v3_route"] = "end"
             return self._result(task, context)
 
@@ -553,7 +559,7 @@ class HierarchicalCAPDProcessor:
         if safe is not True:
             return {"status": "review_rejected"}
         if context.delivery_sink is None:
-            return {"status": "delivery_unavailable", "message": message}
+            return {"status": "delivery_unavailable"}
         try:
             result = context.delivery_sink({
                 "event_type": "task.acknowledge",
@@ -562,9 +568,13 @@ class HierarchicalCAPDProcessor:
                 "idempotency_key": f"v3-early-ack:{task.task_id or task.message_id or ''}",
             })
         except Exception as exc:
-            return {"status": "delivery_failed", "error_type": type(exc).__name__, "message": message}
+            return {"status": "delivery_failed", "error_type": type(exc).__name__}
         rendered = dict(result) if isinstance(result, dict) else {"status": "delivery_unknown"}
-        rendered["message"] = message
+        # Only a queued or delivered acknowledgement is an observed message.
+        # In particular, an idempotency conflict must not make an unqueued
+        # regenerated draft appear in activity as if the user received it.
+        if rendered.get("status") in {"queued", "delivered"}:
+            rendered["message"] = message
         return rendered
 
     @staticmethod
@@ -766,12 +776,67 @@ class HierarchicalCAPDProcessor:
 class EngineRoutingProcessor:
     """Delegate to the engine stamped on the queued task."""
 
-    def __init__(self, *, v2: "IntelligenceProcessor", v3: "IntelligenceProcessor") -> None:
-        self.v2 = v2
+    def __init__(self, *, v3: "IntelligenceProcessor") -> None:
         self.v3 = v3
 
     def process(self, task: "TaskState", context: "CoreLoopContext") -> ProcessingResult:
-        return (self.v3 if task.intelligence_engine == "hierarchical_v3" else self.v2).process(task, context)
+        if task.intelligence_engine == "hierarchical_v3":
+            return self.v3.process(task, context)
+        # An unregistered engine must never silently execute under a different
+        # processor, especially on queue retry or checkpoint resumption. The
+        # core loop turns this into a failed processing result without running
+        # the normal successful-task finalization path.
+        raise ValueError("intelligence_engine_unregistered")
+
+
+def _await_scheduled_delivery(task: "TaskState", context: "CoreLoopContext", waiting: dict) -> bool:
+    """Yield the processor until a task-owned outbox receipt becomes terminal."""
+    message_id = str(waiting.get("outbox_message_id") or "")
+    recipient = str(waiting.get("recipient_user_id") or "")
+    started_text = str(waiting.get("started_at") or "")
+    try:
+        started = datetime.fromisoformat(started_text) if started_text else datetime.now(timezone.utc)
+        if started.tzinfo is None:
+            raise ValueError("missing timezone")
+    except ValueError:
+        started = datetime.min.replace(tzinfo=timezone.utc)
+    for _ in range(2):
+        try:
+            expired = (datetime.now(timezone.utc) - started.astimezone(timezone.utc)).total_seconds() >= _SCHEDULED_DELIVERY_WAIT_SECONDS
+            receipt = context.delivery_sink({"event_type": "communication.delivery_timeout" if expired else "communication.delivery_status", "task": task.to_dict(),
+                                             "outbox_message_id": message_id, "recipient_user_id": recipient}) if callable(context.delivery_sink) else {}
+        except Exception:
+            receipt = {}
+        status = str(receipt.get("status") or "unavailable") if isinstance(receipt, dict) else "unavailable"
+        if status == "delivered":
+            task.metadata.pop("v3_scheduled_delivery_wait", None)
+            return True
+        if status in {"pending", "claimed", "retry_wait"}:
+            if expired:
+                status = "unavailable"
+                break
+            task.metadata["v3_scheduled_delivery_wait"] = {"outbox_message_id": message_id, "recipient_user_id": recipient,
+                                                            "started_at": started.isoformat()}
+            stage = getattr(context.messages, "stage_delivery_wait", None)
+            if (context.scheduled_handoff_enabled and callable(stage) and context.question_store is not None
+                    and stage(task, context.question_store, message_id, recipient)):
+                raise ScheduledHandoff()
+            continue  # The provider may have completed while the wait was being staged.
+        break
+    task.metadata.pop("v3_scheduled_delivery_wait", None)
+    if message_id:
+        task.metadata["v3_unconfirmed_delivery_outbox_id"] = message_id
+    task.status = "failed"
+    reason = "scheduled_delivery_failed" if status == "failed" else "scheduled_delivery_outcome_unavailable"
+    task.outcome = {"status": "failure", "reason": reason}
+    task.metadata["v3_failure_response"] = {
+        "source": "scheduled_delivery_recovery", "communication_reviewed": True,
+        "message": ("I could not deliver the scheduled message." if status == "failed" else
+                    "I could not confirm whether the scheduled message was delivered. Please check before retrying."),
+    }
+    task.metadata["v3_route"] = "end"
+    HierarchicalCAPDProcessor._persist(task, context)
+    return False
 
 
 def _await_scheduled_delivery(task: "TaskState", context: "CoreLoopContext", waiting: dict) -> bool:

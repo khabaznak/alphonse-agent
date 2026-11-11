@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "split": "representative",
+  "cases": [
+    {
+      "id": "fixture-note-read",
+      "goal": "Read the medicine named in the synthetic note and reply in Spanish.",
+      "fixture": {"permissions": ["read"], "files": {"Receta.md": "Medicine: amoxicillin\n"}},
+      "provider_script": {
+        "baseline": "deterministic_adapters:markdown-prescription-no-ocr, adapted synthetic task understanding",
+        "candidate": [
+          {"kind": "tool", "tool_id": "native.fixture_read", "arguments": {"path": "Receta.md"}},
+          {"kind": "answer", "text": "La nota dice amoxicillin."}
+        ]
+      },
+      "oracle": {"allowed_statuses": ["completed"], "response_contains": ["amoxicillin"], "effects": {}, "max_questions": 0, "minimum_source_read_counts": {"Receta.md": 1}}
+    },
+    {
+      "id": "unsupported-fixture",
+      "goal": "A deliberately unsupported synthetic case.",
+      "fixture": {"permissions": []},
+      "provider_script": {"baseline": "unsupported", "candidate": []},
+      "oracle": {"allowed_statuses": ["blocked"], "effects": {}}
+    }
+  ]
+}

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sqlite3
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -19,7 +20,6 @@ from alphonse.agent_v2.core.core import StateSnapshot
 from alphonse.agent_v2.core.core import ToolDescriptor
 from alphonse.agent_v2.core.core import ToolRegistry
 from alphonse.agent_v2.core.inference import InferenceRouter
-from alphonse.agent_v2.core.intelligence import PDCAIntelligenceProcessor
 from alphonse.agent_v2.core.intelligence.v3 import EngineRoutingProcessor, HierarchicalCAPDProcessor
 from alphonse.agent_v2.intelligence_engine_settings import SQLiteIntelligenceEngineSettingsStore
 from alphonse.agent_v2.core.io import IntegrationIdentity
@@ -134,6 +134,8 @@ class V2RuntimeHost:
     communication_router: CommunicationRouter
     conversation_store: SQLiteConversationStore
     project_checks: ProjectCheckService | None = None
+    coding_skill_service: Any | None = None
+    coding_skill_error: str = ""
     integration_management: Any | None = None
     # #6 installs the protected native adapter; skill selection grants no access.
     care_records: CareRecords | None = None
@@ -177,6 +179,7 @@ def build_runtime_host(
     communication_thread_store: SQLiteCommunicationThreadStore | None = None,
     conversation_store: SQLiteConversationStore | None = None,
     skill_store: SkillStore | None = None,
+    coding_skill_service: Any | None = None,
 ) -> V2RuntimeHost:
     reset_state()
     provided_tools = tools is not None
@@ -184,6 +187,15 @@ def build_runtime_host(
     user_store = user_store or V2UserStore()
     conversation_store = conversation_store or SQLiteConversationStore()
     skill_store = skill_store or SkillStore(user_store.skills_root())
+    coding_skill_error = ""
+    if coding_skill_service is None:
+        from alphonse.agent_v2.coding_skill_runtime import build_configured_coding_skill_service
+        try:
+            coding_skill_service = build_configured_coding_skill_service(users=user_store, skills=skill_store)
+        except (ValueError, OSError, sqlite3.Error) as exc:
+            reason = str(exc)
+            coding_skill_error = reason if reason.startswith(('coding_skill_', 'coding_container_', 'coding_agent_')) else 'coding_skill_configuration_unavailable'
+            logger.warning('Codex skill delegation unavailable: %s', coding_skill_error)
     intelligence_engine_settings_store = intelligence_engine_settings_store or SQLiteIntelligenceEngineSettingsStore()
     channel = CommunicationChannel(
         queue,
@@ -191,7 +203,7 @@ def build_runtime_host(
         intelligence_engine_provider=lambda project_id: intelligence_engine_settings_store.get().engine_for(project_id),
     )
     visible_state = InMemoryInternalState()
-    processor = processor or EngineRoutingProcessor(v2=PDCAIntelligenceProcessor(), v3=HierarchicalCAPDProcessor())
+    processor = processor or EngineRoutingProcessor(v3=HierarchicalCAPDProcessor())
     web_tools_settings_store = web_tools_settings_store or SQLiteWebToolsSettingsStore()
     code_mode_settings_store = code_mode_settings_store or SQLiteCodeModeSettingsStore()
     media_tools_settings_store = media_tools_settings_store or SQLiteMediaToolsSettingsStore()
@@ -433,6 +445,8 @@ def build_runtime_host(
         memory_settings_store=memory_settings_store,
         system_one_settings_store=system_one_settings_store,
         skill_store=skill_store,
+        coding_skill_service=coding_skill_service,
+        coding_skill_error=coding_skill_error,
         communication_router=communication_router,
         conversation_store=conversation_store,
         ui_events=ui_events,
@@ -458,7 +472,7 @@ def refresh_runtime_media_tools(runtime: V2RuntimeHost) -> None:
 
 def refresh_runtime_artifacts(runtime: V2RuntimeHost) -> None:
     """Refresh native management tools after artifact catalog or skill changes."""
-    registry = build_native_tool_registry(runtime.web_tools_settings_store.get(), runtime.asset_store, runtime.media_tools_settings_store.get(), runtime.artifact_store, lambda: refresh_runtime_artifacts(runtime), runtime.user_store, runtime.skill_store, management_runtime=runtime)
+    registry = build_native_tool_registry(runtime.web_tools_settings_store.get(), runtime.asset_store, runtime.media_tools_settings_store.get(), runtime.artifact_store, lambda: refresh_runtime_artifacts(runtime), runtime.user_store, runtime.skill_store, management_runtime=runtime, coding_skill_service=runtime.coding_skill_service)
     # Artifact programs are not members of the executable tool registry.
     runtime.core.tools = registry
 

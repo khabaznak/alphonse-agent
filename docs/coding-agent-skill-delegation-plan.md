@@ -2,6 +2,60 @@
 
 Status: proposal; no implementation or rollout claim
 
+## Prototype status
+
+An injectable `CodingSkillService` now coordinates durable job identity, a coding
+provider, an independent verifier and installation through `SkillStore`. A
+conditional native tool is enabled only when an immutable, explicitly configured
+container image is supplied. A disposable live run used real Codex inside a
+non-root container, verified a skill in a separate network-disabled container,
+installed it, and activated and ran it through native Bash in the original
+synthetic task. Sandbox probes denied the mounted credential and network access;
+container exit and cancellation stopped tested detached descendants. No real-site
+or autonomous household-task qualification has been performed.
+
+The earlier host-only Codex prototype is not production-ready: a sandboxed process
+could detach and keep writing after its parent exited. The container-backed runner
+must confirm container removal before verification/publication; uncertainty preserves
+the running job for explicit actor-scoped reconciliation. Credentials are mounted
+read-only and copied only into container tmpfs. The build container has network
+access for Codex itself while its generated commands are denied network access;
+the independent verifier has no container network. A user-supplied brief must not
+contain credentials or private household records. Host Docker and image integrity
+remain trusted infrastructure, and container isolation is not a guarantee against
+kernel or runtime vulnerabilities.
+
+The container runs non-root with dropped capabilities, no-new-privileges, a read-only
+root, bounded processes and memory, and a modified Docker seccomp profile that
+allows the namespace syscalls required for Codex's nested sandbox. This widens the
+default syscall policy. The runtime probes the nested sandbox before each build;
+if Docker or isolation fails, no skill is published. An interrupted or ambiguous
+job is never blindly rerun. Reconcile both named job containers and inspect any
+possible publication before starting another operation. Questions, broader runtime
+readiness and autonomous live qualification remain follow-up work.
+
+### Configuring the local container
+
+Build the bundled image with Docker and select its exact immutable image ID in the
+daemon environment (do not supply a mutable image tag):
+
+```sh
+docker build -t alphonse-codex-sandbox:0.156.1 -f alphonse/agent_v2/coding_sandbox/Dockerfile alphonse/agent_v2/coding_sandbox
+docker image inspect --format '{{.Id}}' alphonse-codex-sandbox:0.156.1
+```
+
+Run `alphonse configure-codex-sandbox <sha256:...>` with that ID, then restart
+the daemon. Alternatively, set `ALPHONSE_CODEX_SANDBOX_IMAGE_ID` in the daemon
+environment; it overrides the stored setting. Use `alphonse configure-codex-sandbox
+off` to disable the stored setting. The daemon requires a persistent configured
+household workspace, a reachable Docker daemon, a non-root host identity, and
+an existing Codex `auth.json` under `CODEX_HOME` (or `~/.codex`). Optional
+`ALPHONSE_CODEX_DOCKER_BIN` selects Docker; `ALPHONSE_CODEX_CODING_MODEL` selects
+the Codex model. The image must be built from the bundled Dockerfile by a trusted
+administrator; an immutable ID does not by itself prove image provenance.
+Without the image setting, the native coding tool is not registered. Docker and
+the image are not automatically downloaded or installed by Alphonse.
+
 ## Outcome
 
 Alphonse owns a household request from start to finish. When a reusable software
