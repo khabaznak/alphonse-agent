@@ -1,0 +1,395 @@
+{
+  "schema_version": 1,
+  "experiment_kind": "development",
+  "protocol_sha256": "f51f43a2a9a155e1ae158ebb8b3669be07eb70a8d5028826b2805d3b112bb83d",
+  "corpus_sha256": "746e312ebbd16772674fe8883ec6bf544bf45cf6b37074a65342f944c3c35313",
+  "oracle_sha256": "746e312ebbd16772674fe8883ec6bf544bf45cf6b37074a65342f944c3c35313",
+  "case_ids": [
+    "development-prescription-morning-day-three",
+    "development-prescription-morning-final-day",
+    "development-prescription-morning-after-course"
+  ],
+  "arms": {
+    "v3": {
+      "status": "unavailable",
+      "reason": "Scripted adapter scaffold only; no measured model or decision-grade configuration"
+    },
+    "targeted_v3": {
+      "status": "unavailable",
+      "reason": "Scripted projection adapter scaffold only; no measured model or decision-grade configuration"
+    },
+    "single_loop": {
+      "status": "unavailable",
+      "reason": "Adapter scaffold exists but no configured chooser or measured model"
+    },
+    "external": {
+      "status": "unavailable",
+      "reason": "No approved measured external adapter"
+    }
+  },
+  "seed": "prescription-development-v1",
+  "repetitions": 5,
+  "schedule": [
+    {
+      "case_id": "development-prescription-morning-day-three",
+      "repetition": 1,
+      "arm": "external",
+      "position": 0
+    },
+    {
+      "case_id": "development-prescription-morning-day-three",
+      "repetition": 1,
+      "arm": "v3",
+      "position": 1
+    },
+    {
+      "case_id": "development-prescription-morning-day-three",
+      "repetition": 1,
+      "arm": "single_loop",
+      "position": 2
+    },
+    {
+      "case_id": "development-prescription-morning-day-three",
+      "repetition": 1,
+      "arm": "targeted_v3",
+      "position": 3
+    },
+    {
+      "case_id": "development-prescription-morning-day-three",
+      "repetition": 2,
+      "arm": "targeted_v3",
+      "position": 0
+    },
+    {
+      "case_id": "development-prescription-morning-day-three",
+      "repetition": 2,
+      "arm": "single_loop",
+      "position": 1
+    },
+    {
+      "case_id": "development-prescription-morning-day-three",
+      "repetition": 2,
+      "arm": "external",
+      "position": 2
+    },
+    {
+      "case_id": "development-prescription-morning-day-three",
+      "repetition": 2,
+      "arm": "v3",
+      "position": 3
+    },
+    {
+      "case_id": "development-prescription-morning-day-three",
+      "repetition": 3,
+      "arm": "single_loop",
+      "position": 0
+    },
+    {
+      "case_id": "development-prescription-morning-day-three",
+      "repetition": 3,
+      "arm": "external",
+      "position": 1
+    },
+    {
+      "case_id": "development-prescription-morning-day-three",
+      "repetition": 3,
+      "arm": "targeted_v3",
+      "position": 2
+    },
+    {
+      "case_id": "development-prescription-morning-day-three",
+      "repetition": 3,
+      "arm": "v3",
+      "position": 3
+    },
+    {
+      "case_id": "development-prescription-morning-day-three",
+      "repetition": 4,
+      "arm": "targeted_v3",
+      "position": 0
+    },
+    {
+      "case_id": "development-prescription-morning-day-three",
+      "repetition": 4,
+      "arm": "v3",
+      "position": 1
+    },
+    {
+      "case_id": "development-prescription-morning-day-three",
+      "repetition": 4,
+      "arm": "external",
+      "position": 2
+    },
+    {
+      "case_id": "development-prescription-morning-day-three",
+      "repetition": 4,
+      "arm": "single_loop",
+      "position": 3
+    },
+    {
+      "case_id": "development-prescription-morning-day-three",
+      "repetition": 5,
+      "arm": "single_loop",
+      "position": 0
+    },
+    {
+      "case_id": "development-prescription-morning-day-three",
+      "repetition": 5,
+      "arm": "external",
+      "position": 1
+    },
+    {
+      "case_id": "development-prescription-morning-day-three",
+      "repetition": 5,
+      "arm": "v3",
+      "position": 2
+    },
+    {
+      "case_id": "development-prescription-morning-day-three",
+      "repetition": 5,
+      "arm": "targeted_v3",
+      "position": 3
+    },
+    {
+      "case_id": "development-prescription-morning-final-day",
+      "repetition": 1,
+      "arm": "targeted_v3",
+      "position": 0
+    },
+    {
+      "case_id": "development-prescription-morning-final-day",
+      "repetition": 1,
+      "arm": "single_loop",
+      "position": 1
+    },
+    {
+      "case_id": "development-prescription-morning-final-day",
+      "repetition": 1,
+      "arm": "external",
+      "position": 2
+    },
+    {
+      "case_id": "development-prescription-morning-final-day",
+      "repetition": 1,
+      "arm": "v3",
+      "position": 3
+    },
+    {
+      "case_id": "development-prescription-morning-final-day",
+      "repetition": 2,
+      "arm": "v3",
+      "position": 0
+    },
+    {
+      "case_id": "development-prescription-morning-final-day",
+      "repetition": 2,
+      "arm": "external",
+      "position": 1
+    },
+    {
+      "case_id": "development-prescription-morning-final-day",
+      "repetition": 2,
+      "arm": "targeted_v3",
+      "position": 2
+    },
+    {
+      "case_id": "development-prescription-morning-final-day",
+      "repetition": 2,
+      "arm": "single_loop",
+      "position": 3
+    },
+    {
+      "case_id": "development-prescription-morning-final-day",
+      "repetition": 3,
+      "arm": "single_loop",
+      "position": 0
+    },
+    {
+      "case_id": "development-prescription-morning-final-day",
+      "repetition": 3,
+      "arm": "external",
+      "position": 1
+    },
+    {
+      "case_id": "development-prescription-morning-final-day",
+      "repetition": 3,
+      "arm": "v3",
+      "position": 2
+    },
+    {
+      "case_id": "development-prescription-morning-final-day",
+      "repetition": 3,
+      "arm": "targeted_v3",
+      "position": 3
+    },
+    {
+      "case_id": "development-prescription-morning-final-day",
+      "repetition": 4,
+      "arm": "targeted_v3",
+      "position": 0
+    },
+    {
+      "case_id": "development-prescription-morning-final-day",
+      "repetition": 4,
+      "arm": "external",
+      "position": 1
+    },
+    {
+      "case_id": "development-prescription-morning-final-day",
+      "repetition": 4,
+      "arm": "v3",
+      "position": 2
+    },
+    {
+      "case_id": "development-prescription-morning-final-day",
+      "repetition": 4,
+      "arm": "single_loop",
+      "position": 3
+    },
+    {
+      "case_id": "development-prescription-morning-final-day",
+      "repetition": 5,
+      "arm": "targeted_v3",
+      "position": 0
+    },
+    {
+      "case_id": "development-prescription-morning-final-day",
+      "repetition": 5,
+      "arm": "single_loop",
+      "position": 1
+    },
+    {
+      "case_id": "development-prescription-morning-final-day",
+      "repetition": 5,
+      "arm": "external",
+      "position": 2
+    },
+    {
+      "case_id": "development-prescription-morning-final-day",
+      "repetition": 5,
+      "arm": "v3",
+      "position": 3
+    },
+    {
+      "case_id": "development-prescription-morning-after-course",
+      "repetition": 1,
+      "arm": "external",
+      "position": 0
+    },
+    {
+      "case_id": "development-prescription-morning-after-course",
+      "repetition": 1,
+      "arm": "v3",
+      "position": 1
+    },
+    {
+      "case_id": "development-prescription-morning-after-course",
+      "repetition": 1,
+      "arm": "single_loop",
+      "position": 2
+    },
+    {
+      "case_id": "development-prescription-morning-after-course",
+      "repetition": 1,
+      "arm": "targeted_v3",
+      "position": 3
+    },
+    {
+      "case_id": "development-prescription-morning-after-course",
+      "repetition": 2,
+      "arm": "single_loop",
+      "position": 0
+    },
+    {
+      "case_id": "development-prescription-morning-after-course",
+      "repetition": 2,
+      "arm": "targeted_v3",
+      "position": 1
+    },
+    {
+      "case_id": "development-prescription-morning-after-course",
+      "repetition": 2,
+      "arm": "v3",
+      "position": 2
+    },
+    {
+      "case_id": "development-prescription-morning-after-course",
+      "repetition": 2,
+      "arm": "external",
+      "position": 3
+    },
+    {
+      "case_id": "development-prescription-morning-after-course",
+      "repetition": 3,
+      "arm": "v3",
+      "position": 0
+    },
+    {
+      "case_id": "development-prescription-morning-after-course",
+      "repetition": 3,
+      "arm": "single_loop",
+      "position": 1
+    },
+    {
+      "case_id": "development-prescription-morning-after-course",
+      "repetition": 3,
+      "arm": "targeted_v3",
+      "position": 2
+    },
+    {
+      "case_id": "development-prescription-morning-after-course",
+      "repetition": 3,
+      "arm": "external",
+      "position": 3
+    },
+    {
+      "case_id": "development-prescription-morning-after-course",
+      "repetition": 4,
+      "arm": "single_loop",
+      "position": 0
+    },
+    {
+      "case_id": "development-prescription-morning-after-course",
+      "repetition": 4,
+      "arm": "v3",
+      "position": 1
+    },
+    {
+      "case_id": "development-prescription-morning-after-course",
+      "repetition": 4,
+      "arm": "external",
+      "position": 2
+    },
+    {
+      "case_id": "development-prescription-morning-after-course",
+      "repetition": 4,
+      "arm": "targeted_v3",
+      "position": 3
+    },
+    {
+      "case_id": "development-prescription-morning-after-course",
+      "repetition": 5,
+      "arm": "v3",
+      "position": 0
+    },
+    {
+      "case_id": "development-prescription-morning-after-course",
+      "repetition": 5,
+      "arm": "targeted_v3",
+      "position": 1
+    },
+    {
+      "case_id": "development-prescription-morning-after-course",
+      "repetition": 5,
+      "arm": "single_loop",
+      "position": 2
+    },
+    {
+      "case_id": "development-prescription-morning-after-course",
+      "repetition": 5,
+      "arm": "external",
+      "position": 3
+    }
+  ],
+  "manifest_sha256": "b5418647af53a1dfe173f2de160254b7089e001312c75875f45a978e696ec229"
+}

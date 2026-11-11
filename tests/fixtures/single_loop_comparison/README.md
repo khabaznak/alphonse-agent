@@ -1,5 +1,20 @@
 # Paired read-only fixture
 
+`prescription_schedule_development_v1.json` is an explicitly **development**
+corpus. Its invented records separate source discovery, treatment start dates,
+course duration and time of day. Its frozen oracle independently computes the
+names due on the requested synthetic date, including the final day and the day
+after a course. Cases require a JSON object containing only `due_medications`,
+an array of names. The oracle requires exact set equality and rejects duplicate
+or unknown names, malformed JSON, extra fields, and natural-language answers;
+it does not interpret those answers. It does not grade doses, clinical
+correctness, source retrieval, or user-visible delivery. It is not a
+held-out set: its contents, oracle, and answers are available to developers.
+Existing V3 and candidate scripted adapters explicitly report these cases as
+unavailable; do not count that as a pass or present this corpus as a real
+comparison. A compatible agent adapter and stronger independent grading are
+still needed. No live household data belongs in these fixtures.
+
 Run the comparison offline with:
 
 ```python
@@ -16,6 +31,12 @@ is frozen in the corpus; the V3 provider reuses the named working-tree
 scenario and adds a synthetic task-understanding answer. Both adapters are
 explicitly unsupported on other cases. Provider token usage is unknown, not
 zero or simulated billing. System Two/Jev/tool events are synthetic calls.
+The authorized note cases require at least one observed `Receta.md` source
+read; an answer alone or uninstrumented access cannot pass. Extra reads are
+recorded without making an otherwise correct answer fail. These observations
+come from fixture adapter instrumentation, not production access controls, and
+scripts already contain the expected answer; they do not establish autonomous
+source discovery or grounding.
 
 These fixtures establish adapter plumbing and one observed read-only path.
 They do not establish autonomous behavior, live-provider cost, production
@@ -77,3 +98,15 @@ candidate is unavailable), use a new output path:
 .venv/bin/python -m alphonse.agent_v2.evaluation.simplified_loop \
   tests/fixtures/single_loop_comparison/v3_seeded_resume_v1.json /tmp/seeded-resume.json --baseline-v3-seeded-resume
 ```
+
+`prescription_v3_adapter.py` and `prescription_three_arm.py` provide a development
+comparison across the actual V3 processor (projection off/on, separate child
+interpreters) and the read-only single-loop prototype. Every arm reads the same
+three disposable sources; the oracle requires observed source reads and exact
+synthetic medication-name output. The caller supplies the **same preselected
+answer scripts** to every arm; this is a wiring check, not evidence that an
+agent retrieved information autonomously, reasoned about dates, or gave clinical
+advice. The source-read events are synthetic instrumentation; dosage, delivery,
+real authorization and provider usage remain unassessed. Missing scripts are
+unavailable. Run `.venv/bin/python -m pytest tests/test_prescription_v3_adapter.py -q`
+for the paired plumbing and adversarial oracle checks.

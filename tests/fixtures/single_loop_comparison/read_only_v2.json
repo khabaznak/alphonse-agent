@@ -38,6 +38,7 @@
         "response_contains": [
           "amoxicillin"
         ],
+        "minimum_source_read_counts": {"Receta.md": 1},
         "effects": {},
         "max_questions": 0
       }

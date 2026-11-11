@@ -13,7 +13,7 @@
           {"kind": "answer", "text": "La nota dice amoxicillin."}
         ]
       },
-      "oracle": {"allowed_statuses": ["completed"], "response_contains": ["amoxicillin"], "effects": {}, "max_questions": 0}
+      "oracle": {"allowed_statuses": ["completed"], "response_contains": ["amoxicillin"], "effects": {}, "max_questions": 0, "minimum_source_read_counts": {"Receta.md": 1}}
     },
     {
       "id": "unsupported-fixture",

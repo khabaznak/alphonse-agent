@@ -1,0 +1,162 @@
+{
+  "schema_version": 1,
+  "split": "development",
+  "cases": [
+    {
+      "id": "development-prescription-morning-day-three",
+      "goal": "It is 2026-04-12 in the household timezone. What medicines are scheduled this morning? Find the prescription and treatment start information in the available records. For this synthetic exercise, reply only as a JSON object with a due_medications array of names, including an empty array if none are due.",
+      "fixture": {
+        "files": {
+          "household/index.md": "Health records: see prescription.md and treatment-start.md in this folder.\n",
+          "household/prescription.md": "Synthetic prescription for fixture only:\nAsterin: morning, daily, for 5 days.\nBorelin: morning, daily, for 2 days.\nCirelin: evening, daily, for 5 days.\n",
+          "household/treatment-start.md": "Synthetic record: all three treatments started 2026-04-10.\n"
+        }
+      },
+      "oracle": {
+        "allowed_statuses": [
+          "completed"
+        ],
+        "effects": {},
+        "medication_schedule": {
+          "date": "2026-04-12",
+          "slot": "morning",
+          "treatments": [
+            {
+              "name": "Asterin",
+              "start": "2026-04-10",
+              "duration_days": 5,
+              "slots": [
+                "morning"
+              ]
+            },
+            {
+              "name": "Borelin",
+              "start": "2026-04-10",
+              "duration_days": 2,
+              "slots": [
+                "morning"
+              ]
+            },
+            {
+              "name": "Cirelin",
+              "start": "2026-04-10",
+              "duration_days": 5,
+              "slots": [
+                "evening"
+              ]
+            }
+          ]
+        },
+        "minimum_source_read_counts": {
+          "household/index.md": 1,
+          "household/prescription.md": 1,
+          "household/treatment-start.md": 1
+        }
+      }
+    },
+    {
+      "id": "development-prescription-morning-final-day",
+      "goal": "It is 2026-04-14 in the household timezone. What medicines are scheduled this morning? Find the prescription and treatment start information in the available records. For this synthetic exercise, reply only as a JSON object with a due_medications array of names, including an empty array if none are due.",
+      "fixture": {
+        "files": {
+          "household/index.md": "Health records: see prescription.md and treatment-start.md in this folder.\n",
+          "household/prescription.md": "Synthetic prescription for fixture only:\nAsterin: morning, daily, for 5 days.\nBorelin: morning, daily, for 2 days.\nCirelin: evening, daily, for 5 days.\n",
+          "household/treatment-start.md": "Synthetic record: all three treatments started 2026-04-10.\n"
+        }
+      },
+      "oracle": {
+        "allowed_statuses": [
+          "completed"
+        ],
+        "effects": {},
+        "medication_schedule": {
+          "date": "2026-04-14",
+          "slot": "morning",
+          "treatments": [
+            {
+              "name": "Asterin",
+              "start": "2026-04-10",
+              "duration_days": 5,
+              "slots": [
+                "morning"
+              ]
+            },
+            {
+              "name": "Borelin",
+              "start": "2026-04-10",
+              "duration_days": 2,
+              "slots": [
+                "morning"
+              ]
+            },
+            {
+              "name": "Cirelin",
+              "start": "2026-04-10",
+              "duration_days": 5,
+              "slots": [
+                "evening"
+              ]
+            }
+          ]
+        },
+        "minimum_source_read_counts": {
+          "household/index.md": 1,
+          "household/prescription.md": 1,
+          "household/treatment-start.md": 1
+        }
+      }
+    },
+    {
+      "id": "development-prescription-morning-after-course",
+      "goal": "It is 2026-04-15 in the household timezone. What medicines are scheduled this morning? Find the prescription and treatment start information in the available records. For this synthetic exercise, reply only as a JSON object with a due_medications array of names, including an empty array if none are due.",
+      "fixture": {
+        "files": {
+          "household/index.md": "Health records: see prescription.md and treatment-start.md in this folder.\n",
+          "household/prescription.md": "Synthetic prescription for fixture only:\nAsterin: morning, daily, for 5 days.\nBorelin: morning, daily, for 2 days.\nCirelin: evening, daily, for 5 days.\n",
+          "household/treatment-start.md": "Synthetic record: all three treatments started 2026-04-10.\n"
+        }
+      },
+      "oracle": {
+        "allowed_statuses": [
+          "completed"
+        ],
+        "effects": {},
+        "medication_schedule": {
+          "date": "2026-04-15",
+          "slot": "morning",
+          "treatments": [
+            {
+              "name": "Asterin",
+              "start": "2026-04-10",
+              "duration_days": 5,
+              "slots": [
+                "morning"
+              ]
+            },
+            {
+              "name": "Borelin",
+              "start": "2026-04-10",
+              "duration_days": 2,
+              "slots": [
+                "morning"
+              ]
+            },
+            {
+              "name": "Cirelin",
+              "start": "2026-04-10",
+              "duration_days": 5,
+              "slots": [
+                "evening"
+              ]
+            }
+          ]
+        },
+        "minimum_source_read_counts": {
+          "household/index.md": 1,
+          "household/prescription.md": 1,
+          "household/treatment-start.md": 1
+        }
+      }
+    }
+  ]
+}
