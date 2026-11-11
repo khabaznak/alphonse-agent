@@ -17,6 +17,23 @@ coordinated specialized agents as family needs grow.
 - `docs/` contains architecture, design decisions, operational guidance, and
   rollout plans.
 
+## Agent-loop direction and gym
+
+The owner selected the simpler loop as the target architecture. V3 is a
+temporary production bridge; the simpler loop is not yet qualified for normal
+household conversations. Coordinator issue #230 tracks the gym, safe
+integration, qualification and eventual retirement of the older loops.
+
+For historical context, open `docs/agent-loop/v3-current-state-2026-11.html`
+and `docs/agent-loop/simpler-loop-proposal-2026-11.html` in a browser. These are
+snapshots from the investigation, not authoritative diagrams of the current
+runtime or proof that the proposed loop is implemented. Verify against code.
+The evidence and its limitations are documented in
+`docs/v3-hierarchical-capd/37-subscription-clock-first-observation.md`,
+`docs/v3-hierarchical-capd/38-subscription-mail-prescription-observation.md`,
+`docs/v3-hierarchical-capd/38-candidate-recovery-experiment.md`, and
+`docs/v3-hierarchical-capd/39-candidate-conversation-integration.md`.
+
 ## V3 decision architecture: System One and System Two
 
 Version 3 introduces Jev, a model specialized in calibrated decision-making.
