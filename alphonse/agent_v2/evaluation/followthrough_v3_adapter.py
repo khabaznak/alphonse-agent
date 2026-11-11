@@ -28,11 +28,20 @@ def _terminal_matches(status: str, response: str) -> bool:
     if not isinstance(message, dict):
         return False
     return ((message.get('kind') == 'result' and status == 'completed') or
-            (message.get('kind') == 'handoff' and status == 'waiting_user'))
+            (message.get('kind') == 'handoff' and status == 'completed'
+             and 'question' in message and message['question'] is None) or
+            (message.get('kind') == 'handoff' and status == 'waiting_user'
+             and isinstance(message.get('question'), str) and bool(message['question'].strip())))
+
+
+def _question_count_matches(status: str, questions: list[str]) -> bool:
+    """The synthetic bridge emits one message; duplicate attempts must fail."""
+    return len(questions) == (1 if status == 'waiting_user' else 0)
 
 
 def run_v3_fixture(case: Case, *, projection_enabled: bool, scripted_sources: list[str],
-                   scripted_response: str, simulate_delivery: bool = False) -> dict:
+                   scripted_response: str, simulate_delivery: bool = False,
+                   scripted_question: str | None = None) -> dict:
     """Run one disposable fixture; scripts must not be supplied by the oracle.
 
     The caller specifies source actions and output before execution. The bridge
@@ -44,7 +53,8 @@ def run_v3_fixture(case: Case, *, projection_enabled: bool, scripted_sources: li
         raise ValueError('invalid_boolean_option')
     if (not isinstance(scripted_sources, list) or
             any(not isinstance(source, str) for source in scripted_sources) or
-            not isinstance(scripted_response, str)):
+            not isinstance(scripted_response, str) or
+            (scripted_question is not None and not isinstance(scripted_question, str))):
         raise ValueError('invalid_script')
     # Empty-action phases are unsupported by the replay planner. Cancellation
     # is represented as a pending but never-executed source read.
@@ -55,7 +65,8 @@ def run_v3_fixture(case: Case, *, projection_enabled: bool, scripted_sources: li
            if k in {'PATH', 'LANG', 'LC_ALL', 'TMPDIR', 'SYSTEMROOT'}}
     env[_FLAG] = '1' if projection_enabled else '0'
     payload = {'name': case.name, 'goal': case.goal, 'sources': scripted_sources,
-               'response': scripted_response, 'bridge': simulate_delivery}
+               'response': scripted_response, 'bridge': simulate_delivery,
+               'question': scripted_question}
     proc = subprocess.run([sys.executable, '-m', __name__, '--worker'],
         cwd=str(_WORKSPACE), env=env, input=json.dumps(payload), capture_output=True,
         text=True, timeout=30, check=False)
@@ -88,6 +99,10 @@ def _execute(payload: dict) -> dict:
     actions = tuple(_Action('fixture.read', 'project_record_search', {'path': source},
                             role=f'read_{i}', behavior='read')
                     for i, source in enumerate(payload['sources']))
+    if payload.get('question') is not None:
+        actions += (_Action('native.ask_question', 'user_interaction',
+                            {'question': payload['question']}, role='clarify', behavior='ask',
+                            side_effect='user_response'),)
     scenario = _Scenario(actions=actions, acceptance='Inspect authorized synthetic sources and respond.',
                          final_response=payload['response'])
     with TemporaryDirectory(prefix='v3-followthrough-') as directory:
@@ -141,6 +156,8 @@ def _execute(payload: dict) -> dict:
         result = HierarchicalCAPDProcessor().process(task, context)
         final = TaskState.from_dict(result.snapshot.metadata.get('task_state') or task.to_dict())
     response = str((final.metadata.get('prepared_user_response') or {}).get('message') or '')
+    if final.status == 'waiting_user' and state.questions:
+        response = state.questions[-1]
     reason = str((final.outcome or {}).get('reason') or '') or None
     # The fixture contract uses a canonical cancellation reason. Preserve the
     # processor's exact reason separately and normalize only its known literal.
@@ -154,12 +171,15 @@ def _execute(payload: dict) -> dict:
         else:
             bridge = fixture.send('actor_private', message)
     outcome = evaluate(case, fixture, processor_status=final.status, processor_reason=oracle_reason)
-    terminal_ok = (final.status == 'cancelled' and oracle_reason == 'cancelled') if case.name == 'cancelled' else _terminal_matches(final.status, response)
+    terminal_ok = ((final.status == 'cancelled' and oracle_reason == 'cancelled') if case.name == 'cancelled'
+                   else _terminal_matches(final.status, response))
+    terminal_ok = terminal_ok and _question_count_matches(final.status, state.questions)
     outcome['terminal_semantics'] = terminal_ok
     outcome['passed'] = outcome['passed'] and terminal_ok
     return {'availability': 'available', 'projection_enabled': enabled(),
         'processor_status': final.status, 'processor_reason': reason,
-        'processor_response': response, 'events': events, 'fixture_audit': fixture.audit(),
+        'processor_response': response, 'question_attempts': list(state.questions),
+        'events': events, 'fixture_audit': fixture.audit(),
         'fixture_outcome': outcome,
         'simulated_bridge': bridge, 'product_delivery': 'unassessed',
         'decision_qualified': False, 'real_time_deadline': 'unassessed',

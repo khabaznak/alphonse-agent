@@ -28,6 +28,18 @@ a recovery objective." No simulated message is sent and the fixture reports no
 handoff. This is an observed failure of this scripted replay, not a claim about
 what a live model would do with the same information.
 
+An additional replay explicitly places `native.ask_question` in the scripted
+phase plan with `user_response` as its effect. Both V3 variants observe the
+missing identity, invoke that question tool, and enter `waiting_user`. An
+optional bridge can then simulate a receipt; without it, delivery is not
+attempted. The prior replay did not schedule a question action, so its failure
+does not establish that V3 cannot ask questions. Both replays remain scripted;
+neither establishes whether a model would choose the question or whether the
+product delivered it. A denial that needs no user answer is not qualified by
+putting the task into `waiting_user` with an empty question.
+The fixture also requires exactly one observed V3 question-tool attempt; the
+single simulated bridge must not hide duplicate questions.
+
 Every available result is marked `decision_qualified: false`, product delivery
 and real-time deadlines are unassessed, and the fixture clock does not advance.
 An empty action script is unavailable rather than a pass. Failed source

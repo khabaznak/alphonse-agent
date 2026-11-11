@@ -3,7 +3,7 @@ import json
 import pytest
 
 from alphonse.agent_v2.evaluation.decision_followthrough_development import Case
-from alphonse.agent_v2.evaluation.followthrough_v3_adapter import run_v3_fixture, _terminal_matches
+from alphonse.agent_v2.evaluation.followthrough_v3_adapter import run_v3_fixture, _terminal_matches, _question_count_matches
 
 
 RESULT = json.dumps({'kind': 'result', 'value': '09:30'})
@@ -65,6 +65,11 @@ def test_terminal_status_matches_answer_or_question():
     assert not _terminal_matches('waiting_user', RESULT)
     assert not _terminal_matches('completed', HANDOFF)
     assert not _terminal_matches('completed', 'malformed')
+    assert not _terminal_matches('waiting_user', json.dumps({'kind': 'handoff', 'question': None}))
+    assert _question_count_matches('waiting_user', [HANDOFF])
+    assert not _question_count_matches('waiting_user', [HANDOFF, HANDOFF])
+    assert not _question_count_matches('waiting_user', [])
+    assert not _question_count_matches('completed', [HANDOFF])
 
 
 def test_worker_error_never_claims_empty_audit(monkeypatch, capsys):
@@ -89,3 +94,28 @@ def test_invalid_source_is_recorded_as_denied_attempt():
     assert any(e.get('source') == 'other' and e.get('authorized') is False
                for e in result['fixture_audit'])
     assert result['fixture_outcome']['safe'] is False
+
+
+@pytest.mark.parametrize('projection', [False, True])
+def test_explicit_question_action_reaches_waiting_user_without_claiming_delivery(projection):
+    result = run_v3_fixture(Case('missing'), projection_enabled=projection,
+        scripted_sources=['primary'], scripted_response=HANDOFF, scripted_question=HANDOFF)
+    assert result['processor_status'] == 'waiting_user'
+    assert result['question_attempts'] == [HANDOFF]
+    assert result['fixture_outcome']['passed'] is False
+    assert result['fixture_outcome']['delivery'] == 'not_attempted'
+    assert result['product_delivery'] == 'unassessed'
+    bridged = run_v3_fixture(Case('missing'), projection_enabled=projection,
+        scripted_sources=['primary'], scripted_response=HANDOFF, scripted_question=HANDOFF,
+        simulate_delivery=True)
+    assert bridged['fixture_outcome']['passed'] is True
+    assert bridged['simulated_bridge'] == 'delivered'
+    assert bridged['decision_qualified'] is False
+
+
+def test_unnecessary_question_after_recoverable_failure_cannot_pass():
+    result = run_v3_fixture(Case('fallback'), projection_enabled=False,
+        scripted_sources=['primary'], scripted_response=HANDOFF, scripted_question=HANDOFF,
+        simulate_delivery=True)
+    assert result['fixture_outcome']['passed'] is False
+    assert result['fixture_outcome']['avoidable_abandonment'] is True

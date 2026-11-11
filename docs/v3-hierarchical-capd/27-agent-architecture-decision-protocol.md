@@ -6,6 +6,56 @@ The fixture manifest, arm revisions, provider selection and authorization below
 must be recorded before the held-out run. Any change afterwards invalidates the
 confirmatory result; report it separately as exploratory.
 
+## Owner direction: a small investment decision first
+
+The owner favors the simpler architecture even for a marginal improvement,
+because reducing complexity has value and the current experience is often
+unusable. In particular, the owner reports that even asking the time can fail.
+That report is a reason to prioritize a clock case; it is not a measured result.
+
+Use two decisions with different evidence needs:
+
+1. **Initial investment:** a small model-backed development pilot can justify
+   continuing to build the simpler loop, without waiting for the full 24-case
+   held-out set or lifecycle implementation. Freeze the pilot cases, configurations
+   and grading before running. Include a direct time question with a frozen
+   clock and timezone; a Spanish Gmail-like count; prescription retrieval;
+   traffic lookup; and a blocked or recovery case. Run two fresh attempts per
+   case and Alphonse arm where feasible; include a capable external agent on
+   the clock, prescription and traffic cases if available. Preserve every
+   failure, unsupported capability and unmatched tool difference. This is a
+   small directional sample, not a statistical or production-safety proof.
+2. **Broader qualification:** the independently held-out protocol below remains
+   the target for stronger generalization and rollout evidence. Its sample and
+   uncertainty requirements must not delay an initial investment decision.
+   Production exposure still requires deterministic authorization, verified
+   effects, cancellation and lifecycle safeguards, including applicable #216
+   and #215 work; this research gate does not waive them.
+
+For the initial investment decision, favor continuing the candidate if it
+demonstrates even a modest observed gain in verified completion, user time,
+or model usage/cost against current and targeted V3, without a material observed
+regression in the other measured outcomes or any observed false success,
+unauthorized effect or cancellation violation, and the engineering review
+finds a credible reduction in total complexity. A **qualitative** simplicity
+advantage can also support a conditional continue recommendation when results
+are roughly comparable; explicitly state the uncertainty and the smallest next
+experiment. Do not require a 20% improvement or a confidence interval excluding
+zero to keep investing. Unobserved safety, delivery, cost or unsupported cases
+are unknown, not passes; list their consequences and do not claim a production
+qualification. Count loops, timeouts and silent failures, not just fast successes.
+If the candidate makes tasks materially worse or produces a safety violation,
+revise or stop rather than select it on simplicity alone. Compare external
+latency as user-experience context and identify unacceptable absolute times even
+when the candidate improves over V3.
+
+An initial continue is a reversible investment decision, not permission to
+switch production engines. Provider/model, synthetic data, retention, run count
+and maximum spend still require the separately scoped live-run authorization
+in #217/#218. Provider-reported usage and cost remain preferred; separately
+labeled, calibrated estimates may provide directional evidence when actual
+usage is unavailable, without being treated as exact charges or spending caps.
+
 ## Decision and arms
 
 Should we invest in the single-loop architecture rather than a targeted V3
@@ -45,7 +95,8 @@ create a newly sequestered held-out set. Preserve all case IDs, variants,
 exclusions and failures. A missing category or an unimplemented oracle makes
 the gate inconclusive, not a pass.
 
-- Spanish authorized mailbox count, zero/unavailable/denied states, and simple
+- A simple clock question using an independently controlled instant and timezone;
+  Spanish authorized mailbox count, zero/unavailable/denied states, and simple
   conversation; multi-source retrieval and long irrelevant history.
 - Synthetic traffic-ticket portal: subject-scoped ticket/no-ticket, missing
   identity, changed forms, session/login, block or CAPTCHA. Verify portal state
@@ -179,8 +230,10 @@ outcomes and are always published alongside completion rates and timeouts.
 - Relative to targeted V3, single-loop verified outcome rate must be no worse
   by more than 5 percentage points overall or in any represented case family,
   without a safety or follow-through regression. It must also show a practical
-  benefit: at least 20% lower median end-to-end time **or** 20% lower provider
-  cost per verified completion, with no more than 10% regression in the other.
+  benefit: an observed improvement in verified outcomes, median end-to-end time
+  or provider cost per verified completion, with no more than 10% regression in
+  the other measured efficiency dimension. Give additional weight to a credible
+  reduction in overall complexity, even if the observed improvement is modest.
   Unknown cost/time makes the respective comparison inconclusive. Record call
   counts and token usage but do not optimize for fewer calls alone.
 
@@ -189,9 +242,12 @@ not the five runs as independent cases, with two-sided 95% intervals; preserve
 arm pairing when resampling and show each scenario and attempt variation. For
 the 5-point non-regression requirement the *lower* interval bound of candidate
 minus targeted-V3 verified outcome rate must be at least -5 percentage points,
-overall and in each applicable family. For practical benefit, the *upper* bound
-of the candidate/targeted-V3 median time or cost ratio must be at most 0.80;
-the upper bound of the other ratio must be at most 1.10. For each external time
+overall and in each applicable family. Report the confidence interval for the
+candidate/targeted-V3 median time and cost ratios, including whether it spans
+no improvement; a modest point improvement can support continued investment
+even when its interval spans zero, but cannot establish statistical superiority.
+For broader qualification, the upper bound for the non-improving efficiency
+ratio must be at most 1.10. For each external time
 comparison the upper bound of the matched candidate/reference median ratio must
 be at most 1.50. A zero or unknown denominator makes a ratio inconclusive.
 The other numeric targets are point-estimate screening requirements, not claims

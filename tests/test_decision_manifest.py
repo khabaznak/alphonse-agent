@@ -124,7 +124,7 @@ def test_development_example_matches_artifacts_and_remains_blocked():
     plan = json.loads((fixtures / 'prescription_schedule_development_plan_v1.json').read_text())
     source = (fixtures / 'prescription_schedule_development_v1.json').read_bytes()
     blockers = validate_manifest(plan,
-        trusted_manifest_sha256='b5418647af53a1dfe173f2de160254b7089e001312c75875f45a978e696ec229',
+        trusted_manifest_sha256='56cf63509a606dade42b1b355e1bedaf85a2ef53c426ffadbd5319126f61dfe4',
         protocol=(root / 'docs/v3-hierarchical-capd/27-agent-architecture-decision-protocol.md').read_bytes(),
         corpus=source, oracle=source, current_arms=plan['arms'], arm_artifacts={})
     assert 'development_only' in blockers

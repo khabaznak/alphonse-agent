@@ -141,9 +141,16 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
         try:
             projection = _project(host, state)
             fingerprint = _projection_fingerprint(projection)
-            # The injected provider receives exactly this text; byte length is a
-            # conservative bound for its text tokens. A real adapter must also
-            # reserve framing/tool schemas and enforce the output cap.
+            # A chooser that adds framing must declare a full-input cap no
+            # larger than the durable input reservation. This is only a local
+            # accounting check; external transport enforcement is separate.
+            chooser_cap = getattr(host.choose, 'max_input_tokens', None)
+            if chooser_cap is not None and (type(chooser_cap) is not int or chooser_cap <= 0
+                                            or chooser_cap > host.input_reservation):
+                return _terminal(host, state, 'blocked', 'candidate_chooser_input_cap_exceeds_reservation')
+            # The projection length is only part of the input. A chooser may
+            # add framing, tool schemas or other material; its complete cap and
+            # the output cap must be enforced by the external transport.
             if len(projection.text.encode('utf-8')) > host.input_reservation:
                 return _terminal(host, state, 'blocked', 'candidate_input_reservation_too_small')
             budget = host.budgets.load(state.task_id)
