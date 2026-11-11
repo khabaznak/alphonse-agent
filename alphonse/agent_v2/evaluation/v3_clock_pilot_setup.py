@@ -83,47 +83,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.execute:
         print(json.dumps(report, ensure_ascii=False, indent=2))
         return 0
-    paths = (args.journal, args.openai_ledger, args.jev_ledger)
-    if not (args.scope_approved and args.accept_estimate_uncertainty and args.isolation_reviewed
-            and all(paths) and report['estimated_reservations_fit_budget']
-            and report['jev']['estimate_fits_proposed_budget']):
-        parser.error('execution requires approved provider scopes, estimate uncertainty, reviewed isolation and new paths')
-    if len({path.resolve() for path in paths}) != 3 or any(path.exists() for path in paths):
-        parser.error('journal and both ledgers must be distinct new paths')
-    # The key prompts happen only after explicit operator opt-in. Neither key is
-    # echoed, included in argv, stored in the local journals or printed on error.
-    openai_key = getpass.getpass('OpenAI API key: ').strip()
-    jev_key = getpass.getpass('TypeSafe API key: ').strip()
-    if not openai_key or not jev_key:
-        parser.error('both provider keys are required')
-    try:
-        with args.openai_ledger.open('x'):
-            pass
-        with args.jev_ledger.open('x'):
-            pass
-        limits = PilotLimits(max_calls=MAX_CALLS, max_input_tokens=MAX_CALLS * INPUT_PER_CALL,
-            max_output_tokens=MAX_CALLS * OUTPUT_PER_CALL, max_cost_units=_budget_nanos(args.openai_budget_usd),
-            input_cost_units_per_token=INPUT_RATE, output_cost_units_per_token=OUTPUT_RATE)
-        ledger = PilotLedger(str(args.openai_ledger), limits)
-        transport = ResponsesPilotTransport(model=MODEL, api_key=openai_key, ledger=ledger,
-            count_complete_input=_estimated_input, sender=requests_sender, enabled=True)
-        provider = V3PilotResponsesProvider(transport, max_input_tokens=INPUT_PER_CALL,
-                                             max_output_tokens=OUTPUT_PER_CALL, dispatch_enabled=True)
-        jev_ledger = JevAttemptLedger(str(args.jev_ledger), max_attempts=JEV_MAX_ATTEMPTS,
-                                      max_payload_bytes=JEV_MAX_PAYLOAD_BYTES)
-        jev_transport = MeteredJevTransport(JevPilotHTTPTransport(enabled=True), jev_ledger)
-        jev = JevCriterionDecisionProvider(SystemOneSettings(enabled=True, api_url=DEFAULT_SYSTEM_ONE_URL,
-                                          api_key=jev_key, model=JEV_MODEL), transport=jev_transport)
-        # This CLI is a fresh process; never switch the flag in a shared worker.
-        os.environ['ALPHONSE_V3_CONTEXT_PROJECTIONS'] = '1' if args.arm == 'targeted_v3' else '0'
-        result = run_v3_clock_responses_attempt(args.journal, source_instant=INSTANT, source_timezone=TIMEZONE,
-            expected_instant=INSTANT, expected_timezone=TIMEZONE, provider=provider, system_one=jev,
-            projection_enabled=args.arm == 'targeted_v3', dispatch_enabled=True)
-    except Exception as exc:
-        print(json.dumps({'status': 'error', 'error_type': type(exc).__name__}))
-        return 1
-    print(json.dumps(result, ensure_ascii=False, indent=2))
-    return 0 if result['passed'] is True else 1
+    parser.error('direct OpenAI API evaluation is disabled; use a Codex subscription pilot')
 
 
 if __name__ == '__main__':

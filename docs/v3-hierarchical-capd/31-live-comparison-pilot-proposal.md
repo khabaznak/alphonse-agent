@@ -1,5 +1,12 @@
 # Proposed synthetic live-comparison pilot (#218)
 
+**Superseded provider direction:** The owner requires Alphonse's existing Codex
+subscription provider for OpenAI model calls and prohibits direct OpenAI API
+testing. The API-key and per-token-dollar instructions below are historical
+and must not be used. The subscription-backed runner is not yet implemented;
+the direct API clock pilot commands are disabled. TypeSafe Jev remains a
+separate provider for V3 under the owner's approved Jev budget.
+
 Status: **not ready to execute and not authorized**. This is a concrete pilot
 proposal, not a measured benchmark or the held-out decision experiment. It
 does not approve API calls, payments, access to household data, or publication.

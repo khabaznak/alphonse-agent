@@ -38,28 +38,13 @@ def test_missing_scope_or_small_budget_refuses_before_prompt(tmp_path, monkeypat
     assert not (tmp_path / 'openai.db').exists() and not (tmp_path / 'jev.db').exists()
 
 
-def test_explicit_opt_in_wires_fresh_meter_and_fake_runner_without_printing_keys(tmp_path, monkeypatch, capsys):
-    monkeypatch.setenv('ALPHONSE_V3_CONTEXT_PROJECTIONS', '0')
-    fake_keys = iter(['synthetic-openai-key', 'synthetic-jev-key'])
-    monkeypatch.setattr(setup.getpass, 'getpass', lambda _: next(fake_keys))
-    calls = []
-    def fake_attempt(output, **kwargs):
-        calls.append(kwargs)
-        assert kwargs['provider'].transport._model == setup.MODEL
-        assert kwargs['system_one'].client.api_key == 'synthetic-jev-key'
-        meter = kwargs['system_one'].client.transport
-        assert type(meter) is MeteredJevTransport and type(meter.transport) is JevPilotHTTPTransport
-        assert meter.ledger.snapshot() == [] and kwargs['projection_enabled'] is True
-        assert os_value() == '1'
-        return {'passed': True, 'status': 'completed', 'decision_qualified': False}
-    def os_value():
-        import os
-        return os.environ.get('ALPHONSE_V3_CONTEXT_PROJECTIONS')
-    monkeypatch.setattr(setup, 'run_v3_clock_responses_attempt', fake_attempt)
-    args = ['--arm', 'targeted_v3', '--execute', '--scope-approved', '--accept-estimate-uncertainty',
-            '--isolation-reviewed', '--journal', str(tmp_path / 'run.jsonl'),
-            '--openai-ledger', str(tmp_path / 'openai.db'), '--jev-ledger', str(tmp_path / 'jev.db')]
-    assert setup.main(args) == 0
-    out = capsys.readouterr().out
-    assert len(calls) == 1 and 'synthetic-openai-key' not in out and 'synthetic-jev-key' not in out
-    assert (tmp_path / 'openai.db').exists() and (tmp_path / 'jev.db').exists()
+def test_direct_api_execution_is_disabled_before_key_prompts(tmp_path, monkeypatch):
+    monkeypatch.setattr(setup.getpass, 'getpass', lambda _: pytest.fail('unexpected key prompt'))
+    monkeypatch.setattr(setup, 'requests_sender', lambda *args: pytest.fail('unexpected provider call'))
+    journal = tmp_path / 'run.jsonl'
+    openai_ledger, jev_ledger = tmp_path / 'openai.db', tmp_path / 'jev.db'
+    with pytest.raises(SystemExit):
+        setup.main(['--arm', 'v3', '--execute', '--scope-approved', '--accept-estimate-uncertainty',
+                    '--isolation-reviewed', '--journal', str(journal), '--openai-ledger', str(openai_ledger),
+                    '--jev-ledger', str(jev_ledger)])
+    assert not journal.exists() and not openai_ledger.exists() and not jev_ledger.exists()

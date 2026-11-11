@@ -247,3 +247,108 @@ def test_changed_source_at_final_dispatch_fence_blocks_tool(fixture):
     result = run_candidate(fixture.state, replace(fixture.host, authorize_read=authorize))
     assert result.blocker == 'candidate_evidence_changed_or_revoked'
     assert fixture.calls == []
+
+
+def test_missing_evidence_recovery_reads_before_answer(fixture):
+    decisions = iter([
+        {'kind': 'answer', 'text': '42', 'usage': {'input_tokens': 10, 'output_tokens': 10}},
+        {'kind': 'tool', 'tool_id': 'native.read', 'arguments': {'key': 'x'}, 'usage': {'input_tokens': 10, 'output_tokens': 10}},
+        {'kind': 'answer', 'text': 'The value is 42.', 'usage': {'input_tokens': 10, 'output_tokens': 10}},
+    ])
+    def choose(text, cap):
+        fixture.seen.append(text)
+        return next(decisions)
+    host = replace(fixture.host, choose=choose, input_reservation=1024,
+                   remaining_advertised_evidence=lambda actor, refs: not refs)
+    result = run_candidate(fixture.state, host)
+    assert result.status == 'completed'
+    assert result.unsupported_retries == 1
+    assert fixture.calls == [{'key': 'x'}]
+    assert 'The proposed answer is not yet verified' in fixture.seen[1]
+    assert 'The proposed answer is not yet verified' not in fixture.seen[2]
+    assert CandidateState.restore(fixture.snapshots[-1]).unsupported_retries == 1
+
+
+def test_unsupported_recovery_is_bounded_and_no_answer_delivered(fixture):
+    host = replace(fixture.host,
+        choose=lambda *_: {'kind': 'answer', 'text': 'guessed', 'usage': {'input_tokens': 10, 'output_tokens': 10}},
+        remaining_advertised_evidence=lambda actor, refs: True, input_reservation=1024)
+    result = run_candidate(fixture.state, host)
+    assert (result.status, result.blocker, result.response) == ('blocked', 'candidate_answer_unsupported', '')
+    assert result.unsupported_retries == 2
+    assert fixture.host.budgets.load('task').usage()['charged']['model_calls'] == 3
+    assert fixture.calls == []
+
+
+def test_recovery_does_not_override_verification_failure_or_denied_reads(fixture):
+    def fail_verification(*_):
+        raise RuntimeError('unavailable')
+    host = replace(fixture.host,
+        choose=lambda *_: {'kind': 'answer', 'text': 'guessed', 'usage': {'input_tokens': 10, 'output_tokens': 10}},
+        verify_response=fail_verification, remaining_advertised_evidence=lambda *_: True)
+    result = run_candidate(fixture.state, host)
+    assert (result.status, result.blocker) == ('blocked', 'candidate_verification_unavailable')
+    assert result.unsupported_retries == 0
+
+
+def test_recovery_does_not_bypass_read_authorization(fixture):
+    script = iter([
+        {'kind': 'answer', 'text': 'guessed', 'usage': {'input_tokens': 10, 'output_tokens': 10}},
+        {'kind': 'tool', 'tool_id': 'native.read', 'arguments': {'key': 'x'}, 'usage': {'input_tokens': 10, 'output_tokens': 10}},
+    ])
+    host = replace(fixture.host, choose=lambda *_: next(script), input_reservation=1024,
+                   remaining_advertised_evidence=lambda *_: True, authorize_read=lambda *_: False)
+    result = run_candidate(fixture.state, host)
+    assert (result.status, result.blocker) == ('blocked', 'candidate_read_denied')
+    assert fixture.calls == []
+
+
+def test_recovery_limit_persists_after_restart(fixture):
+    snapshots = []
+    def checkpoint(snapshot):
+        snapshots.append(snapshot)
+        if snapshot['recovery_pending'] and snapshot['unsupported_retries'] == 1:
+            raise OSError('simulated process interruption')
+    host = replace(fixture.host, checkpoint=checkpoint, input_reservation=1024,
+        choose=lambda *_: {'kind': 'answer', 'text': 'guess', 'usage': {'input_tokens': 10, 'output_tokens': 10}},
+        remaining_advertised_evidence=lambda *_: True)
+    with pytest.raises(OSError):
+        run_candidate(fixture.state, host)
+    restored = CandidateState.restore(snapshots[-1])
+    result = run_candidate(restored, replace(host, checkpoint=fixture.snapshots.append))
+    assert (result.status, result.blocker, result.unsupported_retries) == ('blocked', 'candidate_answer_unsupported', 2)
+    assert fixture.host.budgets.load('task').usage()['charged']['model_calls'] == 3
+
+
+def test_recovery_eligibility_exception_fails_closed(fixture):
+    def unavailable(*_):
+        raise RuntimeError('unavailable')
+    host = replace(fixture.host, remaining_advertised_evidence=unavailable,
+        choose=lambda *_: {'kind': 'answer', 'text': 'guess', 'usage': {'input_tokens': 10, 'output_tokens': 10}})
+    result = run_candidate(fixture.state, host)
+    assert (result.status, result.blocker, result.unsupported_retries) == ('blocked', 'candidate_answer_unsupported', 0)
+    assert fixture.host.budgets.load('task').usage()['charged']['model_calls'] == 1
+
+
+def test_cancellation_during_recovery_prevents_further_model_calls(fixture):
+    cancelled = {'value': False}
+    calls = []
+    fixture.host.context.cancellation_checker = lambda: cancelled['value']
+    def missing(*_):
+        cancelled['value'] = True
+        return True
+    host = replace(fixture.host, input_reservation=1024, remaining_advertised_evidence=missing,
+        choose=lambda *_: calls.append(True) or {'kind': 'answer', 'text': 'guess', 'usage': {'input_tokens': 10, 'output_tokens': 10}})
+    result = run_candidate(fixture.state, host)
+    assert result.status == 'cancelled' and result.response == ''
+    assert len(calls) == 1
+
+
+def test_recovery_policy_exception_fails_closed(fixture):
+    def policy(*_):
+        raise RuntimeError('unavailable')
+    host = replace(fixture.host,
+        choose=lambda *_: {'kind': 'answer', 'text': 'guess', 'usage': {'input_tokens': 10, 'output_tokens': 10}},
+        remaining_advertised_evidence=policy)
+    result = run_candidate(fixture.state, host)
+    assert (result.status, result.blocker, result.unsupported_retries) == ('blocked', 'candidate_answer_unsupported', 0)

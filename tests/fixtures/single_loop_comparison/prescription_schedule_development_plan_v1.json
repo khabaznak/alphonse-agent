@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "experiment_kind": "development",
-  "protocol_sha256": "05016d61d5230f25d6a7ba67247b881d7e903f3d443792145dd6e9bf977a8495",
+  "protocol_sha256": "722af0bd6022c9acc21003d344b94067480a9e2fb9c03279bba687fcabe937bf",
   "corpus_sha256": "746e312ebbd16772674fe8883ec6bf544bf45cf6b37074a65342f944c3c35313",
   "oracle_sha256": "746e312ebbd16772674fe8883ec6bf544bf45cf6b37074a65342f944c3c35313",
   "case_ids": [
@@ -391,5 +391,5 @@
       "position": 3
     }
   ],
-  "manifest_sha256": "613157eb8813905620f29b3527f9274a27f51b74099ccd5ce4b4cd96c4939388"
+  "manifest_sha256": "7b3d33e5998d1bc9b87fc94e3dd5cb4ee389c635ec02e49e645e4e9a24d29559"
 }

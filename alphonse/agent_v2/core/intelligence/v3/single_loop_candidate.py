@@ -17,7 +17,7 @@ from typing import Any, Callable
 from uuid import uuid4
 
 from .evidence_projection import EvidenceAccessError, EvidenceSource, project_evidence
-from .task_budget import BudgetExhausted, SQLiteTaskBudgetStore
+from .task_budget import BudgetExhausted, SQLiteTaskBudgetStore, SyntheticEvaluationBudgetStore
 from alphonse.agent_v2.core.tools.invocation import ToolInvocationService
 
 
@@ -31,25 +31,32 @@ class CandidateState:
     response: str = ''
     blocker: str = ''
     inflight: str = ''
+    unsupported_retries: int = 0
+    recovery_pending: bool = False
 
     def snapshot(self) -> dict[str, Any]:
-        return {'schema_version': 1, **deepcopy(asdict(self))}
+        return {'schema_version': 2, **deepcopy(asdict(self))}
 
     @classmethod
     def restore(cls, snapshot: dict[str, Any]) -> 'CandidateState':
-        if not isinstance(snapshot, dict) or set(snapshot) != {
-            'schema_version', 'task_id', 'actor', 'goal_source', 'evidence_sources', 'status', 'response', 'blocker', 'inflight'
-        }:
+        if not isinstance(snapshot, dict):
             raise ValueError('candidate_checkpoint_invalid')
-        if type(snapshot['schema_version']) is not int or snapshot['schema_version'] != 1:
+        version = snapshot.get('schema_version')
+        base = {'schema_version', 'task_id', 'actor', 'goal_source', 'evidence_sources', 'status', 'response', 'blocker', 'inflight'}
+        if type(version) is not int or version not in (1, 2):
             raise ValueError('candidate_checkpoint_version_unsupported')
+        if set(snapshot) != (base if version == 1 else base | {'unsupported_retries', 'recovery_pending'}):
+            raise ValueError('candidate_checkpoint_invalid')
         state = cls(**{key: deepcopy(value) for key, value in snapshot.items() if key != 'schema_version'})
         if (not all(isinstance(x, str) and x.strip() for x in (state.task_id, state.actor, state.goal_source))
                 or state.status not in {'running', 'completed', 'waiting_user', 'blocked', 'cancelled'}
                 or not isinstance(state.evidence_sources, list)
                 or any(not isinstance(x, str) or not x.strip() for x in state.evidence_sources)
                 or len(set(state.evidence_sources)) != len(state.evidence_sources)
-                or any(not isinstance(x, str) for x in (state.response, state.blocker, state.inflight))):
+                or any(not isinstance(x, str) for x in (state.response, state.blocker, state.inflight))
+                or type(state.unsupported_retries) is not int or not 0 <= state.unsupported_retries <= 2
+                or type(state.recovery_pending) is not bool
+                or (state.recovery_pending and state.unsupported_retries == 0)):
             raise ValueError('candidate_checkpoint_invalid')
         return state
 
@@ -80,6 +87,10 @@ class CandidateHost:
     output_reservation: int = 128
     projection_budget: int = 4096
     deadline_checker: Callable[[], bool] | None = None
+    # Only the dedicated synthetic comparison store may opt in. Provider usage
+    # remains unknown and full reservations are charged; never enable for users.
+    synthetic_allow_unreported_usage: bool = False
+    remaining_advertised_evidence: Callable[[str, tuple[str, ...]], bool] | None = None
 
 
 def _save(host: CandidateHost, state: CandidateState) -> None:
@@ -143,6 +154,9 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
     """
     if state.status != 'running':
         return state
+    if (type(host.synthetic_allow_unreported_usage) is not bool or
+            (host.synthetic_allow_unreported_usage and type(host.budgets) is not SyntheticEvaluationBudgetStore)):
+        return _terminal(host, state, 'blocked', 'candidate_synthetic_usage_policy_invalid')
     if (not state.task_id or not state.actor or state.actor != getattr(host.task, 'user', None)
             or state.task_id != getattr(host.task, 'task_id', None)):
         return _terminal(host, state, 'blocked', 'candidate_actor_mismatch')
@@ -164,7 +178,11 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
             # The projection length is only part of the input. A chooser may
             # add framing, tool schemas or other material; its complete cap and
             # the output cap must be enforced by the external transport.
-            if len(projection.text.encode('utf-8')) > host.input_reservation:
+            decision_input = projection.text
+            if state.recovery_pending:
+                decision_input += ('\nThe proposed answer is not yet verified. Inspect remaining available evidence '
+                                   'using authorized tools before answering, or explain what prevents progress.')
+            if len(decision_input.encode('utf-8')) > host.input_reservation:
                 return _terminal(host, state, 'blocked', 'candidate_input_reservation_too_small')
             budget = host.budgets.load(state.task_id)
             if budget.usage()['in_flight']:
@@ -184,7 +202,7 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
         if _deadline_elapsed(host):
             return _terminal(host, state, 'blocked', 'candidate_deadline_exceeded')
         try:
-            decision = host.choose(projection.text, host.output_reservation)
+            decision = host.choose(decision_input, host.output_reservation)
         except Exception:
             decision = None
         budget = host.budgets.load(state.task_id)
@@ -204,8 +222,10 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
             return _terminal(host, state, 'cancelled', 'cancelled')
         if not isinstance(decision, dict):
             return _terminal(host, state, 'blocked', 'candidate_model_unavailable')
-        if (type(usage.get('input_tokens')) is not int or type(usage.get('output_tokens')) is not int
-                or usage['input_tokens'] > host.input_reservation or usage['output_tokens'] > host.output_reservation):
+        if any((value is not None and (type(value) is not int or value < 0 or value > limit))
+               or (value is None and not host.synthetic_allow_unreported_usage)
+               for value, limit in ((usage.get('input_tokens'), host.input_reservation),
+                                    (usage.get('output_tokens'), host.output_reservation))):
             return _terminal(host, state, 'blocked', 'candidate_model_usage_unknown_or_overrun')
         # A still-authorized source may nevertheless have changed during inference.
         if not _is_fresh(host, state, fingerprint):
@@ -223,7 +243,7 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
                 # Re-read under the current actor before accepting any response.
                 grounded = host.verify_response(state.actor, text, tuple(state.evidence_sources)) is True
             except Exception:
-                grounded = False
+                return _terminal(host, state, 'blocked', 'candidate_verification_unavailable')
             if _cancelled(host):
                 return _terminal(host, state, 'cancelled', 'cancelled')
             if not _is_fresh(host, state, fingerprint):
@@ -233,6 +253,17 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
             if _deadline_elapsed(host):
                 return _terminal(host, state, 'blocked', 'candidate_deadline_exceeded')
             if not grounded:
+                missing = False
+                if host.remaining_advertised_evidence is not None and state.unsupported_retries < 2:
+                    try:
+                        missing = host.remaining_advertised_evidence(state.actor, tuple(state.evidence_sources)) is True
+                    except Exception:
+                        missing = False
+                if missing:
+                    state.unsupported_retries += 1
+                    state.recovery_pending = True
+                    _save(host, state)
+                    continue
                 return _terminal(host, state, 'blocked', 'candidate_answer_unsupported')
             return _terminal(host, state, 'completed', response=text)
         if kind != 'tool' or not isinstance(decision.get('tool_id'), str) or not isinstance(decision.get('arguments'), dict):
@@ -306,6 +337,7 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
         if not isinstance(ref, str) or not ref.strip() or ref == state.goal_source or ref in state.evidence_sources:
             return _terminal(host, state, 'blocked', 'candidate_evidence_reference_invalid')
         state.evidence_sources.append(ref)
+        state.recovery_pending = False
         state.inflight = ''
         _save(host, state)
     return state

@@ -173,7 +173,12 @@ class TaskBudget:
         return {"charged": used, "in_flight": unresolved, "unknown_usage": unknown}
 
     def reserve(self, reservation_id: str, *, kind: str, amounts: Mapping[str, int],
-                now_ms: int, lane: str = "work", cancelled: bool = False) -> int:
+                now_ms: int, lane: str = "work", cancelled: bool = False,
+                _synthetic_allow_settled_unknown: bool = False) -> int:
+        # Only the disposable synthetic evaluation store opts in; the full
+        # reserved amount remains charged and unknown usage stays visible.
+        if type(_synthetic_allow_settled_unknown) is not bool:
+            raise ValueError("budget_invalid:synthetic_unknown_policy")
         if type(cancelled) is not bool:
             raise ValueError("budget_invalid:cancelled")
         if cancelled:
@@ -205,7 +210,7 @@ class TaskBudget:
         usage = self.usage()
         if lane == "work" and any(r["lane"] == "final" and r["status"] != "released" for r in self._reservations.values()):
             exhausted("budget_final_already_started")
-        if kind == "model" and (usage["unknown_usage"] or any(
+        if kind == "model" and ((usage["unknown_usage"] and not _synthetic_allow_settled_unknown) or any(
                 r["kind"] == "model" and r["status"] == "reserved" for r in self._reservations.values())):
             exhausted("budget_model_usage_unresolved")
         for key in DIMENSIONS:
@@ -352,6 +357,8 @@ class SQLiteTaskBudgetStore:
         On concurrent modification this raises BudgetRevisionConflict; callers
         must reload. No model/tool may be dispatched if this call raises.
         """
+        if '_synthetic_allow_settled_unknown' in kwargs and type(self) is not SyntheticEvaluationBudgetStore:
+            raise ValueError('synthetic_budget_policy_not_available')
         budget = self.load(task_id)
         if budget.revision != expected_revision:
             raise BudgetRevisionConflict('budget_revision_conflict')
@@ -363,3 +370,18 @@ class SQLiteTaskBudgetStore:
             raise
         self.save(task_id, budget, expected_revision=expected_revision)
         return budget
+
+
+class SyntheticEvaluationBudgetStore(SQLiteTaskBudgetStore):
+    """Disposable comparison only: retain and fully charge unreported usage.
+
+    Not a billing estimate, production budget, or crash-reconciliation policy.
+    A previous *in-flight* model call still blocks; each settled unknown keeps
+    its full reservation charged and is explicitly recorded as unknown.
+    """
+
+    def reserve(self, task_id: str, *, expected_revision: int, **kwargs: Any) -> TaskBudget:
+        if '_synthetic_allow_settled_unknown' in kwargs:
+            raise ValueError('synthetic_budget_policy_not_overridable')
+        return super().reserve(task_id, expected_revision=expected_revision,
+                               _synthetic_allow_settled_unknown=True, **kwargs)

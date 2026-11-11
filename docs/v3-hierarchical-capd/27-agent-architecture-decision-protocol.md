@@ -8,6 +8,12 @@ confirmatory result; report it separately as exploratory.
 
 ## Owner direction: a small investment decision first
 
+All OpenAI model calls for this comparison must use Alphonse's existing Codex
+subscription provider. Direct OpenAI API calls are outside the owner's scope.
+The experimental single-loop needs a subscription-backed evaluation adapter;
+until then, an API-backed pilot must not be substituted. TypeSafe Jev remains
+a separate V3 integration under the owner's approved $1.86 total Jev budget.
+
 The owner favors the simpler architecture even for a marginal improvement,
 because reducing complexity has value and the current experience is often
 unusable. In particular, the owner reports that even asking the time can fail.

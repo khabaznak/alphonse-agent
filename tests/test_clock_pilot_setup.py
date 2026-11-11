@@ -41,27 +41,11 @@ def test_invalid_budget_rejected(bad):
         setup.preview(budget_usd=bad)
 
 
-def test_fake_provider_execution_preserves_scope_and_never_prints_key(tmp_path, monkeypatch, capsys):
-    fake_key = 'synthetic-secret-key'
-    decisions = iter([
-        {'kind': 'tool', 'tool_id': 'native.fixture_read', 'arguments': {'source': 'index'}},
-        {'kind': 'answer', 'text': json.dumps({'local_time': '08:00', 'local_date': '2026-04-12',
-                                               'timezone': 'America/Mexico_City'})},
-    ])
-    calls = []
-    def fake_sender(url, body, key):
-        calls.append(body)
-        assert key == fake_key and body['model'] == setup.MODEL
-        return {'status': 'completed', 'model': setup.MODEL, 'usage': {'input_tokens': 100, 'output_tokens': 30},
-                'output': [{'type': 'message', 'role': 'assistant',
-                            'content': [{'type': 'output_text', 'text': json.dumps(next(decisions))}]}]}
-    monkeypatch.setattr(setup.getpass, 'getpass', lambda _: fake_key)
-    monkeypatch.setattr(setup, 'requests_sender', fake_sender)
+def test_direct_api_execution_is_disabled_before_key_prompt(tmp_path, monkeypatch):
+    monkeypatch.setattr(setup.getpass, 'getpass', lambda _: pytest.fail('unexpected credential prompt'))
+    monkeypatch.setattr(setup, 'requests_sender', lambda *args: pytest.fail('unexpected provider call'))
     journal, ledger = tmp_path / 'run.jsonl', tmp_path / 'ledger.db'
-    code = setup.main(['--execute', '--scope-approved', '--accept-estimate-uncertainty', '--isolation-reviewed',
-                       '--journal', str(journal), '--ledger', str(ledger)])
-    printed = capsys.readouterr().out
-    assert code == 0 and len(calls) == 2
-    assert json.loads(printed)['passed'] is True
-    assert fake_key not in printed and fake_key not in journal.read_text()
-    assert ledger.is_file()
+    with pytest.raises(SystemExit):
+        setup.main(['--execute', '--scope-approved', '--accept-estimate-uncertainty', '--isolation-reviewed',
+                    '--journal', str(journal), '--ledger', str(ledger)])
+    assert not journal.exists() and not ledger.exists()

@@ -46,6 +46,8 @@ def preview(*, budget_usd: str = '0.25') -> dict:
     expected = MAX_CALLS * (INPUT_PER_CALL * INPUT_RATE + OUTPUT_PER_CALL * OUTPUT_RATE)
     return {
         'kind': 'one_synthetic_candidate_clock_attempt', 'preview_only': True,
+        'status': 'superseded_direct_api_execution_disabled',
+        'required_provider': 'Codex subscription; comparison adapter not yet implemented',
         'provider': 'OpenAI Responses API', 'model': MODEL, 'attempts': 1,
         'synthetic_instant_utc': INSTANT, 'synthetic_timezone': TIMEZONE,
         'data_scope': 'synthetic clock request and generated synthetic evidence only',
@@ -97,34 +99,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.execute:
         print(json.dumps(scope, indent=2, ensure_ascii=False))
         return 0
-    if not (args.scope_approved and args.accept_estimate_uncertainty and args.isolation_reviewed
-            and args.journal and args.ledger and scope['estimated_reservations_fit_budget']):
-        parser.error('execution requires approved scope, acknowledged estimated budget, reviewed isolation, fresh journal and ledger')
-    if args.journal.resolve() == args.ledger.resolve() or args.journal.exists() or args.ledger.exists():
-        parser.error('journal and ledger must be distinct new paths')
-    # Only request a credential after the operator has opted in to every
-    # prerequisite. Never print it, pass it in argv, or store it in a journal.
-    key = getpass.getpass('OpenAI API key: ').strip()
-    if not key:
-        parser.error('an API key is required')
-    try:
-        # Exclusive creation avoids silently sharing/resetting a prior budget.
-        with args.ledger.open('x'):
-            pass
-        limits = PilotLimits(max_calls=MAX_CALLS, max_input_tokens=MAX_CALLS * INPUT_PER_CALL,
-            max_output_tokens=MAX_CALLS * OUTPUT_PER_CALL, max_cost_units=_budget_nanos(args.budget_usd),
-            input_cost_units_per_token=INPUT_RATE, output_cost_units_per_token=OUTPUT_RATE)
-        ledger = PilotLedger(str(args.ledger), limits)
-        transport = ResponsesPilotTransport(model=MODEL, api_key=key, ledger=ledger,
-            count_complete_input=_estimated_input, sender=requests_sender, enabled=True)
-        result = run_clock_responses_attempt(args.journal, source_instant=INSTANT, source_timezone=TIMEZONE,
-            expected_instant=INSTANT, expected_timezone=TIMEZONE, transport=transport, dispatch_enabled=True)
-    except Exception as exc:
-        # Never print provider exceptions, credentials, request bodies or URLs.
-        print(json.dumps({'status': 'error', 'error_type': type(exc).__name__}))
-        return 1
-    print(json.dumps(result, ensure_ascii=False, indent=2))
-    return 0 if result['passed'] is True else 1
+    parser.error('direct OpenAI API evaluation is disabled; use a Codex subscription pilot')
 
 
 if __name__ == '__main__':
