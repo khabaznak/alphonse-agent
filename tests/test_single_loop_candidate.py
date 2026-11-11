@@ -264,9 +264,29 @@ def test_missing_evidence_recovery_reads_before_answer(fixture):
     assert result.status == 'completed'
     assert result.unsupported_retries == 1
     assert fixture.calls == [{'key': 'x'}]
-    assert 'The proposed answer is not yet verified' in fixture.seen[1]
-    assert 'The proposed answer is not yet verified' not in fixture.seen[2]
+    assert 'A previous answer was not verified' in fixture.seen[1]
+    assert 'A previous answer was not verified' in fixture.seen[2]
     assert CandidateState.restore(fixture.snapshots[-1]).unsupported_retries == 1
+
+
+def test_recovery_feedback_persists_across_multiple_reads_without_extra_retries(fixture):
+    decisions = iter([
+        {'kind': 'answer', 'text': 'guess'},
+        {'kind': 'tool', 'tool_id': 'native.read', 'arguments': {'key': 'x'}},
+        {'kind': 'tool', 'tool_id': 'native.read', 'arguments': {'key': 'y'}},
+        {'kind': 'answer', 'text': 'The value is 42.'},
+    ])
+    def choose(text, cap):
+        fixture.seen.append(text)
+        return {**next(decisions), 'usage': {'input_tokens': 10, 'output_tokens': 10}}
+    host = replace(fixture.host, choose=choose, input_reservation=1024,
+                   verify_response=lambda actor, response, refs: len(refs) == 2 and response == 'The value is 42.',
+                   remaining_advertised_evidence=lambda actor, refs: True)
+    result = run_candidate(fixture.state, host)
+    assert result.status == 'completed' and result.unsupported_retries == 1
+    assert [call['key'] for call in fixture.calls] == ['x', 'y']
+    assert 'A previous answer was not verified' not in fixture.seen[0]
+    assert all('A previous answer was not verified' in text for text in fixture.seen[1:])
 
 
 def test_unsupported_recovery_is_bounded_and_no_answer_delivered(fixture):

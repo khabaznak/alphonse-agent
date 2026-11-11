@@ -154,7 +154,65 @@ def test_early_answer_recovers_without_disclosing_oracle(monkeypatch):
     monkeypatch.setattr(CodexSubscriptionProvider, 'generate_json', fake_provider)
     result = comparison.run_prescription_arm(arm='simple', provider=CodexSubscriptionProvider(model=MODEL), model=MODEL)
     assert result['passed'] is True
-    assert 'The proposed answer is not yet verified' in prompts[1]
+    assert all('A previous answer was not verified' in prompt for prompt in prompts[1:])
     assert json.dumps(ANSWER) not in prompts[1]
-    feedback = prompts[1].split('The proposed answer is not yet verified', 1)[1]
+    feedback = prompts[1].split('A previous answer was not verified', 1)[1]
     assert 'conversation' not in feedback and 'treatment-status' not in feedback
+
+
+def test_matched_mode_hidden_requirements_cannot_affect_candidate_run(monkeypatch):
+    prompts_by_run = []
+    results = []
+    for required in (('conversation',), ('prescription', 'treatment-status')):
+        monkeypatch.setattr(comparison, '_REQUIRED', required)
+        decisions = iter([
+            {'kind': 'tool', 'tool_id': 'native.fixture_read', 'arguments': {'source': 'conversation'}},
+            {'kind': 'answer', 'text': json.dumps(ANSWER)},
+        ])
+        prompts = []
+        def fake_provider(self, request):
+            prompts.append(request.prompt)
+            value = next(decisions)
+            return InferenceResult(json_value=value, raw_response=json.dumps(value))
+        monkeypatch.setattr(CodexSubscriptionProvider, 'generate_json', fake_provider)
+        results.append(comparison.run_prescription_arm(arm='simple', provider=CodexSubscriptionProvider(model=MODEL),
+            model=MODEL, verification_mode='matched_provenance'))
+        prompts_by_run.append(prompts)
+    assert prompts_by_run[0] == prompts_by_run[1]
+    assert [r['status'] for r in results] == ['completed', 'completed']
+    assert [r['metrics']['system_two_calls'] for r in results] == [2, 2]
+    assert [r['passed'] for r in results] == [True, False]  # post-run oracle only
+    assert all(r['verification_mode'] == 'matched_provenance' for r in results)
+
+
+def test_matched_mode_does_not_confuse_provenance_with_correctness(monkeypatch):
+    decisions = iter([
+        {'kind': 'tool', 'tool_id': 'native.fixture_read', 'arguments': {'source': 'conversation'}},
+        {'kind': 'answer', 'text': '{"status":"wrong"}'},
+    ])
+    def fake_provider(self, request):
+        value = next(decisions)
+        return InferenceResult(json_value=value, raw_response=json.dumps(value))
+    monkeypatch.setattr(CodexSubscriptionProvider, 'generate_json', fake_provider)
+    result = comparison.run_prescription_arm(arm='simple', provider=CodexSubscriptionProvider(model=MODEL),
+        model=MODEL, verification_mode='matched_provenance')
+    assert result['status'] == 'completed'  # only local provenance, not semantic verification
+    assert result['passed'] is False and result['oracle']['answer_matches_key'] is False
+
+
+def test_matched_mode_blocks_no_observation_without_retry_feedback(monkeypatch):
+    prompts = []
+    def fake_provider(self, request):
+        prompts.append(request.prompt)
+        return InferenceResult(json_value={'kind': 'answer', 'text': json.dumps(ANSWER)})
+    monkeypatch.setattr(CodexSubscriptionProvider, 'generate_json', fake_provider)
+    result = comparison.run_prescription_arm(arm='simple', provider=CodexSubscriptionProvider(model=MODEL),
+        model=MODEL, verification_mode='matched_provenance')
+    assert result['status'] == 'blocked' and result['passed'] is False
+    assert len(prompts) == 1
+
+
+def test_invalid_matched_mode_fails_before_dispatch():
+    with pytest.raises(ValueError, match='invalid_verification_mode'):
+        comparison.run_prescription_arm(arm='simple', provider=CodexSubscriptionProvider(model=MODEL),
+            model=MODEL, verification_mode='unknown')

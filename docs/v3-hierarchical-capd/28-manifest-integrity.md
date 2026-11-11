@@ -55,7 +55,7 @@ commit or source edit requires a fresh development snapshot:
 ```sh
 .venv/bin/python -m alphonse.agent_v2.evaluation.read_only_development_manifest verify \
   tests/fixtures/single_loop_comparison/read_only_v2_development_plan_v1.json \
-  --expected-digest f3345387ee2c7c40821bd2512428c81d9c61c7cd75a1ce6375ebd41de2ad952a
+  --expected-digest bca1443ac7a321610a19c752dec66410446b12bd4a810b43609ef48dbd21f204
 ```
 
 The inventory hashes all Python files in `alphonse/agent_v2`, including

@@ -67,3 +67,18 @@ and its verifier gives it a binary source-coverage signal not provided to V3.
 The result shows that allowing extra attempts alone did not ensure the candidate
 collected the necessary evidence. It does not establish a general success rate
 or justify tuning the retry cap to this one fixture.
+
+After changing recovery so its generic unverified-answer reminder persists
+across subsequent reads, another candidate-only diagnostic on the same task
+also failed. It blocked after 34.70 seconds, five Codex calls and two reads,
+with approximately 3,387 estimated visible input tokens. It read the
+prescription and treatment status but not the conversation. The independent
+oracle failed, and the fixture-specific source-coverage verifier blocked the
+answer. This single attempt does not establish whether the reminder helps in
+other cases. No Jev, real health data or actual user delivery was involved.
+
+The newer opt-in `matched_provenance` evaluation mode removes the candidate's
+hidden-source feedback; this diagnostic used the original `fixture_diagnostic`
+mode and is not a matched comparison. In the new mode, completion alone does
+not establish that an answer is correct; the independent post-run oracle must
+also pass. It is synthetic-only and is not a production medical safeguard.

@@ -205,3 +205,12 @@ def test_candidate_recovery_uses_advertised_inventory_not_hidden_required_set(mo
             required_source_names=required)
     # Verification uses required sources, but available-work eligibility does not.
     assert [row[1:] for row in observed] == [(True, False, False), (True, False, False)]
+
+
+def test_matched_provenance_rejects_oracle_key_before_running():
+    with pytest.raises(ValueError, match='matched_mode_disallows_required_sources'):
+        comparison._run_simple(url='http://127.0.0.1:1/' + 'x' * 43 + '/',
+            provider=CodexSubscriptionProvider(model=MODEL), model=MODEL,
+            emit=lambda _: None, cancelled=lambda: False,
+            allowed_source_names=('index', 'prescription'),
+            required_source_names=('prescription',), verification_mode='matched_provenance')

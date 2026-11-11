@@ -7,6 +7,12 @@ answer key or list of required sources. Retry state is checkpointed. Read
 permission, cancellation, source freshness, deadlines and budgets still apply.
 There is no production routing change and no user-facing question delivery.
 
+Following the failed prescription diagnostic, the generic notice that an
+earlier answer was not verified is retained across subsequent source reads.
+A single read cannot establish that an answer is supported. This does not
+increase the two-retry cap, add source-specific guidance, or relax verification;
+its effect on live behavior has not yet been established.
+
 This is a candidate-only mechanism, so the arms do not have identical recovery
 logic. The candidate's synthetic verifier also checks whether required source
 references are present; its acceptance/rejection is therefore a source-coverage

@@ -178,7 +178,8 @@ def _run_simple(*, url: str, provider: Any, model: str,
                 emit: Callable[[dict], None], cancelled: Callable[[], bool], trace=None,
                 goal: str = GOAL, source_description: str = 'Read the synthetic clock source.',
                 allowed_source_names: tuple[str, ...] = ('index',),
-                required_source_names: tuple[str, ...] = ('index',)):
+                required_source_names: tuple[str, ...] | None = ('index',),
+                verification_mode: str = 'fixture_diagnostic'):
     """Run the actual read-only candidate with a subscription-backed chooser."""
     from alphonse.agent_v2.core.core import CoreLoopContext, ToolDescriptor, ToolKind
     from alphonse.agent_v2.core.intelligence.task_state import TaskState
@@ -189,9 +190,15 @@ def _run_simple(*, url: str, provider: Any, model: str,
     from .codex_candidate_chooser import CodexSubscriptionChooser
     from .simplified_loop import Run
 
-    if (not isinstance(required_source_names, tuple) or not required_source_names
-            or not set(required_source_names) <= set(allowed_source_names)):
-        raise ValueError('invalid_required_sources')
+    if verification_mode not in {'fixture_diagnostic', 'matched_provenance'}:
+        raise ValueError('invalid_verification_mode')
+    if verification_mode == 'fixture_diagnostic':
+        if (not isinstance(required_source_names, tuple) or not required_source_names
+                or not set(required_source_names) <= set(allowed_source_names)):
+            raise ValueError('invalid_required_sources')
+    elif required_source_names is not None:
+        # A matched run must never pass the oracle's coverage key into the loop.
+        raise ValueError('matched_mode_disallows_required_sources')
     source = LocalSource(url, allowed_source_names=allowed_source_names)
     evidence = {'goal': goal}
     registry = InMemoryToolRegistry()
@@ -259,15 +266,21 @@ def _run_simple(*, url: str, provider: Any, model: str,
         now = lambda: int(monotonic() * 1000)
         budgets.create(task.task_id, TaskBudget(BudgetLimits(units(4, 11, 655560, 163940),
                        units(0, 1, 200, 100), 100000, 1000), started_at_ms=now()))
+        def verify(actor, text, refs):
+            if not (actor == ACTOR and bool(text.strip()) and bool(refs)
+                    and all(ref in evidence for ref in refs)):
+                return False
+            if verification_mode == 'matched_provenance':
+                return True
+            return {'read:' + name for name in required_source_names} <= set(refs)
+
         host = CandidateHost(task, context, budgets, lambda _snapshot: None, TracedChooser(),
             lambda actor, ref: actor == ACTOR and ref in evidence,
             lambda actor, ref: evidence[ref], permit, record,
-            lambda actor, text, refs: (actor == ACTOR and bool(text.strip())
-                and {'read:' + name for name in required_source_names} <= set(refs)
-                and all(ref in evidence for ref in refs)),
+            verify,
             now, input_reservation=65536, output_reservation=16384, projection_budget=65536,
             deadline_checker=cancelled, synthetic_allow_unreported_usage=True,
-            remaining_advertised_evidence=remaining_advertised)
+            remaining_advertised_evidence=(remaining_advertised if verification_mode == 'fixture_diagnostic' else None))
         state = run_candidate(CandidateState(task.task_id, ACTOR, 'goal'), host)
     return Run(status=state.status, response=state.response, reason=state.blocker or None)
 

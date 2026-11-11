@@ -180,8 +180,9 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
             # the output cap must be enforced by the external transport.
             decision_input = projection.text
             if state.recovery_pending:
-                decision_input += ('\nThe proposed answer is not yet verified. Inspect remaining available evidence '
-                                   'using authorized tools before answering, or explain what prevents progress.')
+                decision_input += ('\nA previous answer was not verified. Consider whether the available evidence '
+                                   'supports every part of the request; inspect relevant authorized sources before '
+                                   'answering, or explain what prevents progress.')
             if len(decision_input.encode('utf-8')) > host.input_reservation:
                 return _terminal(host, state, 'blocked', 'candidate_input_reservation_too_small')
             budget = host.budgets.load(state.task_id)
@@ -337,7 +338,8 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
         if not isinstance(ref, str) or not ref.strip() or ref == state.goal_source or ref in state.evidence_sources:
             return _terminal(host, state, 'blocked', 'candidate_evidence_reference_invalid')
         state.evidence_sources.append(ref)
-        state.recovery_pending = False
+        # Reading one source does not establish that the prior answer was
+        # supported. Preserve the generic feedback until a terminal outcome.
         state.inflight = ''
         _save(host, state)
     return state
