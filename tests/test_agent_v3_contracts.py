@@ -209,10 +209,10 @@ def test_legacy_call_adapter_creates_only_one_subgoal() -> None:
     assert phase.originating_decision == "legacy_one_call_adapter"
 
 
-def test_task_state_checkpoints_v3_state_without_changing_v2_default() -> None:
+def test_task_state_checkpoints_v3_state_with_v3_default() -> None:
     state = TaskState()
-    assert state.intelligence_engine == "tactical_v2"
-    assert state.intelligence_schema_version == 2
+    assert state.intelligence_engine == "hierarchical_v3"
+    assert state.intelligence_schema_version == 3
 
     state.intelligence_engine = "hierarchical_v3"
     state.intelligence_schema_version = 3

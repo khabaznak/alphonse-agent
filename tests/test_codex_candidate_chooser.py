@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from alphonse.agent_v2.core.core import CoreLoopContext, ToolDescriptor, ToolKind
-from alphonse.agent_v2.core.inference import InferenceResult
+from alphonse.agent_v2.core.inference import InferencePurpose, InferenceResult
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.intelligence.v3.single_loop_candidate import CandidateHost, CandidateState, run_candidate
 from alphonse.agent_v2.core.intelligence.v3.task_budget import (BudgetExhausted, BudgetLimits,
@@ -29,6 +29,7 @@ def make_case(tmp_path, store_type, *, allow_unknown):
         {'kind': 'answer', 'text': '42'},
     ])
     def generate(request):
+        assert request.purpose == InferencePurpose.SIMPLE_LOOP_ACTION
         prompts.append(request.prompt)
         value = next(decisions)
         import json

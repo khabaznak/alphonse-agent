@@ -143,7 +143,11 @@ def project(task, context, *, purpose: str, selected_context_ids=()) -> str:
         if key == "question_interrupt" and isinstance(task.metadata.get(key), dict) and str(task.metadata[key].get("task_id") or "") != str(task.task_id or task.message_id or "current"):
             continue
         if task.metadata.get(key):
-            records.append(Record("task:" + key, key, _json(task.metadata[key]), True))
+            value = task.metadata[key]
+            if key == "question_interrupt":
+                from .browser_workflow import public_question
+                value = public_question(value)
+            records.append(Record("task:" + key, key, _json(value), True))
     global_text = _prompt_file(context, "GlobalContext.md")
     sections = parse_global_context_sections(global_text)
     if sections:

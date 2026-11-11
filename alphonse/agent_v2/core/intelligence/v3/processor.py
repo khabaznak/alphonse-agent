@@ -40,6 +40,10 @@ if TYPE_CHECKING:
 
 _MAX_CONSECUTIVE_NO_PROGRESS_PHASES = 3
 _SCHEDULED_DELIVERY_WAIT_SECONDS = 300
+_SAFE_INFERENCE_ERROR_CODES = frozenset({
+    "openai_codex_invalid_json", "openai_codex_invalid_tool_json", "openai_codex_empty_response",
+    "openai_codex_timeout", "openai_codex_auth_required", "openai_codex_cli_missing",
+})
 
 
 class HierarchicalCAPDProcessor:
@@ -63,8 +67,16 @@ class HierarchicalCAPDProcessor:
             # completed evidence rather than leaking a still-running checkpoint.
             cancelled = context.is_cancelled()
             task.status = "cancelled" if cancelled else "failed"
-            reason = ("Task cancelled." if cancelled else
-                      str(exc) if isinstance(exc, SystemOneUnavailableError) else "v3_runtime_error:" + type(exc).__name__)
+            if cancelled:
+                reason = "Task cancelled."
+            elif isinstance(exc, SystemOneUnavailableError):
+                reason = str(exc)
+            elif type(exc) is ValueError and str(exc) in _SAFE_INFERENCE_ERROR_CODES:
+                # Persist only exact provider-owned codes; arbitrary messages
+                # may contain private prompts or tool output.
+                reason = "v3_runtime_error:" + str(exc)
+            else:
+                reason = "v3_runtime_error:" + type(exc).__name__
             task.outcome = {"status": task.status, "reason": reason}
             if cancelled:
                 task.metadata.pop("v3_terminal_error_type", None)
@@ -74,6 +86,25 @@ class HierarchicalCAPDProcessor:
             return self._result(task, context)
 
     def _process(self, task: "TaskState", context: "CoreLoopContext") -> ProcessingResult:
+        from . import browser_workflow
+        invalid_browser = browser_workflow.KEY not in task.metadata and browser_workflow._legacy_browser_state(task)
+        if browser_workflow.KEY in task.metadata:
+            try:
+                browser_workflow.load(task)
+            except browser_workflow.BrowserWorkflowError:
+                invalid_browser = True
+        if invalid_browser:
+            task.status = "failed"
+            task.outcome = {"status": "failure", "reason": "browser_workflow_legacy_reconciliation_required"}
+            task.metadata["v3_route"] = "end"
+            task.metadata["v3_failure_response"] = {"source": "browser_recovery", "communication_reviewed": True,
+                "message": "The earlier browser activity needs reconciliation before it can continue."}
+            return self._result(task, context)
+        if context.is_cancelled():
+            task.status = "cancelled"
+            task.outcome = {"status": "cancelled", "reason": "Task cancelled."}
+            self._persist(task, context)
+            return self._result(task, context)
         context.emit_ui_event("run_started", {"task": task.to_dict(), "engine": "hierarchical_v3"})
         task.intelligence_engine = "hierarchical_v3"
         task.intelligence_schema_version = 3
@@ -95,18 +126,59 @@ class HierarchicalCAPDProcessor:
             return self._result(task, context)
         no_progress_phases = int(task.metadata.get("v3_no_progress_phase_count") or 0)
         while task.status not in {"completed", "failed", "waiting_user", "cancelled"}:
+            if context.is_cancelled():
+                task.status = "cancelled"
+                task.outcome = {"status": "cancelled", "reason": "Task cancelled."}
+                self._persist(task, context)
+                break
             try:
                 if task.hierarchical_state:
                     state = TacticalState.from_dict(task.hierarchical_state)
+                    if browser_workflow.KEY in task.metadata:
+                        state.evidence.entries = [browser_workflow.public_answer_receipt(task, item)
+                                                  for item in state.evidence.entries]
                     if state.status == PhaseStatus.WAITING_USER:
                         if not _resume_from_authenticated_answer(task, state):
                             task.status = "waiting_user"
                             self._persist(task, context)
                             break
-                        self._append_history(task, state, PhaseOutcome(
-                            state.phase.phase_id, PhaseStatus.WAITING_USER, "Question answered.",
-                        ).to_dict())
-                        state = self._new_state(task, context)
+                        question_id = str((task.metadata.get("question_interrupt") or {}).get("question_id") or "")
+                        question = context.question_store.get_question(question_id) if context.question_store is not None and question_id else None
+                        delivery = (question.metadata.get("delivery") or {}) if question is not None else {}
+                        resume_browser_phase = False
+                        if delivery.get("private_browser_value") is True:
+                            from .browser_workflow import BrowserWorkflowError, FIELDS
+                            from alphonse.agent_v2.browser_private_data import BrowserPrivateDataError
+                            task.hierarchical_state = {**task.hierarchical_state, "status": "running"}
+                            try:
+                                if context.browser_workflow_service is None:
+                                    raise BrowserWorkflowError("browser_workflow_session_unavailable")
+                                context.browser_workflow_service.record_answered_question(task, question_id=question_id)
+                                task.metadata.pop("v3_browser_input_reacquisition_required", None)
+                                resume_browser_phase = _can_resume_browser_phase(task, state, context, question_id)
+                            except (BrowserWorkflowError, BrowserPrivateDataError):
+                                field = delivery.get("browser_private_field")
+                                task.metadata["v3_browser_input_reacquisition_required"] = field if field in FIELDS else "other"
+                                task.metadata["act_directive"] = {"action": "replan", "rationale":
+                                    "The protected answer is unavailable. Reacquire it through the private channel before using it; preserve unresolved effects."}
+                        if resume_browser_phase:
+                            state.transition(PhaseStatus.RUNNING)
+                            receipt = next(item for item in task.metadata.get("v3_resumption_evidence", [])
+                                           if isinstance(item, dict) and item.get("kind") == "authenticated_question_answer"
+                                           and item.get("task_id") == task.task_id and item.get("phase_id") == state.phase.phase_id
+                                           and (item.get("result") or {}).get("question_id") == question_id)
+                            if not any(item.get("evidence_ref") == receipt.get("evidence_ref") for item in state.evidence.entries):
+                                safe_receipt = {**receipt, "result": {**receipt["result"], "answer": {"private_input_provided": True}}}
+                                state.evidence.append(safe_receipt)
+                            review = (task.metadata.get("act_directive") or {}).get("outcome_review")
+                            task.metadata["act_directive"] = {"outcome_review": review} if review else {}
+                            task.hierarchical_state = state.to_dict()
+                            self._persist(task, context)
+                        else:
+                            self._append_history(task, state, PhaseOutcome(
+                                state.phase.phase_id, PhaseStatus.WAITING_USER, "Question answered.",
+                            ).to_dict())
+                            state = self._new_state(task, context)
                     elif state.status in {PhaseStatus.PLANNED, PhaseStatus.RUNNING}:
                         pass
                     elif state.status == PhaseStatus.PHASE_COMPLETE and not task.metadata.get("v3_phase_review"):
@@ -125,6 +197,7 @@ class HierarchicalCAPDProcessor:
                 self._persist(task, context)
                 break
             try:
+                browser_verified_before = _verified_browser_effect_ids(task)
                 outcome = (
                     PhaseOutcome(state.phase.phase_id, PhaseStatus.PHASE_COMPLETE,
                                  "Resumed completed phase with recorded evidence.")
@@ -187,13 +260,14 @@ class HierarchicalCAPDProcessor:
             new_evidence = bool(evidence_after - evidence_before)
             if new_evidence and _phase_observations_report_no_progress(state, refs_before, context):
                 new_evidence = False
-            evidence_progress = new_evidence or bool(_satisfied_criterion_ids(task) - satisfied_before)
+            verified_browser_progress = bool(_verified_browser_effect_ids(task) - browser_verified_before)
+            evidence_progress = new_evidence or verified_browser_progress or bool(_satisfied_criterion_ids(task) - satisfied_before)
             review_status = str(getattr(getattr(review, "status", None), "value", ""))
             inspection_handoff = (
                 (task.metadata.get("v3_inspection_resolution") or {}).get("phase_id") == state.phase.phase_id
                 and any(blocker.startswith("inspection_") for blocker in outcome.blockers)
             )
-            if "tactical_stage_no_new_progress" in set(outcome.blockers):
+            if "tactical_stage_no_new_progress" in set(outcome.blockers) and not verified_browser_progress:
                 evidence_progress = False
             retrieval_handoff = (
                 (task.metadata.get("act_directive", {}).get("retrieval_resolution") or {}).get("phase_id")
@@ -384,6 +458,9 @@ class HierarchicalCAPDProcessor:
 
     @staticmethod
     def _complete_direct_response(task: "TaskState", context: "CoreLoopContext") -> None:
+        from .browser_workflow import completion_blocked
+        if completion_blocked(task, context.browser_workflow_service):
+            raise RuntimeError("browser_workflow_reconciliation_required")
         if context.inference is None:
             raise RuntimeError("v3_direct_response_inference_unavailable")
         # Make the existing skill decision visible while System Two composes
@@ -517,10 +594,12 @@ class HierarchicalCAPDProcessor:
         if review.get("evidence_version"):
             task.metadata["v3_act_recovery_version"] = review["evidence_version"]
         prior = _deduplicated_history_evidence(task.metadata.get("v3_phase_history"))
+        from .browser_workflow import public_answer_receipt
+        prior = [public_answer_receipt(task, item) for item in prior]
         seen = {item.get("evidence_ref") for item in prior}
         for receipt in task.metadata.get("v3_resumption_evidence", []):
             if isinstance(receipt, dict) and receipt.get("evidence_ref") not in seen:
-                prior.append(dict(receipt))
+                prior.append(public_answer_receipt(task, dict(receipt)))
                 seen.add(receipt.get("evidence_ref"))
         state = new_tactical_state(phase, cumulative_evidence=prior)
         task.hierarchical_state = state.to_dict()
@@ -545,7 +624,14 @@ class HierarchicalCAPDProcessor:
     def _persist(task: "TaskState", context: "CoreLoopContext") -> None:
         if context.question_store is not None:
             checkpoint_status = "done" if task.status == "completed" else task.status
-            context.question_store.save_task_checkpoint(task, status=checkpoint_status)
+            from . import browser_workflow
+            if browser_workflow.KEY in task.metadata or browser_workflow._legacy_browser_state(task):
+                if checkpoint_status == "running":
+                    context.question_store.save_active_browser_checkpoint(task, expected_workflow=task.metadata.get(browser_workflow.KEY))
+                else:
+                    context.question_store.save_browser_transition(task, status=checkpoint_status)
+            else:
+                context.question_store.save_task_checkpoint(task, status=checkpoint_status)
 
     @staticmethod
     def _prepare_failure_response(task: "TaskState", context: "CoreLoopContext") -> None:
@@ -753,6 +839,87 @@ def _await_scheduled_delivery(task: "TaskState", context: "CoreLoopContext", wai
     return False
 
 
+def _await_scheduled_delivery(task: "TaskState", context: "CoreLoopContext", waiting: dict) -> bool:
+    """Yield the processor until a task-owned outbox receipt becomes terminal."""
+    message_id = str(waiting.get("outbox_message_id") or "")
+    recipient = str(waiting.get("recipient_user_id") or "")
+    started_text = str(waiting.get("started_at") or "")
+    try:
+        started = datetime.fromisoformat(started_text) if started_text else datetime.now(timezone.utc)
+        if started.tzinfo is None:
+            raise ValueError("missing timezone")
+    except ValueError:
+        started = datetime.min.replace(tzinfo=timezone.utc)
+    for _ in range(2):
+        try:
+            expired = (datetime.now(timezone.utc) - started.astimezone(timezone.utc)).total_seconds() >= _SCHEDULED_DELIVERY_WAIT_SECONDS
+            receipt = context.delivery_sink({"event_type": "communication.delivery_timeout" if expired else "communication.delivery_status", "task": task.to_dict(),
+                                             "outbox_message_id": message_id, "recipient_user_id": recipient}) if callable(context.delivery_sink) else {}
+        except Exception:
+            receipt = {}
+        status = str(receipt.get("status") or "unavailable") if isinstance(receipt, dict) else "unavailable"
+        if status == "delivered":
+            task.metadata.pop("v3_scheduled_delivery_wait", None)
+            return True
+        if status in {"pending", "claimed", "retry_wait"}:
+            if expired:
+                status = "unavailable"
+                break
+            task.metadata["v3_scheduled_delivery_wait"] = {"outbox_message_id": message_id, "recipient_user_id": recipient,
+                                                            "started_at": started.isoformat()}
+            stage = getattr(context.messages, "stage_delivery_wait", None)
+            if (context.scheduled_handoff_enabled and callable(stage) and context.question_store is not None
+                    and stage(task, context.question_store, message_id, recipient)):
+                raise ScheduledHandoff()
+            continue  # The provider may have completed while the wait was being staged.
+        break
+    task.metadata.pop("v3_scheduled_delivery_wait", None)
+    if message_id:
+        task.metadata["v3_unconfirmed_delivery_outbox_id"] = message_id
+    task.status = "failed"
+    reason = "scheduled_delivery_failed" if status == "failed" else "scheduled_delivery_outcome_unavailable"
+    task.outcome = {"status": "failure", "reason": reason}
+    task.metadata["v3_failure_response"] = {
+        "source": "scheduled_delivery_recovery", "communication_reviewed": True,
+        "message": ("I could not deliver the scheduled message." if status == "failed" else
+                    "I could not confirm whether the scheduled message was delivered. Please check before retrying."),
+    }
+    task.metadata["v3_route"] = "end"
+    HierarchicalCAPDProcessor._persist(task, context)
+    return False
+
+
+def _can_resume_browser_phase(task: "TaskState", state: TacticalState, context: "CoreLoopContext", question_id: str) -> bool:
+    """Keep a waiting phase only while its protected browser evidence is usable.
+
+    A live observation is not a claim that the page is unchanged: the transport
+    must still compare it atomically before an effect. No action is preapproved.
+    """
+    if (context.is_cancelled() or state.cancellation_pending or state.steering_pending
+            or not state.actions or state.actions[-1].status != "waiting"
+            or state.actions[-1].tool_id != "native.browser_workflow_request_value"
+            or state.actions[-1].subgoal_id != state.active_subgoal_id):
+        return False
+    service = context.browser_workflow_service
+    if service is None:
+        return False
+    try:
+        from . import browser_workflow
+        view = service.projection(task, limit=256)
+        if not view.get("session_available") or view.get("unresolved_effect") or view.get("older_events_omitted"):
+            return False
+        events = view.get("events") or []
+        observed = next((e for e in reversed(events) if e.get("kind") == "observed" and e.get("field") == "form"), None)
+        supplied = next((e for e in reversed(events) if e.get("kind") == "supplied"), None)
+        recorded = next((e for e in reversed(browser_workflow.load(task)["events"]) if e.get("kind") == "supplied"), None)
+        return bool(observed and supplied and recorded and recorded.get("source") == question_id
+                    and observed.get("current_session") and observed.get("reference_available")
+                    and supplied.get("current_session") and supplied.get("reference_available")
+                    )
+    except Exception:
+        return False
+
+
 def _resume_from_authenticated_answer(task: "TaskState", state: TacticalState) -> bool:
     interrupt = task.metadata.get("question_interrupt") or {}
     answered = interrupt.get("status") == "answered" and any(
@@ -815,13 +982,27 @@ def _successful_evidence_refs(raw_history: object) -> set[str]:
     }
 
 
+def _verified_browser_effect_ids(task: "TaskState") -> set[str]:
+    """Count independently verified effects, never attempts or transport returns."""
+    from . import browser_workflow
+    if browser_workflow.KEY not in task.metadata:
+        return set()
+    try:
+        return {event["id"] for event in browser_workflow.load(task)["events"] if event["kind"] == "verified"}
+    except browser_workflow.BrowserWorkflowError:
+        return set()
+
+
 def _successful_evidence_signatures(raw_history: object) -> set[str]:
     """New action IDs and phase names do not turn repeated results into progress."""
     return {
         json.dumps({key: item.get(key) for key in ("tool_id", "arguments", "result")},
                    ensure_ascii=False, sort_keys=True, default=str)
         for item in _deduplicated_history_evidence(raw_history)
-        if item.get("status") == "success" and item.get("tool_id") != "native.respond"
+        if item.get("status") == "success" and item.get("tool_id") not in {
+            "native.respond", "native.browser_workflow_fill", "native.browser_workflow_submit",
+            "native.browser_workflow_reconcile", "native.browser_workflow_verify_submission",
+        }
     }
 
 

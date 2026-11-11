@@ -314,3 +314,38 @@ def test_json_extraction_preserves_complete_outer_object_with_prose_wrapper():
     assert _try_parse_json_object('Result:\n{"phase_id":"fixture","subgoals":[{"subgoal_id":"reply"}]}\nEnd.') == {
         'phase_id': 'fixture', 'subgoals': [{'subgoal_id': 'reply'}],
     }
+
+
+@pytest.mark.parametrize('output', [
+    'prefix {"tool_id":"native.browser_workflow_fill","arguments":{}}',
+    '{"tool_id":"native.browser_workflow_fill","arguments":{}} trailing',
+    '{"tool_id":"native.browser_workflow_fill","arguments":{"secret":"fixture"}',
+    '```json\n{"tool_id":"native.browser_workflow_fill"}\n```',
+])
+def test_tactical_provider_rejects_partial_or_wrapped_json_without_exposing_output(monkeypatch, output):
+    provider = OpenAICodexProvider()
+    monkeypatch.setattr(provider, '_run_codex', lambda *_: output)
+    with pytest.raises(ValueError) as caught:
+        provider.generate_json(InferenceRequest(prompt='fixture', purpose=InferencePurpose.TACTICAL_ACTION))
+    assert str(caught.value) == 'openai_codex_invalid_json'
+
+
+def test_tactical_provider_distinguishes_non_object_from_bad_encoding(monkeypatch):
+    provider = OpenAICodexProvider()
+    monkeypatch.setattr(provider, '_run_codex', lambda *_: '[{"tool_id":"fixture"}]')
+    with pytest.raises(ValueError, match='^openai_codex_invalid_tactical_schema$'):
+        provider.generate_json(InferenceRequest(prompt='fixture', purpose=InferencePurpose.TACTICAL_ACTION))
+
+
+def test_tactical_provider_accepts_complete_object(monkeypatch):
+    provider = OpenAICodexProvider()
+    from alphonse.agent_v2.core.inference.tactical_wire import SCHEMA
+    wire = {"action": {"tool_id": "fixture", "arguments_json": "{}", "acceptance_questions": []},
+            "actions": [], "browser_fill_sequence": [], "uncertainty_assessment": None}
+    def run(_prompt, request):
+        assert request.output_schema == SCHEMA
+        return json.dumps(wire)
+    monkeypatch.setattr(provider, '_run_codex', run)
+    result = provider.generate_json(InferenceRequest(prompt='fixture', purpose=InferencePurpose.TACTICAL_ACTION))
+    assert result.json_value == {'tool_id': 'fixture', 'arguments': {}, 'acceptance_questions': []}
+    assert result.raw_response is None

@@ -135,6 +135,9 @@ class V3OuterController:
             task.metadata["v3_phase_review"] = _review_dict(review)
             task.metadata["v3_strategic_decision"] = {"action": decision.action.value, "reason": decision.reason}
             return review, decision
+        from .browser_workflow import completion_blocked
+        if decision.action == StrategicAction.COMPLETE and completion_blocked(task, context.browser_workflow_service):
+            decision = StrategicDecision(StrategicAction.REPLAN, "Reconcile the unresolved browser effect or reacquire the unavailable private input before completion.")
         context.emit_activity(
             phase=ImprovementPhase.ACT,
             label="strategy selected",

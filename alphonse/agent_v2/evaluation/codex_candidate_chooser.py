@@ -87,7 +87,7 @@ class CodexSubscriptionChooser:
             'already listed tool, and do not claim an observation that was not supplied.\n\n'
         )
         request = InferenceRequest(prompt=instructions + projection,
-            purpose=InferencePurpose.TACTICAL_ACTION,
+            purpose=InferencePurpose.SIMPLE_LOOP_ACTION,
             model_profile=ModelProfile(provider='openai_codex', model=self.model,
                                        profile_id='synthetic-subscription-comparison'),
             cancel_checker=self.cancellation_checker,

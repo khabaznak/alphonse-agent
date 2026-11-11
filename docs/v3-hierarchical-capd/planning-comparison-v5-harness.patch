@@ -1,0 +1,108 @@
+--- a/alphonse/agent_v2/evaluation/planning_comparison.py
++++ b/alphonse/agent_v2/evaluation/planning_comparison.py
+@@ -4 +4 @@
+-progress rule is an emulation, and no simpler loop is implemented here.
++progress rule is an emulation; the flat-phase prototype is not a general runtime.
+@@ -21,2 +21,2 @@
+-CORPUS = Path(__file__).resolve().parents[3] / 'tests/fixtures/planning_comparison/v2.json'
+-VARIANTS = ('historical_progress_emulation', 'uncertainty_aware', 'targeted_recovery', 'combined_fixture_action', 'independent_read_sequence')
++CORPUS = Path(__file__).resolve().parents[3] / 'tests/fixtures/planning_comparison/v5.json'
++VARIANTS = ('historical_progress_emulation', 'uncertainty_aware', 'targeted_recovery', 'combined_fixture_action', 'independent_read_sequence', 'flat_phase_prototype')
+@@ -43,0 +44,51 @@
++def _run_flat_trial(trial):
++    """One planned phase, real dispatch and outer verification; no replan loop.
++
++    This evaluation-only prototype deliberately reports unresolved questions,
++    recovery and replanning as non-completion. It is not a replacement runtime.
++    """
++    from alphonse.agent_v2.core.inference import InferencePurpose, InferenceRequest
++    from alphonse.agent_v2.core.intelligence.v3 import (PhasePlan, PhaseExecutor, ToolRevealPolicy,
++        V3OuterController, HierarchicalCAPDProcessor, new_tactical_state)
++    from alphonse.agent_v2.core.intelligence.v3.contracts import TacticalState
++    from alphonse.agent_v2.core.intelligence.v3.revealing import validate_phase_actions
++    trial.task.status = 'running'
++    trial.task.set_acceptance_contract_from_markdown('- [ ] Fulfill the original delegated outcome with verified effects')
++    request = InferenceRequest(prompt='Prepare the synthetic task phase', purpose=InferencePurpose.PHASE_PLANNING,
++                               task_id=trial.task.task_id)
++    phase = PhasePlan.from_dict(trial.inference.generate_json(request).json_value)
++    validate_phase_actions(phase, tuple(trial.context.tools.list()))
++    state = new_tactical_state(phase)
++    try:
++        outcome = PhaseExecutor(reveal_policy=ToolRevealPolicy()).run(trial.task, state, trial.context)
++    except fixtures.SimulatedRestart:
++        trial.restarted = True
++        trial.questions = fixtures.RestartStore(trial.root / 'questions.sqlite')
++        trial.context.question_store = trial.questions
++        trial.task = trial.questions.load_task_checkpoint(trial.task.task_id)
++        state = TacticalState.from_dict(trial.task.hierarchical_state)
++        outcome = PhaseExecutor(reveal_policy=ToolRevealPolicy()).run(trial.task, state, trial.context)
++    HierarchicalCAPDProcessor._append_history(trial.task, state, outcome.to_dict())
++    V3OuterController().review_and_route(trial.task, state, outcome, trial.context)
++    if trial.task.status == 'running':
++        # This prototype does not autonomously replan or invent a user response.
++        trial.task.status = 'failed'
++        trial.task.outcome = {'status': 'failure', 'reason': 'flat_prototype_requires_replanning'}
++    return trial.score()
++
++
++def _use_evidence_only_review(trial):
++    """Script Check from recorded readback evidence, never the fixture oracle."""
++    from alphonse.agent_v2.system_one import SystemOneReviewResult
++    def evaluate(**values):
++        entries = values['evidence'].get('entries', [])
++        refs = [entry['evidence_ref'] for entry in entries
++                if entry.get('status') == 'success' and entry.get('evidence_ref')
++                and isinstance(entry.get('result'), dict)
++                and (entry['result'].get('verification') or {}).get('status') == 'verified']
++        updates = tuple({'criterion_id': criterion['id'], 'status': 'satisfied', 'evidence_refs': refs}
++                        for criterion in values['contract']['criteria']) if refs else ()
++        return SystemOneReviewResult(updates, ())
++    trial.context.system_one.evaluate = evaluate
++
++
+@@ -47,0 +99 @@
++            _use_evidence_only_review(trial)
+@@ -75 +127 @@
+-                    result = trial.run()
++                    result = _run_flat_trial(trial) if variant == 'flat_phase_prototype' else trial.run()
+@@ -95 +147,3 @@
+-                'observations': get_count, 'submission_attempts': posts,
++                'observations': get_count, 'repeated_observations': max(0, get_count - 1),
++                'false_stall': case['expected'] == 'completed' and trial.task.status == 'failed' and not trial.oracle_effect(),
++                'submission_attempts': posts,
+@@ -128 +182,2 @@
+-            return InferenceResult(json_value={'tool_id': 'native.fixture_read', 'arguments': {'index': len(observed)},
++            completed = sum(entry.get('status') == 'success' for entry in state.evidence.entries)
++            return InferenceResult(json_value={'tool_id': 'native.fixture_read', 'arguments': {'index': completed},
+@@ -134 +189,2 @@
+-        done = len(observed) == len(fragments)
++        successful = [entry for entry in kwargs.get('execution_log', []) if entry.get('status') == 'success']
++        done = len(successful) == len(fragments)
+@@ -155 +211,2 @@
+-            'unnecessary_questions': 0, 'elapsed_seconds': perf_counter() - started,
++            'unnecessary_questions': 0, 'repeated_observations': len(observed) - len(set(observed)),
++            'elapsed_seconds': perf_counter() - started,
+@@ -168,0 +226,2 @@
++            'false_stall': case['scenario'] in {'normal', 'uncertain'} and result['outcome'] in {'blocked', 'failed'},
++            'repeated_observations': len(result['observed_keys']) - len(set(result['observed_keys'])),
+@@ -210 +269,5 @@
+-        'comparison_complete': False,
++        'comparison_complete': len(rows) == corpus['repeats'] * len(VARIANTS) * (
++            len(cases) + len(corpus.get('tactical_cases', [])) + len(corpus.get('independent_cases', [])))
++            and all(all(key in row for key in ('outcome', 'independent_oracle_pass', 'false_stall',
++                'repeated_observations', 'unnecessary_questions', 'inference_calls', 'tool_calls',
++                'provider_cost_usd', 'elapsed_seconds')) for row in rows),
+@@ -218 +281,2 @@
+-        'unavailable_variants': {'simpler_loop': 'No independently implemented and verified prototype yet.'},
++        'prototype_limitations': {'flat_phase_prototype': 'The prototype omits general replanning and authenticated question resumption.'},
++        'architecture_decision': 'Retain the hierarchical loop; the flat prototype fails required recovery cases. Revisit with stronger evidence.',
+@@ -221,0 +286 @@
++            'Scripted Check uses recorded verified readback evidence; the fixture oracle is reserved for outcome scoring.',
+@@ -224,0 +290 @@
++            'The flat phase prototype uses real dispatch and outer verification but has no general replanning or question-resumption loop; tactical-only cases do not compare hierarchy.',
+@@ -242,2 +308,3 @@
+-                      'unavailable_variants': report['unavailable_variants']}))
+-    return 0 if report['comparison_complete'] and all(r.get('independent_oracle_pass') for r in report['results']) else 1
++                      'prototype_limitations': report['prototype_limitations']}))
++    # A completed comparison may include deliberate, independently recorded failures.
++    return 0 if report['comparison_complete'] else 1

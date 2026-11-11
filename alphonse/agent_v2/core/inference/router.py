@@ -79,7 +79,9 @@ class InferenceRouter:
             result = getattr(self.provider, method)(resolved)
         except Exception as exc:
             finish_decision(manifest, failed=True)
-            self._emit(resolved, None, started, status="failed", error=f"{type(exc).__name__}: {exc}")
+            # Provider exception strings can contain the raw model response.
+            error = "tactical_provider_error" if resolved.purpose.value == "tactical_action" else f"{type(exc).__name__}: {exc}"
+            self._emit(resolved, None, started, status="failed", error=error)
             raise
         normalized = self._with_result_profile(result, resolved.model_profile)
         finish_decision(manifest)
@@ -122,7 +124,8 @@ class InferenceRouter:
             duration_ms=max(0, round((monotonic() - started) * 1000)),
             status=status,
             error=str(safe_telemetry_value(error)),
-            provider_usage=safe_telemetry_value(dict(result.usage)) if result is not None else {},
+            provider_usage=(safe_telemetry_value(dict(result.usage)) if result is not None
+                            and request.purpose.value != "tactical_action" else {}),
             metadata=safe_telemetry_value(dict(request.metadata)),
         )
         self.telemetry_sink(event.to_dict())

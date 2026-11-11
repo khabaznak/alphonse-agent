@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import replace
 from alphonse.agent_v2.core.context_inventory import source, prompt_receipt
 
 import json
 import time
 from typing import TYPE_CHECKING, Any, Callable
 from uuid import uuid4
+
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import SchemaError
 
 from alphonse.agent_v2.core.core import ImprovementPhase, ToolKind
 from alphonse.agent_v2.core.inference import InferencePurpose, InferenceRequest
@@ -34,6 +38,7 @@ from alphonse.agent_v2.core.intelligence.v3.task_understanding import receipt as
 from alphonse.agent_v2.core.tools.registry import ToolExposurePolicy
 from alphonse.agent_v2.core.memory.workflow import MEMORY_WORKFLOW
 from alphonse.agent_v2.core.memory.retry_context import retry_continuity_context
+from .tactical_contract import TACTICAL_SCHEMA, valid_tactical_response
 from .feasibility import FEASIBILITY_GUIDANCE
 from ..routine_autonomy import ROUTINE_AUTONOMY_GUIDANCE, ordinary_workspace_context
 
@@ -45,6 +50,10 @@ ActionSelector = Callable[[TacticalState, PhaseSubgoal, tuple["ToolDescriptor", 
 TACTICAL_RETRY_BASE_SECONDS = 1.0
 MAX_UPDATE_INSPECTION_ACTIONS = 6
 MAX_UNCERTAIN_PROGRESS_ACTIONS = 6
+MAX_BROWSER_OBSERVATIONS_PER_SUBGOAL = 8
+MAX_INDEPENDENT_READ_ACTIONS = 3
+
+
 class ScheduledHandoff(Exception):
     """A durable checkpoint is ready for the daemon to yield its queue lease."""
 
@@ -80,6 +89,8 @@ class PhaseExecutor:
                 self._checkpoint(task, state, context)
                 return self._outcome(state, "The scheduled delivery outcome is unconfirmed.",
                                      blockers=("scheduled_delivery_outcome_unavailable",))
+        # Ephemeral only: a restart discards proposals that have not run.
+        pending_reads: list[dict[str, Any]] = []
         while state.status == PhaseStatus.RUNNING:
             interruption = self._interruption(task, state, context)
             if interruption is not None:
@@ -95,8 +106,14 @@ class PhaseExecutor:
             selected = (retry.get("action") if isinstance(retry, dict)
                         and retry.get("phase_id") == state.phase.phase_id
                         and retry.get("subgoal_id") == subgoal.subgoal_id else None)
-            if not isinstance(selected, dict):
+            from_inference = False
+            if isinstance(selected, dict):
+                pending_reads.clear()
+            elif pending_reads:
+                selected = pending_reads.pop(0)
+            else:
                 selected = self._select_action(task, state, subgoal, tools, context)
+                from_inference = self._action_selector is None
             interruption = self._interruption(task, state, context)
             if interruption is not None:
                 self._checkpoint(task, state, context)
@@ -105,17 +122,56 @@ class PhaseExecutor:
                 state.transition(PhaseStatus.BLOCKED)
                 self._checkpoint(task, state, context)
                 return self._outcome(state, "No valid tactical action was available.", blockers=("tactical_action_unavailable",))
+            # An outstanding fill has only one safe local recovery path: obtain
+            # a subsequent observation, then reconcile it. Selection remains
+            # subject to the ordinary reveal, phase, grant and cancellation checks.
+            required = _pending_browser_fill_recovery(task)
+            reacquire = False
+            if required and selected.get("tool_id") == "native.browser_workflow_reacquire":
+                try:
+                    service = context.browser_workflow_service
+                    reacquire = service is not None and not service.projection(task).get("session_available")
+                except Exception:
+                    reacquire = False
+            if required and selected.get("tool_id") != required and not reacquire:
+                state.transition(PhaseStatus.BLOCKED)
+                self._checkpoint(task, state, context)
+                return self._outcome(state, "The browser effect needs independent reconciliation.",
+                                     blockers=("browser_workflow_reconciliation_required",))
+            is_sequence = "actions" in selected
+            is_browser_sequence = "browser_fill_sequence" in selected
+            selected_id = selected.get("tool_id")
+            sensitive_action = is_sequence or is_browser_sequence or (isinstance(selected_id, str) and selected_id.startswith("native.browser_workflow_")) or any(
+                tool.tool_id == selected_id and tool.metadata.get("sensitive_content") is True for tool in tools)
             try:
+                if from_inference and not valid_tactical_response(selected):
+                    raise ValueError("tactical_response_schema_invalid")
+                if is_browser_sequence:
+                    proposed = _validate_browser_fill_sequence(self, state, subgoal, selected, tools)
+                    selected, pending_reads = proposed[0], proposed[1:]
+                elif is_sequence:
+                    proposed = _validate_independent_reads(self, state, subgoal, selected, tools)
+                    selected, pending_reads = proposed[0], proposed[1:]
+                    sensitive_action = False
                 action = self._validate_action(state, subgoal, selected, tools)
             except (ValueError, PermissionError) as exc:
+                pending_reads.clear()
                 error = str(exc)
-                # IDs and acceptance-question wording do not change an invalid action.
+                context.emit_telemetry({"event": "v3_tactical_response_failure", "category":
+                    "schema" if error == "tactical_response_schema_invalid" else "action_validation"})
+                # All rejected provider output can contain sensitive content,
+                # including under unknown keys or a forged tool identifier.
+                safe_error = error.split(":", 1)[0]
+                if not safe_error.startswith(("tactical_", "browser_fill_sequence_", "independent_reads_", "legacy_")):
+                    safe_error = "tactical_action_invalid"
+                from . import browser_workflow
+                sensitive_rejection = (sensitive_action or browser_workflow.KEY in task.metadata
+                                       or browser_workflow._legacy_browser_state(task))
                 fingerprint = hashlib.sha256(json.dumps({
-                    "tool_id": selected.get("tool_id"), "arguments": selected.get("arguments"),
-                    "error": error, "capabilities": sorted(subgoal.allowed_capabilities),
+                    "error": "sensitive_action_invalid" if sensitive_rejection else safe_error,
+                    "capabilities": sorted(subgoal.allowed_capabilities),
                     "effects": sorted(item.value for item in subgoal.allowed_side_effects),
-                    "scope": state.phase.mutation_scope.__dict__,
-                }, sort_keys=True, default=str).encode()).hexdigest()
+                }, sort_keys=True).encode()).hexdigest()
                 seen = task.metadata.setdefault("v3_rejected_action_fingerprints", [])
                 repeated = fingerprint in seen
                 exhausted = any(item.get("status") == "rejected" and
@@ -125,7 +181,8 @@ class PhaseExecutor:
                 state.evidence.append({
                     "evidence_ref": f"tactical-rejection:{uuid4()}",
                     "phase_id": state.phase.phase_id, "subgoal_id": subgoal.subgoal_id,
-                    "status": "rejected", "error": error, "rejected_action": selected,
+                    "status": "rejected", "error": "sensitive_action_invalid" if sensitive_rejection else safe_error,
+                    "rejected_action": {"tool_id": "native.browser_workflow" if sensitive_rejection else "redacted", "arguments": {"redacted": True}},
                     "validation_feedback": "No tool ran. Correct this action once using the same revealed tools, "
                         "capabilities, effects and mutation scope; preserve completed work. Do not broaden authorization.",
                     "fingerprint": fingerprint, "repeated": repeated,
@@ -135,8 +192,21 @@ class PhaseExecutor:
                     continue
                 state.transition(PhaseStatus.BLOCKED)
                 self._checkpoint(task, state, context)
-                reason = ("tactical_planning_error_repeated:" if repeated else "tactical_correction_exhausted:") + error
+                reason = ("tactical_planning_error_repeated:" if repeated else "tactical_correction_exhausted:") + ("sensitive_action_invalid" if sensitive_rejection else safe_error)
                 return self._outcome(state, reason, blockers=(reason,))
+            if sensitive_action:
+                action = TacticalAction(action_id=f"action-{uuid4()}", subgoal_id=action.subgoal_id,
+                    tool_id=action.tool_id, arguments=action.arguments, acceptance_questions=action.acceptance_questions)
+            if (action.tool_id in {"native.browser_workflow_observe", "native.browser_workflow_observe_result"}
+                    and sum(prior.subgoal_id == action.subgoal_id and prior.tool_id in {
+                        "native.browser_workflow_observe", "native.browser_workflow_observe_result"}
+                            for prior in state.actions) >= MAX_BROWSER_OBSERVATIONS_PER_SUBGOAL):
+                state.transition(PhaseStatus.BLOCKED)
+                self._checkpoint(task, state, context)
+                return self._outcome(state, "Browser observation budget exhausted; review the existing evidence.",
+                                     blockers=("browser_observation_budget_exhausted",))
+            recorded_arguments = {"redacted": True} if sensitive_action else action.arguments
+            recorded_questions = [] if sensitive_action else action.acceptance_questions
             if _scheduled_delivery_may_repeat(task, state, action, context):
                 state.transition(PhaseStatus.BLOCKED)
                 self._checkpoint(task, state, context)
@@ -144,24 +214,28 @@ class PhaseExecutor:
                                      blockers=("scheduled_delivery_repetition_unresolved",))
             recovery = (task.metadata.get("act_directive") or {}).get("outcome_review") or {}
             verified_refs = set(recovery.get("verified_evidence_refs") or ())
-            if any(
+            repeated_verified = any(
                 entry.get("evidence_ref") in verified_refs and entry.get("tool_id") == action.tool_id
-                and (entry.get("arguments") or {}) == action.arguments
+                and (entry.get("arguments") or {}) == recorded_arguments
                 for entry in state.evidence.entries
-            ):
+            )
+            redacted_observation = action.tool_id in {"native.browser_workflow_observe", "native.browser_workflow_observe_result"}
+            if repeated_verified and not redacted_observation and not _browser_fill_has_protected_identity(task, action, context):
                 blocker = "act_recovery_repeats_verified_work"
                 state.transition(PhaseStatus.BLOCKED)
                 self._checkpoint(task, state, context)
                 return self._outcome(state, blocker, blockers=(blocker,))
             retry_count = 0
             retry_interrupted = False
+            reconciliation_step = False
             while True:
                 if retry_count:
                     interruption = self._interruption(task, state, context)
                     if interruption is not None:
                         self._checkpoint(task, state, context)
                         return interruption
-                state.actions.append(action)
+                state.actions.append(TacticalAction(action_id=action.action_id, subgoal_id=action.subgoal_id,
+                    tool_id=action.tool_id, arguments=recorded_arguments, acceptance_questions=recorded_questions))
                 self._checkpoint(task, state, context)
                 context.emit_activity(
                     phase=ImprovementPhase.DO,
@@ -194,11 +268,11 @@ class PhaseExecutor:
                     action_id=action.action_id,
                     subgoal_id=action.subgoal_id,
                     tool_id=action.tool_id,
-                    arguments=action.arguments,
+                    arguments=recorded_arguments,
                     status=str(outcome.get("status") or "failed"),
-                    result=outcome.get("result"),
+                    result={"redacted": True} if sensitive_action else outcome.get("result"),
                     error=_error_message(outcome.get("error")),
-                    acceptance_questions=action.acceptance_questions,
+                    acceptance_questions=recorded_questions,
                 )
                 state.actions[-1] = completed
                 state.evidence.append(
@@ -255,6 +329,42 @@ class PhaseExecutor:
                     state.transition(PhaseStatus.WAITING_USER)
                     self._checkpoint(task, state, context)
                     return self._outcome(state, "A tactical action requires user input.")
+                if completed.tool_id == "native.browser_workflow_fill" and completed.status == "success":
+                    # A return is only an attempt. Continue solely to the fenced
+                    # observation/reconciliation path, never to completion.
+                    if _pending_browser_fill_recovery(task) == "native.browser_workflow_observe":
+                        self._checkpoint(task, state, context)
+                        reconciliation_step = True
+                        break
+                if completed.tool_id in {"native.browser_workflow_fill", "native.browser_workflow_submit"}:
+                    # A transport return cannot verify the form effect. Until a
+                    # fresh-observation reconciliation exists, do not retry or
+                    # let semantic review promote this into phase completion.
+                    state.transition(PhaseStatus.BLOCKED)
+                    self._checkpoint(task, state, context)
+                    return self._outcome(state, "The browser effect needs independent reconciliation.",
+                                         blockers=("browser_workflow_reconciliation_required",))
+                if completed.tool_id == "native.browser_workflow_observe" and required == completed.tool_id:
+                    if completed.status == "success":
+                        self._checkpoint(task, state, context)
+                        reconciliation_step = True
+                        break
+                    state.transition(PhaseStatus.BLOCKED)
+                    self._checkpoint(task, state, context)
+                    return self._outcome(state, "Browser reconciliation remains unavailable.",
+                                         blockers=("browser_workflow_reconciliation_required",))
+                if completed.tool_id == "native.browser_workflow_reconcile" and required == completed.tool_id and completed.status == "success":
+                    if not _pending_browser_fill_recovery(task):
+                        self._checkpoint(task, state, context)
+                        reconciliation_step = True
+                        break
+                if completed.tool_id in {"native.browser_workflow_reconcile", "native.browser_workflow_verify_submission"}:
+                    state.transition(PhaseStatus.BLOCKED)
+                    self._checkpoint(task, state, context)
+                    reason = ("Review the recorded browser reconciliation before continuing." if completed.status == "success"
+                              else "Browser reconciliation remains unavailable.")
+                    return self._outcome(state, reason,
+                                         blockers=("browser_workflow_reconciliation_review",))
                 self._checkpoint(task, state, context)
                 completion_met, retry_approved, progress_review = self._completion_review(
                     task, state, subgoal, completed, context
@@ -269,6 +379,8 @@ class PhaseExecutor:
                     "context_coverage": progress_review.get("context_coverage", {}),
                     "answers": dict(progress_review.get("answers") or {}),
                 }
+                if not completion_met and completed.status == "success":
+                    _queue_uncertainty_recovery(state, subgoal, context)
                 if not completion_met and _is_update_inspection(state, subgoal, progress_review.get("answers") or {},
                     float(getattr(getattr(context.system_one, "settings", None), "yes_threshold", 0.8))):
                     count = int(task.metadata.get("v3_update_inspection_actions") or 0) + 1
@@ -299,6 +411,9 @@ class PhaseExecutor:
                 settings = getattr(context.system_one, "settings", None)
                 yes_threshold = float(getattr(settings, "yes_threshold", 0.8))
                 no_threshold = float(getattr(settings, "no_threshold", 0.2))
+                if pending_reads and (completion_met or completed.status != "success"
+                                      or not _independent_read_can_continue(progress_review, yes_threshold)):
+                    pending_reads.clear()
                 if not completion_met and _consecutive_no_progress(state, subgoal.subgoal_id, no_threshold) >= 3:
                     blocker = "tactical_stage_no_new_progress"
                     state.evidence.entries[-1]["no_progress_blocker"] = blocker
@@ -345,6 +460,8 @@ class PhaseExecutor:
                     arguments=dict(action.arguments),
                     acceptance_questions=action.acceptance_questions,
                 )
+            if reconciliation_step:
+                continue
             if retry_interrupted:
                 interruption = self._interruption(task, state, context)
                 if interruption is not None:
@@ -400,7 +517,7 @@ class PhaseExecutor:
         skill_guidance, loaded_skill_ids = selected_skill_guidance(task, context)
         if self._action_selector is not None:
             selected = self._action_selector(state, subgoal, tools)
-            if isinstance(selected, dict) and not selected.get("acceptance_questions"):
+            if isinstance(selected, dict) and not selected.get("acceptance_questions") and "browser_fill_sequence" not in selected:
                 selected = dict(selected)
                 selected["acceptance_questions"] = [{
                     "question_id": "stage_result_satisfies_completion",
@@ -440,9 +557,36 @@ class PhaseExecutor:
                 'task:' + str(task.task_id) + ':inspection_handoff', 'inspection_handoff',
             )
         skill_guidance = skill_guidance + "\n" + MEMORY_WORKFLOW
+        required_browser_step = _pending_browser_fill_recovery(task)
+        if required_browser_step in {"native.browser_workflow_observe", "native.browser_workflow_reconcile"}:
+            skill_guidance += source(
+                "\nA previous browser fill has an unresolved effect. The next permitted local recovery step is "
+                + required_browser_step + " with empty arguments. Do not repeat the fill or perform another "
+                "mutation until the independent reconciliation succeeds. Normal authorization and cancellation checks apply.",
+                'task:' + str(task.task_id) + ':browser_reconciliation', 'browser_reconciliation',
+            )
         selection = task.metadata.get("v3_context_selection") or {}
         task_context = task_context_for_decision(task, context, purpose="execution",
                                                 selected_context_ids=selection.get("selected_context_ids", []))
+        recovery = _consume_uncertainty_recovery(state, subgoal)
+        if recovery is not None:
+            # Reserve this bounded recovery opportunity before inference so a
+            # restart cannot repeatedly spend it. The next ordinary action-composition
+            # call carries the question and evidence; it cannot declare success.
+            self._checkpoint(task, state, context)
+            context.emit_telemetry({"event": "v3_tactical_uncertainty_recovery", "task_id": task.task_id,
+                                    "phase_id": state.phase.phase_id, "subgoal_id": subgoal.subgoal_id,
+                                    "evidence_ref": recovery["evidence_ref"], "reason": recovery["reason"]})
+            skill_guidance += source(
+                "\nTargeted uncertainty recovery: " + json.dumps(recovery, ensure_ascii=False)
+                + "\nUse the referenced execution evidence and coverage gaps to select the next safe action. "
+                  "Alongside the action, include uncertainty_assessment with question_id, answer "
+                  "(supported, not_supported, or uncertain), and evidence_refs referencing only successful "
+                  "execution-log entries. Use uncertain if the evidence does not resolve the question. "
+                  "The assessment is advisory and cannot establish completion; obtain a targeted observation when needed. "
+                  "Do not repeat a mutation with an uncertain effect. All normal authorization and verification apply.",
+                'phase:' + state.phase.phase_id + ':uncertainty_recovery', 'uncertainty_recovery',
+            )
         prompt = _tactical_prompt(
             state,
             subgoal,
@@ -453,28 +597,52 @@ class PhaseExecutor:
             skill_guidance=skill_guidance,
             task_context=task_context + "\n" + ordinary_workspace_context(task, context),
         )
+        # Providers which cannot enforce an output schema still receive the
+        # identical contract in the prompt; local validation is authoritative.
+        prompt += "\nTactical response JSON Schema: " + json.dumps(TACTICAL_SCHEMA, sort_keys=True)
         from .context_manifests import event_input_metadata
         images = context.image_inputs(task)
-        result = context.inference.generate_json(
-            InferenceRequest(
-                prompt=prompt,
-                purpose=InferencePurpose.TACTICAL_ACTION,
-                context_manifests=prompt_receipt(prompt, [task_context, skill_guidance,
-                    source('Strategic plan: ' + json.dumps(state.phase.to_dict(), ensure_ascii=False), 'phase:' + state.phase.phase_id, 'strategic_plan'),
-                    source('Complete tool execution log (every entry, no omissions or truncation):\n' + state.prompt_projection(max_evidence_entries=None, max_chars=None), 'phase:' + state.phase.phase_id + ':execution', 'execution_evidence'),
-                    *([source('Goal: ' + task.goal, 'request:' + str(task.message_id or task.task_id), 'current_request')] if not projections_enabled() else []),
-                ], purpose='execution'),
-                project_id=task.project_id,
-                user=task.user,
-                task_id=task.task_id,
-                images=images,
-                tools=tools,
-                metadata={"phase_id": state.phase.phase_id, "subgoal_id": subgoal.subgoal_id,
-                          **event_input_metadata(task, "execution")},
-                cancel_checker=context.is_cancelled if context.cancellation_checker is not None else None,
-            )
+        request = InferenceRequest(
+            prompt=prompt,
+            purpose=InferencePurpose.TACTICAL_ACTION,
+            context_manifests=prompt_receipt(prompt, [task_context, skill_guidance,
+                source('Strategic plan: ' + json.dumps(state.phase.to_dict(), ensure_ascii=False), 'phase:' + state.phase.phase_id, 'strategic_plan'),
+                source('Complete tool execution log (every entry, no omissions or truncation):\n' + state.prompt_projection(max_evidence_entries=None, max_chars=None), 'phase:' + state.phase.phase_id + ':execution', 'execution_evidence'),
+                *([source('Goal: ' + task.goal, 'request:' + str(task.message_id or task.task_id), 'current_request')] if not projections_enabled() else []),
+            ], purpose='execution'),
+            project_id=task.project_id,
+            user=task.user,
+            task_id=task.task_id,
+            images=images,
+            tools=tools,
+            metadata={"phase_id": state.phase.phase_id, "subgoal_id": subgoal.subgoal_id,
+                      **event_input_metadata(task, "execution")},
+            cancel_checker=context.is_cancelled if context.cancellation_checker is not None else None,
         )
+        try:
+            result = _safe_tactical_generate(context.inference, request)
+        except ValueError as exc:
+            # A malformed provider response contains no executable action. A
+            # single fresh attempt can recover without replaying that response,
+            # any browser mutation, or sensitive output into the next prompt.
+            category = {"openai_codex_invalid_json": "encoding",
+                        "openai_codex_invalid_tactical_schema": "schema"}.get(str(exc), "provider")
+            context.emit_telemetry({"event": "v3_tactical_response_failure", "category": category})
+            if "v3_browser_workflow" not in task.metadata or str(exc) not in {"openai_codex_invalid_json", "openai_codex_invalid_tactical_schema"}:
+                raise
+            if context.is_cancelled():
+                return None
+            try:
+                result = _safe_tactical_generate(context.inference, replace(request, prompt=request.prompt +
+                    "\nThe previous response could not be parsed. Return one valid JSON object using the action contract."))
+            except ValueError as retry_exc:
+                if str(retry_exc) not in {"openai_codex_invalid_json", "openai_codex_invalid_tactical_schema"}:
+                    raise
+                return None
+        if recovery is not None and valid_tactical_response(result.json_value):
+            _record_uncertainty_assessment(state, recovery, result.json_value)
         if not isinstance(result.json_value, dict):
+            context.emit_telemetry({"event": "v3_tactical_response_failure", "category": "schema"})
             return None
         if images:
             state.evidence.append({
@@ -616,6 +784,15 @@ class PhaseExecutor:
             raise ValueError(f"tactical_tool_not_revealed:{tool_id or '(missing)'}")
         if not isinstance(arguments, dict):
             raise ValueError("tactical_tool_arguments_invalid")
+        try:
+            Draft202012Validator.check_schema(descriptor.argument_schema or {})
+        except SchemaError:
+            raise ValueError("tactical_tool_schema_invalid") from None
+        try:
+            ToolInvocationService._validate(descriptor.argument_schema, arguments)
+        except ValueError:
+            # Validation messages may contain private argument values.
+            raise ValueError("tactical_tool_arguments_schema_invalid") from None
         compatibility_error = action_compatibility_error(subgoal, descriptor)
         if compatibility_error:
             raise PermissionError(compatibility_error)
@@ -698,7 +875,14 @@ class PhaseExecutor:
         task.intelligence_schema_version = 3
         task.hierarchical_state = state.to_dict()
         if context.question_store is not None:
-            context.question_store.save_task_checkpoint(task, status=task.status)
+            if "v3_browser_workflow" in task.metadata:
+                if task.status == "running":
+                    context.question_store.save_active_browser_checkpoint(task, expected_workflow=task.metadata["v3_browser_workflow"])
+                else:
+                    status = "done" if task.status == "completed" else task.status
+                    context.question_store.save_browser_transition(task, status=status)
+            else:
+                context.question_store.save_task_checkpoint(task, status=task.status)
 
     @staticmethod
     def _outcome(state: TacticalState, reason: str, blockers: tuple[str, ...] = ()) -> PhaseOutcome:
@@ -835,9 +1019,17 @@ def _tactical_prompt(
     ]
     return (
         FEASIBILITY_GUIDANCE + ROUTINE_AUTONOMY_GUIDANCE +
-        "Select exactly one concrete tactical action for the current subgoal and define acceptance questions for its result. "
+        "Select one concrete tactical action for the current subgoal and define acceptance questions for its result. "
+        "For a read-only subgoal only, you may instead return {actions:[...]} with two or three independent read-only "
+        "actions, each in the same format, only when all arguments are already known and none depends on another result. "
+        "For a browser fill whose field, target and private input are already known, you may instead return "
+        "{browser_fill_sequence:[fill, observe, reconcile]} with those three native browser workflow actions in that "
+        "exact order and the normal action format. The sequence stops on failure, uncertainty, cancellation, or changed "
+        "authorization; it does not establish task completion. Do not sequence any other write, browser action, "
+        "private input request, or user interaction. "
+        "The runtime rechecks every action and stops the sequence on failure, uncertainty or completion. "
         "Do not change the objective, acceptance criteria, or mutation scope. "
-        "Return JSON with tool_id, arguments, and a non-empty acceptance_questions array. Each item must be a Noul question "
+        "Each action has tool_id, arguments, and a non-empty acceptance_questions array. Each question must be a Noul "
         "shaped as {question_id, type:'noul', instructions, criteria:{true, false}}. Questions must evaluate the tool result "
         "against the stage goal and relevant acceptance criteria. Treat successful prior action results as authoritative inputs "
         "for the next action even when they did not complete the subgoal. Do not repeat a successful discovery/list action when "
@@ -848,9 +1040,11 @@ def _tactical_prompt(
         "If progress_review.context_complete is false, the current result exceeded the bounded judgment view. "
         "The original result remains below. Obtain a targeted source expansion or narrower observation to verify the "
         "stage; do not repeat the broad search or re-execute a mutation whose effects may already exist. "
-        "Every completed execution-log entry includes progress_review.complete from Jev. When it is false, the call "
-        "executed but did not make semantic progress. Do not select the same tool with the same arguments again; "
-        "choose different arguments or another revealed tool. For a CLI-backed artifact that returns an unexpected "
+        "progress_review.complete indicates whether the stage completion condition was met, not whether an action "
+        "made progress. Use the action result, progress answers and context coverage together; an incomplete or "
+        "uncertain review does not erase useful evidence. Avoid repeating an observation that already supplies the "
+        "needed information, and reconcile any uncertain effect before considering another mutation. "
+        "For a CLI-backed artifact that returns an unexpected "
         "result shape, use native.bash to inspect or invoke the underlying CLI when Bash is revealed. "
         "Task images are attached directly to this inference request and mapped to asset IDs. Inspect them using your "
         "vision capabilities and follow the selected skill guidance for what to extract or describe. Use the observations "
@@ -898,8 +1092,52 @@ def _task_project_root(task: "TaskState", context: "CoreLoopContext") -> str:
         return ""
 
 
+def _browser_fill_has_protected_identity(task: "TaskState", action: TacticalAction, context: "CoreLoopContext") -> bool:
+    """Only the workflow service can compare redacted verified fill identities."""
+    if action.tool_id != "native.browser_workflow_fill" or context.browser_workflow_service is None:
+        return False
+    try:
+        from . import browser_workflow
+        events = browser_workflow.load(task)["events"]
+        attempts = {event["id"] for event in events if event["kind"] == "attempted" and event["field"] == "fill"}
+        return any(event["kind"] == "verified" and event["related"] in attempts for event in events)
+    except Exception:
+        return False
+
+
+def _pending_browser_fill_recovery(task: "TaskState") -> str | None:
+    from . import browser_workflow
+    if browser_workflow.KEY not in task.metadata:
+        return None
+    try:
+        workflow = browser_workflow.load(task)
+        events = workflow["events"]
+        resolved = {event["related"] for event in events if event["kind"] == "verified"}
+        pending = [(i, event) for i, event in enumerate(events)
+                   if event["kind"] == "attempted" and event["id"] not in resolved]
+        if not pending:
+            return None
+        if len(pending) != 1:
+            return "browser_reconciliation_unavailable"
+        if pending[0][1]["field"] != "fill" or pending[0][1]["session"] != workflow["session"]:
+            # Submission and cross-session recovery follow their existing
+            # strategic recovery paths, including explicit reacquisition.
+            return None
+        index = pending[0][0]
+        observed = any(event["kind"] == "observed" and event["field"] == "form"
+                       and event["session"] == workflow["session"] for event in events[index + 1:])
+        return "native.browser_workflow_reconcile" if observed else "native.browser_workflow_observe"
+    except Exception:
+        return "browser_reconciliation_unavailable"
+
+
 def _matching_prior_incomplete_result(state: TacticalState, completed: TacticalAction) -> str | None:
     """Find equivalent prior evidence that Jev already judged incomplete."""
+    if (completed.tool_id in {"native.browser_workflow_observe", "native.browser_workflow_observe_result"}
+            and completed.result == {"redacted": True}):
+        # Identical placeholders cannot establish identical page observations.
+        # A separate deterministic per-subgoal budget bounds repeated reads.
+        return None
     for evidence in reversed(state.evidence.entries[:-1]):
         review = evidence.get("progress_review")
         if not isinstance(review, dict) or review.get("complete") is not False:
@@ -934,6 +1172,164 @@ def _is_update_inspection(state: TacticalState, subgoal: PhaseSubgoal, answers: 
         }
         for item in state.phase.subgoals
     )
+
+
+def _validate_browser_fill_sequence(executor: PhaseExecutor, state: TacticalState, subgoal: PhaseSubgoal,
+                                    selected: dict[str, Any], tools: tuple["ToolDescriptor", ...]) -> list[dict[str, Any]]:
+    """Accept only one fill and its mandatory independent recovery steps.
+
+    The ephemeral proposal confers no authority and is discarded on restart.
+    Each member still passes the normal reveal, phase and invocation checks.
+    """
+    items = selected.get("browser_fill_sequence")
+    expected = ["native.browser_workflow_fill", "native.browser_workflow_observe",
+                "native.browser_workflow_reconcile"]
+    if (set(selected) - {"browser_fill_sequence", "uncertainty_assessment"} or not isinstance(items, list)
+            or len(items) != len(expected)
+            or any(not isinstance(item, dict) or item.get("tool_id") != name
+                   for item, name in zip(items, expected))):
+        raise ValueError("browser_fill_sequence_invalid")
+    for item in items:
+        action = executor._validate_action(state, subgoal, item, tools)
+        descriptor = next(tool for tool in tools if tool.tool_id == action.tool_id)
+        ToolInvocationService._validate(descriptor.argument_schema, action.arguments)
+    return [{key: value for key, value in item.items() if key != "action_id"} for item in items]
+
+
+def _validate_independent_reads(executor: PhaseExecutor, state: TacticalState, subgoal: PhaseSubgoal,
+                                selected: dict[str, Any], tools: tuple["ToolDescriptor", ...]) -> list[dict[str, Any]]:
+    """Validate the entire ephemeral sequence before any action can run."""
+    items = selected.get("actions")
+    if set(subgoal.allowed_side_effects) != {SideEffectClass.READ_ONLY}:
+        raise ValueError("independent_reads_require_read_only_subgoal")
+    if not isinstance(items, list) or not 2 <= len(items) <= MAX_INDEPENDENT_READ_ACTIONS:
+        raise ValueError("independent_reads_invalid_count")
+    from alphonse.agent_v2.system_one import _TACTICAL_RETRY_FUSE_QUESTIONS
+    reserved = {"runtime_declared_subgoal_complete", "runtime_action_added_progress", "runtime_action_is_inspection",
+                "runtime_inspection_ready_for_action", "runtime_inspection_requires_user_input"}
+    reserved.update(question["question_id"] for question in _TACTICAL_RETRY_FUSE_QUESTIONS)
+    seen: set[str] = set()
+    for item in items:
+        if not isinstance(item, dict) or "actions" in item:
+            raise ValueError("independent_reads_invalid_action")
+        descriptor = next((tool for tool in tools if tool.tool_id == item.get("tool_id")), None)
+        if (descriptor is None or not descriptor.read_only or descriptor.metadata.get("sensitive_content") is True
+                or descriptor.tool_id.startswith("native.browser_workflow_")
+                or descriptor.tool_id in {"native.ask_question", "native.respond"}
+                or descriptor.metadata.get("side_effect_class") not in {None, "read_only"}):
+            raise ValueError("independent_reads_tool_not_allowed")
+        executor._validate_action(state, subgoal, item, tools)
+        ToolInvocationService._validate(descriptor.argument_schema, item["arguments"])
+        if any(str(question.get("question_id") or "").strip() in reserved for question in item["acceptance_questions"]):
+            raise ValueError("independent_reads_reserved_question")
+        signature = json.dumps([item.get("tool_id"), item.get("arguments")], sort_keys=True, default=str)
+        if signature in seen:
+            raise ValueError("independent_reads_duplicate")
+        seen.add(signature)
+    # Action IDs are runtime-owned; a repeated model-authored ID would alias
+    # distinct evidence entries. Generate a fresh one at each actual dispatch.
+    return [{key: value for key, value in item.items() if key != "action_id"} for item in items]
+
+
+def _independent_read_can_continue(review: dict[str, Any], yes_threshold: float) -> bool:
+    coverage = review.get("context_coverage") or {}
+    return (review.get("confident") is True and review.get("context_complete") is not False
+            and not coverage.get("omitted_prior_count", 0)
+            and not coverage.get("omitted_prior_result_count", 0) and not coverage.get("omitted_prior_refs")
+            and _confident_probability((review.get("answers") or {}).get("runtime_action_added_progress"), yes_threshold))
+
+
+def _queue_uncertainty_recovery(state: TacticalState, subgoal: PhaseSubgoal, context: "CoreLoopContext") -> None:
+    """Queue at most one stage and one other recovery per phase/subgoal."""
+    import math
+    relevant = [entry for entry in state.evidence.entries
+                if entry.get("phase_id") == state.phase.phase_id and entry.get("subgoal_id") == subgoal.subgoal_id]
+    if not relevant:
+        return
+    review = relevant[-1].get("progress_review") or {}
+    if review.get("uncertainty_recovery"):
+        return
+    settings = getattr(context.system_one, "settings", None)
+    no = float(getattr(settings, "no_threshold", .2))
+    yes = float(getattr(settings, "yes_threshold", .8))
+    answers = review.get("answers") or {}
+    coverage = review.get("context_coverage") or {}
+    incomplete = (review.get("context_complete") is False or coverage.get("omitted_prior_count", 0)
+                  or coverage.get("omitted_prior_result_count", 0) or coverage.get("omitted_prior_refs"))
+    # Stable question IDs let System Two find the exact question and evidence in
+    # the execution log. Give the runtime stage/progress questions precedence.
+    keys = [key for key in ("runtime_declared_subgoal_complete", "runtime_action_added_progress") if key in answers]
+    authored_ids = {item.get("question_id") for item in relevant[-1].get("acceptance_questions", [])
+                    if isinstance(item, dict) and isinstance(item.get("question_id"), str)}
+    keys.extend(sorted(key for key in authored_ids if key in answers and key not in keys))
+    uncertain = next((key for key in keys if type(answers[key]) in {int, float}
+                      and math.isfinite(answers[key]) and no < answers[key] < yes), None)
+    if not incomplete and uncertain is None:
+        return
+    budget_class = "stage" if uncertain == "runtime_declared_subgoal_complete" else "other"
+    for entry in relevant:
+        previous = (entry.get("progress_review") or {}).get("uncertainty_recovery") or {}
+        # Older checkpoints have no budget_class. Derive it from their question.
+        previous_class = previous.get("budget_class") or (
+            "stage" if previous.get("question_id") == "runtime_declared_subgoal_complete" else "other")
+        if previous and previous_class == budget_class:
+            return
+    review["uncertainty_recovery"] = {"status": "pending", "reason": "incomplete_context" if incomplete else "ambiguous_judgment",
+                                      "question_id": uncertain, "budget_class": budget_class}
+
+
+def _consume_uncertainty_recovery(state: TacticalState, subgoal: PhaseSubgoal) -> dict[str, Any] | None:
+    for entry in reversed(state.evidence.entries):
+        if entry.get("phase_id") != state.phase.phase_id or entry.get("subgoal_id") != subgoal.subgoal_id:
+            continue
+        review = entry.get("progress_review") or {}
+        recovery = review.get("uncertainty_recovery") or {}
+        if recovery.get("status") != "pending":
+            continue
+        recovery["status"] = "consumed"
+        question_id = recovery.get("question_id")
+        runtime_questions = {
+            "runtime_declared_subgoal_complete": "Does the current action and execution log establish the declared stage goal and completion condition?",
+            "runtime_action_added_progress": "Did the latest action add meaningful evidence or enable a concrete next step compared with earlier entries?",
+            "runtime_action_is_inspection": "Was the latest action only read-only inspection?",
+            "runtime_inspection_ready_for_action": "Does the authorized evidence resolve the details needed to plan the requested operation?",
+            "runtime_inspection_requires_user_input": "Is a specific essential missing or conflicting detail dependent on a user answer?",
+        }
+        authored = next((item.get("instructions") for item in entry.get("acceptance_questions", [])
+                         if isinstance(item, dict) and item.get("question_id") == question_id), None)
+        return {
+            "question": authored or runtime_questions.get(question_id) or "Which targeted observation can resolve the recorded evidence gap?",
+            "question_id": question_id,
+            "evidence_ref": entry.get("evidence_ref"), "reason": recovery["reason"],
+            "probability": (review.get("answers") or {}).get(recovery.get("question_id")),
+            "context_complete": review.get("context_complete"),
+            "context_coverage": review.get("context_coverage") or {},
+        }
+    return None
+
+
+def _record_uncertainty_assessment(state: TacticalState, recovery: dict[str, Any], selected: Any) -> None:
+    """Record only a bounded advisory and references to existing successful evidence."""
+    target = next((entry for entry in state.evidence.entries
+                   if entry.get("evidence_ref") == recovery.get("evidence_ref")), None)
+    marker = ((target or {}).get("progress_review") or {}).get("uncertainty_recovery") or {}
+    if not marker or marker.get("status") != "consumed":
+        return
+    assessment = selected.get("uncertainty_assessment") if isinstance(selected, dict) else None
+    valid_refs = {entry.get("evidence_ref") for entry in state.evidence.entries
+                  if entry.get("status") == "success" and isinstance(entry.get("evidence_ref"), str)}
+    if not isinstance(assessment, dict):
+        marker["assessment"] = {"status": "unavailable"}
+        return
+    answer, refs = assessment.get("answer"), assessment.get("evidence_refs")
+    if (assessment.get("question_id") != recovery.get("question_id")
+            or not isinstance(answer, str) or answer not in {"supported", "not_supported", "uncertain"}
+            or not isinstance(refs, list) or len(refs) > 20
+            or any(not isinstance(ref, str) or ref not in valid_refs for ref in refs)
+            or (answer != "uncertain" and not refs)):
+        marker["assessment"] = {"status": "invalid"}
+        return
+    marker["assessment"] = {"status": "recorded", "answer": answer, "evidence_refs": list(dict.fromkeys(refs))}
 
 
 def _consecutive_no_progress(state: TacticalState, subgoal_id: str, threshold: float = 0.2) -> int:
@@ -1044,3 +1440,15 @@ def _record_system_one_tactical_review(
     })
     if len(history) > 50:
         del history[:-50]
+
+
+def _safe_tactical_generate(inference: Any, request: InferenceRequest) -> Any:
+    """Keep provider-supplied exception text out of terminal errors and traces."""
+    try:
+        return inference.generate_json(request)
+    except Exception as exc:
+        if isinstance(exc, ValueError) and str(exc) in {"openai_codex_invalid_json", "openai_codex_invalid_tactical_schema", "inference_cancelled"}:
+            raise ValueError(str(exc)) from None
+        if isinstance(exc, ValueError):
+            raise ValueError("tactical_provider_error") from None
+        raise RuntimeError("tactical_provider_error") from None

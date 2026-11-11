@@ -1,0 +1,77 @@
+--- a/alphonse/agent_v2/core/intelligence/v3/executor.py
++++ b/alphonse/agent_v2/core/intelligence/v3/executor.py
+@@ -47,0 +48 @@
++MAX_INDEPENDENT_READ_ACTIONS = 3
+@@ -84,0 +86,2 @@
++        # Ephemeral only: a restart discards proposals that have not run.
++        pending_reads: list[dict[str, Any]] = []
+@@ -100 +103,5 @@
+-            if not isinstance(selected, dict):
++            if isinstance(selected, dict):
++                pending_reads.clear()
++            elif pending_reads:
++                selected = pending_reads.pop(0)
++            else:
+@@ -109,0 +117 @@
++            is_sequence = "actions" in selected
+@@ -111 +119 @@
+-            sensitive_action = (isinstance(selected_id, str) and selected_id.startswith("native.browser_workflow_")) or any(
++            sensitive_action = is_sequence or (isinstance(selected_id, str) and selected_id.startswith("native.browser_workflow_")) or any(
+@@ -113,0 +122,4 @@
++                if is_sequence:
++                    proposed = _validate_independent_reads(self, state, subgoal, selected, tools)
++                    selected, pending_reads = proposed[0], proposed[1:]
++                    sensitive_action = False
+@@ -115,0 +128 @@
++                pending_reads.clear()
+@@ -330,0 +344,3 @@
++                if pending_reads and (completion_met or completed.status != "success"
++                                      or not _independent_read_can_continue(progress_review, yes_threshold)):
++                    pending_reads.clear()
+@@ -892 +908,5 @@
+-        "Select exactly one concrete tactical action for the current subgoal and define acceptance questions for its result. "
++        "Select one concrete tactical action for the current subgoal and define acceptance questions for its result. "
++        "For a read-only subgoal only, you may instead return {actions:[...]} with two or three independent read-only "
++        "actions, each in the same format, only when all arguments are already known and none depends on another result. "
++        "Never sequence writes, private or browser actions, user interaction, or actions needing a new observation. "
++        "The runtime rechecks every action and stops the sequence on failure, uncertainty or completion. "
+@@ -894 +914 @@
+-        "Return JSON with tool_id, arguments, and a non-empty acceptance_questions array. Each item must be a Noul question "
++        "Each action has tool_id, arguments, and a non-empty acceptance_questions array. Each question must be a Noul "
+@@ -994,0 +1015,36 @@
++def _validate_independent_reads(executor: PhaseExecutor, state: TacticalState, subgoal: PhaseSubgoal,
++                                selected: dict[str, Any], tools: tuple["ToolDescriptor", ...]) -> list[dict[str, Any]]:
++    """Validate the entire ephemeral sequence before any action can run."""
++    items = selected.get("actions")
++    if set(subgoal.allowed_side_effects) != {SideEffectClass.READ_ONLY}:
++        raise ValueError("independent_reads_require_read_only_subgoal")
++    if not isinstance(items, list) or not 2 <= len(items) <= MAX_INDEPENDENT_READ_ACTIONS:
++        raise ValueError("independent_reads_invalid_count")
++    seen: set[str] = set()
++    for item in items:
++        if not isinstance(item, dict):
++            raise ValueError("independent_reads_invalid_action")
++        descriptor = next((tool for tool in tools if tool.tool_id == item.get("tool_id")), None)
++        if (descriptor is None or not descriptor.read_only or descriptor.metadata.get("sensitive_content") is True
++                or descriptor.tool_id.startswith("native.browser_workflow_")
++                or descriptor.tool_id in {"native.ask_question", "native.respond"}
++                or descriptor.metadata.get("side_effect_class") not in {None, "read_only"}):
++            raise ValueError("independent_reads_tool_not_allowed")
++        executor._validate_action(state, subgoal, item, tools)
++        signature = json.dumps([item.get("tool_id"), item.get("arguments")], sort_keys=True, default=str)
++        if signature in seen:
++            raise ValueError("independent_reads_duplicate")
++        seen.add(signature)
++    # Action IDs are runtime-owned; a repeated model-authored ID would alias
++    # distinct evidence entries. Generate a fresh one at each actual dispatch.
++    return [{key: value for key, value in item.items() if key != "action_id"} for item in items]
++
++
++def _independent_read_can_continue(review: dict[str, Any], yes_threshold: float) -> bool:
++    coverage = review.get("context_coverage") or {}
++    return (review.get("confident") is True and review.get("context_complete") is not False
++            and not coverage.get("omitted_prior_count", 0)
++            and not coverage.get("omitted_prior_result_count", 0) and not coverage.get("omitted_prior_refs")
++            and _confident_probability((review.get("answers") or {}).get("runtime_action_added_progress"), yes_threshold))
++
++

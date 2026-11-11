@@ -8,7 +8,7 @@ from alphonse.agent_v2.evaluation import codex_subscription_provider as subject
 
 
 def request(*, cancel_checker=None, model='gpt-6-luna'):
-    return InferenceRequest(prompt='synthetic', purpose=InferencePurpose.TACTICAL_ACTION,
+    return InferenceRequest(prompt='synthetic', purpose=InferencePurpose.SIMPLE_LOOP_ACTION,
                             model_profile=ModelProfile(provider='openai_codex', model=model,
                                                        profile_id='test'),
                             cancel_checker=cancel_checker)

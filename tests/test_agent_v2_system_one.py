@@ -684,3 +684,21 @@ def test_act_request_budget_includes_questions_and_stops_before_transport():
         transport=lambda *args: pytest.fail('Oversized request must not reach transport'))
     with pytest.raises(ValueError, match='system_one_context_budget_exceeded'):
         provider.judge_act(state={'goal': 'Large fixture ' * 4000})
+
+
+def test_model_authored_action_question_uncertainty_does_not_become_stage_completion():
+    def transport(url, api_key, payload, timeout):
+        return {'answers': {key: {'type': 'noul', 'noul': .5 if key == 'authored_uncertain' else .99}
+                            for key in payload['questions']}}
+    provider = JevCriterionDecisionProvider(SystemOneSettings(enabled=True, api_key='fixture'), transport=transport)
+    questions = [
+        {'question_id': 'authored_clear', 'type': 'noul', 'instructions': 'Is the fixture visible?',
+         'criteria': {'true': 'It is visible.', 'false': 'It is absent.'}},
+        {'question_id': 'authored_uncertain', 'type': 'noul', 'instructions': 'Is the observed record the requested record?',
+         'criteria': {'true': 'The record matches.', 'false': 'The record does not match.'}},
+    ]
+    result = provider.evaluate_tactical_progress(goal='Find the record', phase={},
+        subgoal={'objective': 'Find the record'}, action={'status': 'success', 'result': {'record': 'synthetic'}},
+        questions=questions)
+    assert result.answers['runtime_declared_subgoal_complete'] == .99
+    assert not result.complete and not result.confident

@@ -2031,6 +2031,19 @@ class V2Daemon:
         question = self.runtime.question_store.get_question(question_id)
         if question is not None and question.respondent_user_id != normalized_user:
             raise PermissionError("question_respondent_required")
+        private_browser = bool(question is not None and (question.metadata.get("delivery") or {}).get("private_browser_value") is True)
+        private_ref = None
+        private_validator = None
+        if private_browser:
+            service = getattr(self.runtime.core, "browser_workflow_service", None)
+            checkpoint = self.runtime.question_store.load_task_checkpoint(question.task_id)
+            value = text if text else payload.get("text") if isinstance(payload, dict) and set(payload) == {"text"} else None
+            if service is None or checkpoint is None or not isinstance(value, str) or not value:
+                raise ValueError("browser_private_input_unavailable")
+            private_ref = service.store_pending_answer(checkpoint, actor_id=normalized_user, question_id=question_id, value=value)
+            private_validator = service.validate_pending_answer
+            text = ""
+            payload = {"text": private_ref}
         if question is not None:
             self._record_question_conversation_event(question)
         if question is not None and question.kind == "datetime" and isinstance(payload, dict):
@@ -2046,6 +2059,8 @@ class V2Daemon:
             question_id=question_id,
             text=text or None,
             payload=payload,
+            private_browser_ref=private_ref,
+            private_ref_validator=private_validator,
         )
         if result.handled and result.question is not None:
             child_id = str(result.question.metadata.get("child_task_id") or "").strip()
@@ -2061,11 +2076,12 @@ class V2Daemon:
             self.runtime.ui_events.append(
                 CoreUiEvent(
                     event_type="question_interrupt_resolved",
-                    payload={"question": result.question.to_dict() if result.question else None, "answer": result.answer},
+                    payload={"question": result.question.to_dict() if result.question else None,
+                             "answer": {"private_input_provided": True} if private_browser else result.answer},
                 )
             )
             queued = self.runtime.channel.queue_message(
-                prompt=text or _question_answer_text(payload),
+                prompt="Private input provided." if private_browser else text or _question_answer_text(payload),
                 user=normalized_user,
                 project_id=result.resumed_task.project_id,
                 memory_session_id=result.resumed_task.memory_session_id,
@@ -2080,6 +2096,9 @@ class V2Daemon:
                 channel_target=normalized_user,
             )
             payload_result = result.to_dict()
+            if private_browser:
+                payload_result["answer"] = {"private_input_provided": True}
+                payload_result.pop("resumed_task", None)
             payload_result["message_id"] = queued.message_id
             return payload_result
         return result.to_dict()

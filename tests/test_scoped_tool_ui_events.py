@@ -57,6 +57,26 @@ def test_missing_actor_suppresses_tool_payloads():
     assert events == []
 
 
+def test_sensitive_tool_events_are_both_scoped_and_redacted():
+    registry = InMemoryToolRegistry()
+    descriptor = ToolDescriptor(tool_id='native.sensitive_fixture', name='fixture',
+        kind=ToolKind.NATIVE, description='Synthetic sensitive result', read_only=True,
+        metadata={'sensitive_content': True})
+    registry.register(ToolDefinition(descriptor=descriptor, argument_schema={},
+        callable=lambda args: {'secret': args['secret']}))
+    events = []
+    context = CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry, ui_event_sink=events.append)
+    outcome = ToolInvocationService(context=context, task=TaskState(task_id='a', user='alice')).invoke(
+        'native.sensitive_fixture', {'secret': 'private-fixture-value'})
+    assert outcome['status'] == 'success'
+    daemon = project(events)
+    alice, _ = daemon.ui_events_since(user='alice')
+    bob, _ = daemon.ui_events_since(user='bob')
+    assert len(alice) == 2 and bob == []
+    assert 'private-fixture-value' not in str(alice)
+    assert all(row['event']['payload']['task_id'] == 'a' for row in alice)
+
+
 def test_v3_reveal_event_is_scoped_and_missing_actor_is_not_broadcast():
     context, events = setup()
     subgoal = PhaseSubgoal('read', 'Read synthetic', 'observation', allowed_capabilities=('fixture_read',))

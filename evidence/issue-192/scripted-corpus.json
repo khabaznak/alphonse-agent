@@ -1,0 +1,24 @@
+{
+  "repeats": 20,
+  "arms": {
+    "legacy_parser": {
+      "cases": 160,
+      "wrong": 20,
+      "unsafe_accepts": 20,
+      "failure_cases": [
+        "nested_fragment"
+      ],
+      "scripted_provider_calls": 200,
+      "median_local_ms": 0.0379
+    },
+    "structured_wire": {
+      "cases": 160,
+      "wrong": 0,
+      "unsafe_accepts": 0,
+      "failure_cases": [],
+      "scripted_provider_calls": 260,
+      "median_local_ms": 0.0801
+    }
+  },
+  "note": "Scripted responses; no tool execution, provider latency, task success, or live browser measured."
+}
