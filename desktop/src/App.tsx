@@ -9,14 +9,14 @@ import { WorkOverview } from "./WorkOverview";
 import { TaskProgressBubble } from "./TaskProgressBubble";
 import { AtHandDrawer, useAtHand } from "./AtHandDrawer";
 import { FormEvent, KeyboardEvent, memo, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CalendarClock, ChevronLeft, ChevronRight, FolderKanban, FolderOpen, Settings, UsersRound, Sparkles, MessageCircle, CircleHelp, PanelRightClose, PanelRightOpen, Palette, Wrench, Plug, Brain, Gauge, FileText } from "lucide-react";
+import { ArrowUp, Plus, Search, X, CalendarClock, ChevronLeft, ChevronRight, FolderKanban, FolderOpen, Settings, UsersRound, Sparkles, MessageCircle, CircleHelp, PanelRightClose, PanelRightOpen, Palette, Wrench, Plug, Brain, Gauge, FileText } from "lucide-react";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { onAction } from "@tauri-apps/plugin-notification";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { daemonRequest, ensureDaemon, playAlertSound, showInFinder, stopDaemon } from "./api";
-import { matchingCommands } from "./commands";
+import { DESKTOP_COMMANDS, matchingCommands } from "./commands";
 import { mergeFreshConversationHistory } from "./conversationHistory";
 import { projectTaskProgress } from "./taskProgress";
 import { buildConversationTimeline } from "./conversationTimeline";
@@ -28,9 +28,7 @@ import { readDismissedScheduledSurfaces, rememberDismissedScheduledSurface, with
 import { avatarState, avatarStateLabel, capdActivityLabel, type Workspace, SETTINGS_SECTIONS } from "./layoutState";
 import { ConversationMessage, MemoizedConversationMessage } from "./ConversationMessage";
 import { reconcileQuestionSurfaces, reuseQuestions, withoutTaskProgressSurfaces } from "./pollState";
-import { QueueWorkloadChart } from "./QueueWorkloadChart";
 import { appendQueueSample, type QueueSample } from "./queueHistory";
-import { PdcaActivityChart } from "./PdcaActivityChart";
 import { appendPdcaActivity, type PdcaSample } from "./pdcaHistory";
 import type { ActivityEvent, AgentDocument, ChatMessage, CodeModeSettings, InferenceSettings, MediaToolsSettings, MemorySettings, Project, Question, SystemOneSettings, WebToolsSettings } from "./types";
 
@@ -144,6 +142,10 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const [error, setError] = useState("");
   const [surfaces, setSurfaces] = useState<Record<string, import("./a2ui").A2uiSurface>>({});
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [navigationQuery, setNavigationQuery] = useState("");
+  const commandMenuRef = useRef<HTMLDetailsElement>(null);
+  const [activityMember, setActivityMember] = useState("");
+  const historyMemberRef = useRef("");
   const [queueHistory, setQueueHistory] = useState<QueueSample[]>([]);
   const [pdcaHistory, setPdcaHistory] = useState<PdcaSample[]>([]);
   const [conversationHasUnseenMessages, setConversationHasUnseenMessages] = useState(false);
@@ -249,12 +251,15 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       });
       setConversationHasUnseenMessages(Boolean(response.conversation_has_unseen_messages));
       const polledAt = Date.now();
-      setQueueHistory((current) => appendQueueSample(current, {
+      const historyMemberChanged = historyMemberRef.current !== user;
+      historyMemberRef.current = user;
+      setActivityMember(user);
+      setQueueHistory((current) => appendQueueSample(daemonChanged || historyMemberChanged ? [] : current, {
         ready: response.status.queue?.ready || 0,
         processing: response.status.queue?.processing || 0,
       }, polledAt));
       setPdcaHistory((current) => appendPdcaActivity(
-        daemonChanged ? [] : current,
+        daemonChanged || historyMemberChanged ? [] : current,
         response.events,
         response.status.activity.state || "idle",
         polledAt,
@@ -585,22 +590,25 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
           <span className="brand-name">Alphonse</span>
           <button className="collapse-toggle" type="button" onClick={() => setSidebarCollapsed((value) => !value)} aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}>{sidebarCollapsed ? <ChevronRight aria-hidden="true" /> : <ChevronLeft aria-hidden="true" />}</button>
         </div>
-        <div className="member-context"><strong>{memberName || user || "Local household"}</strong><small>{connected ? "Connected locally" : "Disconnected"} · {currentAvatarStateLabel}</small></div>
+        <label className="sidebar-search" hidden={workspace === "settings"}><Search aria-hidden="true" /><input aria-label="Find a workspace or project" placeholder="Find a workspace…" value={navigationQuery} onChange={event => setNavigationQuery(event.target.value)} /><button type="button" aria-label="Clear navigation search" hidden={!navigationQuery} onClick={() => setNavigationQuery("")}><X aria-hidden="true" /></button></label>
         <nav className="shell-navigation" aria-label={workspace === "settings" ? "Settings navigation" : "Workspaces"}>
           {workspace === "settings" ? <>
             <button disabled={workspaceRequired} title="Back to workspace" onClick={() => navigate(returnWorkspace)}><ChevronLeft /><span>Back to workspace</span></button>
             {SETTINGS_SECTIONS.filter(([id]) => (!workspaceRequired || id === "general") && (isAdmin || ["general", "appearance"].includes(id))).map(([id, label]) => { const Icon = SETTINGS_ICONS[id]; return <button key={id} title={label} aria-current={workspace === "settings" && settingsTab === id ? "page" : undefined} onClick={() => { setSettingsTab(id); navigate("settings"); }}><Icon /><span>{label}</span></button>; })}
           </> : <>
-            {([["conversation", "Conversation", MessageCircle], ["household", "Household", UsersRound], ["projects", "Projects & Tasks", FolderKanban], ["agenda", "Agenda", CalendarClock], ["attention", "Needs your attention", CircleHelp]] as const).map(([id, label, Icon]) => <button key={id} title={label} aria-current={workspace === id ? "page" : undefined} onClick={() => navigate(id)}><Icon /><span>{label}</span>{id === "attention" && questions.length > 0 && <small>{questions.length}</small>}</button>)}
-            <div className="in-progress-projects"><small>In progress</small>{contextProjects.filter((item) => item.status === "active" && !item.is_system_home).map((item) => <button key={item.project_id} title={item.name} onClick={() => { setProjectForView((current) => ({ id: item.project_id, request: current.request + 1 })); navigate("projects"); }}><FolderKanban /><span>{item.name}</span></button>)}</div>
-            <button title="Settings" onClick={() => navigate("settings")}><Settings /><span>Settings</span></button>
+            <p className="sidebar-section-label">Your household</p>
+            {([["conversation", "Conversation", MessageCircle], ["household", "Household", UsersRound], ["projects", "Projects & Tasks", FolderKanban], ["agenda", "Agenda", CalendarClock], ["attention", "Needs your attention", CircleHelp]] as const).filter(([, label]) => label.toLowerCase().includes(navigationQuery.trim().toLowerCase())).map(([id, label, Icon]) => <button key={id} title={label} aria-current={workspace === id ? "page" : undefined} onClick={() => navigate(id)}><Icon /><span>{label}</span>{id === "attention" && questions.length > 0 && <small>{questions.length}</small>}</button>)}
+            <div className="in-progress-projects"><small>In progress</small>{contextProjects.filter((item) => item.status === "active" && !item.is_system_home && item.name.toLowerCase().includes(navigationQuery.trim().toLowerCase())).map((item) => <button key={item.project_id} title={item.name} onClick={() => { setProjectForView((current) => ({ id: item.project_id, request: current.request + 1 })); navigate("projects"); }}><i className="project-status-dot" aria-hidden="true" /><span>{item.name}</span></button>)}</div>
           </>}
         </nav>
-        <QueueWorkloadChart samples={queueHistory} />
-        <PdcaActivityChart samples={pdcaHistory} now={queueHistory.at(-1)?.at || Date.now()} />
+        <div className="sidebar-bottom">
+          <button className="sidebar-settings" title="Settings" aria-current={workspace === "settings" ? "page" : undefined} onClick={() => navigate("settings")}><Settings /><span>Settings</span></button>
+          <div className="agent-status" role="status"><i className={connected ? "connected" : "disconnected"} aria-hidden="true" /><span>{connected ? `Connected locally · ${currentAvatarStateLabel}` : "Disconnected"}</span></div>
+          <div className="sidebar-profile" aria-label="Current member"><span className="member-initials" aria-hidden="true">{(memberName || user || "?").slice(0, 1).toLocaleUpperCase()}</span><div><strong>{memberName || user || "Local household"}</strong><small>Personal view</small>{isAdmin && <small>Administrator</small>}</div></div>
+        </div>
       </aside>
       <div className="workspace-host" ref={workspaceHostRef}>
-        <div className="shell-toolbar"><span>{memberName || user || "Local household"} · {connected ? currentAvatarStateLabel : "Disconnected"}</span><button ref={drawerToggleRef} aria-label="Toggle At hand" aria-controls="at-hand" aria-expanded={atHandOpen} disabled={!user} onClick={() => changeDrawer({ type: "visibility", open: !atHandOpen })}>{atHandOpen ? <PanelRightClose /> : <PanelRightOpen />} At hand</button></div>
+        <div className="shell-toolbar"><div className="workspace-breadcrumb"><span>Personal view</span><ChevronRight aria-hidden="true" /><strong>{workspace === "settings" ? "Settings" : workspace === "projects" ? "Projects & Tasks" : workspace === "household" ? "Household" : workspace === "agenda" ? "Agenda" : workspace === "attention" ? "Needs your attention" : "Conversation"}</strong></div><button ref={drawerToggleRef} aria-label="Toggle At hand" aria-controls="at-hand" aria-expanded={atHandOpen} disabled={!user} onClick={() => changeDrawer({ type: "visibility", open: !atHandOpen })}>{atHandOpen ? <PanelRightClose /> : <PanelRightOpen />} At hand</button></div>
         {widgetItem?.member === user && (workspace === "agenda" && ["appointments", "reminders"].includes(widgetItem.family) || workspace === "projects" && ["todos", "shopping"].includes(widgetItem.family)) && <section className="card widget-item-detail" aria-label="Widget item details"><button onClick={() => setWidgetItem(undefined)}>Close item</button><h2>Selected item</h2>{selectedWidgetData && selectedWidgetItem ? <CoordinationList data={{ ...selectedWidgetData, items: [selectedWidgetItem] }} timezone={timezone} onAgenda={() => navigate("agenda")} onWork={() => navigate("projects")} onRequest={(draft) => { setPrompt((current) => appendWidgetDraft(current, draft)); navigate("conversation"); }} /> : <p role="status">Item unavailable. Refresh the source or check access.</p>}</section>}
         <section className="workspace-panel" tabIndex={-1} aria-label="Conversation workspace" hidden={workspace !== "conversation"}>
         <section className="conversation">
@@ -622,11 +630,12 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
           {activeSurface && (
             <A2uiSurfaceView surface={activeSurface} clientId={clientId} user={user} onDone={poll} onDismiss={dismissScheduledSurface} onAction={(result) => { if (result.action === "view_scheduled_task" && typeof result.scheduled_task_id === "string") { dismissScheduledSurface(activeSurface.surfaceId); setScheduledTaskForView(result.scheduled_task_id); navigate("agenda"); } }} />
           )}
-          <form className="composer" onSubmit={submit}>
+          <form className="composer" onSubmit={submit} onKeyDown={event => { if (event.key === "Escape" && commandMenuRef.current?.open) { event.preventDefault(); event.stopPropagation(); commandMenuRef.current.open = false; textareaRef.current?.focus(); } }}>
               {suggestions.length > 0 && <div className="suggestions">{suggestions.map((item) => <button type="button" key={item} onClick={() => setPrompt(item)}>{item}</button>)}</div>}
-              <textarea ref={textareaRef} value={prompt} onKeyDown={onComposerKeyDown} onChange={(event) => setPrompt(event.target.value)} placeholder="Message Alphonse... Type / for commands" rows={1} />
-              <button className="send" type="submit">Send</button>
+              <textarea ref={textareaRef} aria-label="Message Alphonse" value={prompt} onKeyDown={onComposerKeyDown} onChange={(event) => setPrompt(event.target.value)} placeholder="Ask Alphonse, or hand something over…" rows={1} />
+              <div className="composer-bottom"><details ref={commandMenuRef} className="composer-command-menu"><summary aria-label="Conversation commands" title="Conversation commands"><Plus aria-hidden="true" /></summary><div><p>{prompt.trim() ? "Keep or send your draft before choosing a command." : "Choose a command to prepare in the composer."}</p>{DESKTOP_COMMANDS.map(command => <button key={command} type="button" disabled={Boolean(prompt.trim())} onClick={() => { setPrompt(command); if (commandMenuRef.current) commandMenuRef.current.open = false; textareaRef.current?.focus(); }}>{command}</button>)}</div></details><span className="composer-context">Everyday assistant</span><button className="send" type="submit" aria-label="Send" title="Send message"><ArrowUp aria-hidden="true" /></button></div>
           </form>
+          <p className="composer-hint">Your conversation with Alphonse · {enterToSend ? "Enter to send · Shift+Enter for a new line" : "Use Send to send your message"}</p>
         </section>
         </section></section>
         {visited.has("projects") && <section className="workspace-panel" tabIndex={-1} aria-label="Projects and tasks workspace" hidden={workspace !== "projects"}><ProjectsWorkspace active={workspace === "projects"} user={user} initialTaskId={workTaskForView} initialProjectId={projectForView.id} selectionRequest={projectForView.request} onAgenda={(id) => { setScheduledTaskForView(id); navigate("agenda"); }} onConversation={(day) => { setConversationDay(day); navigate("conversation"); }} onQuestions={() => navigate("attention")} onClose={() => navigate("conversation")} /></section>}
@@ -639,7 +648,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
             }); }}>View in conversation</button></article>) : <p>No pending questions.</p>}</section>}
       {visited.has("settings") && <section className="workspace-panel" tabIndex={-1} aria-label="Settings workspace" hidden={workspace !== "settings"}><SettingsWorkspace isAdmin={isAdmin} user={user} initialTab={settingsTab} workspaceRequired={workspaceRequired} enterToSend={enterToSend} desktopStyle={desktopStyle} desktopNotifications={desktopNotifications} onDesktopStyleChange={changeDesktopStyle} onDesktopNotificationsChange={setDesktopNotifications} onEnterToSendChange={setEnterToSend} onTimezoneChange={setTimezone} onWorkspaceConfigured={() => setWorkspaceRequired(false)} onTestDesktopNotification={() => void desktopNotifierRef.current.notify({ id: `test:${Date.now()}`, title: "Alphonse test alert", body: "Desktop notifications are ready." }, { ...desktopNotifications, onlyWhenUnfocused: false })} onClose={() => { navigate(returnWorkspace); }} /></section>}
       </div>
-      <AtHandDrawer state={{ ...drawer, open: atHandOpen }} act={changeDrawer} member={user} connected={connected} questionCount={questions.length} questionsMember={questionsMember} onAttention={() => navigate("attention")} onAgenda={(id) => { setScheduleViewRequest((value) => value + 1); setScheduledTaskForView(id || ""); navigate("agenda"); }} toggleRef={drawerToggleRef} saveFailed={drawerSaveFailed} widgetContext={widgetContext} timezone={timezone} onItem={(artifactId, itemId, family) => { setWidgetItem({ member: user, artifactId, itemId, family }); navigate(["appointments", "reminders"].includes(family) ? "agenda" : "projects"); }} onWork={(id, taskId) => { setWorkTaskForView(taskId || ""); setProjectForView((current) => ({ id: taskId ? "" : id, request: current.request + 1 })); navigate("projects"); }} onRequest={(draft) => { setPrompt((current) => appendWidgetDraft(current, draft)); setConversationDay(localDay(timezone)); navigate("conversation"); window.requestAnimationFrame(() => textareaRef.current?.focus()); }} />
+      <AtHandDrawer activityMember={activityMember} queueSamples={queueHistory} pdcaSamples={pdcaHistory} state={{ ...drawer, open: atHandOpen }} act={changeDrawer} member={user} connected={connected} questionCount={questions.length} questionsMember={questionsMember} onAttention={() => navigate("attention")} onAgenda={(id) => { setScheduleViewRequest((value) => value + 1); setScheduledTaskForView(id || ""); navigate("agenda"); }} toggleRef={drawerToggleRef} saveFailed={drawerSaveFailed} widgetContext={widgetContext} timezone={timezone} onItem={(artifactId, itemId, family) => { setWidgetItem({ member: user, artifactId, itemId, family }); navigate(["appointments", "reminders"].includes(family) ? "agenda" : "projects"); }} onWork={(id, taskId) => { setWorkTaskForView(taskId || ""); setProjectForView((current) => ({ id: taskId ? "" : id, request: current.request + 1 })); navigate("projects"); }} onRequest={(draft) => { setPrompt((current) => appendWidgetDraft(current, draft)); setConversationDay(localDay(timezone)); navigate("conversation"); window.requestAnimationFrame(() => textareaRef.current?.focus()); }} />
       {modal === "onboarding" && <OnboardingModal onComplete={(next) => { setUser(next); setIsAdmin(true); setWorkspaceRequired(false); setModal(null); void poll(); }} />}
     </main>
   );
