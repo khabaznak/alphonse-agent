@@ -11,6 +11,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import Enum
+from threading import Lock
 from time import sleep
 from typing import TYPE_CHECKING, Any, Callable, Protocol
 from uuid import uuid4
@@ -572,6 +573,7 @@ class AlphonseCore:
     active_task_callback: Callable[[QueuedMessage, TaskState], None] | None = None
     fsm: DDFSM = field(default_factory=build_default_ddfsm)
     _stop_requested: bool = field(default=False, init=False, repr=False)
+    _step_lock: Any = field(default_factory=Lock, init=False, repr=False, compare=False)
 
     def run_once(self, selector: MessageSelector | None = None) -> StateSnapshot | None:
         """Process one queued message and return its visible snapshot."""
@@ -587,6 +589,19 @@ class AlphonseCore:
 
     def step(self, selector: MessageSelector | None = None) -> LoopStepResult:
         """Run one agentic loop step."""
+        # Checking State and acquiring a queue message are separate operations.
+        # Prevent two callers of this core from both passing the availability
+        # check and consuming different messages before either transitions state.
+        # This lock is process-local; it does not replace durable claim fencing.
+        if not self._step_lock.acquire(blocking=False):
+            state = State.snapshot()
+            return LoopStepResult(status=LoopStepStatus.BUSY, state_before=state, state_after=state)
+        try:
+            return self._step_exclusive(selector)
+        finally:
+            self._step_lock.release()
+
+    def _step_exclusive(self, selector: MessageSelector | None = None) -> LoopStepResult:
         state_before = State.snapshot()
         if self._stop_requested:
             return LoopStepResult(
@@ -619,6 +634,29 @@ class AlphonseCore:
                 status=LoopStepStatus.EMPTY,
                 state_before=state_before,
                 state_after=state_before,
+            )
+
+        return self._process_acquired(queued, state_before)
+
+    def _process_acquired(self, queued: QueuedMessage, state_before: CurrentState) -> LoopStepResult:
+        """Process the exact envelope acquired by this core's exclusive step.
+
+        This private boundary prepares for a future daemon-owned acquisition;
+        callers must hold the core step lock and establish its availability.
+        Fenced processing remains unavailable until claim-aware sinks and queue
+        disposition exist. It is not an entry point for a preclaimed live task.
+        """
+        # Do not silently discard a fenced receipt supplied by a wrapper or a
+        # misconfigured queue that did not advertise the experimental mode.
+        # This claim has already been acquired: leave it untouched for expiry
+        # and reconciliation; processing or legacy ack/retry is unsafe.
+        if (getattr(self.messages, "experimental_claim_fencing", False) is True
+                or getattr(queued, "claim_receipt", None) is not None):
+            return LoopStepResult(
+                status=LoopStepStatus.BUSY,
+                state_before=state_before,
+                state_after=state_before,
+                error="claim_fencing_runtime_unavailable",
             )
 
         working = self._transition(MESSAGE_DEQUEUED)

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from threading import Thread
+from threading import Event, Thread
+
+import pytest
 
 from alphonse.agent_v2.core.core import AlphonseCore
 from alphonse.agent_v2.core.core import CoreLoopContext
@@ -51,6 +53,71 @@ def test_available_state_consumes_message_and_returns_available_on_completion() 
     assert processor.processed == ["first"]
     assert processor.received_message_ids == [result.queued_message_id]
     assert queue.size() == 0
+
+
+def test_concurrent_steps_do_not_claim_a_second_message_before_state_transition(monkeypatch) -> None:
+    core, queue, processor = _core(_Processor(ProcessingStatus.COMPLETED))
+    queue.enqueue(_message("first"))
+    queue.enqueue(_message("second"))
+    entered, release = Event(), Event()
+    original = queue.dequeue
+
+    def blocked_dequeue(selector=None):
+        entered.set()
+        assert release.wait(5)
+        return original(selector)
+
+    monkeypatch.setattr(queue, "dequeue", blocked_dequeue)
+    results = []
+    thread = Thread(target=lambda: results.append(core.step()))
+    thread.start()
+    try:
+        assert entered.wait(5)
+        result = core.step()
+        assert result.status is LoopStepStatus.BUSY
+        assert result.queued_message_id is None
+        assert result.state_before == result.state_after
+        assert queue.size() == 2
+    finally:
+        release.set()
+        thread.join(5)
+    assert not thread.is_alive()
+    assert results[0].status is LoopStepStatus.PROCESSED
+    assert processor.processed == ["first"]
+    assert queue.size() == 1
+
+
+def test_step_lock_is_released_after_acquisition_raises(monkeypatch) -> None:
+    core, queue, processor = _core(_Processor(ProcessingStatus.COMPLETED))
+    queue.enqueue(_message("first"))
+    original = queue.dequeue
+    monkeypatch.setattr(queue, "dequeue", lambda *_: (_ for _ in ()).throw(RuntimeError("unavailable")))
+    with pytest.raises(RuntimeError, match="unavailable"):
+        core.step()
+    assert State.snapshot().key == AVAILABLE
+    monkeypatch.setattr(queue, "dequeue", original)
+    assert core.step().status is LoopStepStatus.PROCESSED
+    assert processor.processed == ["first"]
+
+
+def test_recursive_step_returns_busy_without_consuming_another_message() -> None:
+    class RecursiveProcessor:
+        core = None
+        nested = None
+
+        def process(self, task, context):
+            self.nested = self.core.step()
+            return ProcessingResult(snapshot=StateSnapshot(current_work=task.goal))
+
+    processor = RecursiveProcessor()
+    core, queue, _ = _core(processor)
+    processor.core = core
+    queue.enqueue(_message("first"))
+    queue.enqueue(_message("second"))
+    assert core.step().status is LoopStepStatus.PROCESSED
+    assert processor.nested.status is LoopStepStatus.BUSY
+    assert processor.nested.queued_message_id is None
+    assert queue.size() == 1
 
 
 def test_v3_retry_restores_checkpoint_and_keeps_acceptance_contract(tmp_path) -> None:

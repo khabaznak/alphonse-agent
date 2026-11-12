@@ -8,6 +8,8 @@ from alphonse.agent_v2.core.io.channels import ChannelAddress
 from alphonse.agent_v2.core.io.outbox import SQLiteOutboundStore
 from alphonse.agent_v2.core.messages.claim_fence import ClaimSuperseded, fenced_claim_transaction
 from alphonse.agent_v2.core.messages.sqlite_queue import SQLiteMessageQueue
+from alphonse.agent_v2.core.intelligence.task_state import TaskState
+from alphonse.agent_v2.core.questions import SQLiteQuestionStore
 
 
 def test_existing_outbox_can_share_claim_transaction_and_roll_back_on_expiry(tmp_path):
@@ -88,3 +90,41 @@ def test_outbox_accepts_symlink_alias_for_same_database(tmp_path):
         assert first.outbox_message_id == again.outbox_message_id
         assert conn.row_factory is None
     assert len(outbox.list_pending()) == 1
+
+
+def test_live_claim_alone_does_not_fence_a_superseded_checkpoint(tmp_path):
+    """A future publication boundary must bind task version, not just lease."""
+    path = tmp_path / 'runtime.sqlite'
+    queue = SQLiteMessageQueue(path, lease_owner='worker', experimental_claim_fencing=True)
+    outbox = SQLiteOutboundStore(path)
+    questions = SQLiteQuestionStore(path)
+    now = datetime.now(timezone.utc)
+    queue.enqueue(CoreMessage(timestamp=now, prompt='synthetic', user='alice'), message_id='message')
+    receipt = queue.claim_next().claim_receipt
+    task = TaskState(task_id='task', message_id='message', user='alice', goal='synthetic')
+    original_version = questions.save_task_checkpoint(task, status='running')
+    # A newer checkpoint may cancel or supersede work before the lease changes.
+    task.goal = 'new synthetic instruction'
+    assert questions.save_task_checkpoint(task, status='running') > original_version
+    address = ChannelAddress('desktop', 'desktop', 'synthetic', alphonse_user_id='alice')
+    with queue._connect() as conn:
+        with fenced_claim_transaction(conn, receipt, clock=lambda: now):
+            outbox.enqueue(address=address, message='stale synthetic response', task_id='task', connection=conn)
+    # This is evidence of the missing check, not an acceptable host behavior.
+    assert outbox.claim_next().message == 'stale synthetic response'
+
+
+def test_expired_outbox_worker_can_settle_after_another_worker_reclaims(tmp_path):
+    """The current outbox completion API carries no distinct claim receipt."""
+    outbox = SQLiteOutboundStore(tmp_path / 'runtime.sqlite')
+    address = ChannelAddress('desktop', 'desktop', 'synthetic', alphonse_user_id='alice')
+    item = outbox.enqueue(address=address, message='synthetic')
+    first = outbox.claim_next(lease_owner='first', lease_seconds=1)
+    assert first.outbox_message_id == item.outbox_message_id
+    assert outbox.reclaim_expired(now=datetime.now(timezone.utc) + timedelta(minutes=1)) == 1
+    second = outbox.claim_next(lease_owner='second')
+    assert second.outbox_message_id == item.outbox_message_id
+    # The old caller can overwrite the new claim: a delivery receipt must bind
+    # a unique acquisition, not merely the message id or reusable worker name.
+    assert outbox.mark_delivered(first.outbox_message_id, provider_message_id='stale-receipt')
+    assert outbox.get(item.outbox_message_id).status == 'delivered'

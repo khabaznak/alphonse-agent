@@ -206,6 +206,17 @@ def test_engine_router_rejects_unregistered_stamp_without_dispatch(engine: str) 
     assert v3.calls == 0
 
 
+@pytest.mark.parametrize("schema", [1, 2, 4])
+def test_engine_router_rejects_v3_with_mismatched_schema_without_dispatch(schema: int) -> None:
+    v3 = _Processor("v3")
+    task = TaskState(intelligence_engine=HIERARCHICAL_V3, intelligence_schema_version=schema)
+
+    with pytest.raises(ValueError, match="^intelligence_engine_unregistered$"):
+        EngineRoutingProcessor(v3=v3).process(task, CoreLoopContext(messages=InMemoryMessageQueue()))
+
+    assert v3.calls == 0
+
+
 @pytest.mark.parametrize("raw", [{}, {"intelligence_engine": ""}, {"intelligence_engine": None}])
 def test_legacy_task_state_without_usable_stamp_restores_as_v2(raw: dict) -> None:
     # Existing pre-engine checkpoints rely on this fallback. Explicit blank

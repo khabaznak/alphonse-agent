@@ -137,6 +137,9 @@ class V2Daemon:
         self._memory_migration_thread: threading.Thread | None = None
         self._lock_file: Any | None = None
         self._lifecycle_lock = threading.RLock()
+        # Protect the whole daemon turn, including work done before core.step.
+        # This is local exclusion, not a cross-process claim fence.
+        self._run_once_lock = threading.Lock()
         self._optional_account_service = None
         self._stopped = False
         self._last_processor_error = ""
@@ -2485,6 +2488,17 @@ class V2Daemon:
             return dict(self._activity_status)
 
     def run_once(self) -> Any:
+        if not self._run_once_lock.acquire(blocking=False):
+            from alphonse.agent_v2.core.core import LoopStepResult
+            from alphonse.agent_v2.core.state.runtime import State
+            state = State.snapshot()
+            return LoopStepResult(status=LoopStepStatus.BUSY, state_before=state, state_after=state)
+        try:
+            return self._run_once_exclusive()
+        finally:
+            self._run_once_lock.release()
+
+    def _run_once_exclusive(self) -> Any:
         # The experimental queue can issue fenced claims, but this daemon does
         # not yet carry their receipts through publication and acknowledgement.
         # Refuse the entire turn before retention, reconciliation, presence,
@@ -2523,6 +2537,13 @@ class V2Daemon:
                     failed=step.status == LoopStepStatus.FAILED,
                     waiting=step.status in {LoopStepStatus.PARKED, LoopStepStatus.WAITING},
                 )
+        # An unadvertised fenced receipt may only be discovered when core
+        # dequeues it.  The daemon has no claim-aware disposition or
+        # publication path, so do not reconcile events, inspect a possibly
+        # unrelated snapshot, acknowledge, retry, or publish after refusal.
+        # Prework above may already have occurred; this is not claim fencing.
+        if step.status == LoopStepStatus.BUSY and step.error == "claim_fencing_runtime_unavailable":
+            return step
         snapshot = self.runtime.visible_state.snapshot()
         queued_metadata = self._scheduled_metadata_for_step(queued, snapshot)
         occurrence_key = str(queued_metadata.get("occurrence_key") or "").strip()

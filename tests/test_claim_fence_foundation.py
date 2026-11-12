@@ -102,6 +102,22 @@ def test_claim_row_mutation_rolls_back_transaction(q):
         assert conn.execute("SELECT status FROM v2_inbound_messages WHERE message_id='msg'").fetchone()[0] == 'processing'
 
 
+@pytest.mark.parametrize('field,value', [
+    ('lease_expires_at', (NOW + timedelta(hours=1)).isoformat()),
+    ('last_error', 'rewritten'),
+])
+def test_claim_row_changes_that_keep_claim_live_are_rolled_back(q, field, value):
+    path, claim = q
+    with connect(path) as conn:
+        before = conn.execute(f'SELECT {field} FROM v2_inbound_messages WHERE message_id=?', ('msg',)).fetchone()[0]
+        with pytest.raises(ClaimFenceUnavailable, match='claim_row_modified_by_caller'):
+            with fenced_claim_transaction(conn, claim, clock=lambda: NOW) as transaction:
+                transaction.execute("INSERT INTO effects VALUES ('must roll back')")
+                transaction.execute(f'UPDATE v2_inbound_messages SET {field}=? WHERE message_id=?', (value, 'msg'))
+        assert conn.execute('SELECT COUNT(*) FROM effects').fetchone()[0] == 0
+        assert conn.execute(f'SELECT {field} FROM v2_inbound_messages WHERE message_id=?', ('msg',)).fetchone()[0] == before
+
+
 def test_competing_reclaim_cannot_change_claim_inside_fenced_transaction(q):
     path, claim = q
     with connect(path) as first, sqlite3.connect(path, timeout=0.01) as second:

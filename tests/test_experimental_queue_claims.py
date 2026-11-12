@@ -1,6 +1,7 @@
 """Opt-in queue generation tests against disposable SQLite only."""
 from datetime import datetime, timedelta, timezone
-from dataclasses import replace
+from dataclasses import asdict, replace
+from copy import deepcopy
 
 import pytest
 
@@ -24,6 +25,12 @@ def test_default_has_no_migration_and_opt_in_claim_receipt_stays_internal(tmp_pa
     assert claimed.claim_receipt.user_id == 'alice'
     assert len(claimed.claim_receipt.claim_generation) == 32
     assert claimed.claim_receipt.claim_generation not in repr(claimed)
+    assert 'claim_receipt' not in asdict(claimed)
+    assert claimed.claim_receipt.claim_generation not in str(asdict(claimed))
+    assert 'claim_generation' not in asdict(claimed.claim_receipt)
+    assert replace(claimed).claim_receipt is claimed.claim_receipt
+    assert deepcopy(claimed).claim_receipt.claim_generation == claimed.claim_receipt.claim_generation
+    assert replace(claimed.claim_receipt, claim_generation='0' * 32) != claimed.claim_receipt
     assert 'claim_generation' not in claimed.message.metadata
     with pytest.raises(ValueError, match='requires_receipt'):
         queue.claim_next(include_owned=True)

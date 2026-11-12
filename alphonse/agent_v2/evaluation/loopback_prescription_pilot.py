@@ -135,6 +135,19 @@ class LoopbackPrescriptionPilot:
         self._finalized = True
 
 
+def _same_json_value(actual: Any, expected: Any) -> bool:
+    """Compare JSON values without Python's bool/int or int/float coercions."""
+    if type(actual) is not type(expected):
+        return False
+    if isinstance(actual, dict):
+        return (actual.keys() == expected.keys()
+                and all(_same_json_value(actual[key], value) for key, value in expected.items()))
+    if isinstance(actual, list):
+        return (len(actual) == len(expected)
+                and all(_same_json_value(a, b) for a, b in zip(actual, expected)))
+    return actual == expected
+
+
 def evaluate(pilot: LoopbackPrescriptionPilot, *, response: Any, expected_response: dict,
              expected_sources: dict[str, dict[str, Any]]) -> dict[str, Any]:
     """Grade exact response and separately specified source values after shutdown.
@@ -152,11 +165,11 @@ def evaluate(pilot: LoopbackPrescriptionPilot, *, response: Any, expected_respon
     events = pilot.audit()
     reads = [e for e in events if e.get('event') == 'read']
     observed = {e['source'] for e in reads if e['source'] in expected_sources
-                and e.get('value') == expected_sources[e['source']]}
-    mismatch = any(e['source'] not in expected_sources or e.get('value') != expected_sources[e['source']]
+                and _same_json_value(e.get('value'), expected_sources[e['source']])}
+    mismatch = any(e['source'] not in expected_sources or not _same_json_value(e.get('value'), expected_sources[e['source']])
                    for e in reads)
     incomplete = any(e.get('event') == 'incomplete_http_request' for e in events)
-    answer_ok = isinstance(response, dict) and response == expected_response
+    answer_ok = _same_json_value(response, expected_response)
     return {'passed': bool(answer_ok and required <= observed and not mismatch and not incomplete),
             'answer_matches_key': answer_ok, 'observed_required_sources': sorted(observed),
             'source_mismatch': mismatch, 'incomplete_http_request': incomplete,

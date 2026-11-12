@@ -69,7 +69,19 @@ def run_atomic_step(state: CandidateState, host: CandidateHost, checkpoints: Exp
         current = checkpoints.load(state.task_id, state.actor, expected_version=reserved.version)
         if current.state.inflight != reservation_id:
             return AtomicStepResult('blocked', 'inflight_changed_before_model', current.version)
-    except (CheckpointConflict, ValueError, KeyError):
+        # Projection freshness checks and checkpoint I/O can consume the
+        # remaining work window after the reservation. Do not dispatch with an
+        # expired or regressed clock. Retain the reservation conservatively:
+        # this adapter has no durable proof-of-non-dispatch release protocol.
+        try:
+            now = host.now_ms()
+        except Exception:
+            return AtomicStepResult('blocked', 'deadline_or_clock_invalid_before_model', current.version)
+        budget = current.budget
+        if (type(now) is not int or now < budget.last_observed_at_ms
+                or now - budget.started_at_ms >= budget.limits.elapsed_ms - budget.limits.final_reserve_ms):
+            return AtomicStepResult('blocked', 'deadline_or_clock_invalid_before_model', current.version)
+    except (CheckpointConflict, ValueError, KeyError, TypeError):
         return AtomicStepResult('blocked', 'checkpoint_changed_before_model', None)
     try:
         decision = host.choose(projection.text, host.output_reservation)

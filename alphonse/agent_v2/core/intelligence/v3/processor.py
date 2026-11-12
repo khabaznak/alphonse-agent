@@ -780,7 +780,7 @@ class EngineRoutingProcessor:
         self.v3 = v3
 
     def process(self, task: "TaskState", context: "CoreLoopContext") -> ProcessingResult:
-        if task.intelligence_engine == "hierarchical_v3":
+        if task.intelligence_engine == "hierarchical_v3" and task.intelligence_schema_version == 3:
             return self.v3.process(task, context)
         # An unregistered engine must never silently execute under a different
         # processor, especially on queue retry or checkpoint resumption. The

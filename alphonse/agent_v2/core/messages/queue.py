@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import InitVar, dataclass, field
 from datetime import datetime, timezone
 from itertools import count
 from threading import RLock
@@ -27,8 +27,12 @@ class QueuedMessage:
     message_id: str = field(default_factory=lambda: str(uuid4()))
     queued_at: datetime = field(default_factory=_now_utc)
     sequence: int = 0
-    # Internal ownership receipt; never expose it in prompts, UI or telemetry.
-    claim_receipt: "ClaimReceipt | None" = field(default=None, repr=False, compare=False)
+    # InitVar keeps dataclasses.asdict from recursively emitting the receipt.
+    # Other serialization mechanisms are not protected by this convention.
+    claim_receipt: InitVar["ClaimReceipt | None"] = None
+
+    def __post_init__(self, claim_receipt: "ClaimReceipt | None") -> None:
+        object.__setattr__(self, "claim_receipt", claim_receipt)
 
 
 @dataclass(frozen=True)

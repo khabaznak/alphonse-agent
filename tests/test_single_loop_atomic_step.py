@@ -105,6 +105,39 @@ def test_stale_checkpoint_does_not_call_model(f):
     assert result.status == 'blocked' and not f.choices
 
 
+@pytest.mark.parametrize('before_dispatch', [10000, 1099, True])
+def test_expired_or_regressed_clock_after_reservation_does_not_dispatch(f, before_dispatch):
+    # Work window ends at started_at + elapsed - final reserve = 10000.
+    times = iter((1100, before_dispatch))
+    result = run_atomic_step(f.state, replace(f.host, now_ms=lambda: next(times)), f.store,
+                             expected_version=f.version)
+    assert result.reason == 'deadline_or_clock_invalid_before_model'
+    assert not f.choices
+    # A fresh store instance represents restart: no automatic refund or retry.
+    restored = ExperimentalCheckpointStore(SQLiteQuestionStore(f.questions.db_path))
+    checkpoint = restored.load('task', 'alice', expected_version=result.checkpoint_version)
+    assert checkpoint.state.inflight.startswith('model-')
+    assert checkpoint.budget.usage()['in_flight'] == [checkpoint.state.inflight]
+    retry = run_atomic_step(checkpoint.state, f.host, restored, expected_version=checkpoint.version)
+    assert retry.reason == 'inflight_requires_reconciliation'
+    assert not f.choices
+
+
+def test_clock_failure_after_reservation_blocks_and_retains_inflight(f):
+    calls = iter((1100, None))
+    def clock():
+        value = next(calls)
+        if value is None:
+            raise RuntimeError('clock unavailable')
+        return value
+    result = run_atomic_step(f.state, replace(f.host, now_ms=clock), f.store, expected_version=f.version)
+    assert result.reason == 'deadline_or_clock_invalid_before_model'
+    assert not f.choices
+    checkpoint = f.store.load('task', 'alice', expected_version=result.checkpoint_version)
+    assert checkpoint.state.inflight.startswith('model-')
+    assert checkpoint.budget.usage()['in_flight'] == [checkpoint.state.inflight]
+
+
 def test_changed_goal_after_model_cannot_turn_into_action(f):
     def choose(prompt, cap):
         f.data['goal'] = 'A different request'

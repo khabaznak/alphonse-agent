@@ -82,6 +82,26 @@ def test_hold_preserves_checkpoint_claim_and_blocks_legacy_ack_retry_and_delete(
     assert f[2].load_task_checkpoint('task').metadata['unconfirmed_effect'] == {'synthetic': 'unknown'}
 
 
+@pytest.mark.parametrize('guard', ['insert', 'update', 'delete'])
+@pytest.mark.parametrize('already_held', [False, True])
+@pytest.mark.parametrize('replace', [False, True])
+def test_park_refuses_missing_or_replaced_guard_even_for_existing_hold(f, guard, already_held, replace):
+    advance(f)
+    if already_held:
+        assert park(f).status == 'held'
+    name = f'v2_supersession_hold_prevent_{guard}'
+    with sqlite3.connect(f[0]) as conn:
+        conn.execute(f'DROP TRIGGER {name}')
+        if replace:
+            # A same-named but ineffective trigger must not be adopted either.
+            conn.execute(f'CREATE TRIGGER {name} BEFORE {guard.upper()} ON v2_inbound_messages BEGIN SELECT 1; END')
+    with pytest.raises(ClaimFenceUnavailable, match='hold_schema_unavailable'):
+        park(f)
+    with sqlite3.connect(f[0]) as conn:
+        assert conn.execute('SELECT count(*) FROM v2_supersession_holds').fetchone()[0] == int(already_held)
+        assert conn.execute('SELECT status FROM v2_inbound_messages').fetchone()[0] == 'processing'
+
+
 def test_cancellation_without_version_increment_can_be_held(f):
     assert f[2].mark_task_checkpoint_terminal('task', status='cancelled')
     assert park(f).status == 'held'
