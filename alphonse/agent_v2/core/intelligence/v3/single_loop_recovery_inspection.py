@@ -16,7 +16,7 @@ from alphonse.agent_v2.core.messages.claim_fence import (
     ClaimFenceUnavailable, ClaimReceipt, ClaimSuperseded, fenced_claim_transaction,
 )
 from .single_loop_checkpoint import CheckpointConflict, ExperimentalCheckpointStore
-from .single_loop_delivery_reservation import ACTION_KEY, DeliveryBinding
+from .single_loop_delivery_reservation import ACTION_KEY, ACTION_SCHEMA_VERSION, DeliveryBinding
 
 
 @dataclass(frozen=True)
@@ -52,6 +52,24 @@ def inspect_recovery(store: ExperimentalCheckpointStore, session: AccountSession
             raw = store._validate_identity(row, task_id, actor, expected_version,
                                            allow_cancelled=row['status'] == 'cancelled')
             state, budget = store._decode(raw, task_id, actor)
+            # A standalone delivery action is not evidence that its effect was
+            # reconciled. Malformed or mismatched action state must not be
+            # projected as "no_pending" (nor as a model-only reservation).
+            # This read-only inspector does not accept settlement assertions.
+            if ACTION_KEY in raw['metadata']:
+                record = raw['metadata'][ACTION_KEY]
+                keys = set(DeliveryBinding.__dataclass_fields__)
+                if (not isinstance(record, dict) or set(record) != keys | {'schema_version', 'operation', 'task_id', 'actor'}
+                        or type(record.get('schema_version')) is not int
+                        or record['schema_version'] != ACTION_SCHEMA_VERSION
+                        or record['operation'] != 'delivery' or record['task_id'] != task_id
+                        or record['actor'] != actor):
+                    return unavailable
+                binding = DeliveryBinding(**{key: record[key] for key in keys})
+                reservation = budget.to_dict()['reservations'].get(state.inflight)
+                if (state.inflight != binding.action_id or not isinstance(reservation, dict)
+                        or reservation.get('kind') != 'tool' or reservation.get('status') != 'reserved'):
+                    return unavailable
             if not state.inflight:
                 if budget.usage()['unknown_usage']:
                     return RecoveryInspection('usage_unresolved', row['status'], 'model')
@@ -93,12 +111,14 @@ def inspect_delivery_binding(store: ExperimentalCheckpointStore, session: Accoun
                 row = store._row(conn, task_id)
                 raw = store._validate_identity(row, task_id, actor, expected_version)
                 state, budget = store._decode(raw, task_id, actor)
-                expected_record = {'schema_version': 1, 'operation': 'delivery',
+                expected_record = {'schema_version': ACTION_SCHEMA_VERSION, 'operation': 'delivery',
                                    'task_id': task_id, 'actor': actor, **asdict(expected)}
                 record = raw['metadata'].get(ACTION_KEY)
                 pending = budget.to_dict()['reservations'].get(state.inflight)
                 if (raw.get('message_id') != claim.message_id
                         or not isinstance(record, dict) or type(record.get('schema_version')) is not int
+                        or type(record.get('grant_revision')) is not int
+                        or type(record.get('connection_revision')) is not int
                         or record != expected_record
                         or state.inflight != expected.action_id
                         or not isinstance(pending, dict) or pending.get('kind') != 'tool'

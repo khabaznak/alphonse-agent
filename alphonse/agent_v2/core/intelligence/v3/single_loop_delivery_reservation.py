@@ -18,6 +18,7 @@ from .task_budget import BudgetExhausted
 
 
 ACTION_KEY = 'single_loop_delivery_action'
+ACTION_SCHEMA_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -30,12 +31,18 @@ class DeliveryBinding:
     recipient_user_id: str
     message_digest: str
     idempotency_key: str
-    grant_revision: str
+    grant_id: str
+    grant_revision: int
+    connection_revision: int
 
     def __post_init__(self) -> None:
         import re
         values = asdict(self)
-        if any(not isinstance(v, str) or not v.strip() or len(v) > 512 for v in values.values()):
+        revisions = ('grant_revision', 'connection_revision')
+        if any(type(values[key]) is not int or values[key] < 1 for key in revisions):
+            raise ValueError('delivery_binding_revision_invalid')
+        if any(not isinstance(v, str) or not v.strip() or len(v) > 512
+               for key, v in values.items() if key not in revisions):
             raise ValueError('delivery_binding_invalid')
         if re.fullmatch(r'[0-9a-f]{64}', self.message_digest) is None:
             raise ValueError('delivery_binding_digest_invalid')
@@ -49,7 +56,8 @@ def reserve_delivery(store: ExperimentalCheckpointStore, claim: ClaimReceipt, *,
     Only a direct-owner queue message and file-backed shared checkpoint are
     supported. Existing legacy reservations and action bindings are not adopted.
     The idempotency key is not globally enforced. The caller-supplied grant
-    revision is not authorization. The message is not retained here, so a host
+    revision is not authorization. Grant identity and revisions must still be
+    revalidated against authoritative stores. The message is not retained here, so a host
     must also retain durable authorized inputs before any dispatch. This prototype
     never clears or reconciles the resulting marker and must not be used to dispatch.
     """
@@ -96,7 +104,7 @@ def reserve_delivery(store: ExperimentalCheckpointStore, claim: ClaimReceipt, *,
                     result = store._write(conn, row, raw, state, budget)
             else:
                 state.inflight = binding.action_id
-                raw['metadata'][ACTION_KEY] = {'schema_version': 1, 'operation': 'delivery',
+                raw['metadata'][ACTION_KEY] = {'schema_version': ACTION_SCHEMA_VERSION, 'operation': 'delivery',
                                                'task_id': task_id, 'actor': actor, **asdict(binding)}
                 result = store._write(conn, row, raw, state, budget)
     if rejected is not None:

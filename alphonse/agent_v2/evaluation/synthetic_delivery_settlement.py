@@ -13,7 +13,7 @@ import sqlite3
 from typing import Callable
 
 from alphonse.agent_v2.core.intelligence.v3.single_loop_checkpoint import ExperimentalCheckpointStore
-from alphonse.agent_v2.core.intelligence.v3.single_loop_delivery_reservation import ACTION_KEY, DeliveryBinding
+from alphonse.agent_v2.core.intelligence.v3.single_loop_delivery_reservation import ACTION_KEY, ACTION_SCHEMA_VERSION, DeliveryBinding
 from alphonse.agent_v2.core.messages.claim_fence import ClaimFenceUnavailable, ClaimReceipt, fenced_claim_transaction
 
 
@@ -45,10 +45,10 @@ def settle_fixture_delivery(store: ExperimentalCheckpointStore, claim: ClaimRece
                 state, budget = store._decode(raw, task_id, actor)
                 record = raw['metadata'].get(ACTION_KEY)
                 keys = {'action_id', 'integration_id', 'provider_key', 'channel_target', 'recipient_user_id',
-                        'message_digest', 'idempotency_key', 'grant_revision'}
+                        'message_digest', 'idempotency_key', 'grant_id', 'grant_revision', 'connection_revision'}
                 if (raw.get('message_id') != claim.message_id or not isinstance(record, dict)
                         or set(record) != keys | {'schema_version', 'operation', 'task_id', 'actor'}
-                        or type(record['schema_version']) is not int or record['schema_version'] != 1
+                        or type(record['schema_version']) is not int or record['schema_version'] != ACTION_SCHEMA_VERSION
                         or record['operation'] != 'delivery' or record['task_id'] != task_id or record['actor'] != actor):
                     raise ClaimFenceUnavailable('fixture_settlement_unavailable')
                 binding = DeliveryBinding(**{key: record[key] for key in keys})
@@ -56,18 +56,20 @@ def settle_fixture_delivery(store: ExperimentalCheckpointStore, claim: ClaimRece
                 if state.inflight != binding.action_id or not pending or pending['kind'] != 'tool' or pending['status'] != 'reserved':
                     raise ClaimFenceUnavailable('fixture_settlement_unavailable')
                 # These two rows are fixture-owned, not model or caller input.
-                grants = conn.execute('''SELECT actor,recipient,integration,provider,channel,revision,active
+                grants = conn.execute('''SELECT actor,recipient,integration,provider,channel,grant_id,revision,connection_revision,active
                     FROM main.fixture_delivery_grants WHERE actor=? AND recipient=? AND integration=? AND provider=? AND channel=?''',
                     (actor, binding.recipient_user_id, binding.integration_id, binding.provider_key, binding.channel_target)).fetchall()
                 if len(grants) != 1 or tuple(grants[0]) != (actor, binding.recipient_user_id, binding.integration_id,
-                                                            binding.provider_key, binding.channel_target, binding.grant_revision, 1):
+                                                            binding.provider_key, binding.channel_target, binding.grant_id,
+                                                            binding.grant_revision, binding.connection_revision, 1):
                     raise ClaimFenceUnavailable('fixture_settlement_unavailable')
                 effects = conn.execute('''SELECT task_id,actor,action_id,integration,provider,channel,recipient,
-                           message_digest,idempotency_key,grant_revision,status
+                           message_digest,idempotency_key,grant_id,grant_revision,connection_revision,status
                     FROM main.fixture_delivery_effects WHERE task_id=? AND action_id=?''', (task_id, binding.action_id)).fetchall()
                 expected = (task_id, actor, binding.action_id, binding.integration_id, binding.provider_key,
                             binding.channel_target, binding.recipient_user_id, binding.message_digest,
-                            binding.idempotency_key, binding.grant_revision, 'delivered')
+                            binding.idempotency_key, binding.grant_id, binding.grant_revision,
+                            binding.connection_revision, 'delivered')
                 if len(effects) != 1 or tuple(effects[0]) != expected:
                     raise ClaimFenceUnavailable('fixture_settlement_unavailable')
                 budget.settle(binding.action_id, outcome='success')

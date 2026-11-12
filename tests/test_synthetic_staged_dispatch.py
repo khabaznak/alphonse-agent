@@ -15,12 +15,12 @@ def seed(f, *, active=1):
     _, _, questions, _, _, _, _ = f
     with questions._connect() as conn:
         conn.execute('''CREATE TABLE fixture_delivery_grants(actor TEXT,recipient TEXT,integration TEXT,
-                     provider TEXT,channel TEXT,revision TEXT,active INTEGER)''')
+                     provider TEXT,channel TEXT,grant_id TEXT,revision INTEGER,connection_revision INTEGER,active INTEGER)''')
         conn.execute('''CREATE TABLE fixture_delivery_effects(task_id TEXT,actor TEXT,action_id TEXT,
                      integration TEXT,provider TEXT,channel TEXT,recipient TEXT,message_digest TEXT,
-                     idempotency_key TEXT,grant_revision TEXT,status TEXT)''')
-        conn.execute('INSERT INTO fixture_delivery_grants VALUES (?,?,?,?,?,?,?)',
-                     ('alice', 'alice', 'desktop', 'desktop', 'alice', 'grant', active))
+                     idempotency_key TEXT,grant_id TEXT,grant_revision INTEGER,connection_revision INTEGER,status TEXT)''')
+        conn.execute('INSERT INTO fixture_delivery_grants VALUES (?,?,?,?,?,?,?,?,?)',
+                     ('alice', 'alice', 'desktop', 'desktop', 'alice', 'grant', 1, 1, active))
 
 
 def dispatch(f, identity, **kwargs):
@@ -51,7 +51,7 @@ def test_failed_authority_or_ownership_never_records_effect(setup, failure):
     seed(setup, active=0 if failure == 'revoked' else 1)
     with sqlite3.connect(path) as conn:
         if failure == 'wrong_grant':
-            conn.execute("UPDATE fixture_delivery_grants SET revision='other'")
+            conn.execute("UPDATE fixture_delivery_grants SET revision=2")
         if failure == 'inactive':
             conn.execute("UPDATE v2_users SET is_active=0 WHERE user_id='alice'")
     options = {}

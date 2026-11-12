@@ -14,7 +14,7 @@ from typing import Callable
 from uuid import NAMESPACE_URL, uuid5
 
 from alphonse.agent_v2.core.intelligence.v3.single_loop_checkpoint import ExperimentalCheckpointStore
-from alphonse.agent_v2.core.intelligence.v3.single_loop_delivery_reservation import ACTION_KEY, DeliveryBinding
+from alphonse.agent_v2.core.intelligence.v3.single_loop_delivery_reservation import ACTION_KEY, ACTION_SCHEMA_VERSION, DeliveryBinding
 from alphonse.agent_v2.core.io.checkpoint_claim_fence import experimental_checkpoint_claim_transaction
 from alphonse.agent_v2.core.io.experimental_staged_outbox import _validate_guards
 from alphonse.agent_v2.core.io.outbox import SQLiteOutboundStore
@@ -49,9 +49,9 @@ def dispatch_fixture_staged(store: SQLiteOutboundStore, checkpoints: Experimenta
                 state, budget = checkpoints._decode(raw, task_id, actor)
                 action = raw['metadata'].get(ACTION_KEY)
                 keys = {'action_id', 'integration_id', 'provider_key', 'channel_target', 'recipient_user_id',
-                        'message_digest', 'idempotency_key', 'grant_revision'}
+                        'message_digest', 'idempotency_key', 'grant_id', 'grant_revision', 'connection_revision'}
                 if (not isinstance(action, dict) or set(action) != keys | {'schema_version', 'operation', 'task_id', 'actor'}
-                        or type(action.get('schema_version')) is not int or action['schema_version'] != 1
+                        or type(action.get('schema_version')) is not int or action['schema_version'] != ACTION_SCHEMA_VERSION
                         or action['operation'] != 'delivery' or action['task_id'] != task_id or action['actor'] != actor):
                     raise ClaimFenceUnavailable('fixture_dispatch_unavailable')
                 binding = DeliveryBinding(**{key: action[key] for key in keys})
@@ -82,21 +82,21 @@ def dispatch_fixture_staged(store: SQLiteOutboundStore, checkpoints: Experimenta
                         or binding.recipient_user_id != actor or metadata != expected_metadata
                         or tuple(staged[9:]) != ('', '', '', 0, '', '', '', '')):
                     raise ClaimFenceUnavailable('fixture_dispatch_unavailable')
-                grants = conn.execute('''SELECT actor,recipient,integration,provider,channel,revision,active
+                grants = conn.execute('''SELECT actor,recipient,integration,provider,channel,grant_id,revision,connection_revision,active
                     FROM main.fixture_delivery_grants WHERE actor=? AND recipient=? AND integration=? AND provider=? AND channel=?''',
                     (actor, binding.recipient_user_id, binding.integration_id, binding.provider_key, binding.channel_target)).fetchall()
                 expected_grant = (actor, binding.recipient_user_id, binding.integration_id, binding.provider_key,
-                                  binding.channel_target, binding.grant_revision, 1)
+                                  binding.channel_target, binding.grant_id, binding.grant_revision, binding.connection_revision, 1)
                 if len(grants) != 1 or tuple(grants[0]) != expected_grant:
                     raise ClaimFenceUnavailable('fixture_dispatch_unavailable')
                 if conn.execute('SELECT 1 FROM main.fixture_delivery_effects WHERE task_id=? AND action_id=?',
                                 (task_id, binding.action_id)).fetchone() is not None:
                     raise ClaimFenceUnavailable('fixture_dispatch_already_observed')
                 conn.execute('''INSERT INTO main.fixture_delivery_effects(task_id,actor,action_id,integration,
-                    provider,channel,recipient,message_digest,idempotency_key,grant_revision,status)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,'delivered')''',
+                    provider,channel,recipient,message_digest,idempotency_key,grant_id,grant_revision,connection_revision,status)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'delivered')''',
                     (task_id, actor, binding.action_id, binding.integration_id, binding.provider_key,
                      binding.channel_target, binding.recipient_user_id, binding.message_digest,
-                     binding.idempotency_key, binding.grant_revision))
+                     binding.idempotency_key, binding.grant_id, binding.grant_revision, binding.connection_revision))
     except (sqlite3.Error, ValueError, KeyError, TypeError) as exc:
         raise ClaimFenceUnavailable('fixture_dispatch_unavailable') from exc

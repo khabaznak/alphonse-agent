@@ -64,21 +64,25 @@ def test_same_owner_reclaim_rotates_generation_and_legacy_ack_retry_cannot_steal
     assert not queue.ack_fenced(newer)
 
 
-def test_fenced_handoff_release_requires_exact_live_claim_and_owner(tmp_path):
+@pytest.mark.parametrize('wait_outbox_id', ['', 'unconfirmed-delivery'])
+def test_fenced_handoff_release_refuses_unverified_legacy_handoff_even_with_live_claim(tmp_path, wait_outbox_id):
     path = tmp_path / 'queue.sqlite'
     queue = SQLiteMessageQueue(path, lease_owner='worker', experimental_claim_fencing=True)
     queue.enqueue(message(), message_id='m')
     receipt = queue.claim_next().claim_receipt
     with queue._connect() as conn:
-        conn.execute('INSERT INTO v2_scheduled_handoffs(message_id,task_id,owner_id) VALUES (?,?,?)', ('m', 'task', 'alice'))
+        conn.execute('INSERT INTO v2_scheduled_handoffs(message_id,task_id,owner_id,wait_outbox_id) VALUES (?,?,?,?)',
+                     ('m', 'task', 'alice', wait_outbox_id))
     assert not queue.release_scheduled_handoff('m', lease_owner='worker')
     assert not queue.release_scheduled_handoff_fenced(replace(receipt, claim_generation='a' * 32))
-    assert queue.release_scheduled_handoff_fenced(receipt)
+    assert not queue.release_scheduled_handoff_fenced(receipt, clock=lambda: pytest.fail('unverified handoff must not enter release'))
     assert not queue.ack_fenced(receipt)
+    with queue._connect() as conn:
+        row = conn.execute("SELECT status,claim_generation FROM v2_inbound_messages WHERE message_id='m'").fetchone()
+        assert tuple(row) == ('processing', receipt.claim_generation)
+        assert conn.execute("SELECT 1 FROM v2_scheduled_handoffs WHERE message_id='m'").fetchone()
     legacy = SQLiteMessageQueue(path, lease_owner='worker')
     assert legacy.claim_next() is None
-    new = queue.claim_next().claim_receipt
-    assert new.claim_generation != receipt.claim_generation
 
 
 def test_expired_or_wrong_actor_receipt_cannot_ack_or_release(tmp_path):
@@ -96,25 +100,21 @@ def test_expired_or_wrong_actor_receipt_cannot_ack_or_release(tmp_path):
     assert not queue.release_scheduled_handoff_fenced(receipt)
 
 
-@pytest.mark.parametrize('operation', ['ack', 'release'])
 @pytest.mark.parametrize('end', ['expired', 'clock_rollback'])
-def test_fenced_terminal_transition_rolls_back_if_lease_lapses_before_commit(tmp_path, operation, end):
+def test_fenced_ack_rolls_back_if_lease_lapses_before_commit(tmp_path, end):
     path = tmp_path / 'queue.sqlite'
     queue = SQLiteMessageQueue(path, lease_owner='worker', experimental_claim_fencing=True)
     queue.enqueue(message(), message_id='m')
     receipt = queue.claim_next().claim_receipt
     with queue._connect() as conn:
         expiry = datetime.fromisoformat(conn.execute("SELECT lease_expires_at FROM v2_inbound_messages WHERE message_id='m'").fetchone()[0])
-        conn.execute('INSERT INTO v2_scheduled_handoffs(message_id,task_id,owner_id) VALUES (?,?,?)', ('m', 'task', 'alice'))
     start = expiry - timedelta(seconds=30)
     times = iter((start, expiry if end == 'expired' else start - timedelta(seconds=1)))
-    result = (queue.ack_fenced(receipt, clock=lambda: next(times)) if operation == 'ack'
-              else queue.release_scheduled_handoff_fenced(receipt, clock=lambda: next(times)))
+    result = queue.ack_fenced(receipt, clock=lambda: next(times))
     assert not result
     with queue._connect() as conn:
         row = conn.execute("SELECT status,claim_generation FROM v2_inbound_messages WHERE message_id='m'").fetchone()
         assert tuple(row) == ('processing', receipt.claim_generation)
-        assert conn.execute("SELECT 1 FROM v2_scheduled_handoffs WHERE message_id='m'").fetchone()
 
 
 def test_legacy_reclaim_does_not_touch_expired_fenced_row(tmp_path):
@@ -313,12 +313,12 @@ def test_claim_modes_do_not_run_concurrently_in_this_binary(tmp_path, first_mode
         with fenced._connect() as conn:
             conn.execute('INSERT INTO v2_scheduled_handoffs(message_id,task_id,owner_id) VALUES(?,?,?)',
                          (claim.message_id, 'task', 'alice'))
-        assert fenced.release_scheduled_handoff_fenced(claim.claim_receipt)
-        # Pending handoff retains its generation and must not admit legacy work.
+        assert not fenced.release_scheduled_handoff_fenced(claim.claim_receipt)
+        # An unverified handoff remains held by its current fenced claim.
         assert legacy.claim_next() is None
-        from alphonse.agent_v2.core.messages.queue import MessageSelector
-        resumed = fenced.claim_next(selector=MessageSelector(message_id=claim.message_id))
-        assert fenced.ack_fenced(resumed.claim_receipt)
+        assert not fenced.ack_fenced(claim.claim_receipt)
+        assert other.claim_next() is None
+        return
     else:
         assert legacy.ack(claim.message_id)
     assert other.claim_next() is not None

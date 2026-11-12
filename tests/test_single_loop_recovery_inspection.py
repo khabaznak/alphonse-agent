@@ -95,3 +95,44 @@ def test_corrupt_envelope_does_not_project_status(fixture):
         task = json.loads(row[0]); task['intelligence_schema_version'] = 2
         conn.execute('UPDATE v2_task_checkpoints SET task_state_json=?', (json.dumps(task),))
     assert read(store, version=version).status == 'unavailable'
+
+
+def test_delivery_binding_without_pending_marker_is_not_reported_clear(fixture):
+    """A corrupt checkpoint cannot turn an uncertain delivery into no_pending."""
+    from dataclasses import asdict
+    from alphonse.agent_v2.core.intelligence.v3.single_loop_checkpoint import STATE_KEY
+    from alphonse.agent_v2.core.intelligence.v3.single_loop_delivery_reservation import ACTION_KEY, ACTION_SCHEMA_VERSION, DeliveryBinding
+
+    _, questions, store, version = fixture
+    binding = DeliveryBinding('action', 'fixture', 'provider', 'channel', 'alice', 'a' * 64,
+                              'key', 'grant', 1, 1)
+    with questions._connect() as conn:
+        raw = json.loads(conn.execute("SELECT task_state_json FROM v2_task_checkpoints WHERE task_id='task'").fetchone()[0])
+        # The budget and state both have no pending marker; the orphan action
+        # must still prevent a clear status even when the envelope is otherwise valid.
+        assert not raw['metadata'][STATE_KEY]['state']['inflight']
+        raw['metadata'][ACTION_KEY] = {'schema_version': ACTION_SCHEMA_VERSION, 'operation': 'delivery',
+                                       'task_id': 'task', 'actor': 'alice', **asdict(binding)}
+        conn.execute("UPDATE v2_task_checkpoints SET task_state_json=? WHERE task_id='task'", (json.dumps(raw),))
+    assert read(store, version=version).status == 'unavailable'
+    with questions._connect() as conn:
+        persisted = json.loads(conn.execute("SELECT task_state_json FROM v2_task_checkpoints WHERE task_id='task'").fetchone()[0])
+    assert persisted['metadata'][ACTION_KEY]['action_id'] == 'action'
+
+
+def test_delivery_binding_cannot_relabel_a_model_reservation(fixture):
+    from dataclasses import asdict
+    from alphonse.agent_v2.core.intelligence.v3.single_loop_delivery_reservation import ACTION_KEY, ACTION_SCHEMA_VERSION, DeliveryBinding
+
+    _, questions, store, version = fixture
+    checkpoint = store.reserve('task', 'alice', expected_version=version, reservation_id='action', kind='model',
+        amounts={'actions': 0, 'model_calls': 1, 'input_tokens': 100, 'output_tokens': 30}, now_ms=1100)
+    binding = DeliveryBinding('action', 'fixture', 'provider', 'channel', 'alice', 'a' * 64,
+                              'key', 'grant', 1, 1)
+    with questions._connect() as conn:
+        raw = json.loads(conn.execute("SELECT task_state_json FROM v2_task_checkpoints WHERE task_id='task'").fetchone()[0])
+        raw['metadata'][ACTION_KEY] = {'schema_version': ACTION_SCHEMA_VERSION, 'operation': 'delivery',
+                                       'task_id': 'task', 'actor': 'alice', **asdict(binding)}
+        conn.execute("UPDATE v2_task_checkpoints SET task_state_json=? WHERE task_id='task'", (json.dumps(raw),))
+    assert read(store, version=checkpoint.version).status == 'unavailable'
+    assert store.load('task', 'alice', expected_version=checkpoint.version).state.inflight == 'action'

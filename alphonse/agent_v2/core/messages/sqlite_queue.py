@@ -421,6 +421,12 @@ class SQLiteMessageQueue:
                 conn.execute("BEGIN IMMEDIATE")
                 start = _time(clock())
                 expiry = _read_claim(conn, receipt, start)
+                # A handoff is not a terminal result. Its current legacy row
+                # does not establish a receipt-bound continuation or effect
+                # reconciliation, so acknowledgement must not erase it.
+                if conn.execute("SELECT 1 FROM main.v2_scheduled_handoffs WHERE message_id=?",
+                                (receipt.message_id,)).fetchone() is not None:
+                    return False
                 holds = _exclude_supersession_holds(conn)
                 cursor = conn.execute(f"""DELETE FROM v2_inbound_messages WHERE message_id=? AND user_id=?
                     AND status='processing' AND lease_owner=? AND claim_generation=? {holds}""",
@@ -437,36 +443,14 @@ class SQLiteMessageQueue:
             return False
 
     def release_scheduled_handoff_fenced(self, receipt: Any, *, clock: Any = None) -> bool:
-        """Experimental release of a staged handoff; staging is not yet wired."""
-        from .claim_fence import ClaimReceipt, ClaimSuperseded, ClaimFenceUnavailable, _read_claim, _time
-        if not self.experimental_claim_fencing or not isinstance(receipt, ClaimReceipt):
-            return False
-        clock = clock or _now
-        try:
-            with self._connect() as conn:
-                conn.execute("BEGIN IMMEDIATE")
-                start = _time(clock())
-                expiry = _read_claim(conn, receipt, start)
-                handoff = conn.execute("SELECT wait_outbox_id FROM v2_scheduled_handoffs WHERE message_id=? AND owner_id=?",
-                                       (receipt.message_id, receipt.user_id)).fetchone()
-                if handoff is None:
-                    return False
-                wait = bool(handoff["wait_outbox_id"])
-                retry_at = (_now() + timedelta(seconds=5)).isoformat() if wait else ""
-                holds = _exclude_supersession_holds(conn)
-                cursor = conn.execute(f"""UPDATE v2_inbound_messages SET status=?, processing_at='', lease_owner='',
-                    lease_expires_at='', next_attempt_at=?, attempt_count=MAX(attempt_count-1, 0),
-                    sequence=(SELECT MAX(sequence)+1 FROM v2_inbound_messages)
-                    WHERE message_id=? AND user_id=? AND status='processing' AND lease_owner=? AND claim_generation=? {holds}""",
-                    ("retry_wait" if wait else "pending", retry_at, receipt.message_id, receipt.user_id,
-                     receipt.lease_owner, receipt.claim_generation))
-                if cursor.rowcount:
-                    end = _time(clock())
-                    if end < start or end >= expiry:
-                        raise ClaimSuperseded("claim_expired_or_clock_reversed")
-                return cursor.rowcount == 1
-        except (ClaimSuperseded, ClaimFenceUnavailable):
-            return False
+        """Refuse release until receipt-bound handoff staging is implemented.
+
+        The legacy handoff row contains neither the claim generation nor a
+        verified checkpoint/effect boundary. Its presence cannot prove that a
+        continuation is safe, even while the presented claim is current.
+        Preserve both claim and row for explicit reconciliation.
+        """
+        return False
 
     def renew_claim_fenced(self, receipt: Any, *, lease_seconds: int,
                            is_cancelled: Any, clock: Any = None) -> bool:

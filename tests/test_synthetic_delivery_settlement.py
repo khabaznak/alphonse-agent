@@ -14,20 +14,20 @@ def seed_fixture(f, *, grant=True, effect=True):
     _, _, questions, _, _, _, _, binding = f
     with questions._connect() as conn:
         conn.execute('''CREATE TABLE fixture_delivery_grants(actor TEXT,recipient TEXT,integration TEXT,
-                     provider TEXT,channel TEXT,revision TEXT,active INTEGER)''')
+                     provider TEXT,channel TEXT,grant_id TEXT,revision INTEGER,connection_revision INTEGER,active INTEGER)''')
         conn.execute('''CREATE TABLE fixture_delivery_effects(task_id TEXT,actor TEXT,action_id TEXT,
                      integration TEXT,provider TEXT,channel TEXT,recipient TEXT,message_digest TEXT,
-                     idempotency_key TEXT,grant_revision TEXT,status TEXT)''')
+                     idempotency_key TEXT,grant_id TEXT,grant_revision INTEGER,connection_revision INTEGER,status TEXT)''')
         if grant:
-            conn.execute('INSERT INTO fixture_delivery_grants VALUES (?,?,?,?,?,?,?)',
+            conn.execute('INSERT INTO fixture_delivery_grants VALUES (?,?,?,?,?,?,?,?,?)',
                          ('alice', binding.recipient_user_id, binding.integration_id, binding.provider_key,
-                          binding.channel_target, binding.grant_revision, 1))
+                          binding.channel_target, binding.grant_id, binding.grant_revision, binding.connection_revision, 1))
         if effect:
             # Independent synthetic provider observation; not an agent assertion.
-            conn.execute('INSERT INTO fixture_delivery_effects VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+            conn.execute('INSERT INTO fixture_delivery_effects VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
                          ('task', 'alice', binding.action_id, binding.integration_id, binding.provider_key,
                           binding.channel_target, binding.recipient_user_id, binding.message_digest,
-                          binding.idempotency_key, binding.grant_revision, 'delivered'))
+                          binding.idempotency_key, binding.grant_id, binding.grant_revision, binding.connection_revision, 'delivered'))
 
 
 def settle(f, version, **kwargs):
@@ -51,8 +51,27 @@ def test_verified_fixture_effect_settles_once_and_survives_restart(setup):
     assert store.load('task', 'alice', expected_version=settled.version).state.inflight == ''
 
 
+def test_old_binding_does_not_settle_even_with_matching_fixture_evidence(setup):
+    import json
+    _, _, questions, store, _, _, _, binding = setup
+    pending = reserve(setup)
+    seed_fixture(setup)
+    with questions._connect() as conn:
+        raw = json.loads(conn.execute("SELECT task_state_json FROM v2_task_checkpoints WHERE task_id='task'").fetchone()[0])
+        action = raw['metadata']['single_loop_delivery_action']
+        action['schema_version'] = 1
+        action.pop('grant_id')
+        action.pop('connection_revision')
+        conn.execute("UPDATE v2_task_checkpoints SET task_state_json=? WHERE task_id='task'", (json.dumps(raw),))
+    with pytest.raises(ClaimFenceUnavailable):
+        settle(setup, pending.version)
+    assert store.load('task', 'alice', expected_version=pending.version).state.inflight == binding.action_id
+
+
 @pytest.mark.parametrize('mutation', ['missing_effect', 'failed', 'recipient', 'digest', 'provider', 'channel',
-                                      'idempotency', 'grant', 'revoked', 'inactive', 'duplicate_effect', 'duplicate_grant'])
+                                      'idempotency', 'grant', 'grant_id', 'connection_revision',
+                                      'effect_grant_id', 'effect_grant_revision', 'effect_connection_revision',
+                                      'revoked', 'inactive', 'duplicate_effect', 'duplicate_grant'])
 def test_unverified_or_unauthorized_fixture_keeps_pending_marker(setup, mutation):
     _, users, questions, store, _, _, _, binding = setup
     pending = reserve(setup)
@@ -66,7 +85,12 @@ def test_unverified_or_unauthorized_fixture_keeps_pending_marker(setup, mutation
                    'provider': ("UPDATE fixture_delivery_effects SET provider='other'", ()),
                    'channel': ("UPDATE fixture_delivery_effects SET channel='other'", ()),
                    'idempotency': ("UPDATE fixture_delivery_effects SET idempotency_key='other'", ()),
-                   'grant': ("UPDATE fixture_delivery_grants SET revision='new'", ()),
+                   'grant': ("UPDATE fixture_delivery_grants SET revision=2", ()),
+                   'grant_id': ("UPDATE fixture_delivery_grants SET grant_id='other'", ()),
+                   'connection_revision': ("UPDATE fixture_delivery_grants SET connection_revision=2", ()),
+                   'effect_grant_id': ("UPDATE fixture_delivery_effects SET grant_id='other'", ()),
+                   'effect_grant_revision': ("UPDATE fixture_delivery_effects SET grant_revision=2", ()),
+                   'effect_connection_revision': ("UPDATE fixture_delivery_effects SET connection_revision=2", ()),
                    'revoked': ("UPDATE fixture_delivery_grants SET active=0", ()),
                    'duplicate_effect': ("INSERT INTO fixture_delivery_effects SELECT * FROM fixture_delivery_effects", ()),
                    'duplicate_grant': ("INSERT INTO fixture_delivery_grants SELECT * FROM fixture_delivery_grants", ())}

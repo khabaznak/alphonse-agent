@@ -37,7 +37,7 @@ def setup(tmp_path):
     checkpoint = store.initialize('task', 'alice', expected_version=version,
         state=CandidateState('task', 'alice', 'goal'),
         budget=TaskBudget(BudgetLimits(total, final, 10000, 0), started_at_ms=1000))
-    binding = DeliveryBinding('action', 'synthetic', 'fixture-provider', 'channel', 'alice', hashlib.sha256(b'synthetic message').hexdigest(), 'idempotency', 'grant-1')
+    binding = DeliveryBinding('action', 'synthetic', 'fixture-provider', 'channel', 'alice', hashlib.sha256(b'synthetic message').hexdigest(), 'idempotency', 'grant-1', 1, 1)
     return queue, users, questions, store, claim, checkpoint.version, now, binding
 
 
@@ -71,6 +71,35 @@ def test_mismatched_message_digest_cannot_reserve_or_create_marker(setup):
         reserve(setup, message='synthetic message ')
     assert ACTION_KEY not in questions.load_task_checkpoint('task').metadata
     assert not store.load('task', 'alice', expected_version=version).state.inflight
+
+
+@pytest.mark.parametrize('field,value', [('grant_revision', True), ('grant_revision', 0),
+                                        ('grant_revision', '1'), ('connection_revision', False),
+                                        ('connection_revision', -1), ('connection_revision', '1'),
+                                        ('grant_id', '')])
+def test_binding_rejects_invalid_grant_identity(setup, field, value):
+    with pytest.raises(ValueError, match='delivery_binding_'):
+        replace(setup[-1], **{field: value})
+
+
+def test_v1_action_is_not_adopted_or_reconciled_by_guessing(setup):
+    import json
+    from alphonse.agent_v2.accounts import AccountSession
+    from alphonse.agent_v2.core.intelligence.v3.single_loop_recovery_inspection import inspect_delivery_binding
+
+    _, _, questions, store, claim, _, now, binding = setup
+    saved = reserve(setup)
+    with questions._connect() as conn:
+        raw = json.loads(conn.execute("SELECT task_state_json FROM v2_task_checkpoints WHERE task_id='task'").fetchone()[0])
+        action = raw['metadata'][ACTION_KEY]
+        action['schema_version'] = 1
+        action.pop('grant_id')
+        action.pop('connection_revision')
+        conn.execute("UPDATE v2_task_checkpoints SET task_state_json=? WHERE task_id='task'", (json.dumps(raw),))
+    result = inspect_delivery_binding(store, AccountSession('alice'), claim, task_id='task',
+                                      expected_version=saved.version, expected=binding, clock=lambda: now)
+    assert result.status == 'unavailable'
+    assert store.load('task', 'alice', expected_version=saved.version).state.inflight == binding.action_id
 
 
 def test_message_digest_preserves_exact_unicode_bytes(setup):
@@ -175,7 +204,8 @@ def test_recovery_inspection_requires_exact_binding_and_leaves_marker_untouched(
     for mismatch in (replace(binding, recipient_user_id='bob'),
                      replace(binding, provider_key='other-provider'),
                      replace(binding, message_digest='b' * 64),
-                     replace(binding, grant_revision='grant-2'),
+                     replace(binding, grant_revision=2), replace(binding, grant_id='other-grant'),
+                     replace(binding, connection_revision=2),
                      replace(binding, action_id='other')):
         assert inspect(expected=mismatch).status == 'unavailable'
     assert inspect(actor='bob').status == 'unavailable'
@@ -204,6 +234,24 @@ def test_recovery_inspection_rejects_tampered_binding_and_inactive_owner(setup):
         raw['metadata'][ACTION_KEY]['schema_version'] = True
         conn.execute("UPDATE v2_task_checkpoints SET task_state_json=? WHERE task_id='task'", (json.dumps(raw),))
     assert inspect().status == 'unavailable'
+
+
+@pytest.mark.parametrize('field', ['grant_revision', 'connection_revision'])
+def test_recovery_inspection_rejects_boolean_revision_even_when_python_equal(setup, field):
+    import json
+    from alphonse.agent_v2.accounts import AccountSession
+    from alphonse.agent_v2.core.intelligence.v3.single_loop_recovery_inspection import inspect_delivery_binding
+
+    _, _, questions, store, claim, _, now, binding = setup
+    saved = reserve(setup)
+    with questions._connect() as conn:
+        raw = json.loads(conn.execute("SELECT task_state_json FROM v2_task_checkpoints WHERE task_id='task'").fetchone()[0])
+        raw['metadata'][ACTION_KEY][field] = True
+        conn.execute("UPDATE v2_task_checkpoints SET task_state_json=? WHERE task_id='task'", (json.dumps(raw),))
+    result = inspect_delivery_binding(store, AccountSession('alice'), claim, task_id='task',
+                                      expected_version=saved.version, expected=binding, clock=lambda: now)
+    assert result.status == 'unavailable'
+    assert store.load('task', 'alice', expected_version=saved.version).state.inflight == binding.action_id
 
 
 def test_recovery_inspection_rejects_old_claim_after_same_owner_reclaim(setup):

@@ -11,6 +11,7 @@ from functools import lru_cache
 import hashlib
 import json
 import sqlite3
+from pathlib import Path
 from typing import Callable
 from uuid import NAMESPACE_URL, uuid5
 
@@ -18,7 +19,7 @@ from .checkpoint_claim_fence import experimental_checkpoint_claim_transaction
 from .outbox import SQLiteOutboundStore, _OUTBOX_STATUSES, _outbox_status_schema, _validate_outbox_rebuild
 from alphonse.agent_v2.core.messages.claim_fence import ClaimReceipt, ClaimFenceUnavailable
 from alphonse.agent_v2.core.intelligence.v3.single_loop_checkpoint import ExperimentalCheckpointStore
-from alphonse.agent_v2.core.intelligence.v3.single_loop_delivery_reservation import ACTION_KEY, DeliveryBinding
+from alphonse.agent_v2.core.intelligence.v3.single_loop_delivery_reservation import ACTION_KEY, ACTION_SCHEMA_VERSION, DeliveryBinding
 
 
 _OLD = "'pending', 'claimed', 'retry_wait', 'delivered', 'failed', 'unconfirmed'"
@@ -96,6 +97,57 @@ def install_experimental_staging(store: SQLiteOutboundStore) -> None:
             conn.execute(trigger)
 
 
+def rollback_empty_experimental_staging(db_path: str | Path) -> None:
+    """Restore the canonical outbox only when no staged rows exist.
+
+    This is an explicit recovery operation for disposable experiments, not a
+    live downgrade protocol. All writers must be stopped; older binaries and
+    direct DDL remain unfenced. It never deletes or releases staged messages.
+    A foreign schema, dependent object or any remaining staged row aborts the
+    transaction without modifying the outbox, its guards, or its data.
+    """
+    if not isinstance(db_path, (str, Path)) or str(db_path) in ('', ':memory:'):
+        raise ValueError('staged_outbox_file_store_required')
+    path = Path(db_path).expanduser().resolve(strict=True)
+    if not path.is_file():
+        raise ValueError('staged_outbox_file_store_required')
+    conn = sqlite3.connect(path, timeout=5)
+    try:
+        conn.execute('PRAGMA foreign_keys = ON')
+        conn.execute('BEGIN IMMEDIATE')
+        _validate_guards(conn)
+        if conn.execute("""SELECT 1 FROM main.v2_outbox WHERE status NOT IN
+                ('pending','claimed','retry_wait','delivered','failed','unconfirmed','staged') LIMIT 1""").fetchone():
+            raise ClaimFenceUnavailable('staged_outbox_schema_unavailable')
+        if conn.execute("SELECT 1 FROM main.v2_outbox WHERE status='staged' LIMIT 1").fetchone():
+            raise ClaimFenceUnavailable('staged_outbox_reconciliation_required')
+        for name in _GUARDS:
+            conn.execute(f'DROP TRIGGER main.{name}')
+        # Validate after removing only our known guards. Any other dependent
+        # view, trigger, foreign key or unfamiliar index aborts and restores
+        # the dropped triggers as part of the same SQLite transaction.
+        _validate_outbox_rebuild(conn)
+        row = conn.execute("SELECT sql FROM main.sqlite_master WHERE type='table' AND name='v2_outbox'").fetchone()
+        sql = str(row[0] or '') if row else ''
+        if sql.count(_NEW) != 1:
+            raise ClaimFenceUnavailable('staged_outbox_schema_unavailable')
+        indexes = [row[0] for row in conn.execute(
+            "SELECT sql FROM main.sqlite_master WHERE type='index' AND tbl_name='v2_outbox' AND sql IS NOT NULL")]
+        conn.execute('ALTER TABLE main.v2_outbox RENAME TO experimental_old_outbox')
+        conn.execute(sql.replace(_NEW, _OLD))
+        conn.execute('INSERT INTO main.v2_outbox SELECT * FROM main.experimental_old_outbox')
+        conn.execute('DROP TABLE main.experimental_old_outbox')
+        for index in indexes:
+            conn.execute(index)
+        conn.commit()
+    except BaseException:
+        if conn.in_transaction:
+            conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def stage_experimental_response(store: SQLiteOutboundStore, claim: ClaimReceipt, *,
                                 checkpoints: ExperimentalCheckpointStore,
                                 task_id: str, actor: str, expected_version: int,
@@ -131,14 +183,14 @@ def stage_experimental_response(store: SQLiteOutboundStore, claim: ClaimReceipt,
                 raise ClaimFenceUnavailable('staged_outbox_binding_unavailable')
             try:
                 keys = {'action_id', 'integration_id', 'provider_key', 'channel_target', 'recipient_user_id',
-                        'message_digest', 'idempotency_key', 'grant_revision'}
+                        'message_digest', 'idempotency_key', 'grant_id', 'grant_revision', 'connection_revision'}
                 if set(action) != keys | {'schema_version', 'operation', 'task_id', 'actor'}:
                     raise ValueError('invalid binding')
                 binding = DeliveryBinding(**{key: action[key] for key in keys})
             except (ValueError, TypeError, KeyError):
                 raise ClaimFenceUnavailable('staged_outbox_binding_unavailable') from None
             pending = budget.to_dict()['reservations'].get(state.inflight)
-            if (action['schema_version'] != 1 or action['operation'] != 'delivery'
+            if (action['schema_version'] != ACTION_SCHEMA_VERSION or action['operation'] != 'delivery'
                     or action['task_id'] != task_id or action['actor'] != actor
                     or state.inflight != binding.action_id or not isinstance(pending, dict)
                     or pending['kind'] != 'tool' or pending['status'] != 'reserved'

@@ -13,7 +13,10 @@ from alphonse.agent_v2.core.intelligence.v3.single_loop_candidate import Candida
 from alphonse.agent_v2.core.intelligence.v3.single_loop_checkpoint import ExperimentalCheckpointStore
 from alphonse.agent_v2.core.intelligence.v3.single_loop_delivery_reservation import DeliveryBinding, reserve_delivery
 from alphonse.agent_v2.core.intelligence.v3.task_budget import BudgetLimits, TaskBudget
-from alphonse.agent_v2.core.io.experimental_staged_outbox import install_experimental_staging, stage_experimental_response
+from alphonse.agent_v2.core.io.experimental_staged_outbox import (
+    install_experimental_staging, rollback_empty_experimental_staging, stage_experimental_response,
+)
+from alphonse.agent_v2.core.io.channels import ChannelAddress
 from alphonse.agent_v2.core.io.outbox import SQLiteOutboundStore
 from alphonse.agent_v2.core.messages.claim_fence import ClaimFenceUnavailable, ClaimSuperseded
 from alphonse.agent_v2.core.messages.sqlite_queue import SQLiteMessageQueue
@@ -44,7 +47,7 @@ def setup(tmp_path):
         budget=TaskBudget(BudgetLimits(total, final, 10000, 0), started_at_ms=1000))
     message = 'synthetic private'
     binding = DeliveryBinding('action', 'desktop', 'desktop', 'alice', 'alice',
-                              hashlib.sha256(message.encode('utf-8')).hexdigest(), 'key', 'grant')
+                              hashlib.sha256(message.encode('utf-8')).hexdigest(), 'key', 'grant', 1, 1)
     reserved = reserve_delivery(checkpoints, claim, task_id='task', actor='alice',
         expected_version=initial.version, binding=binding, message=message, now_ms=1100, clock=lambda: now)
     install_experimental_staging(outbox)
@@ -76,6 +79,89 @@ def test_staged_row_is_not_dispatchable_or_legacy_settleable(setup):
     # Existing binary refuses the new schema instead of migrating a staged row.
     with pytest.raises(ValueError, match='outbox_status_unsupported|outbox_status_schema_unsupported'):
         SQLiteOutboundStore(path)
+
+
+def test_empty_staging_rollback_restores_restart_without_changing_existing_rows(tmp_path):
+    path = tmp_path / 'runtime.sqlite'
+    outbox = SQLiteOutboundStore(path)
+    address = ChannelAddress('desktop', 'desktop', 'alice', alphonse_user_id='alice')
+    message = outbox.enqueue(address=address, message='synthetic', task_id='task')
+    with sqlite3.connect(path) as conn:
+        before = conn.execute('SELECT * FROM v2_outbox').fetchall()
+        indexes = conn.execute("SELECT name,sql FROM sqlite_master WHERE type='index' AND tbl_name='v2_outbox' ORDER BY name").fetchall()
+    install_experimental_staging(outbox)
+    # Reopen by pathname, as after a process restart: the ordinary outbox
+    # constructor correctly refuses the experimental schema.
+    rollback_empty_experimental_staging(path)
+    restored = SQLiteOutboundStore(path)
+    assert restored.get(message.outbox_message_id).message == 'synthetic'
+    with sqlite3.connect(path) as conn:
+        assert conn.execute('SELECT * FROM v2_outbox').fetchall() == before
+        assert conn.execute("SELECT name,sql FROM sqlite_master WHERE type='index' AND tbl_name='v2_outbox' ORDER BY name").fetchall() == indexes
+        assert conn.execute("SELECT count(*) FROM sqlite_master WHERE type='trigger' AND name LIKE 'experimental_staged_outbox_%'").fetchone()[0] == 0
+
+
+def test_rollback_refuses_staged_rows_and_preserves_guards_and_payload(setup):
+    path, _, _, _, _, _, _ = setup
+    identity = stage(setup)
+    with sqlite3.connect(path) as conn:
+        before = conn.execute('SELECT * FROM v2_outbox').fetchall()
+        schema = conn.execute("SELECT type,name,sql FROM sqlite_master WHERE name LIKE 'experimental_staged_outbox_%' ORDER BY name").fetchall()
+    with pytest.raises(ClaimFenceUnavailable, match='reconciliation_required'):
+        rollback_empty_experimental_staging(path)
+    with sqlite3.connect(path) as conn:
+        assert conn.execute('SELECT * FROM v2_outbox').fetchall() == before
+        assert conn.execute("SELECT type,name,sql FROM sqlite_master WHERE name LIKE 'experimental_staged_outbox_%' ORDER BY name").fetchall() == schema
+        assert conn.execute('SELECT status FROM v2_outbox WHERE outbox_message_id=?', (identity,)).fetchone()[0] == 'staged'
+
+
+def test_rollback_with_foreign_view_rolls_back_trigger_removal(tmp_path):
+    path = tmp_path / 'runtime.sqlite'
+    outbox = SQLiteOutboundStore(path)
+    install_experimental_staging(outbox)
+    with sqlite3.connect(path) as conn:
+        conn.execute('CREATE VIEW household_view AS SELECT * FROM v2_outbox')
+        before = conn.execute("SELECT type,name,sql FROM sqlite_master WHERE name LIKE 'experimental_staged_outbox_%' ORDER BY name").fetchall()
+    with pytest.raises(ValueError, match='outbox_rebuild_schema_unsupported'):
+        rollback_empty_experimental_staging(path)
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT type,name,sql FROM sqlite_master WHERE name LIKE 'experimental_staged_outbox_%' ORDER BY name").fetchall() == before
+        assert conn.execute("SELECT count(*) FROM sqlite_master WHERE name='household_view'").fetchone()[0] == 1
+
+
+def test_rollback_holds_writer_lock_and_restores_guards_on_failure(tmp_path, monkeypatch):
+    import alphonse.agent_v2.core.io.experimental_staged_outbox as staged_module
+    path = tmp_path / 'runtime.sqlite'
+    outbox = SQLiteOutboundStore(path)
+    install_experimental_staging(outbox)
+    with sqlite3.connect(path) as conn:
+        before = conn.execute("SELECT type,name,sql FROM sqlite_master WHERE name LIKE 'experimental_staged_outbox_%' ORDER BY name").fetchall()
+    def fail_under_lock(conn):
+        with sqlite3.connect(path, timeout=0) as writer:
+            with pytest.raises(sqlite3.OperationalError, match='locked'):
+                writer.execute("DELETE FROM v2_outbox")
+        raise RuntimeError('synthetic failure')
+    monkeypatch.setattr(staged_module, '_validate_outbox_rebuild', fail_under_lock)
+    with pytest.raises(RuntimeError, match='synthetic failure'):
+        rollback_empty_experimental_staging(path)
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT type,name,sql FROM sqlite_master WHERE name LIKE 'experimental_staged_outbox_%' ORDER BY name").fetchall() == before
+
+
+def test_rollback_rejects_unknown_status_without_discarding_row(tmp_path):
+    path = tmp_path / 'runtime.sqlite'
+    outbox = SQLiteOutboundStore(path)
+    address = ChannelAddress('desktop', 'desktop', 'alice', alphonse_user_id='alice')
+    item = outbox.enqueue(address=address, message='synthetic')
+    install_experimental_staging(outbox)
+    with sqlite3.connect(path) as conn:
+        conn.execute('PRAGMA ignore_check_constraints=ON')
+        conn.execute("UPDATE v2_outbox SET status='unknown' WHERE outbox_message_id=?", (item.outbox_message_id,))
+    with pytest.raises(ClaimFenceUnavailable, match='schema_unavailable'):
+        rollback_empty_experimental_staging(path)
+    with sqlite3.connect(path) as conn:
+        assert conn.execute('SELECT status FROM v2_outbox WHERE outbox_message_id=?', (item.outbox_message_id,)).fetchone()[0] == 'unknown'
+        assert conn.execute("SELECT count(*) FROM sqlite_master WHERE type='trigger' AND name LIKE 'experimental_staged_outbox_%'").fetchone()[0] == 3
 
 
 def test_restage_after_lost_commit_response_returns_same_inert_record(setup):
@@ -205,4 +291,22 @@ def test_staging_rejects_tampered_reservation(setup, part):
     with pytest.raises((ValueError, ClaimFenceUnavailable)):
         stage(setup)
     with sqlite3.connect(path) as conn:
+        assert conn.execute('SELECT count(*) FROM v2_outbox').fetchone()[0] == 0
+
+
+def test_staging_does_not_guess_upgrade_for_legacy_v1_action(setup):
+    path, _, questions, _, _, _, _ = setup
+    with questions._connect() as conn:
+        raw = json.loads(conn.execute("SELECT task_state_json FROM v2_task_checkpoints WHERE task_id='task'").fetchone()[0])
+        action = raw['metadata']['single_loop_delivery_action']
+        action['schema_version'] = 1
+        del action['grant_id']
+        del action['connection_revision']
+        conn.execute("UPDATE v2_task_checkpoints SET task_state_json=? WHERE task_id='task'", (json.dumps(raw),))
+    with pytest.raises(ClaimFenceUnavailable, match='binding_unavailable'):
+        stage(setup)
+    with sqlite3.connect(path) as conn:
+        restored = json.loads(conn.execute("SELECT task_state_json FROM v2_task_checkpoints WHERE task_id='task'").fetchone()[0])
+        assert restored['metadata']['single_loop_delivery_action'] == action
+        assert restored['metadata']['single_loop_checkpoint']['state']['inflight'] == 'action'
         assert conn.execute('SELECT count(*) FROM v2_outbox').fetchone()[0] == 0

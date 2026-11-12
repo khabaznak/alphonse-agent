@@ -15,12 +15,12 @@ def seed_authority(f):
     path, _, _, _, _, _, _ = f
     with sqlite3.connect(path) as conn:
         conn.execute('''CREATE TABLE fixture_delivery_grants(actor TEXT,recipient TEXT,integration TEXT,
-                     provider TEXT,channel TEXT,revision TEXT,active INTEGER)''')
+                     provider TEXT,channel TEXT,grant_id TEXT,revision INTEGER,connection_revision INTEGER,active INTEGER)''')
         conn.execute('''CREATE TABLE fixture_delivery_effects(task_id TEXT,actor TEXT,action_id TEXT,
                      integration TEXT,provider TEXT,channel TEXT,recipient TEXT,message_digest TEXT,
-                     idempotency_key TEXT,grant_revision TEXT,status TEXT)''')
-        conn.execute('INSERT INTO fixture_delivery_grants VALUES (?,?,?,?,?,?,?)',
-                     ('alice', 'alice', 'desktop', 'desktop', 'alice', 'grant', 1))
+                     idempotency_key TEXT,grant_id TEXT,grant_revision INTEGER,connection_revision INTEGER,status TEXT)''')
+        conn.execute('INSERT INTO fixture_delivery_grants VALUES (?,?,?,?,?,?,?,?,?)',
+                     ('alice', 'alice', 'desktop', 'desktop', 'alice', 'grant', 1, 1, 1))
 
 
 def dispatch(f, staged_id, claim=None, clock=None):

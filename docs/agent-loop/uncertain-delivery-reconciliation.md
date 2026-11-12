@@ -1,21 +1,27 @@
 # Uncertain delivery reconciliation: proposed first operation
 
 Status: design and diagnostics for #224 and #225, not an implementation or
-permission to send. The candidate has no delivery action, authorized recovery
-endpoint, claim-fenced publication or operation-bound receipt. It remains off.
+permission to send. The candidate has no production delivery action, authorized
+recovery endpoint, claim-fenced publication or operation-bound provider receipt.
+It remains off.
 This document narrows the general evidence requirements in
 [24](../v3-hierarchical-capd/24-single-loop-evidence-boundary.md) to one possible
 operation: a message delivery to one authenticated, authorized recipient.
 
 ## Existing boundary
 
-`ExperimentalCheckpointStore.reserve` persists a reservation ID, kind and budget
-but not the action's tool, arguments, actor's grant revision, recipient, channel
-or intended effect. `settle` deliberately rejects all tool settlement, including
-one that cites an actually delivered outbox ID. Consequently no outbox result
-can prove that it belongs to this reservation. The read-only recovery inspection
-exposes only the existence and kind of the marker to a trusted, active direct
-owner; it does not authenticate callers, resolve effects or release the marker.
+`ExperimentalCheckpointStore.reserve` persists a reservation ID, kind and budget,
+but no operation binding. The separate unwired `reserve_delivery` experiment
+adds a claim-bound delivery action, recipient, channel, provider, message digest,
+idempotency key, grant ID and connection/grant revisions. These caller-supplied
+identifiers are not an authorization check, the key is not globally enforced,
+and the message must be retained by a future host. The v2 binding does not infer
+missing authority identifiers from older v1 records. `settle` deliberately rejects all tool settlement,
+including one that cites an actually delivered outbox ID. The evaluation-only
+synthetic settlement uses forgeable fixture tables, not product authority or
+provider evidence. Neither path establishes a real delivery. The read-only
+recovery inspection does not authenticate callers, resolve effects or release
+the marker.
 
 The legacy outbox has another independent problem. A timed-out ordinary send
 can enter `retry_wait`, and the next claimant may repeat a send that the provider
