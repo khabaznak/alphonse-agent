@@ -910,6 +910,86 @@ tests/test_outbox_status_migration_safety.py` — **44 passed in 0.29 seconds**.
 No provider, model, actual message delivery or household data was used. This was
 not a full-suite run.
 
+### Project-check policy and lifecycle: one file
+
+On 14 November, individually inspected all **19 test functions / 53
+collected cases** in `test_project_checks.py`. The service manages an
+authorized, bounded proactive project check; these tests use disposable
+identities, stores and projects without provider calls. This protects an
+existing product capability, not evidence that the simpler loop has integrated
+or qualified proactive behavior.
+
+| Function | Disposition and distinct behavior |
+| --- | --- |
+| `test_persisted_default_disabled_and_explicit_authority` | Retain: disabled default, explicit activation, persistence and actor-scoped retrieval. |
+| `test_no_implicit_source_audience_or_actor_authority` | Retain seven variants: reject changed resource, recipient, connection, grant, skill, actor and write scope. |
+| `test_goal_edits_suspend_and_need_new_authorization` | Retain four variants: changed goal, scope, duration or direct file edit invalidates the old authorization. |
+| `test_config_spoof_cannot_create_or_activate_policies` | Retain: a project config cannot manufacture or activate a stored policy. |
+| `test_lifecycle_round_trip_fences_queued_work` | Retain three project status transitions that must not revive the old policy. |
+| `test_pause_resume_cancel_and_end_never_revive_old_work` | Retain: policy pause/resume revisions, per-run cancellation and irreversible ending. |
+| `test_dependency_changes_fence_and_do_not_expand_sharing` | Retain eight changes covering grants, connection, selected binding, ACL, actor, resource and membership; membership additionally checks recipients. |
+| `test_projectless_queries_preserved_but_checks_require_accessible_project` | Retain: normal projectless binding use remains possible while a proactive check requires an accessible project. |
+| `test_duration_and_explicit_ongoing_renewal` | Retain: expiration, explicit renewal and invalid missing end for finite duration. |
+| `test_bounded_schema_rejects_unsafe_or_incomplete_inputs` | Retain 12 distinct schema boundaries; these check the common invalid-definition result, not full end-to-end scheduling. |
+| `test_concurrent_policy_revision_has_one_winner` | Retain: two competing policy edits cannot both win. |
+| `test_status_hopping_cannot_bypass_reauthorization` | Retain three preexisting states that must not return to paused without authorization. |
+| `test_future_start_is_inactive_without_losing_authorization` | Retain: a future start blocks execution without silently revoking the active policy. |
+| `test_project_duration_independently_limits_ongoing_policy` | Retain: project duration independently limits an ongoing check. |
+| `test_revision_change_fences_query_and_duration_and_preserves_identity` | Retain the exercised query revision, stable ID, stale policy and conflict checks. Despite its name this function does not edit duration; duration is exercised by separate tests. |
+| `test_empty_recipients_and_bounded_late_policy_are_explicit` | Retain: explicitly empty recipient set and bounded-late setting survive guard. |
+| `test_removing_executing_member_invalidates_access` | Retain: removal of a member from a separately owned shared project revokes access. |
+| `test_project_deletion_and_id_reuse_never_revive_queued_work` | Retain: delete/recreate the same ID cannot preserve old authority; this tests guard, not a real queue delivery. |
+| `test_calendar_policy_requires_explicit_finite_offset_window` | Retain four absent or invalid window examples for calendar source policy. |
+
+No deletion or consolidation was supported: similar variants target different
+authority or lifecycle boundaries and the test names alone do not establish
+duplication. Several negative cases accept either `PermissionError` or
+`ValueError`, so their passing result alone does not establish the exact
+rejection reason. Validation: `PYTHONPATH=/private/tmp:. .venv/bin/python -m
+pytest -q -p alphonse_audit_isolation_step5 tests/test_project_checks.py` —
+**53 passed in 1.89 seconds**. The temporary isolation plugin redirects legacy
+user, skill and agent-config defaults to `tmp_path`; this was not a full-suite
+run.
+
+### Standard skill validation and starter packages: two files
+
+On 14 November, individually inspected **18 test functions / 107 collected
+cases** in `test_agent_v2_skills.py` (15) and
+`test_household_starter_skills.py` (3). Tests use temporary skill stores; starter
+selection cases use reviewed inputs and do not evaluate Jev's choices. These
+test the installed standard-skill surface and V3 bridge, not complete
+simpler-loop skill activation or real household workflows.
+
+| Function | Disposition and distinct behavior |
+| --- | --- |
+| `test_package_validation_fixtures` | Retain 39 metadata/frontmatter examples: names and directory mismatch, description boundaries/types, optional metadata, normalization and unknown/missing fields. Two similar IDs are distinct underscore vs slash inputs. |
+| `test_reference_validator_agrees_on_shared_rules` | Retain as an optional differential check against `skills_ref` for the cases flagged compatible. In this run all such cases were skipped because the optional reference validator was unavailable; they are not evidence it agreed. |
+| `test_description_boundary_across_authoring_update_and_schema` | Retain four length cases spanning install schema, execution, authoring and update paths. |
+| `test_authoring_rejects_wrong_description_types` | Retain four non-string value types through native authoring. |
+| `test_install_replace_export_preserve_entire_package` | Retain package bytes and file modes, metadata preservation, conflict resolution and export behavior; the final equality check occurs after a rejected repeat export. |
+| `test_package_copy_rejects_symlink_escape` | Retain separate install, replace and export entry points. |
+| `test_listing_exposes_specification_operational_and_filesystem_diagnostics` | Retain distinct invalid package, oversized file and missing file diagnostics. |
+| `test_ipc_metadata_diagnostics_export_and_authorization` | Retain Desktop-facing IPC package metadata, export and actor denial. |
+| `test_skill_overview_does_not_inventory_packages_and_detail_is_scoped` | Retain overview avoids resource inventory, detail requests one package and rejects a stranger. |
+| `test_package_directory_listing_includes_empty_and_excludes_symlinks` | Retain empty directories and linked-directory exclusion. |
+| `test_metadata_numeric_key_is_rejected` | Retain non-string metadata-key rejection at installation. |
+| `test_reference_validator_accepts_complete_package` | Retain optional reference package validation; skipped here with the unavailable validator. |
+| `test_malformed_frontmatter_is_diagnosed` | Retain four malformed delimiter, structure and YAML examples. |
+| `test_import_body_has_no_authoring_length_constraint` | Retain the distinction between imported and newly authored instruction limits. |
+| `test_description_limits_count_unicode_characters` | Retain Unicode character boundary rather than byte count. |
+| `test_clean_store_validates_starters_and_linked_resources` | Retain bundled defaults, link containment and readability. |
+| `test_representative_selections_load_complete_composed_guidance` | Retain eight reviewed skill-selection combinations, including project-free activation and on-demand resources. These are explicit inputs, not model routing performance. |
+| `test_third_party_package_roundtrip_without_registry_changes` | Retain third-party standard package install/resource/export without per-script registry. |
+
+No deletion was justified: overlapping-looking checks exercise distinct entry
+points, invalid types or package boundaries. The optional reference tests are
+potential conformance coverage, but are not running in this environment and
+their skip count should not be mistaken for passing validation. Validation:
+`PYTHONPATH=/private/tmp:. .venv/bin/python -m pytest -q -p
+alphonse_audit_isolation_step5 tests/test_agent_v2_skills.py
+tests/test_household_starter_skills.py` — **72 passed, 35 skipped in 0.41
+seconds**. This was a focused run, not the full suite.
+
 ## Mission coverage and next review passes
 
 Keep behavior that protects real household outcomes while the relevant feature

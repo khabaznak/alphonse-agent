@@ -60,7 +60,8 @@ class CodexSubscriptionChooser:
                  max_input_tokens: int, emit: Callable[[dict[str, Any]], None],
                  cancellation_checker: Callable[[], bool] | None = None,
                  allowed_source_names: tuple[str, ...] = ('index',),
-                 source_description: str = 'Read an authorized synthetic source.'):
+                 source_description: str = 'Read an authorized synthetic source.',
+                 observed_sources: Callable[[], tuple[str, ...]] | None = None):
         if type(provider) is not CodexSubscriptionProvider:
             raise ValueError('codex_subscription_provider_required')
         if not isinstance(model, str) or not model.strip() or len(model) > 128:
@@ -70,6 +71,8 @@ class CodexSubscriptionChooser:
         if type(max_input_tokens) is not int or max_input_tokens <= 0 or not callable(emit):
             raise ValueError('codex_chooser_configuration_invalid')
         if cancellation_checker is not None and not callable(cancellation_checker):
+            raise ValueError('codex_chooser_configuration_invalid')
+        if observed_sources is not None and not callable(observed_sources):
             raise ValueError('codex_chooser_configuration_invalid')
         if (not isinstance(allowed_source_names, tuple) or not allowed_source_names or
                 any(not isinstance(x, str) or x not in _ALLOWED_SOURCES for x in allowed_source_names) or
@@ -81,6 +84,7 @@ class CodexSubscriptionChooser:
         self.max_input_tokens, self.emit = max_input_tokens, emit
         self.cancellation_checker, self.allowed_source_names = cancellation_checker, allowed_source_names
         self.source_description = source_description
+        self.observed_sources = observed_sources
 
     def _cancelled(self) -> bool:
         if self.cancellation_checker is None:
@@ -129,6 +133,22 @@ class CodexSubscriptionChooser:
             'source descriptions and relevant observations have been considered. Do not ask the user to enable an '
             'already listed tool, and do not claim an observation that was not supplied.\n\n'
         )
+        if self.observed_sources is not None:
+            try:
+                observed = self.observed_sources()
+                if (not isinstance(observed, tuple) or len(set(observed)) != len(observed)
+                        or any(not isinstance(name, str) or name not in self.allowed_source_names for name in observed)):
+                    raise ValueError('invalid_source_progress')
+                progress = {'observed_sources': list(observed), 'unread_sources': [
+                    name for name in self.allowed_source_names if name not in observed]}
+            except Exception:
+                raise ValueError('candidate_source_progress_unavailable') from None
+            instructions += (
+                'The following source progress is based only on completed host observations; '
+                'it is not a list of required sources or a judgment of relevance. '
+                'Compare the facts needed to answer with what the observations actually establish. '
+                'If an essential fact is unsupported, consider whether an unread source can establish it. '
+                + json.dumps(progress, ensure_ascii=False) + '\n\n')
         request = InferenceRequest(prompt=instructions + projection,
             purpose=InferencePurpose.SIMPLE_LOOP_ACTION,
             model_profile=ModelProfile(provider='openai_codex', model=self.model,

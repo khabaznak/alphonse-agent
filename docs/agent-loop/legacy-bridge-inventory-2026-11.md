@@ -83,3 +83,7 @@ with the historical evaluation package. Its planner resolves its own template
 directory, and package-data configuration includes those files. The active
 shared acceptance and task-state templates remain in place. Focused template,
 planner and replay tests pass; this move does not itself retire replay.
+For commit `91643e88`, a wheel built from a clean `git archive` contained the
+legacy processor and all five moved templates. A disposable target installation
+loaded the replay planner and rendered its template from the installed wheel;
+this verifies packaging for that path, not full installed runtime qualification.

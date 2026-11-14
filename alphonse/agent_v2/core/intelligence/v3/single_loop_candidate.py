@@ -110,6 +110,10 @@ class CandidateHost:
     # of the synthetic candidate_complete marker. This only validates the
     # observation shape; it is not authority or a publication fence.
     validate_observation: Callable[[str, str, dict[str, Any], dict[str, Any]], bool] | None = None
+    # Optional action-bound recording for real read hosts. It must persist the
+    # actor, tool, exact arguments and result before returning the evidence ref.
+    # A ref alone does not authorize reuse or prove the observation is current.
+    record_bound_observation: Callable[[str, str, dict[str, Any], dict[str, Any]], str] | None = None
 
 
 def _save(host: CandidateHost, state: CandidateState) -> None:
@@ -406,7 +410,11 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
             complete = False
         if not complete:
             return _terminal(host, state, 'blocked', 'candidate_observation_incomplete')
-        ref = host.record_evidence(state.actor, result)
+        try:
+            ref = (host.record_evidence(state.actor, result) if host.record_bound_observation is None
+                   else host.record_bound_observation(state.actor, tool_id, deepcopy(args), deepcopy(result)))
+        except Exception:
+            return _terminal(host, state, 'blocked', 'candidate_evidence_recording_unavailable')
         if not isinstance(ref, str) or not ref.strip() or ref == state.goal_source or ref in state.evidence_sources:
             return _terminal(host, state, 'blocked', 'candidate_evidence_reference_invalid')
         state.evidence_sources.append(ref)

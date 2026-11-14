@@ -205,8 +205,14 @@ def _run_simple(*, url: str, provider: Any, model: str,
                 goal: str = GOAL, source_description: str = 'Read the synthetic clock source.',
                 allowed_source_names: tuple[str, ...] = ('index',),
                 required_source_names: tuple[str, ...] | None = ('index',),
-                verification_mode: str = 'fixture_diagnostic', max_source_reads: int = 4):
-    """Run the actual read-only candidate with a subscription-backed chooser."""
+                verification_mode: str = 'fixture_diagnostic', max_source_reads: int = 4,
+                show_source_progress: bool = False):
+    """Run the actual read-only candidate with a subscription-backed chooser.
+
+    The optional synthetic source-progress view lists advertised source names
+    already recorded and not yet recorded; it supplies no relevance or oracle
+    judgment. It is off by default and is not a production access mechanism.
+    """
     from alphonse.agent_v2.core.core import CoreLoopContext, ToolDescriptor, ToolKind
     from alphonse.agent_v2.core.intelligence.task_state import TaskState
     from alphonse.agent_v2.core.intelligence.v3.single_loop_candidate import CandidateHost, CandidateState, run_candidate
@@ -218,6 +224,8 @@ def _run_simple(*, url: str, provider: Any, model: str,
 
     if type(max_source_reads) is not int or not 1 <= max_source_reads <= 5:
         raise ValueError('invalid_source_read_budget')
+    if type(show_source_progress) is not bool:
+        raise ValueError('invalid_source_progress_policy')
     if verification_mode not in {'fixture_diagnostic', 'matched_provenance'}:
         raise ValueError('invalid_verification_mode')
     if verification_mode == 'fixture_diagnostic':
@@ -280,7 +288,9 @@ def _run_simple(*, url: str, provider: Any, model: str,
     chooser = CodexSubscriptionChooser(provider=provider, model=model, max_input_tokens=65536,
                                         emit=emit, cancellation_checker=cancelled,
                                         allowed_source_names=allowed_source_names,
-                                        source_description=source_description)
+                                        source_description=source_description,
+                                        observed_sources=(lambda: tuple(name for name in allowed_source_names
+                                            if 'read:' + name in evidence)) if show_source_progress else None)
     class TracedChooser:
         max_input_tokens = chooser.max_input_tokens
         answer_proposed = False

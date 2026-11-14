@@ -112,6 +112,15 @@ def test_observation_validator_error_fails_closed(fixture):
     assert not result.evidence_sources
 
 
+def test_action_bound_recording_failure_does_not_publish_private_error(fixture):
+    def record(*_args):
+        raise RuntimeError('synthetic private detail')
+    result = run_candidate(fixture.state, replace(fixture.host, record_bound_observation=record))
+    assert (result.status, result.blocker) == ('blocked', 'candidate_evidence_recording_unavailable')
+    assert result.evidence_sources == []
+    assert 'synthetic private detail' not in repr(result)
+
+
 def test_candidate_discovers_then_reads_owner_conversation(tmp_path, fixture):
     import re
     from alphonse.agent_v2.conversations import SQLiteConversationStore
@@ -181,6 +190,53 @@ def test_candidate_rejects_conversation_deleted_after_read(tmp_path, fixture):
     result = run_candidate(fixture.state, host)
     assert (result.status, result.blocker) == ('blocked', 'candidate_observation_incomplete')
     assert result.evidence_sources == []
+
+
+def test_candidate_revalidates_action_bound_search_before_answer(tmp_path, fixture):
+    from alphonse.agent_v2.conversations import SQLiteConversationStore
+    from alphonse.agent_v2.core.tools.registry.native.memory import (
+        build_search_memory_tool_definition, revalidate_conversation_observation,
+    )
+    conversations = SQLiteConversationStore(tmp_path / 'conversations.sqlite')
+    event = conversations.record(owner_user_id='fixture-user', role='user',
+        content='Synthetic current pharmacy Cedar', source='test', source_message_id='one')
+    fixture.host.context.conversation_store = conversations
+    fixture.registry.register(build_search_memory_tool_definition())
+    observations = {}
+    def record(actor, tool_id, arguments, result):
+        ref = 'bound-' + result['call_id']
+        observations[ref] = (actor, tool_id, arguments, result['result'])
+        return ref
+    def allowed(actor, ref):
+        if ref == 'goal':
+            return actor == 'fixture-user'
+        owner, tool_id, args, payload = observations[ref]
+        return owner == actor and revalidate_conversation_observation(actor, tool_id, args, payload,
+            context=fixture.host.context.tool_execution_context(fixture.host.task))
+    def load(actor, ref):
+        return fixture.sources['goal'] if ref == 'goal' else json.dumps(observations[ref][3])
+    calls = []
+    def choose(_projection, _cap):
+        calls.append(True)
+        if len(calls) == 1:
+            return {'kind': 'tool', 'tool_id': 'native.search_memory',
+                    'arguments': {'query': 'pharmacy', 'source_types': ['conversation']},
+                    'usage': {'input_tokens': 100, 'output_tokens': 20}}
+        assert conversations.delete(event_id=event.event_id, owner_user_id='fixture-user')
+        return {'kind': 'answer', 'text': 'Synthetic current pharmacy Cedar',
+                'usage': {'input_tokens': 100, 'output_tokens': 20}}
+    budgets = SQLiteTaskBudgetStore(str(tmp_path / 'bound-budget.db'))
+    budgets.create('task', TaskBudget(BudgetLimits(vector(3, 6, 24000, 1000),
+        vector(0, 1, 100, 50), 100000, 1000), started_at_ms=0))
+    host = replace(fixture.host, choose=choose, authorize_source=allowed, load_source=load,
+        budgets=budgets, input_reservation=6000, projection_budget=8000,
+        validate_observation=lambda actor, tool, args, payload: revalidate_conversation_observation(
+            actor, tool, args, payload, context=fixture.host.context.tool_execution_context(fixture.host.task)),
+        record_bound_observation=record)
+    result = run_candidate(fixture.state, host)
+    assert (result.status, result.blocker) == ('blocked', 'candidate_evidence_changed_or_revoked')
+    assert len(observations) == 1
+    assert next(iter(observations.values()))[2] == {'query': 'pharmacy', 'source_types': ['conversation']}
 
 
 def test_revalidation_rejects_changed_search_and_wrong_actor(tmp_path, fixture):

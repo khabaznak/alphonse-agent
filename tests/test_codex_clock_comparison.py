@@ -209,6 +209,35 @@ def test_candidate_trace_records_read_order_without_source_contents(monkeypatch)
     assert secret not in repr(observed) and 'initial response' not in repr(observed)
 
 
+def test_source_progress_reflects_only_recorded_reads_without_oracle_hints(monkeypatch):
+    decisions = iter([
+        {'kind': 'tool', 'tool_id': 'native.fixture_read', 'arguments': {'source': 'conversation'}, 'text': None},
+        {'kind': 'answer', 'tool_id': None, 'arguments': None, 'text': 'done'},
+        {'kind': 'answer', 'tool_id': None, 'arguments': None, 'text': 'done'},
+    ])
+    prompts = []
+    def fake_generate(self, request):
+        prompts.append(request.prompt)
+        data = next(decisions)
+        return InferenceResult(json_value=data, raw_response=json.dumps(data))
+    class FakeSource:
+        def __init__(self, url, *, allowed_source_names):
+            pass
+        def read(self, args):
+            return {'source': args['source'], 'content': {'value': 'fixture'}, 'candidate_complete': True}
+    monkeypatch.setattr(CodexSubscriptionProvider, 'generate_json', fake_generate)
+    monkeypatch.setattr(comparison, 'LocalSource', FakeSource)
+    outcome = comparison._run_simple(url='fixture', provider=CodexSubscriptionProvider(model=MODEL),
+        model=MODEL, emit=lambda _: None, cancelled=lambda: False,
+        allowed_source_names=('conversation', 'prescription'), required_source_names=None,
+        verification_mode='matched_provenance', show_source_progress=True)
+    assert outcome.status == 'completed'
+    assert '"observed_sources": [], "unread_sources": ["conversation", "prescription"]' in prompts[0]
+    assert '"observed_sources": ["conversation"], "unread_sources": ["prescription"]' in prompts[1]
+    assert 'not a list of required sources or a judgment of relevance' in prompts[1]
+    assert len(prompts) == 3  # pre-answer review does not force reading every source
+
+
 def test_trace_callback_failure_does_not_change_clock_result(monkeypatch):
     decisions = iter([
         {'kind': 'tool', 'tool_id': 'native.fixture_read', 'arguments': {'source': 'index'}, 'text': None},

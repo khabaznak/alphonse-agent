@@ -43,6 +43,17 @@ authenticated host, a transaction across inference and publication, proof of
 semantic accuracy, or a claim/delivery fence. The normal household runtime is
 not wired to this callback.
 
+The candidate now optionally passes a recorder the actor, exact tool ID,
+arguments and tool result together when it accepts a read. This lets a host
+retain the action-bound data needed to call `revalidate_conversation_observation`
+when a source is used again; the legacy result-only recorder remains supported.
+In a disposable SQLite test, a search result is recorded with its original
+query, a conversation is deleted after a later model decision, and the host's
+actor-scoped authorization callback revalidates that bound search and blocks
+the answer. Recording failure also blocks the candidate. This test uses an
+in-memory observation map and does not establish durable evidence, user
+authentication, atomicity with revocation or publication, or delivery.
+
 `native.search_memory` and `native.read_memory_source` are plausible first
 operations because they support multi-source conversation tasks and advertise
 read-only descriptors. Their behavior still needs a production host contract

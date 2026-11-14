@@ -56,6 +56,25 @@ for normal household conversations and the production release gates remain open.
 
 ### Reference and source-variant exercise — 14 November
 
+#### Observed-source progress experiment
+
+An opt-in synthetic chooser experiment shows which advertised sources have
+produced recorded observations and which remain unread. It does not include a
+required-source list or relevance judgment. Four predeclared attempts used the
+same public development variants. Agreement and missing matched both answer
+and designated source criterion; both also read the optional status and index.
+Missing returned the expected structured unknown. Superseded and resolution
+matched their answer keys but omitted the conversation source designated by
+the fixture; both read the index, and resolution also read its status source.
+No questions were asked. Plans and receipts are
+`evidence/gym-cycle-2026-11-13/selective-progress-v1-*`.
+
+These are tuned development cases, not a held-out or controlled causal test.
+Source coverage is a conservative fixture criterion. Recorded observations
+and advertised names are synthetic; bearer access does not prove reader identity
+or when an answer was formed. Provider token use and real delivery were
+unassessed. The results do not establish general source-selection reliability.
+
 #### Identity follow-up
 
 Added evaluation-only guidance that finding one record does not establish
