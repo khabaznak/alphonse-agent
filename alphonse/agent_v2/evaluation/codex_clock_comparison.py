@@ -125,9 +125,8 @@ def _run_v3(*, url: str, provider: Any, jev: Any, model: str,
     from alphonse.agent_v2.core.intelligence.task_state import TaskState
     from alphonse.agent_v2.core.intelligence.v3 import HierarchicalCAPDProcessor
     from alphonse.agent_v2.core.messages import InMemoryMessageQueue
-    from alphonse.agent_v2.core.tools.registry import ToolDefinition
+    from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry, ToolDefinition
     from alphonse.agent_v2.core.tools.registry.native.respond import build_respond_tool_definition
-    from .deterministic_adapters import _Action, _RunState, _Scenario, _registry
     from .simplified_loop import Run
 
     if (not isinstance(required_source_names, tuple) or not required_source_names
@@ -140,64 +139,59 @@ def _run_v3(*, url: str, provider: Any, jev: Any, model: str,
                 trace(event)
             except Exception:
                 pass
-    with TemporaryDirectory(prefix='codex-clock-v3-') as directory:
-        action = _Action('native.fixture_read', 'project_record_search', {}, role='read_clock', behavior='read')
-        acceptance = ('Answer from the synthetic clock.' if goal == GOAL
-                      else 'Answer from the authorized synthetic source.')
-        state = _RunState(_Scenario((action,), acceptance, ''), Path(directory), 'hierarchical_v3')
-        registry = _registry(state)
-        source_schema = ({'const': 'index'} if allowed_source_names == ('index',)
-                         else {'type': 'string', 'enum': list(allowed_source_names)})
-        descriptor = ToolDescriptor('native.fixture_read', 'fixture_read', ToolKind.NATIVE,
-            description=source_description,
-            argument_schema={'type': 'object', 'properties': {'source': source_schema},
-                             'required': ['source'], 'additionalProperties': False},
-            metadata={'v3_capabilities': ['project_record_search']}, read_only=True)
+    registry = InMemoryToolRegistry()
+    source_schema = ({'const': 'index'} if allowed_source_names == ('index',)
+                     else {'type': 'string', 'enum': list(allowed_source_names)})
+    descriptor = ToolDescriptor('native.fixture_read', 'fixture_read', ToolKind.NATIVE,
+        description=source_description,
+        argument_schema={'type': 'object', 'properties': {'source': source_schema},
+                         'required': ['source'], 'additionalProperties': False},
+        metadata={'v3_capabilities': ['project_record_search']}, read_only=True)
 
-        def read(args):
-            name = args.get('source') if isinstance(args, dict) else None
-            name = name if isinstance(name, str) and name in allowed_source_names else None
-            diagnostic({'event': 'source_read_attempt', 'arm': 'v3', 'source': name})
-            if cancelled():
-                raise ValueError('clock_cancelled_before_read')
-            emit({'kind': 'tool', 'tool': 'native.fixture_read'})
-            result = source.read(args)
-            if cancelled():
-                raise ValueError('clock_cancelled_after_read')
-            emit({'kind': 'source_read', 'source': args['source']})
-            diagnostic({'event': 'source_read_observed', 'arm': 'v3', 'source': name})
-            return result
+    def read(args):
+        name = args.get('source') if isinstance(args, dict) else None
+        name = name if isinstance(name, str) and name in allowed_source_names else None
+        diagnostic({'event': 'source_read_attempt', 'arm': 'v3', 'source': name})
+        if cancelled():
+            raise ValueError('clock_cancelled_before_read')
+        emit({'kind': 'tool', 'tool': 'native.fixture_read'})
+        result = source.read(args)
+        if cancelled():
+            raise ValueError('clock_cancelled_after_read')
+        emit({'kind': 'source_read', 'source': args['source']})
+        diagnostic({'event': 'source_read_observed', 'arm': 'v3', 'source': name})
+        return result
 
-        registry.register(ToolDefinition(descriptor, read, descriptor.argument_schema,
-                                         enabled=True, accepts_context=False))
-        # Use the product's real response descriptor, schema and local payload
-        # builder. The deterministic fixture's generic read-only descriptor
-        # misrepresents a user response; this tool only prepares a payload and
-        # does not send a message or establish user-visible delivery.
-        response_tool = build_respond_tool_definition()
-        def respond(args):
-            emit({'kind': 'tool', 'tool': 'native.respond'})
-            result = response_tool.callable(args)
-            diagnostic({'event': 'response_prepared', 'arm': 'v3'})
-            return result
-        registry.register(ToolDefinition(response_tool.descriptor, respond, response_tool.argument_schema,
-                                         enabled=response_tool.enabled, accepts_context=response_tool.accepts_context))
-        router = InferenceRouter(provider=_TrackedProvider(provider, emit, trace), default_profile=ModelProfile(
-            provider='openai_codex', model=model, profile_id='codex-clock'))
-        task = TaskState(task_id='codex-v3-clock', message_id='codex-v3-clock', user=ACTOR,
-                         project_id='synthetic-clock', goal=goal,
-                         intelligence_engine='hierarchical_v3', intelligence_schema_version=3)
-        context = CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry,
-                                  inference=router, system_one=jev, cancellation_checker=cancelled)
-        result = HierarchicalCAPDProcessor().process(task, context)
-        final = TaskState.from_dict(result.snapshot.metadata.get('task_state') or task.to_dict())
-        response = final.metadata.get('prepared_user_response') or {}
-        reason = str((final.outcome or {}).get('reason') or '') or None
-        diagnostic({'event': 'terminal', 'arm': 'v3',
-                    'status': final.status if final.status in {'completed', 'failed', 'cancelled', 'waiting_user', 'blocked', 'running'} else 'other',
-                    'response_accepted': bool(response), 'reason_category': _reason_category(reason)})
-        return Run(status=final.status, response=str(response.get('message') or ''),
-                   reason=reason)
+    registry.register(ToolDefinition(descriptor, read, descriptor.argument_schema,
+                                     enabled=True, accepts_context=False))
+    # Use the product's real response descriptor, schema and local payload
+    # builder. The deterministic fixture's generic read-only descriptor
+    # misrepresents a user response; this tool only prepares a payload and
+    # does not send a message or establish user-visible delivery.
+    response_tool = build_respond_tool_definition()
+    def respond(args):
+        emit({'kind': 'tool', 'tool': 'native.respond'})
+        result = response_tool.callable(args)
+        diagnostic({'event': 'response_prepared', 'arm': 'v3'})
+        return result
+    registry.register(ToolDefinition(response_tool.descriptor, respond, response_tool.argument_schema,
+                                     enabled=response_tool.enabled, accepts_context=response_tool.accepts_context))
+    router = InferenceRouter(provider=_TrackedProvider(provider, emit, trace), default_profile=ModelProfile(
+        provider='openai_codex', model=model, profile_id='codex-clock'))
+    task = TaskState(task_id='codex-v3-clock', message_id='codex-v3-clock', user=ACTOR,
+                     project_id='synthetic-clock', goal=goal,
+                     intelligence_engine='hierarchical_v3', intelligence_schema_version=3)
+    context = CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry,
+                              inference=router, system_one=jev, cancellation_checker=cancelled)
+    result = HierarchicalCAPDProcessor().process(task, context)
+    final = TaskState.from_dict(result.snapshot.metadata.get('task_state') or task.to_dict())
+    response = final.metadata.get('prepared_user_response') or {}
+    reason = str((final.outcome or {}).get('reason') or '') or None
+    diagnostic({'event': 'terminal', 'arm': 'v3',
+                'status': final.status if final.status in {'completed', 'failed', 'cancelled', 'waiting_user', 'blocked', 'running'} else 'other',
+                'response_accepted': bool(response), 'reason_category': _reason_category(reason)})
+    return Run(status=final.status, response=str(response.get('message') or ''),
+               reason=reason)
 
 
 def _run_simple(*, url: str, provider: Any, model: str,

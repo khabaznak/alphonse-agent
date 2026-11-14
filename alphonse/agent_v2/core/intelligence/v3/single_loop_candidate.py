@@ -114,15 +114,25 @@ class CandidateHost:
     # actor, tool, exact arguments and result before returning the evidence ref.
     # A ref alone does not authorize reuse or prove the observation is current.
     record_bound_observation: Callable[[str, str, dict[str, Any], dict[str, Any]], str] | None = None
+    # Experimental shared-claim checkpoint protocol. Default execution keeps
+    # the existing budget/checkpoint behavior and is not production enabled.
+    atomic_checkpoint: Any | None = None
 
 
-def _save(host: CandidateHost, state: CandidateState) -> None:
-    host.checkpoint(state.snapshot())
+def _save(host: CandidateHost, state: CandidateState, *, consume_decision: bool = False,
+          selected_decision: dict | None = None, projection_fingerprint: str = '') -> None:
+    if host.atomic_checkpoint is not None:
+        host.atomic_checkpoint.save_state(state, consume_decision=consume_decision,
+            selected_decision=selected_decision, projection_fingerprint=projection_fingerprint)
+    else:
+        host.checkpoint(state.snapshot())
 
 
-def _terminal(host: CandidateHost, state: CandidateState, status: str, reason: str = '', response: str = '') -> CandidateState:
+def _terminal(host: CandidateHost, state: CandidateState, status: str, reason: str = '', response: str = '', *,
+              selected_decision: dict | None = None, projection_fingerprint: str = '') -> CandidateState:
     state.status, state.blocker, state.response = status, reason, response
-    _save(host, state)
+    _save(host, state, consume_decision=True, selected_decision=selected_decision,
+          projection_fingerprint=projection_fingerprint)
     return state
 
 
@@ -228,14 +238,18 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
                                    'the catalog.')
             if len(decision_input.encode('utf-8')) > host.input_reservation:
                 return _terminal(host, state, 'blocked', 'candidate_input_reservation_too_small')
-            budget = host.budgets.load(state.task_id)
-            if budget.usage()['in_flight']:
-                return _terminal(host, state, 'blocked', 'candidate_unresolved_reservation')
             call_id = 'model-' + uuid4().hex
-            revision = budget.revision
-            host.budgets.reserve(state.task_id, expected_revision=revision, reservation_id=call_id,
-                kind='model', amounts={'actions': 0, 'model_calls': 1, 'input_tokens': host.input_reservation,
-                'output_tokens': host.output_reservation}, now_ms=host.now_ms())
+            amounts = {'actions': 0, 'model_calls': 1, 'input_tokens': host.input_reservation,
+                       'output_tokens': host.output_reservation}
+            if host.atomic_checkpoint is None:
+                budget = host.budgets.load(state.task_id)
+                if budget.usage()['in_flight']:
+                    return _terminal(host, state, 'blocked', 'candidate_unresolved_reservation')
+                host.budgets.reserve(state.task_id, expected_revision=budget.revision, reservation_id=call_id,
+                                     kind='model', amounts=amounts, now_ms=host.now_ms())
+            else:
+                host.atomic_checkpoint.reserve(expected_version=host.atomic_checkpoint.version,
+                    reservation_id=call_id, kind='model', amounts=amounts, now_ms=host.now_ms())
             state.inflight = call_id
             # Consume the single review before dispatch and persist together
             # with the model marker. Crashes cannot silently replay it.
@@ -249,23 +263,32 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
             return _terminal(host, state, 'cancelled', 'cancelled')
         if _deadline_elapsed(host):
             return _terminal(host, state, 'blocked', 'candidate_deadline_exceeded')
+        if host.atomic_checkpoint is not None and not host.atomic_checkpoint.check_claim(call_id, 'model'):
+            return _terminal(host, state, 'blocked', 'candidate_claim_unavailable')
         try:
             decision = host.choose(decision_input, host.output_reservation)
         except Exception:
             decision = None
-        budget = host.budgets.load(state.task_id)
-        revision = budget.revision
         usage = decision.get('usage', {}) if isinstance(decision, dict) else {}
         if not isinstance(usage, dict):
             usage = {}
         try:
-            budget.settle(call_id, outcome='success' if isinstance(decision, dict) else 'failure',
-                          input_tokens=usage.get('input_tokens'), output_tokens=usage.get('output_tokens'))
-            host.budgets.save(state.task_id, budget, expected_revision=revision)
+            outcome = 'success' if isinstance(decision, dict) else 'failure'
+            if host.atomic_checkpoint is None:
+                budget = host.budgets.load(state.task_id)
+                revision = budget.revision
+                budget.settle(call_id, outcome=outcome, input_tokens=usage.get('input_tokens'),
+                              output_tokens=usage.get('output_tokens'))
+                host.budgets.save(state.task_id, budget, expected_revision=revision)
+            else:
+                host.atomic_checkpoint.settle_model(expected_version=host.atomic_checkpoint.version,
+                    reservation_id=call_id, outcome=outcome, input_tokens=usage.get('input_tokens'),
+                    output_tokens=usage.get('output_tokens'), decision=decision, projection_fingerprint=fingerprint)
         except (ValueError, KeyError):
             return _terminal(host, state, 'blocked', 'candidate_model_settlement_unavailable')
         state.inflight = ''
-        _save(host, state)
+        if host.atomic_checkpoint is None:
+            _save(host, state)
         if _cancelled(host):
             return _terminal(host, state, 'cancelled', 'cancelled')
         if not isinstance(decision, dict):
@@ -289,7 +312,7 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
             if state.invalid_decision_retries < 1:
                 state.invalid_decision_retries += 1
                 state.decision_format_pending = True
-                _save(host, state)
+                _save(host, state, consume_decision=True)
                 continue
             return _terminal(host, state, 'blocked', 'candidate_decision_invalid')
         if state.decision_format_pending:
@@ -302,13 +325,14 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
             if kind == 'question':
                 if _deadline_elapsed(host):
                     return _terminal(host, state, 'blocked', 'candidate_deadline_exceeded')
-                return _terminal(host, state, 'waiting_user', 'question_delivery_not_integrated', text)
+                return _terminal(host, state, 'waiting_user', 'question_delivery_not_integrated', text,
+                                 selected_decision=decision, projection_fingerprint=fingerprint)
             if host.synthetic_preanswer_review and state.answer_review_state == 'not_started':
                 # Hold the proposal; do not persist, return, or pass its text as
                 # evidence. The next budgeted decision sees only the current
                 # authorized projection and the neutral review request.
                 state.answer_review_state = 'pending'
-                _save(host, state)
+                _save(host, state, consume_decision=True)
                 continue
             try:
                 # Re-read under the current actor before accepting any response.
@@ -333,10 +357,11 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
                 if missing:
                     state.unsupported_retries += 1
                     state.recovery_pending = True
-                    _save(host, state)
+                    _save(host, state, consume_decision=True)
                     continue
                 return _terminal(host, state, 'blocked', 'candidate_answer_unsupported')
-            return _terminal(host, state, 'completed', response=text)
+            return _terminal(host, state, 'completed', response=text, selected_decision=decision,
+                             projection_fingerprint=fingerprint)
         if kind != 'tool' or not isinstance(decision.get('tool_id'), str) or not isinstance(decision.get('arguments'), dict):
             return _terminal(host, state, 'blocked', 'candidate_decision_invalid')
         tool_id, args = decision['tool_id'], deepcopy(decision['arguments'])
@@ -354,11 +379,16 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
             return _terminal(host, state, 'cancelled', 'cancelled')
         action_id = 'tool-' + uuid4().hex
         try:
-            budget = host.budgets.load(state.task_id)
-            revision = budget.revision
-            host.budgets.reserve(state.task_id, expected_revision=revision, reservation_id=action_id,
-                kind='tool', amounts={'actions': 1, 'model_calls': 0, 'input_tokens': 0, 'output_tokens': 0},
-                now_ms=host.now_ms())
+            amounts = {'actions': 1, 'model_calls': 0, 'input_tokens': 0, 'output_tokens': 0}
+            if host.atomic_checkpoint is None:
+                budget = host.budgets.load(state.task_id)
+                host.budgets.reserve(state.task_id, expected_revision=budget.revision, reservation_id=action_id,
+                    kind='tool', amounts=amounts, now_ms=host.now_ms())
+            else:
+                host.atomic_checkpoint.reserve(expected_version=host.atomic_checkpoint.version,
+                    reservation_id=action_id, kind='tool', amounts=amounts, now_ms=host.now_ms(),
+                    tool_id=tool_id, arguments=args, selected_decision=decision,
+                    projection_fingerprint=fingerprint)
             state.inflight = action_id
             _save(host, state)
         except (BudgetExhausted, ValueError, KeyError) as exc:
@@ -379,11 +409,15 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
             return _terminal(host, state, 'cancelled', 'cancelled')
         if _deadline_elapsed(host):
             return _terminal(host, state, 'blocked', 'candidate_deadline_exceeded')
+        if host.atomic_checkpoint is not None and not host.atomic_checkpoint.check_claim(
+                action_id, 'tool', tool_id=tool_id, arguments=args):
+            return _terminal(host, state, 'blocked', 'candidate_claim_unavailable')
         result = ToolInvocationService(context=host.context, task=host.task).invoke(tool_id, args, call_id=action_id)
-        budget = host.budgets.load(state.task_id)
-        revision = budget.revision
-        budget.settle(action_id, outcome='success' if result.get('status') == 'success' else 'failure')
-        host.budgets.save(state.task_id, budget, expected_revision=revision)
+        if host.atomic_checkpoint is None:
+            budget = host.budgets.load(state.task_id)
+            revision = budget.revision
+            budget.settle(action_id, outcome='success' if result.get('status') == 'success' else 'failure')
+            host.budgets.save(state.task_id, budget, expected_revision=revision)
         # Retain the in-flight marker until the verified observation and its
         # source reference are checkpointed. A crash after settlement must not
         # silently repeat the read or discard its result on resume.
@@ -432,6 +466,9 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
             return _terminal(host, state, 'blocked', 'candidate_evidence_recording_unavailable')
         if not isinstance(ref, str) or not ref.strip() or ref == state.goal_source or ref in state.evidence_sources:
             return _terminal(host, state, 'blocked', 'candidate_evidence_reference_invalid')
+        if host.atomic_checkpoint is not None:
+            host.atomic_checkpoint.settle_read(expected_version=host.atomic_checkpoint.version,
+                reservation_id=action_id, tool_id=tool_id, arguments=args, evidence_ref=ref, observation=payload)
         state.evidence_sources.append(ref)
         # Reading one source does not establish that the prior answer was
         # supported. Preserve the generic feedback until a terminal outcome.

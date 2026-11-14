@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 from alphonse.agent_v2.conversations import SQLiteConversationStore
 from alphonse.agent_v2.core.core import AlphonseCore, CoreLoopContext, CoreMessage, LoopStepStatus, ProcessingStatus, StateSnapshot
-from alphonse.agent_v2.core.inference.models import InferenceResult, ModelProfile
+from alphonse.agent_v2.core.inference.models import InferencePurpose, InferenceResult, ModelProfile
 from alphonse.agent_v2.core.inference.router import InferenceRouter
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.intelligence.v3.owner_read_processor import OwnerReadConversationProcessor, authorize_trusted_owner_claim
@@ -72,6 +72,9 @@ def test_owner_candidate_uses_real_memory_and_blocks_replay(tmp_path):
     with pytest.raises(ValueError, match='candidate_response_publication_unavailable'):
         project_snapshot_to_outbox(snapshot=result.snapshot, outbox=None)
     assert len(provider.requests) == 3 and 'Synthetic apples.' in provider.requests[1].prompt
+    assert all(request.purpose is InferencePurpose.SIMPLE_LOOP_ACTION
+               and request.user == owner.user_id and request.task_id == task.task_id
+               for request in provider.requests)
     assert 'Synthetic apples.' in provider.requests[2].prompt
     assert 'Search the owner’s prior conversation messages' in provider.requests[0].prompt
     assert 'Synthetic apples private.' not in provider.requests[1].prompt
@@ -93,6 +96,29 @@ def test_owner_host_requires_trusted_claim_and_active_owner(tmp_path):
     users.update_user(owner.user_id, is_active=False)
     processor.authorize_claim = lambda *_: True
     assert processor.process(task, ctx).error == 'owner_read_authority_unavailable'
+
+
+@pytest.mark.parametrize('outcome', ['failed', 'cancelled'])
+def test_owner_non_draft_outcomes_cannot_enter_legacy_outbox(tmp_path, monkeypatch, outcome):
+    users = V2UserStore(':memory:')
+    owner = users.onboard(display_name='Synthetic owner', users_root=tmp_path / 'users')
+    task = TaskState(task_id='message-1', message_id='message-1', user=owner.user_id,
+        goal='Hello', intelligence_engine='single_loop_experimental', intelligence_schema_version=1)
+    registry = InMemoryToolRegistry()
+    registry.register(build_search_memory_tool_definition())
+    registry.register(build_read_memory_source_tool_definition())
+    ctx = CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry,
+        inference=InferenceRouter(provider=Provider('unused'), default_profile=ModelProfile('test', 'fixture', 'offline')),
+        conversation_store=SQLiteConversationStore(tmp_path / 'conversation.db'), cancellation_checker=lambda: False)
+    processor = OwnerReadConversationProcessor(users=users, budgets=SQLiteTaskBudgetStore(str(tmp_path / 'budget.db')),
+        authorize_claim=lambda *_: outcome != 'failed', save_checkpoint=lambda *_: None)
+    if outcome == 'cancelled':
+        monkeypatch.setattr('alphonse.agent_v2.core.intelligence.v3.owner_read_processor.run_candidate',
+                            lambda *_: SimpleNamespace(status='cancelled'))
+    result = processor.process(task, ctx)
+    assert result.status == (ProcessingStatus.FAILED if outcome == 'failed' else ProcessingStatus.CANCELLED)
+    with pytest.raises(ValueError, match='candidate_response_publication_unavailable'):
+        project_snapshot_to_outbox(snapshot=result.snapshot, outbox=None)
 
 
 def test_real_trusted_claim_is_carried_internally_and_verified(tmp_path):

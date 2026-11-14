@@ -1,6 +1,32 @@
 # First fenced conversation slice
 
-## Owner-only integration work — 14 November
+## Current experimental path — 14 November, later update
+
+The local working tree has an explicit, default-off owner-only startup mode:
+`ALPHONSE_OWNER_ONLY_SIMPLE_LOOP=1`. Unset or `0` continues to use V3; invalid
+values fail. This is a limited personal experiment, not a default release.
+It runs an owner-only worker with trusted local ingress and conversation-memory
+search/read, plus a Desktop opt-in, one-shot response pickup and acknowledgment.
+An acknowledgment atomically records conversation history and finalizes the
+exact claim; an owner can explicitly abandon eligible expired requests without
+replaying or claiming delivery. Disposable socket tests exercise this path.
+The legacy CoreLoop fenced-worker guard still exists; the experimental daemon
+uses a separate owner worker. Local peer UID identifies an OS account, not an
+independently authenticated household member.
+
+Owner-only mode does not run schedulers or integrations, support external chores
+or deliver clarification questions. Its 180-second claim has no renewal. Lost
+or uncertain work needs explicit recovery; malformed or unknown effects can
+remain blocked. Model and source I/O cannot be atomically fenced by SQLite,
+and client acknowledgment does not prove a person read the answer. No live
+provider, household data, or existing daemon restart was used to qualify this
+working-tree change. Actual deployment and broader retirement remain open.
+
+## Earlier owner-only integration work — historical
+
+The following entries record successive prior states. Their statements about
+missing components or unimplemented behavior are superseded where the current
+update above describes later work.
 
 An explicitly injected, default-off owner-read processor now exercises the
 candidate and shared chooser with the actual conversation search/read tools and
@@ -48,10 +74,39 @@ reads, checkpoint or budget writes, publication, delivery or revocation.
 The queue also exposes a trusted-owner claim transaction that checks the owner
 and origin before and after writes on its own SQLite connection, rolling them
 back if authority or the claim changes. Candidate budget, checkpoint and
-evidence transitions do not yet use it; it cannot protect other databases or
-external calls.
+evidence transitions now use it in the opt-in owner processor. Reservations,
+settlements and read bindings share the checkpoint, and a pre-dispatch check
+verifies the claim, checkpoint version and exact action. That check cannot
+protect other databases or fence external calls after the transaction ends.
 
-## Disposable CoreLoop and inference-router progress — 14 November
+Experimental recovery can resume a quiescent checkpoint under the same live
+claim. It re-reads authorized sources and compares their canonical digests;
+unresolved model decisions and in-flight work block instead of being replayed.
+Selected draft provenance binds the model decision and projection to the saved
+draft, but is not proof of factual support or authority to deliver. Observation
+bodies are not copied into the checkpoint; goals, queries, source IDs, answers
+and hashes may still be sensitive and need retention and deletion controls.
+Expired-claim takeover, uncertain effects, fenced publication and delivery,
+and safe daemon disposition are not implemented; the normal path stays on V3.
+
+The runtime factory can explicitly register the owner processor with a fenced,
+shared SQLite queue and an internal selected-draft handoff. In disposable tests,
+the real processor hands a committed answer to the daemon and a same-OS-user
+socket client can take it once after source revalidation. A started-unconfirmed
+marker is committed before the response; a secret attempt token lets that
+client acknowledge under the original live claim. This records client
+acknowledgment, not human receipt. Lost pickup or acknowledgment responses do
+not yet have authenticated reconciliation or status; the answer is not added
+to conversation history, questions are unsupported, and Desktop has no caller.
+The CoreLoop and daemon fencing refusals remain in place. Local peer identity
+identifies an OS account, not a separately authenticated household member.
+
+## Historical disposable CoreLoop experiment — 14 November
+
+The fixture-only synthetic owner processor and its separate engine stamp were
+removed after the real owner-read processor gained an equivalent disposable
+CoreLoop test. The paragraphs in this section record the earlier experiment;
+they do not describe a currently available engine. Normal runtime is still V3.
 
 The default router can now accept an explicitly injected synthetic processor
 for a fixture-only engine stamp. A test queues a disposable message through

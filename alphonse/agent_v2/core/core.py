@@ -699,10 +699,24 @@ class AlphonseCore:
                 loader = getattr(self.question_store, "load_single_loop_task_checkpoint", None)
                 if candidate_invalid or not callable(loader):
                     raise ValueError("candidate_checkpoint_unavailable")
-                task = loader(queued.message_id, owner_id=queued.message.user)
-                if task is None:
-                    task = TaskState.from_message(queued.message, message_id=queued.message_id)
-                    task.task_id = queued.message_id
+                restored = loader(queued.message_id, owner_id=queued.message.user)
+                task = TaskState.from_message(queued.message, message_id=queued.message_id)
+                task.task_id = queued.message_id
+                if restored is not None:
+                    # The queue is the authority for the original request.
+                    # Checkpoint-only metadata is validated by the candidate
+                    # store, never merged into origin authorization.
+                    for name in ('goal', 'user', 'project_id', 'tag', 'correlation_id', 'memory_session_id'):
+                        if getattr(restored, name) != getattr(task, name):
+                            raise ValueError('candidate_checkpoint_unavailable')
+                    stored_metadata = dict(restored.metadata)
+                    for key in ('single_loop_checkpoint', 'owner_read_observations', 'owner_read_pending_action',
+                                'owner_read_pending_decision'):
+                        stored_metadata.pop(key, None)
+                    if json.dumps(stored_metadata, sort_keys=True, allow_nan=False) != json.dumps(
+                            task.metadata, sort_keys=True, allow_nan=False):
+                        raise ValueError('candidate_checkpoint_unavailable')
+                    task._checkpoint_version = restored._checkpoint_version
             except Exception:
                 snapshot = StateSnapshot(current_work="", metadata={"status": "failed", "reason": "candidate_checkpoint_unavailable"})
                 self.state.update(snapshot)
@@ -767,7 +781,10 @@ class AlphonseCore:
             task.task_id = queued.message_id
         elif not task.task_id:
             task.task_id = str(uuid4())
-        if self.active_task_callback is not None:
+        # The legacy callback mutates daemon lifecycle state without the queue
+        # claim. Candidate activity needs a claim-aware publisher before it can
+        # be exposed through that callback.
+        if not registered_candidate and self.active_task_callback is not None:
             self.active_task_callback(queued, task)
 
         def _task_is_cancelled() -> bool:
@@ -811,9 +828,9 @@ class AlphonseCore:
                 tools=self.tools,
                 inference=self.inference,
                 prompts=self.prompts,
-                activity_sink=_task_activity_sink,
-                ui_event_sink=self.ui_event_sink,
-                telemetry_sink=self.telemetry_sink,
+                activity_sink=None if registered_candidate else _task_activity_sink,
+                ui_event_sink=None if registered_candidate else self.ui_event_sink,
+                telemetry_sink=None if registered_candidate else self.telemetry_sink,
                 system_one=self.system_one,
                 skill_store=self.skill_store,
                 artifact_resources=self.artifact_resources,
@@ -824,10 +841,10 @@ class AlphonseCore:
                 question_store=self.question_store,
                 project_store=self.project_store,
                 schedule_store=self.schedule_store,
-                delivery_sink=self.delivery_sink,
+                delivery_sink=None if registered_candidate else self.delivery_sink,
                 user_context_provider=self.user_context_provider,
                 user_timezone_provider=self.user_timezone_provider,
-                memory=self.memory,
+                memory=None if registered_candidate else self.memory,
                 conversation_store=self.conversation_store,
                 identity_resolver=self.identity_resolver,
                 program_runner=self.program_runner,
@@ -845,10 +862,11 @@ class AlphonseCore:
                 self.intelligence.processor_for(task)
             start_memory = getattr(self.memory, "start_task", None)
             memory_options = {"cancel_checker": context.is_cancelled} if getattr(self.memory, "supports_knowledge_cancellation", False) else {}
-            if callable(start_memory):
+            if not registered_candidate and callable(start_memory):
                 task.memory_context_md = str(start_memory(task, **memory_options) or "")
-            from alphonse.agent_v2.core.memory.transcript import conversation_transcript
-            task.conversation_history_md = conversation_transcript(task, self.conversation_store)
+            if not registered_candidate:
+                from alphonse.agent_v2.core.memory.transcript import conversation_transcript
+                task.conversation_history_md = conversation_transcript(task, self.conversation_store)
             result = self.intelligence.process(task, context)
             if result.status == ProcessingStatus.SUPERSEDED:
                 # Do not publish the processor's stale snapshot or error, finish
@@ -859,11 +877,11 @@ class AlphonseCore:
                 return LoopStepResult(status=LoopStepStatus.SUPERSEDED,
                                       state_before=state_before, state_after=state_after)
             finish_memory = getattr(self.memory, "finish_task", None)
-            if callable(finish_memory) and result.status != ProcessingStatus.YIELDED:
+            if not registered_candidate and callable(finish_memory) and result.status != ProcessingStatus.YIELDED:
                 serialized_task = result.snapshot.metadata.get("task_state") if isinstance(result.snapshot.metadata, dict) else None
                 finished_task = TaskState.from_dict(serialized_task) if isinstance(serialized_task, dict) else task
                 finish_memory(finished_task, **memory_options)
-            if result.status not in {ProcessingStatus.FAILED, ProcessingStatus.CANCELLED}:
+            if not registered_candidate and result.status not in {ProcessingStatus.FAILED, ProcessingStatus.CANCELLED}:
                 context.acknowledge_consumed_messages()
         except Exception as exc:
             cancelled = _task_is_cancelled()

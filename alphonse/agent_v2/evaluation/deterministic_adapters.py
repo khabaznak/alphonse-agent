@@ -1,4 +1,4 @@
-"""Deterministic offline adapters that execute the real V2 and V3 processors."""
+"""Deterministic fixture helpers for current offline evaluations."""
 
 from __future__ import annotations
 
@@ -19,7 +19,6 @@ from alphonse.agent_v2.core.intelligence.v3.contracts import PhasePlan
 from alphonse.agent_v2.system_one import SystemOneActJudgments, SystemOneReviewResult
 from alphonse.agent_v2.core.messages import CommunicationChannel, InMemoryMessageQueue
 from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry, ToolDefinition
-from alphonse.agent_v2.evaluation.replay import EngineTrace, EvaluationCase
 
 
 @dataclass(frozen=True)
@@ -54,7 +53,6 @@ class _RunState:
     tool_calls: list[str] = field(default_factory=list)
     questions: list[str] = field(default_factory=list)
     failures: list[str] = field(default_factory=list)
-    v2_index: int = 0
     v3_index: int = 0
     required_context_markers: tuple[str, ...] = ()
     context_preserved: bool = True
@@ -122,25 +120,6 @@ class _DeterministicProvider:
             value = {}
         return self._result(json_value=value, request=request)
 
-    def plan_tool_call(self, request: InferenceRequest) -> InferenceResult:
-        self._check_context(request.prompt)
-        actions = list(self.state.scenario.actions)
-        if '"response_required": true' in request.prompt.lower() or '"response_required":true' in request.prompt.lower():
-            action = _respond_action(self.state.scenario.final_response)
-        elif self.state.v2_index >= len(actions):
-            action = _respond_action(self.state.scenario.final_response)
-        else:
-            action = actions[self.state.v2_index]
-            self.state.v2_index += 1
-        value = {
-            "id": f"v2-{self.state.v2_index}-{action.role}",
-            "execution_mode": "direct",
-            "tool_id": action.tool_id,
-            "tool_name": action.tool_id,
-            "arguments": dict(action.arguments),
-            "internal_state": f"{action.role}: {action.capability}",
-        }
-        return self._result(json_value=value, tool_call=value, request=request)
 
     def _check_context(self, prompt: str) -> None:
         if self.state.required_context_markers:
@@ -175,122 +154,10 @@ class _DeterministicProvider:
         )
 
 
-def v2_runner(
-    case: EvaluationCase,
-    fixture_root: Path,
-    telemetry_sink: Callable[[dict[str, Any]], None],
-) -> EngineTrace:
-    return _run(case, fixture_root, telemetry_sink, engine="tactical_v2")
 
 
-def v3_runner(
-    case: EvaluationCase,
-    fixture_root: Path,
-    telemetry_sink: Callable[[dict[str, Any]], None],
-) -> EngineTrace:
-    return _run(case, fixture_root, telemetry_sink, engine="hierarchical_v3")
 
 
-def _run(
-    case: EvaluationCase,
-    fixture_root: Path,
-    telemetry_sink: Callable[[dict[str, Any]], None],
-    *,
-    engine: str,
-) -> EngineTrace:
-    scenario = _scenario(case.case_id)
-    state = _RunState(
-        scenario=scenario,
-        root=fixture_root / "project",
-        engine=engine,
-        required_context_markers=tuple(map(str, case.fixture.get("required_context_markers") or ())),
-    )
-    registry = _registry(state)
-    provider = _DeterministicProvider(state)
-    router = InferenceRouter(
-        provider=provider,
-        default_profile=ModelProfile(provider="deterministic", model="replay-v1", profile_id="offline-replay"),
-        telemetry_sink=telemetry_sink,
-    )
-    queue = InMemoryMessageQueue()
-    ui_events: list[dict[str, Any]] = []
-    context = CoreLoopContext(
-        messages=queue,
-        tools=registry,
-        inference=router,
-        system_one=_ReplayJev({action.tool_id for action in scenario.actions if not action.read_only}),
-        telemetry_sink=telemetry_sink,
-        ui_event_sink=lambda event: ui_events.append({"event_type": event.event_type, "payload": dict(event.payload)}),
-    )
-    # Offline image fixtures use the same authorized asset resolution as runtime.
-    from alphonse.agent_v2.assets import AttachmentDescriptor, SQLiteAssetStore
-    assets = SQLiteAssetStore(":memory:", fixture_root / "assets")
-    attachments = []
-    for item in case.fixture.get("attachments") or []:
-        asset = assets.register_bytes(
-            owner_user_id="evaluation-user",
-            descriptor=AttachmentDescriptor("fixture.png", "image/png", 3),
-            content=b"png", source="offline-replay",
-        )
-        attachments.append({**item, "asset_id": asset.asset_id, "mime_type": "image/png"})
-    context.asset_store = assets
-    task = TaskState(
-        task_id=f"replay-{case.case_id}-{engine}",
-        message_id=f"message-{case.case_id}",
-        user="evaluation-user",
-        project_id="fixture-project",
-        goal=case.goal,
-        intelligence_engine=engine,
-        intelligence_schema_version=3 if engine == "hierarchical_v3" else 2,
-        metadata={"attachments": attachments},
-        recent_conversation_md=str(case.fixture.get("recent_conversation") or "- (none)"),
-    )
-    if scenario.initial_acceptance or scenario.restart_after_role:
-        task.set_acceptance_contract_from_markdown(f"- [ ] {scenario.acceptance}")
-    if scenario.steering:
-        CommunicationChannel(queue).queue_message(
-            prompt=scenario.steering,
-            user=task.user or "evaluation-user",
-            project_id=task.project_id,
-            metadata={"routing_disposition": "steering"},
-        )
-    if scenario.restart_after_role:
-        _restore_checkpoint(task, scenario, engine)
-        if engine == "tactical_v2":
-            state.v2_index = 1
-        else:
-            state.v3_index = 1
-
-    if engine == "hierarchical_v3":
-        processor = HierarchicalCAPDProcessor()
-    else:
-        from alphonse.agent_v2.evaluation.legacy_pdca import PDCAIntelligenceProcessor
-        processor = PDCAIntelligenceProcessor()
-    try:
-        result = processor.process(task, context)
-    except Exception as exc:
-        return EngineTrace(
-            engine=engine,
-            status="failed",
-            outcome=f"processor exception: {type(exc).__name__}",
-            error=f"{type(exc).__name__}: {exc}",
-            capabilities=_used_capabilities(state, scenario),
-            questions=list(state.questions),
-            events=_evaluation_events(ui_events),
-        )
-    final_task = TaskState.from_dict(result.snapshot.metadata.get("task_state") or task.to_dict())
-    metadata = _trace_metadata(case, scenario, state, final_task, ui_events)
-    return EngineTrace(
-        engine=engine,
-        status=final_task.status,
-        outcome=str((final_task.outcome or {}).get("reason") or final_task.status),
-        capabilities=_used_capabilities(state, scenario),
-        effects=_affected_paths_from_events(ui_events),
-        questions=list(state.questions),
-        events=_evaluation_events(ui_events),
-        metadata=metadata,
-        error="" if final_task.status not in {"failed", "error"} else str((final_task.outcome or {}).get("reason") or "task failed"),
-    )
 
 
 def _registry(state: _RunState) -> InMemoryToolRegistry:
@@ -498,74 +365,12 @@ def _satisfied_patch(prompt: str) -> dict[str, Any]:
     ]}
 
 
-def _used_capabilities(state: _RunState, scenario: _Scenario) -> list[str]:
-    capabilities = [
-        action.capability for tool_id in state.tool_calls for action in scenario.actions
-        if action.tool_id == tool_id
-    ]
-    return list(dict.fromkeys(capabilities))
 
 
-def _affected_paths_from_events(events: list[dict[str, Any]]) -> list[str]:
-    affected: list[str] = []
-    for event in events:
-        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
-        result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
-        for path in result.get("affected_paths") or []:
-            affected.append(str(path))
-    return list(dict.fromkeys(affected))
 
 
-def _evaluation_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    projected: list[dict[str, Any]] = []
-    for event in events:
-        event_type = str(event.get("event_type") or "")
-        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
-        if event_type == "tactical_tools_revealed":
-            projected.append({
-                "event_type": event_type,
-                "phase_id": payload.get("phase_id"),
-                "subgoal_id": payload.get("subgoal_id"),
-                "capabilities": list(payload.get("capabilities") or []),
-                "tool_ids": list(payload.get("tool_ids") or []),
-            })
-        elif event_type == "tool_call_result":
-            result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
-            projected.append({
-                "event_type": event_type,
-                "tool_id": payload.get("tool_id"),
-                "status": payload.get("status"),
-                "affected_paths": [str(path) for path in result.get("affected_paths") or []],
-            })
-    return projected
 
 
-def _trace_metadata(
-    case: EvaluationCase,
-    scenario: _Scenario,
-    state: _RunState,
-    task: TaskState,
-    events: list[dict[str, Any]],
-) -> dict[str, Any]:
-    metadata: dict[str, Any] = {
-        "phase_shape": [action.role for action in scenario.actions if action.tool_id not in {"native.respond", "native.ask_question"}],
-        "tool_ids": list(state.tool_calls),
-        "task_status": task.status,
-        "context_preserved": state.context_preserved,
-        "question_count": len(state.questions),
-    }
-    if case.case_id == "tool-failure-local-fallback":
-        metadata["recovery"] = "bounded project-file search" if state.failures and "fixture.search" in state.tool_calls else ""
-    if case.case_id == "conflicting-authoritative-records":
-        route = str(task.metadata.get("v3_route") or task.metadata.get("act_route") or "")
-        metadata["outer_route"] = "strategic_replan_or_ask_user" if state.questions and task.status == "waiting_user" else route
-    if case.case_id == "steering-during-phase":
-        reviewed = int(task.check_new_message_count or 0) > 0 or bool(task.metadata.get("acceptance_criteria_amendment_prompt"))
-        metadata["outer_route"] = "explicit_contract_review" if reviewed else str(task.metadata.get("v3_route") or "")
-    if case.case_id == "restart-mid-phase":
-        locate_repeated = scenario.actions[0].tool_id in state.tool_calls
-        metadata["property"] = "checkpointed action idempotency" if not locate_repeated else "locate repeated"
-    return metadata
 
 
 def _respond_action(message: str) -> _Action:

@@ -62,7 +62,9 @@ class SingleLoopFixtureAdapter:
         context = CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry,
                                   cancellation_checker=lambda: fixture.get('cancelled', False))
         checkpoints = []
-        class FixtureInterrupted(Exception):
+        class FixtureInterrupted(BaseException):
+            # Simulate abrupt process loss, which ordinary host exception
+            # handling cannot convert into an evidence-recording failure.
             pass
         def choose(text, cap):
             decision = dict(next(scripts))

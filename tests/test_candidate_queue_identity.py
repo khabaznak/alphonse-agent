@@ -46,8 +46,9 @@ def enqueue(queue, *, metadata=None, owner='owner'):
 
 
 def saved(questions, *, owner='owner'):
-    task = TaskState(task_id='msg', message_id='msg', user=owner, goal='saved',
-                     intelligence_engine='single_loop_experimental', intelligence_schema_version=1)
+    task = TaskState(task_id='msg', message_id='msg', user=owner, goal='original',
+                     intelligence_engine='single_loop_experimental', intelligence_schema_version=1,
+                     metadata={'intelligence_engine': 'single_loop_experimental', 'intelligence_schema_version': 1})
     questions.save_task_checkpoint(task)
 
 
@@ -71,10 +72,49 @@ def test_candidate_uses_queue_id_and_restores_matching_checkpoint(tmp_path):
     core.messages = queue
     enqueue(queue)
     assert core.step().status is LoopStepStatus.WAITING
-    assert recorder.seen[-1] == ('msg', 'msg', 'owner', 'single_loop_experimental', 1, 'saved')
+    assert recorder.seen[-1] == ('msg', 'msg', 'owner', 'single_loop_experimental', 1, 'original')
 
 
-@pytest.mark.parametrize('mutation', ['db_owner', 'raw_owner', 'message', 'engine', 'schema', 'status', 'malformed'])
+def test_candidate_resume_passes_only_ingress_metadata_and_checkpoint_version(tmp_path):
+    class Inspector:
+        def process(self, task, context):
+            assert task.metadata == {'intelligence_engine': 'single_loop_experimental', 'intelligence_schema_version': 1}
+            assert task._checkpoint_version == 1
+            return ProcessingResult(snapshot=StateSnapshot(task_owner=task.user), status=ProcessingStatus.WAITING)
+    core, queue, questions = make_core(tmp_path, RegisteredRouter(Inspector()))
+    task = TaskState(task_id='msg', message_id='msg', user='owner', goal='original',
+        intelligence_engine='single_loop_experimental', intelligence_schema_version=1,
+        metadata={'intelligence_engine': 'single_loop_experimental', 'intelligence_schema_version': 1,
+                  'single_loop_checkpoint': {'private': 'not ingress'}, 'owner_read_observations': {}})
+    questions.save_task_checkpoint(task)
+    enqueue(queue)
+    assert core.step().status is LoopStepStatus.WAITING
+
+
+def test_candidate_does_not_use_unfenced_legacy_lifecycle_or_sinks(tmp_path):
+    emitted = []
+    class Probe:
+        def process(self, task, context):
+            context.emit_ui_event('tool_call_started', {'user': task.user})
+            context.emit_telemetry({'kind': 'candidate'})
+            context.record_memory_event(task, 'probe', {'value': 'private'})
+            context.consumed_message_ids.append('another-message')
+            assert context.activity_sink is None
+            assert context.delivery_sink is None
+            return ProcessingResult(snapshot=StateSnapshot(task_owner=task.user), status=ProcessingStatus.WAITING)
+    core, queue, _ = make_core(tmp_path, RegisteredRouter(Probe()))
+    core.active_task_callback = lambda *_: emitted.append('active')
+    core.ui_event_sink = lambda *_: emitted.append('ui')
+    core.telemetry_sink = lambda *_: emitted.append('telemetry')
+    core.delivery_sink = lambda *_: emitted.append('delivery')
+    core.memory = SimpleNamespace(event=lambda *_: emitted.append('memory'))
+    queue.ack = lambda *_: emitted.append('ack')
+    enqueue(queue)
+    assert core.step().status is LoopStepStatus.WAITING
+    assert emitted == []
+
+
+@pytest.mark.parametrize('mutation', ['db_owner', 'raw_owner', 'message', 'engine', 'schema', 'status', 'malformed', 'goal', 'metadata'])
 def test_candidate_checkpoint_mismatch_is_never_dispatched(tmp_path, mutation):
     import json
     recorder = Recorder()
@@ -90,7 +130,8 @@ def test_candidate_checkpoint_mismatch_is_never_dispatched(tmp_path, mutation):
         else:
             key, value = {'raw_owner': ('user', 'other'), 'message': ('message_id', 'other'),
                           'engine': ('intelligence_engine', 'hierarchical_v3'),
-                          'schema': ('intelligence_schema_version', 3), 'status': ('status', 'completed')}[mutation]
+                          'schema': ('intelligence_schema_version', 3), 'status': ('status', 'completed'),
+                          'goal': ('goal', 'different request'), 'metadata': ('metadata', {'foo': 'changed'})}[mutation]
             raw[key] = value
             conn.execute("UPDATE v2_task_checkpoints SET task_state_json=? WHERE task_id='msg'", (json.dumps(raw),))
     enqueue(queue)

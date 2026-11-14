@@ -6,8 +6,6 @@ import time
 import pytest
 
 from alphonse.agent_v2.core.core import CoreLoopContext
-from alphonse.agent_v2.evaluation.legacy_pdca.nodes import do_node
-from alphonse.agent_v2.evaluation.legacy_pdca.nodes.plan_node import _render_tool_call_plan_prompt
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
 from alphonse.agent_v2.core.tools.registry.native import BASH_TOOL_ID
@@ -31,18 +29,6 @@ def test_native_registry_registers_bash_tool() -> None:
     assert descriptor.capabilities == ("shell", "local_execution")
 
 
-def test_bash_descriptor_and_schema_are_visible_to_plan_prompt() -> None:
-    task = TaskState(goal="List files", acceptance_criteria_md="1.- [ ] Files are listed")
-    descriptor = next(item for item in build_native_tool_registry().list() if item.tool_id == BASH_TOOL_ID)
-
-    prompt = _render_tool_call_plan_prompt(task, (descriptor,))
-
-    assert BASH_TOOL_ID in prompt
-    assert BASH_TOOL_NAME in prompt
-    assert "native" in prompt
-    assert "Never invent a short timeout" in prompt
-    assert "persistent foreground services" in prompt
-    assert "redirect stdin, stdout, and stderr" in prompt
 
 
 def test_bash_tool_executes_successful_command_and_captures_stdout() -> None:
@@ -159,49 +145,8 @@ def test_bash_tool_honors_optional_cwd(tmp_path) -> None:
     assert result["cwd"] == str(tmp_path)
 
 
-def test_do_node_executes_native_bash_and_records_result(tmp_path) -> None:
-    task = TaskState(goal="Print greeting")
-    task.append_plan_call(
-        {
-            "id": "plan-call-1",
-            "tool_id": BASH_TOOL_ID,
-            "tool_name": BASH_TOOL_NAME,
-            "arguments": {"command": "printf hello", "cwd": str(tmp_path)},
-            "internal_state": "Printing a greeting.",
-        }
-    )
-
-    do_node(
-        task,
-        context=CoreLoopContext(messages=InMemoryMessageQueue(), tools=build_native_tool_registry()),
-    )
-
-    execution = json.loads(task.plan_json)[0]["execution"]
-    assert execution["status"] == "success"
-    assert execution["result"]["exit_code"] == 0
-    assert execution["result"]["stdout"] == "hello"
 
 
-def test_do_node_records_native_bash_invalid_arguments_as_exception() -> None:
-    task = TaskState(goal="Run bash")
-    task.append_plan_call(
-        {
-            "id": "plan-call-1",
-            "tool_id": BASH_TOOL_ID,
-            "tool_name": BASH_TOOL_NAME,
-            "arguments": {"command": ""},
-            "internal_state": "Trying bash.",
-        }
-    )
-
-    do_node(
-        task,
-        context=CoreLoopContext(messages=InMemoryMessageQueue(), tools=build_native_tool_registry()),
-    )
-
-    execution = json.loads(task.plan_json)[0]["execution"]
-    assert execution["status"] == "exception"
-    assert "bash_command_required" in execution["exception"]
 
 
 def test_bash_tool_definition_executes_through_registry() -> None:

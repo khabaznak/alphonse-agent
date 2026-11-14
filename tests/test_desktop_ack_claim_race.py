@@ -61,3 +61,39 @@ def test_desktop_ack_rolls_back_if_lease_expires_during_write(tmp_path, monkeypa
     monkeypatch.setattr(daemon, '_on_outbox_delivered', lambda *_: pytest.fail('expired claim published'))
     assert not daemon.acknowledge_desktop_delivery(client_id='original', outbox_message_id=item.outbox_message_id)
     assert outbox.get(item.outbox_message_id).status == 'claimed'
+
+
+def test_late_ack_from_same_desktop_cannot_confirm_new_acquisition(tmp_path, monkeypatch):
+    outbox = SQLiteOutboundStore(tmp_path / 'outbox.sqlite')
+    daemon = V2Daemon(build_runtime_host(outbox=outbox))
+    item = outbox.enqueue(address=ChannelAddress('desktop', 'desktop', 'alice', alphonse_user_id='alice'),
+                          message='synthetic')
+    first = outbox.claim_next(OutboundSelector(integration_id='desktop'), lease_owner='desktop:original')
+    assert first.attempt_count == 1
+    assert outbox.reclaim_expired(now=datetime.now(timezone.utc) + timedelta(days=1)) == 1
+    second = outbox.claim_next(OutboundSelector(integration_id='desktop'), lease_owner='desktop:original')
+    assert second.attempt_count == 2
+    callbacks = []
+    monkeypatch.setattr(daemon, '_on_outbox_delivered', callbacks.append)
+    from alphonse.agent_v2.ipc import V2DaemonServer
+    server = V2DaemonServer(daemon, tmp_path / 'unused.sock')
+    def ack(attempt):
+        return server._dispatch({'method': 'desktop_ack_delivery', 'params': {
+            'client_id': 'original', 'outbox_message_id': item.outbox_message_id, 'attempt_count': attempt}})
+    assert ack(first.attempt_count) == {'acknowledged': False}
+    assert outbox.get(item.outbox_message_id).status == 'claimed'
+    assert callbacks == []
+    assert ack(second.attempt_count) == {'acknowledged': True}
+    assert outbox.get(item.outbox_message_id).status == 'delivered'
+
+
+@pytest.mark.parametrize('attempt', [True, 0, -1, '1'])
+def test_malformed_desktop_attempt_does_not_acknowledge(tmp_path, attempt):
+    outbox = SQLiteOutboundStore(tmp_path / 'outbox.sqlite')
+    daemon = V2Daemon(build_runtime_host(outbox=outbox))
+    item = outbox.enqueue(address=ChannelAddress('desktop', 'desktop', 'alice', alphonse_user_id='alice'),
+                          message='synthetic')
+    outbox.claim_next(OutboundSelector(integration_id='desktop'), lease_owner='desktop:original')
+    assert not daemon.acknowledge_desktop_delivery(client_id='original', outbox_message_id=item.outbox_message_id,
+                                                    attempt_count=attempt)
+    assert outbox.get(item.outbox_message_id).status == 'claimed'

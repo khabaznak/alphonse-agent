@@ -82,7 +82,7 @@ def _read_claim(conn: sqlite3.Connection, receipt: ClaimReceipt, now: datetime) 
 
 @contextmanager
 def fenced_claim_transaction(conn: sqlite3.Connection, receipt: ClaimReceipt, *,
-                             clock: Callable[[], datetime]) -> Iterator[sqlite3.Connection]:
+                             clock: Callable[[], datetime], _finalize=None) -> Iterator[sqlite3.Connection]:
     """Fence DB writes against the current queue claim in one immediate transaction.
 
     Both checks read the same locked SQLite database. The callback may update
@@ -115,12 +115,24 @@ def fenced_claim_transaction(conn: sqlite3.Connection, receipt: ClaimReceipt, *,
         end = _time(clock())
         if end < start:
             raise ClaimFenceUnavailable('claim_clock_moved_backwards')
-        _read_claim(conn, receipt, end)
+        expires = _read_claim(conn, receipt, end)
         current_row = conn.execute(
             'SELECT * FROM main.v2_inbound_messages WHERE message_id=?', (receipt.message_id,)
         ).fetchone()
         if current_row is None or tuple(current_row) != original_row:
             raise ClaimFenceUnavailable('claim_row_modified_by_caller')
+        # Reserved for narrowly scoped owner acknowledgment: the finalizer is
+        # trusted internal code and runs only after both full claim checks.
+        # It must perform no I/O and must not commit or roll back.
+        if _finalize is not None:
+            _finalize(conn)
+            if not conn.in_transaction:
+                raise ClaimFenceUnavailable('claim_transaction_ended_by_caller')
+            finalized_at = _time(clock())
+            if finalized_at < end:
+                raise ClaimFenceUnavailable('claim_clock_moved_backwards')
+            if finalized_at >= expires:
+                raise ClaimSuperseded('claim_expired')
         conn.commit()
     except BaseException:
         if conn.in_transaction:

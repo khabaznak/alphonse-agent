@@ -133,7 +133,7 @@ class SQLiteMessageQueue:
         return message_id
 
     @contextmanager
-    def trusted_local_owner_claim_transaction(self, receipt: Any, task: Any, *, clock=None):
+    def trusted_local_owner_claim_transaction(self, receipt: Any, task: Any, *, clock=None, _finalize=None):
         """Run same-database writes under a verified local-owner claim.
 
         Both the active admin and immutable ingress payload are verified on the
@@ -175,7 +175,8 @@ class SQLiteMessageQueue:
                 raise ClaimFenceUnavailable('owner_claim_authorization_unavailable')
 
         with self._connect() as conn:
-            with fenced_claim_transaction(conn, receipt, clock=clock or (lambda: datetime.now(timezone.utc))):
+            with fenced_claim_transaction(conn, receipt, clock=clock or (lambda: datetime.now(timezone.utc)),
+                                          _finalize=_finalize):
                 check(conn)
                 yield conn
                 check(conn)
@@ -191,6 +192,149 @@ class SQLiteMessageQueue:
                 return True
         except Exception:
             return False
+
+    def abandon_trusted_owner_message(self, message_id: str, *, clock=None) -> dict[str, str]:
+        """Explicitly abandon an unstarted or expired read-only owner request.
+
+        The caller authenticates the local owner peer. This never retries an
+        action and never asserts an uncertain pickup was or was not received.
+        A live processing lease, legacy handoff, unknown action or changed
+        origin is refused. Historical checkpoint data is retained.
+        """
+        import re
+        if (not self.experimental_claim_fencing or not isinstance(message_id, str)
+                or re.fullmatch(r'[0-9a-f]{32}', message_id) is None):
+            raise ValueError('owner_abandon_unavailable')
+        now_fn = clock or (lambda: datetime.now(timezone.utc))
+        def now_utc():
+            value = now_fn()
+            if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
+                raise ValueError('owner_abandon_clock_invalid')
+            return value.astimezone(timezone.utc)
+        with self._connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            conn.execute("""CREATE TABLE IF NOT EXISTS v2_owner_abandoned (
+                message_id TEXT PRIMARY KEY, owner_id TEXT NOT NULL,
+                delivery_status TEXT NOT NULL, recorded_at TEXT NOT NULL) STRICT""")
+            prior = conn.execute("""SELECT a.delivery_status FROM v2_owner_abandoned a
+                JOIN v2_trusted_owner_ingress o ON o.message_id=a.message_id AND o.owner_id=a.owner_id
+                JOIN v2_user_settings s ON s.key='admin_user_id' AND s.value=a.owner_id
+                JOIN v2_users u ON u.user_id=a.owner_id AND u.role='admin' AND u.is_active=1
+                WHERE a.message_id=? AND o.peer_uid=?""", (message_id, os.getuid())).fetchone()
+            if prior is not None:
+                return {'status': 'abandoned', 'delivery_status': prior['delivery_status']}
+            row = conn.execute("""SELECT q.*,o.owner_id,o.peer_uid,o.payload_sha256
+                FROM v2_inbound_messages q JOIN v2_trusted_owner_ingress o ON o.message_id=q.message_id
+                JOIN v2_user_settings s ON s.key='admin_user_id' AND s.value=q.user_id
+                JOIN v2_users u ON u.user_id=q.user_id AND u.role='admin' AND u.is_active=1
+                WHERE q.message_id=?""", (message_id,)).fetchone()
+            if row is None or row['owner_id'] != row['user_id'] or row['peer_uid'] != os.getuid():
+                raise ValueError('owner_abandon_unavailable')
+            has_outbox = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_outbox'").fetchone()
+            if not has_outbox or conn.execute('SELECT 1 FROM v2_outbox WHERE task_id=? LIMIT 1', (message_id,)).fetchone():
+                raise ValueError('owner_abandon_unavailable')
+            payload = [row[key] for key in ('message_id', 'timestamp', 'prompt', 'user_id', 'project_id',
+                       'tag', 'correlation_id', 'memory_session_id', 'metadata_json')]
+            digest = hashlib.sha256(json.dumps(payload, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
+            expected_metadata = {'intelligence_engine': 'single_loop_experimental',
+                                 'intelligence_schema_version': 1, 'routing_disposition': 'pdca_task'}
+            if (not isinstance(row['payload_sha256'], str) or not hmac.compare_digest(row['payload_sha256'], digest)
+                    or row['metadata_json'] != json.dumps(expected_metadata, sort_keys=True)
+                    or row['status'] not in {'pending', 'processing'}
+                    or conn.execute('SELECT 1 FROM v2_scheduled_handoffs WHERE message_id=?', (message_id,)).fetchone()):
+                raise ValueError('owner_abandon_unavailable')
+            started = now_utc()
+            if row['status'] == 'processing':
+                if (not isinstance(row['claim_generation'], str)
+                        or re.fullmatch(r'[0-9a-f]{32}', row['claim_generation']) is None
+                        or not row['lease_owner'] or not row['processing_at'] or row['attempt_count'] < 1):
+                    raise ValueError('owner_abandon_unavailable')
+                try:
+                    expiry = datetime.fromisoformat(row['lease_expires_at'])
+                    if expiry.tzinfo is None or expiry.utcoffset() is None or expiry.astimezone(timezone.utc) > started:
+                        raise ValueError('owner_abandon_live_claim')
+                except (TypeError, ValueError):
+                    raise ValueError('owner_abandon_live_claim') from None
+            checkpoint = conn.execute('SELECT * FROM v2_task_checkpoints WHERE task_id=?', (message_id,)).fetchone()
+            if row['status'] == 'pending' and (row['claim_generation'] or row['lease_owner']
+                    or row['lease_expires_at'] or row['processing_at'] or row['attempt_count'] != 0
+                    or checkpoint is not None):
+                raise ValueError('owner_abandon_unavailable')
+            delivery_status = 'no_pickup_recorded'
+            if checkpoint is not None:
+                try:
+                    from alphonse.agent_v2.core.messages.claim_fence import ClaimReceipt
+                    from alphonse.agent_v2.core.messages.experimental_claim_checkpoint import _claim_digest
+                    from alphonse.agent_v2.core.intelligence.v3.single_loop_candidate import CandidateState
+                    from alphonse.agent_v2.core.intelligence.v3.single_loop_checkpoint import STATE_KEY, ExperimentalCheckpointStore
+                    from alphonse.agent_v2.core.intelligence.v3.task_budget import TaskBudget
+                    raw = ExperimentalCheckpointStore._validate_identity(checkpoint, message_id, row['user_id'], checkpoint['version'])
+                    metadata = raw['metadata']
+                    if (checkpoint['owner_id'] != row['user_id'] or checkpoint['status'] != 'running'
+                            or raw['task_id'] != message_id
+                            or raw['message_id'] != message_id or raw['user'] != row['user_id']
+                            or raw['intelligence_engine'] != 'single_loop_experimental'
+                            or type(raw.get('intelligence_schema_version')) is not int
+                            or raw['intelligence_schema_version'] != 1 or not isinstance(metadata, dict)):
+                        raise ValueError
+                    allowed_keys = set(expected_metadata) | {STATE_KEY, 'owner_read_observations',
+                        'owner_read_pending_action', 'owner_read_pending_decision',
+                        'owner_read_selected_draft', 'owner_read_desktop_pickup_started'}
+                    if (set(metadata) - allowed_keys or type(metadata.get('intelligence_schema_version')) is not int
+                            or any(metadata.get(key) != value for key, value in expected_metadata.items())):
+                        raise ValueError
+                    receipt = ClaimReceipt(message_id, row['user_id'], row['lease_owner'], row['claim_generation'])
+                    claim_digest = _claim_digest(receipt)
+                    envelope = metadata[STATE_KEY]
+                    if (not isinstance(envelope, dict) or set(envelope) != {'schema_version', 'state', 'budget'}
+                            or type(envelope['schema_version']) is not int or envelope['schema_version'] != 1):
+                        raise ValueError
+                    state = CandidateState.restore(envelope['state'])
+                    budget = TaskBudget.from_dict(envelope['budget'])
+                    inflight = budget.usage()['in_flight']
+                    if (state.task_id != message_id or state.actor != row['user_id']
+                            or (state.inflight and inflight != [state.inflight])
+                            or (not state.inflight and inflight)):
+                        raise ValueError
+                    action = metadata.get('owner_read_pending_action')
+                    if action is not None and (not isinstance(action, dict) or action.get('kind') not in {'model', 'tool'}
+                            or (action.get('kind') == 'tool' and action.get('tool_id') not in {
+                                'native.search_memory', 'native.read_memory_source'})):
+                        raise ValueError
+                    if bool(action) != bool(state.inflight) or (action and action.get('reservation_id') != state.inflight):
+                        raise ValueError
+                    if action:
+                        reserved = budget.to_dict()['reservations'].get(state.inflight)
+                        if (action.get('claim_digest') != claim_digest or not isinstance(reserved, dict)
+                                or reserved.get('kind') != action.get('kind') or reserved.get('status') != 'reserved'):
+                            raise ValueError
+                    for key in ('owner_read_pending_decision', 'owner_read_selected_draft', 'owner_read_desktop_pickup_started'):
+                        marker = metadata.get(key)
+                        if marker is not None and (not isinstance(marker, dict) or marker.get('claim_digest') != claim_digest):
+                            raise ValueError
+                    pickup = metadata.get('owner_read_desktop_pickup_started')
+                    if pickup is not None:
+                        if not isinstance(pickup, dict) or pickup.get('status') != 'started_unconfirmed':
+                            raise ValueError
+                        delivery_status = 'unconfirmed'
+                    metadata['owner_read_abandoned'] = {'status': 'abandoned', 'delivery_status': delivery_status}
+                    updated = conn.execute('UPDATE v2_task_checkpoints SET task_state_json=?,version=version+1 WHERE task_id=? AND version=?',
+                        (json.dumps(raw, ensure_ascii=False, sort_keys=True), message_id, checkpoint['version']))
+                    if updated.rowcount != 1:
+                        raise ValueError
+                except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+                    raise ValueError('owner_abandon_unavailable') from None
+            ended = now_utc()
+            if ended < started:
+                raise ValueError('owner_abandon_clock_invalid')
+            deleted = conn.execute("""DELETE FROM v2_inbound_messages WHERE message_id=? AND user_id=?
+                AND status=? AND lease_owner=? AND claim_generation=? AND lease_expires_at=?""",
+                (message_id, row['user_id'], row['status'], row['lease_owner'], row['claim_generation'], row['lease_expires_at']))
+            if deleted.rowcount != 1:
+                raise ValueError('owner_abandon_unavailable')
+            conn.execute('INSERT INTO v2_owner_abandoned VALUES (?,?,?,?)',
+                         (message_id, row['user_id'], delivery_status, ended.isoformat()))
+            return {'status': 'abandoned', 'delivery_status': delivery_status}
 
     def peek(self, selector: MessageSelector | None = None) -> QueuedMessage | None:
         with self._connect() as conn:

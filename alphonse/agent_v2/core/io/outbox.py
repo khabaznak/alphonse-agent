@@ -755,6 +755,17 @@ def build_outbox_delivery_sink(
     resolver = identity_resolver or V2IdentityResolver()
 
     def _sink(event: dict[str, Any]) -> dict[str, Any]:
+        # Candidate task events must not fall through the legacy delivery sink:
+        # it can queue acknowledgements/questions, write transcripts, or invoke
+        # a communication router without the candidate's claim or checkpoint.
+        # This is a refusal, not an authorization mechanism; event producers
+        # must carry the real task identity and the normal candidate runtime
+        # remains disabled until a claim-bound delivery protocol is available.
+        task = event.get("task") if isinstance(event.get("task"), dict) else {}
+        task_metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+        if (task.get("intelligence_engine") == "single_loop_experimental"
+                or task_metadata.get("intelligence_engine") == "single_loop_experimental"):
+            raise ValueError("candidate_delivery_unavailable")
         event_type = str(event.get("event_type") or "").strip()
         if event_type == "communication.resolve_recipient":
             if communication_router is None:

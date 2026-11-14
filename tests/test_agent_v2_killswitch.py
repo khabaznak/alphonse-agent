@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from alphonse.agent_v2.core.core import CoreLoopContext, ProcessingStatus
+from alphonse.agent_v2.core.core import CoreLoopContext, ProcessingResult, ProcessingStatus, StateSnapshot
 from alphonse.agent_v2.core.io import OutboundSelector
-from alphonse.agent_v2.evaluation.legacy_pdca import PDCAIntelligenceProcessor
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
 from alphonse.agent_v2.core.messages import SQLiteMessageQueue
@@ -51,15 +50,6 @@ def test_killswitch_cancels_active_task_and_queues_owner_notice(tmp_path) -> Non
     assert notice.message == "Your task was eliminated for security reasons. Please try later or contact Alphonse’s Admin."
 
 
-def test_pdca_cancellation_skips_all_nodes() -> None:
-    task = TaskState(goal="unsafe work", user="owner")
-    result = PDCAIntelligenceProcessor().process(
-        task,
-        CoreLoopContext(messages=InMemoryMessageQueue(), cancellation_checker=lambda: True),
-    )
-
-    assert result.status == ProcessingStatus.CANCELLED
-    assert result.snapshot.metadata["task_state"]["status"] == "cancelled"
 
 
 def test_daemon_acknowledges_only_cancelled_active_message(tmp_path) -> None:
@@ -73,7 +63,7 @@ def test_daemon_acknowledges_only_cancelled_active_message(tmp_path) -> None:
 
         def process(self, task, context):
             self.daemon.trigger_killswitch(actor_user_id=admin.user_id)
-            return PDCAIntelligenceProcessor().process(task, context)
+            return ProcessingResult(snapshot=StateSnapshot(), status=ProcessingStatus.CANCELLED, error="inference_cancelled")
 
     processor = CancellingProcessor()
     runtime = build_runtime_host(user=admin.user_id, user_store=users, messages=queue, processor=processor)

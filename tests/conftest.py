@@ -1,9 +1,8 @@
 """Explicit synthetic decision providers for legacy CAPD compatibility tests."""
-from types import SimpleNamespace
 
 import pytest
 
-from alphonse.agent_v2.system_one import SystemOneActJudgments, SystemOneReviewResult
+from alphonse.agent_v2.system_one import SystemOneActJudgments
 
 
 def act_judgments(*, effect_requested=.01, effect_supported=.99, effect_contradicted=.01,
@@ -15,20 +14,6 @@ def act_judgments(*, effect_requested=.01, effect_supported=.99, effect_contradi
     })
 
 
-@pytest.fixture
-def v2_decisions():
-    def build(*, satisfy=False):
-        def evaluate(*, contract, evidence, **kwargs):
-            entries = evidence.get('entries', [])
-            refs = [entry['evidence_ref'] for entry in entries if entry.get('status') == 'success']
-            return SystemOneReviewResult(updates=tuple({
-                'criterion_id': criterion['id'],
-                'status': 'satisfied' if satisfy and refs else 'pending',
-                'evidence_refs': refs if satisfy else [],
-                'reason': 'Synthetic evidence judgment',
-            } for criterion in contract['criteria']), ambiguous_criterion_ids=())
-        return SimpleNamespace(evaluate=evaluate)
-    return build
 
 
 @pytest.fixture
@@ -82,39 +67,3 @@ def secure_vault(tmp_path):
     key.write_bytes(os.urandom(32))
     key.chmod(0o600)
     return CredentialVault(EncryptedFileBackend(root, key))
-
-
-@pytest.fixture
-def pdca_decisions():
-    """Explicit synthetic Check/Act answers for legacy graph mechanics tests.
-
-    Only successful evidence references can support the configured criteria.
-    Production code still owns patch validation and terminal-state invariants.
-    """
-    from alphonse.agent_v2.system_one import SystemOneActRecommendation, SystemOneReviewResult
-
-    class Decisions:
-        def __init__(self):
-            self.satisfy = False
-            self.action = None
-            self.calls = []
-
-        def recommend_act(self, *, state):
-            self.calls.append(("act", state))
-            criteria = state["acceptance_contract"].get("criteria", [])
-            complete = bool(criteria) and all(c["status"] == "satisfied" for c in criteria)
-            action = self.action or ("complete" if complete else "continue")
-            return SystemOneActRecommendation(
-                action, 1.0, True,
-                "All acceptance criteria are complete and a user response is prepared." if action == "complete" else "Synthetic continuation judgment.",
-                answers={"continuation_is_worthwhile": 1.0},
-            )
-
-        def evaluate(self, *, contract, phase, evidence):
-            self.calls.append(("check", evidence))
-            refs = [e["evidence_ref"] for e in evidence["entries"] if e["status"] == "success"]
-            updates = tuple({"criterion_id": c["id"], "status": "satisfied", "evidence_refs": refs}
-                            for c in contract["criteria"] if self.satisfy and refs)
-            return SystemOneReviewResult(updates, ())
-
-    return Decisions()

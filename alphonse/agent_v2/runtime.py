@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sqlite3
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -180,7 +181,13 @@ def build_runtime_host(
     conversation_store: SQLiteConversationStore | None = None,
     skill_store: SkillStore | None = None,
     coding_skill_service: Any | None = None,
+    experimental_owner_read: bool = False,
+    owner_selected_draft_sink: Callable[[Any], None] | None = None,
 ) -> V2RuntimeHost:
+    if type(experimental_owner_read) is not bool or (not experimental_owner_read and owner_selected_draft_sink is not None):
+        raise ValueError('owner_read_runtime_configuration_invalid')
+    if experimental_owner_read and (processor is not None or not callable(owner_selected_draft_sink)):
+        raise ValueError('owner_read_runtime_configuration_invalid')
     reset_state()
     provided_tools = tools is not None
     queue = messages or InMemoryMessageQueue()
@@ -222,6 +229,40 @@ def build_runtime_host(
     memory_session_store = memory_session_store or SQLiteMemorySessionStore()
     inference = inference or build_inference_router_from_settings(inference_settings_store.get())
     question_store = question_store or SQLiteQuestionStore()
+    outbox = outbox or SQLiteOutboundStore()
+    if experimental_owner_read:
+        # Registration is an explicit dependency-injection hook, not a daemon
+        # enable switch. The worker still refuses fenced processing until the
+        # entire acquisition and delivery path is integrated.
+        from alphonse.agent_v2.core.messages.sqlite_queue import SQLiteMessageQueue
+        from alphonse.agent_v2.core.intelligence.v3.owner_read_processor import (
+            OwnerReadConversationProcessor, authorize_trusted_owner_claim,
+        )
+        from alphonse.agent_v2.core.intelligence.v3.single_loop_checkpoint import ExperimentalCheckpointStore
+        from alphonse.agent_v2.core.intelligence.v3.task_budget import SQLiteTaskBudgetStore
+        try:
+            if (type(queue) is not SQLiteMessageQueue or queue.experimental_claim_fencing is not True
+                    or queue.db_path == ':memory:' or user_store.db_path == ':memory:'
+                    or question_store.db_path == ':memory:' or conversation_store.db_path == ':memory:'
+                    or type(outbox) is not SQLiteOutboundStore or outbox.db_path == ':memory:'
+                    or not os.path.samefile(queue.db_path, user_store.db_path)
+                    or not os.path.samefile(queue.db_path, question_store.db_path)
+                    or not os.path.samefile(queue.db_path, conversation_store.db_path)
+                    or not os.path.samefile(queue.db_path, outbox.db_path)):
+                raise ValueError('owner_read_runtime_store_mismatch')
+        except (AttributeError, OSError):
+            raise ValueError('owner_read_runtime_store_mismatch') from None
+
+        def _atomic_only_checkpoint(*_args: Any) -> None:
+            raise RuntimeError('owner_read_unfenced_checkpoint_forbidden')
+
+        candidate = OwnerReadConversationProcessor(
+            users=user_store, budgets=SQLiteTaskBudgetStore(queue.db_path),
+            authorize_claim=authorize_trusted_owner_claim, save_checkpoint=_atomic_only_checkpoint,
+            atomic_checkpoints=ExperimentalCheckpointStore(question_store),
+            selected_draft_sink=owner_selected_draft_sink,
+        )
+        processor = EngineRoutingProcessor(v3=HierarchicalCAPDProcessor(), owner_read_candidate=candidate)
     project_store = project_store or ProjectStore()
     artifact_store.capture_legacy_roots(project_store)
     artifact_resources = ArtifactResources(artifact_store, skill_store, project_store, repository_root=user_store.artifacts_root, is_admin=user_store.is_admin)
@@ -229,7 +270,6 @@ def build_runtime_host(
         artifact_resources.ensure_repository()
     # Legacy rows remain solely for migration/provenance and privacy guards.
     schedule_store = schedule_store or ScheduledTaskStore()
-    outbox = outbox or SQLiteOutboundStore()
     def _scheduled_delivery_allowed(message: Any) -> bool:
         metadata = message.metadata
         scheduled = schedule_store.get_task(str(metadata.get("scheduled_task_id") or ""))

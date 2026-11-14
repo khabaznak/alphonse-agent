@@ -25,6 +25,10 @@ from alphonse.agent_v2.core.messages.sqlite_queue import SQLiteMessageQueue
 from .router_candidate_chooser import RouterCandidateChooser
 from .single_loop_candidate import CandidateHost, CandidateState, run_candidate
 from .task_budget import BudgetLimits, SQLiteTaskBudgetStore, TaskBudget
+from .single_loop_checkpoint import ExperimentalCheckpointStore
+from .owner_atomic_checkpoint import OwnerAtomicCheckpoint
+from .owner_read_recovery import restore_owner_read_observations
+from datetime import datetime, timezone
 
 
 def authorize_trusted_owner_claim(task: TaskState, context: CoreLoopContext) -> bool:
@@ -50,13 +54,21 @@ class OwnerReadConversationProcessor:
     def __init__(self, *, users: V2UserStore, budgets: SQLiteTaskBudgetStore,
                  authorize_claim: Callable[[TaskState, CoreLoopContext], bool],
                  save_checkpoint: Callable[[TaskState, dict[str, Any]], None],
-                 now_ms: Callable[[], int] | None = None):
+                 now_ms: Callable[[], int] | None = None,
+                 atomic_checkpoints: ExperimentalCheckpointStore | None = None,
+                 selected_draft_sink: Callable[[OwnerAtomicCheckpoint, CoreLoopContext], None] | None = None):
         if (not isinstance(users, V2UserStore) or type(budgets) is not SQLiteTaskBudgetStore
                 or not callable(authorize_claim) or not callable(save_checkpoint)):
             raise ValueError('owner_read_configuration_invalid')
         self.users, self.budgets = users, budgets
         self.authorize_claim, self.save_checkpoint = authorize_claim, save_checkpoint
         self.now_ms = now_ms or (lambda: int(time.time() * 1000))
+        if atomic_checkpoints is not None and not isinstance(atomic_checkpoints, ExperimentalCheckpointStore):
+            raise ValueError('owner_read_atomic_checkpoint_invalid')
+        if selected_draft_sink is not None and (atomic_checkpoints is None or not callable(selected_draft_sink)):
+            raise ValueError('owner_read_draft_sink_invalid')
+        self.atomic_checkpoints = atomic_checkpoints
+        self.selected_draft_sink = selected_draft_sink
 
     def _authorized(self, task: TaskState, context: CoreLoopContext) -> bool:
         try:
@@ -99,14 +111,32 @@ class OwnerReadConversationProcessor:
             vector = lambda a, m, i, o: {'actions': a, 'model_calls': m, 'input_tokens': i, 'output_tokens': o}
             budget = TaskBudget(BudgetLimits(vector(5, 8, 524288, 131072),
                 vector(0, 1, 65536, 16384), 120000, 5000), started_at_ms=self.now_ms())
-            # Existing task IDs fail closed: no blind replay after restart.
-            self.budgets.create(task.task_id, budget)
+            atomic = None
+            candidate_state = CandidateState(task.task_id, actor, 'goal')
+            restored_observations = {}
+            if self.atomic_checkpoints is None:
+                # Existing task IDs fail closed: no blind replay after restart.
+                self.budgets.create(task.task_id, budget)
+            else:
+                atomic = OwnerAtomicCheckpoint(context.messages, self.atomic_checkpoints, task,
+                    context.claim_receipt, clock=lambda: datetime.now(timezone.utc))
+                version = getattr(task, '_checkpoint_version', None)
+                if version is None:
+                    atomic.initialize(candidate_state, budget)
+                else:
+                    recovered, restored_observations = restore_owner_read_observations(
+                        atomic, context, expected_version=version)
+                    candidate_state = recovered.state
+                    atomic.version = recovered.version
         except Exception:
             return self._failure(task, 'owner_read_initialization_unavailable')
 
-        # An observation is tied to the actor, exact action and original result.
-        # These in-process bindings cannot be reconstructed after a restart.
-        observations: dict[str, tuple[str, dict[str, Any], dict[str, Any]]] = {}
+        # Each recovered binding has already been checked against the current
+        # source and is checked again at each later access.
+        observations: dict[str, tuple[str, dict[str, Any], dict[str, Any]]] = {
+            ref: (item['tool_id'], deepcopy(item['arguments']), deepcopy(item['observation']))
+            for ref, item in restored_observations.items()
+        }
         execution_context = context.tool_execution_context(task)
 
         def allowed(actor_id: str, tool_id: str, args: dict[str, Any]) -> bool:
@@ -153,16 +183,28 @@ class OwnerReadConversationProcessor:
         host = CandidateHost(task, context, self.budgets, lambda snapshot: self.save_checkpoint(task, snapshot),
             chooser, access, load, allowed, lambda *_: '', provenance, self.now_ms,
             input_reservation=65536, output_reservation=16384, projection_budget=65536,
-            validate_observation=validate, record_bound_observation=record)
+            validate_observation=validate, record_bound_observation=record, atomic_checkpoint=atomic)
         try:
-            result = run_candidate(CandidateState(task.task_id, actor, 'goal'), host)
+            result = run_candidate(candidate_state, host)
         except Exception:
             return self._failure(task, 'owner_read_execution_unavailable')
         if result.status == 'cancelled':
-            return ProcessingResult(snapshot=StateSnapshot(task_owner=actor, metadata={'status': 'cancelled'}),
+            return ProcessingResult(snapshot=StateSnapshot(task_owner=actor, metadata={
+                                        'engine': 'single_loop_experimental',
+                                        'intelligence_schema_version': 1, 'status': 'cancelled'}),
                                     status=ProcessingStatus.CANCELLED, error='owner_read_cancelled')
         if result.status not in {'completed', 'waiting_user'}:
             return self._failure(task, result.blocker or 'owner_read_blocked')
+        # Owner pickup currently supports answers only. Questions stay as
+        # undelivered drafts until a claim-aware question lifecycle exists.
+        if result.status == 'completed' and self.selected_draft_sink is not None:
+            try:
+                # The callback receives the server-owned checkpoint object,
+                # never a caller-supplied receipt or answer. It must itself
+                # revalidate current authority before any later publication.
+                self.selected_draft_sink(atomic, context)
+            except Exception:
+                return self._failure(task, 'owner_read_draft_handoff_unavailable')
         return ProcessingResult(snapshot=StateSnapshot(task_owner=actor, current_work=task.goal,
             metadata={'engine': 'single_loop_experimental', 'intelligence_schema_version': 1,
                       'status': 'draft_only', 'draft': result.response, 'delivery': 'not_integrated'}),
@@ -171,4 +213,5 @@ class OwnerReadConversationProcessor:
     @staticmethod
     def _failure(task: Any, reason: str) -> ProcessingResult:
         return ProcessingResult(snapshot=StateSnapshot(task_owner=getattr(task, 'user', None),
-            metadata={'status': 'blocked', 'reason': reason}), status=ProcessingStatus.FAILED, error=reason)
+            metadata={'engine': 'single_loop_experimental', 'intelligence_schema_version': 1,
+                      'status': 'blocked', 'reason': reason}), status=ProcessingStatus.FAILED, error=reason)

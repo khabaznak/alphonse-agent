@@ -8,8 +8,6 @@ import pytest
 from alphonse.agent_v2.core.core import CoreLoopContext
 from alphonse.agent_v2.core.core import ToolExecutionContext
 from alphonse.agent_v2.core.intelligence.acceptance_planning import _render_acceptance_criteria_prompt
-from alphonse.agent_v2.evaluation.legacy_pdca.nodes.plan_node import _render_tool_call_plan_prompt
-from alphonse.agent_v2.evaluation.legacy_pdca.nodes.plan_node import plan_node
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
 from alphonse.agent_v2.core.projects import ProjectStore
@@ -160,18 +158,6 @@ def test_prompt_render_paths_include_project_context(tmp_path: Path) -> None:
         acceptance_criteria_md="1.- [ ] Docs exist",
         metadata={"v3_context_selection": {"selected_context_ids": ["project:" + project.project_id]}},
     )
-    context = CoreLoopContext(messages=InMemoryMessageQueue(), tools=build_native_tool_registry(), project_store=store)
-
-    task.metadata["v3_context_selection"] = {"selected_context_ids": [f"project:{project.project_id}"]}
-    plan_node(task, context=context)
-
-    assert "Prefer concise markdown." in task.metadata["tool_call_plan_prompt"]
-    assert "Alpha" in task.metadata["tool_call_plan_prompt"]
-    assert "Prefer concise markdown." in _render_tool_call_plan_prompt(
-        task,
-        tuple(),
-        project_context_md=store.render_project_context(project.project_id, requester_user_id="alex"),
-    )
     assert "Prefer concise markdown." in _render_acceptance_criteria_prompt(
         task,
         project_context_md=store.render_project_context(project.project_id, requester_user_id="alex"),
@@ -193,12 +179,10 @@ def test_capd_prompts_keep_user_and_project_contexts_isolated(tmp_path: Path) ->
 
     alex_task = TaskState(goal="Respond", user="alex", project_id=alex_project.project_id, acceptance_criteria_md="1.- [ ] Reply", metadata={"v3_context_selection": {"selected_context_ids": ["project:" + alex_project.project_id]}})
     gaby_task = TaskState(goal="Respond", user="gaby", project_id=gaby_project.project_id, acceptance_criteria_md="1.- [ ] Reply", metadata={"v3_context_selection": {"selected_context_ids": ["project:" + gaby_project.project_id]}})
-    plan_node(alex_task, context=context)
-    gaby_task.metadata["v3_context_selection"] = {"selected_context_ids": [f"project:{gaby_project.project_id}"]}
-    plan_node(gaby_task, context=context)
-
-    alex_prompt = alex_task.metadata["tool_call_plan_prompt"]
-    gaby_prompt = gaby_task.metadata["tool_call_plan_prompt"]
+    alex_prompt = _render_acceptance_criteria_prompt(alex_task, user_context_md=context.user_context_provider('alex'),
+        project_context_md=store.render_project_context(alex_project.project_id, requester_user_id='alex'))
+    gaby_prompt = _render_acceptance_criteria_prompt(gaby_task, user_context_md=context.user_context_provider('gaby'),
+        project_context_md=store.render_project_context(gaby_project.project_id, requester_user_id='gaby'))
     assert "ALEX_USER_SENTINEL" in alex_prompt
     assert "ALEX_PROJECT_SENTINEL" in alex_prompt
     assert "GABY_USER_SENTINEL" not in alex_prompt
@@ -220,14 +204,12 @@ def test_capd_prompt_uses_the_project_attached_to_each_new_task(tmp_path: Path) 
 
     first_task = TaskState(goal="Respond", user="alex", project_id=first.project_id, acceptance_criteria_md="1.- [ ] Reply", metadata={"v3_context_selection": {"selected_context_ids": ["project:" + first.project_id]}})
     second_task = TaskState(goal="Respond", user="alex", project_id=second.project_id, acceptance_criteria_md="1.- [ ] Reply", metadata={"v3_context_selection": {"selected_context_ids": ["project:" + second.project_id]}})
-    plan_node(first_task, context=context)
-    second_task.metadata["v3_context_selection"] = {"selected_context_ids": [f"project:{second.project_id}"]}
-    plan_node(second_task, context=context)
-
-    assert "FIRST_PROJECT_SENTINEL" in first_task.metadata["tool_call_plan_prompt"]
-    assert "SECOND_PROJECT_SENTINEL" not in first_task.metadata["tool_call_plan_prompt"]
-    assert "SECOND_PROJECT_SENTINEL" in second_task.metadata["tool_call_plan_prompt"]
-    assert "FIRST_PROJECT_SENTINEL" not in second_task.metadata["tool_call_plan_prompt"]
+    first_prompt = _render_acceptance_criteria_prompt(first_task, project_context_md=store.render_project_context(first.project_id, requester_user_id='alex'))
+    second_prompt = _render_acceptance_criteria_prompt(second_task, project_context_md=store.render_project_context(second.project_id, requester_user_id='alex'))
+    assert "FIRST_PROJECT_SENTINEL" in first_prompt
+    assert "SECOND_PROJECT_SENTINEL" not in first_prompt
+    assert "SECOND_PROJECT_SENTINEL" in second_prompt
+    assert "FIRST_PROJECT_SENTINEL" not in second_prompt
 
 
 def test_bash_defaults_to_project_root_when_cwd_omitted(tmp_path: Path) -> None:

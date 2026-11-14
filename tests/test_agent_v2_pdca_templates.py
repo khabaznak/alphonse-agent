@@ -9,33 +9,8 @@ from alphonse.agent_v2.core.intelligence.task_state import TaskState
 
 
 TEMPLATE_DIR = Path("alphonse/agent_v2/core/intelligence/templates")
-LEGACY_TEMPLATE_DIR = Path("alphonse/agent_v2/evaluation/legacy_pdca/templates")
 
 
-def test_pdca_prompt_templates_render_expected_sections() -> None:
-    env = Environment(loader=FileSystemLoader(LEGACY_TEMPLATE_DIR))
-
-    for template_name in ("check_prompt.j2", "plan_prompt.j2", "act_prompt.j2"):
-        rendered = env.get_template(template_name).render(
-            system_prompt="System instructions",
-            philosophy_md="Philosophy content",
-            global_context_md="Global context",
-            user_context_md="User context",
-            project_context_md="Project context",
-            user_prompt="User request",
-            task_state_md="Task state markdown",
-        )
-
-        assert "# System Prompt" in rendered
-        assert "System instructions" in rendered
-        assert "## Philosophy.md" in rendered
-        assert "## GlobalContext.md" in rendered
-        assert "## User Context" in rendered
-        assert "## Project Context" in rendered
-        assert "# User Prompt" in rendered
-        assert "User request" in rendered
-        assert "# Task State" in rendered
-        assert "Task state markdown" in rendered
 
 
 def test_acceptance_criteria_prompt_template_renders_expected_sections() -> None:
@@ -62,32 +37,6 @@ def test_acceptance_criteria_prompt_template_renders_expected_sections() -> None
     assert "Task state markdown" in rendered
 
 
-def test_tool_call_plan_prompt_template_renders_expected_sections() -> None:
-    env = Environment(loader=FileSystemLoader(LEGACY_TEMPLATE_DIR))
-
-    rendered = env.get_template("tool_call_plan_prompt.j2").render(
-        acceptance_criteria_md="1.- [ ] File exists",
-        available_tools_md="- tool-1 | write_file | native | Writes files",
-        task_state_md="Task state markdown",
-    )
-
-    assert "# System Prompt" in rendered
-    assert "one bounded execution phase" in rendered
-    assert "advance one or more acceptance criteria" in rendered
-    assert "pending_silent_bash_confirmation" in rendered
-    assert "next tool call must be `native.respond`" in rendered
-    assert '"id": "string"' in rendered
-    assert '"tool_id": "string"' in rendered
-    assert '"tool_name": "string"' in rendered
-    assert '"arguments": {}' in rendered
-    assert '"internal_state": "short user-visible status message, 256 chars max"' in rendered
-    assert "not hidden reasoning or chain-of-thought" in rendered
-    assert "# Acceptance Criteria" in rendered
-    assert "1.- [ ] File exists" in rendered
-    assert "# Available Tools" in rendered
-    assert "write_file" in rendered
-    assert "# Task State" in rendered
-    assert "Task state markdown" in rendered
 
 
 def test_task_state_exposes_pending_silent_bash_confirmation_to_planner() -> None:
@@ -130,37 +79,3 @@ def test_task_state_describes_desktop_project_file_attachments() -> None:
     assert "Project path: /tmp/project/notes.txt" in rendered
     assert "copied into the selected project directory" in rendered
     assert "Inspect them with normal local tools" in rendered
-
-
-def test_criteria_review_prompt_template_renders_expected_sections() -> None:
-    env = Environment(loader=FileSystemLoader(LEGACY_TEMPLATE_DIR))
-
-    rendered = env.get_template("criteria_review_prompt.j2").render(
-        acceptance_contract_json='{"criteria":[{"id":"ac-1","statement":"File exists","status":"pending"}]}',
-        valid_evidence_refs=["tool-call:plan-call-1"],
-        latest_executed_call_json='{"id": "plan-call-1", "execution": {"status": "success"}}',
-        task_state_md="Task state markdown",
-    )
-
-    assert "# System Prompt" in rendered
-    assert "cannot change, remove, add, merge, or reinterpret criteria" in rendered
-    assert "Return the status-update JSON object only" in rendered
-    assert "A satisfied criterion requires at least one real evidence reference" in rendered
-    assert "Do not decide mission success or mission failure" in rendered
-    assert "# Immutable Acceptance Contract" in rendered
-    assert '"id":"ac-1"' in rendered
-    assert "tool-call:plan-call-1" in rendered
-    assert "# Latest Executed Tool Call" in rendered
-    assert "plan-call-1" in rendered
-    assert "# Task State" in rendered
-    assert "Task state markdown" in rendered
-
-
-def test_pdca_prompt_templates_have_stub_defaults() -> None:
-    env = Environment(loader=FileSystemLoader(LEGACY_TEMPLATE_DIR))
-
-    rendered = env.get_template("check_prompt.j2").render()
-
-    assert "Stub check-node system prompt." in rendered
-    assert "- (not loaded)" in rendered
-    assert "- (not provided)" in rendered

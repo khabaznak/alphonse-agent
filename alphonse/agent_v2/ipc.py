@@ -97,8 +97,12 @@ class V2DaemonClient:
             limit=limit,
         )
 
-    def acknowledge_desktop_delivery(self, *, client_id: str, outbox_message_id: str) -> dict[str, Any]:
-        return self.request("desktop_ack_delivery", client_id=client_id, outbox_message_id=outbox_message_id)
+    def acknowledge_desktop_delivery(self, *, client_id: str, outbox_message_id: str,
+                                     attempt_count: int | None = None) -> dict[str, Any]:
+        params = {"client_id": client_id, "outbox_message_id": outbox_message_id}
+        if attempt_count is not None:
+            params["attempt_count"] = attempt_count
+        return self.request("desktop_ack_delivery", **params)
 
     def desktop_conversation_history(self, *, user: str, project_id: str = "", local_date: str = "", limit: int = 100) -> dict[str, Any]:
         return self.request("desktop_conversation_history", user=user, project_id=project_id, local_date=local_date, limit=limit)
@@ -371,6 +375,16 @@ class V2DaemonServer:
                     result = self._optional_management(connection, request)
                 elif isinstance(request, dict) and request.get('method') == 'experimental_owner_ingress':
                     result = self._owner_ingress(connection, request)
+                elif isinstance(request, dict) and request.get('method') == 'experimental_owner_take_draft':
+                    result = self._owner_take_draft(connection, request)
+                elif isinstance(request, dict) and request.get('method') == 'experimental_owner_ack_draft':
+                    result = self._owner_ack_draft(connection, request)
+                elif isinstance(request, dict) and request.get('method') == 'experimental_owner_status':
+                    result = self._owner_status(connection, request)
+                elif isinstance(request, dict) and request.get('method') == 'experimental_owner_abandon':
+                    result = self._owner_abandon(connection, request)
+                elif isinstance(request, dict) and request.get('method') == 'experimental_owner_recovery_list':
+                    result = self._owner_recovery_list(connection, request)
                 else:
                     result = self._dispatch(request)
                 response = {"version": PROTOCOL_VERSION, "request_id": _request_id(request), "ok": True, "result": result}
@@ -393,11 +407,73 @@ class V2DaemonServer:
         if not isinstance(params, dict) or set(params) != {'prompt'}:
             raise ValueError('owner_ingress_payload_denied')
         uid = self._local_peer_uid(connection)
+        if (getattr(self.daemon, 'experimental_owner_only', False) is True
+                and not self.daemon.owner_processing_ready()):
+            raise RuntimeError('owner_worker_unavailable')
         from alphonse.agent_v2.core.messages.sqlite_queue import SQLiteMessageQueue
         queue = self.daemon.runtime.queue
         if type(queue) is not SQLiteMessageQueue:
             raise PermissionError('owner_ingress_unavailable')
         return {'message_id': queue.enqueue_trusted_local_owner(prompt=params['prompt'], peer_uid=uid)}
+
+    def _owner_status(self, connection, request):
+        if not self.experimental_owner_ingress:
+            raise PermissionError('owner_status_unavailable')
+        if request.get('version') != PROTOCOL_VERSION:
+            raise ValueError('daemon_protocol_version_unsupported')
+        params = request.get('params')
+        if not isinstance(params, dict) or set(params) not in (set(), {'message_id'}):
+            raise ValueError('owner_status_payload_denied')
+        self._local_peer_uid(connection)
+        if not params:
+            return {'processing_ready': self.daemon.owner_processing_ready()}
+        return {'status': self.daemon.owner_message_status(params['message_id'])}
+
+    def _owner_recovery_list(self, connection, request):
+        if not self.experimental_owner_ingress:
+            raise PermissionError('owner_recovery_unavailable')
+        if request.get('version') != PROTOCOL_VERSION:
+            raise ValueError('daemon_protocol_version_unsupported')
+        if request.get('params') != {}:
+            raise ValueError('owner_recovery_payload_denied')
+        self._local_peer_uid(connection)
+        return {'items': self.daemon.owner_recovery_list()}
+
+    def _owner_abandon(self, connection, request):
+        if not self.experimental_owner_ingress:
+            raise PermissionError('owner_abandon_unavailable')
+        if request.get('version') != PROTOCOL_VERSION:
+            raise ValueError('daemon_protocol_version_unsupported')
+        params = request.get('params')
+        if not isinstance(params, dict) or set(params) != {'message_id'}:
+            raise ValueError('owner_abandon_payload_denied')
+        self._local_peer_uid(connection)
+        return self.daemon.abandon_owner_message(params['message_id'])
+
+    def _owner_take_draft(self, connection, request):
+        # The OS peer and server-held checkpoint identify authority; a client
+        # cannot supply an actor, claim receipt, destination, or draft bytes.
+        if not self.experimental_owner_ingress:
+            raise PermissionError('owner_desktop_pickup_unavailable')
+        if request.get('version') != PROTOCOL_VERSION:
+            raise ValueError('daemon_protocol_version_unsupported')
+        params = request.get('params')
+        if not isinstance(params, dict) or set(params) != {'message_id'}:
+            raise ValueError('owner_desktop_pickup_payload_denied')
+        self._local_peer_uid(connection)
+        return self.daemon.take_owner_desktop_draft(params['message_id'])
+
+    def _owner_ack_draft(self, connection, request):
+        if not self.experimental_owner_ingress:
+            raise PermissionError('owner_desktop_ack_unavailable')
+        if request.get('version') != PROTOCOL_VERSION:
+            raise ValueError('daemon_protocol_version_unsupported')
+        params = request.get('params')
+        if not isinstance(params, dict) or set(params) != {'message_id', 'acknowledgement_token'}:
+            raise ValueError('owner_desktop_ack_payload_denied')
+        self._local_peer_uid(connection)
+        self.daemon.acknowledge_owner_desktop_draft(params['message_id'], params['acknowledgement_token'])
+        return {'status': 'client_acknowledged'}
 
     @staticmethod
     def _local_peer_uid(connection):
@@ -427,6 +503,8 @@ class V2DaemonServer:
         return uid
 
     def _optional_management(self, connection, request):
+        if getattr(self.daemon, 'experimental_owner_only', False) is True:
+            raise RuntimeError('owner_only_integrations_unavailable')
         from alphonse.agent_v2.accounts import AccountSession
         self._local_peer_uid(connection)
         session = AccountSession(self.daemon.runtime.user)
@@ -456,6 +534,12 @@ class V2DaemonServer:
             raise ValueError(f"daemon_protocol_version_unsupported: {version}")
         method = str(request.get("method") or "").strip()
         params = request.get("params") if isinstance(request.get("params"), dict) else {}
+        if (getattr(self.daemon, 'experimental_owner_only', False) is True
+                and method in {'desktop_ack_delivery', 'answer_question', 'cancel_question', 'a2ui_action',
+                               'publish_event', 'register_event_worker', 'create_event_automation',
+                               'retry_occurrence', 'resume_schedule', 'approve_access_request',
+                               'save_telegram_integration', 'save_discord_integration'}):
+            raise RuntimeError('owner_only_operation_unavailable')
         if method == "ping":
             return {"service": "alphonse-v2-daemon", "status": "ready"}
         if method == "status":
@@ -532,6 +616,7 @@ class V2DaemonServer:
                 "acknowledged": self.daemon.acknowledge_desktop_delivery(
                     client_id=str(params.get("client_id") or "desktop"),
                     outbox_message_id=str(params.get("outbox_message_id") or ""),
+                    **({"attempt_count": params["attempt_count"]} if "attempt_count" in params else {}),
                 )
             }
         if method == "desktop_conversation_history":
@@ -900,6 +985,8 @@ class V2DaemonServer:
                 )
             }
         if method == "queue_message":
+            if getattr(self.daemon, 'experimental_owner_only', False) is True:
+                raise RuntimeError('owner_only_use_owner_conversation')
             integration_id = str(params.get("integration_id") or "tui")
             provider_key = str(params.get("provider_key") or "tui")
             user = str(params.get("user") or "")

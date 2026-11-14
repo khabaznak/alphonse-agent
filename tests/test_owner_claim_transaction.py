@@ -8,6 +8,8 @@ import pytest
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.messages.claim_fence import ClaimFenceUnavailable, ClaimSuperseded
 from alphonse.agent_v2.core.messages.sqlite_queue import SQLiteMessageQueue
+from alphonse.agent_v2.core.io.outbox import SQLiteOutboundStore
+from alphonse.agent_v2.core.questions import SQLiteQuestionStore
 from alphonse.agent_v2.users import V2UserStore
 
 
@@ -17,6 +19,7 @@ def owner_claim(tmp_path):
     users = V2UserStore(path)
     owner = users.onboard(display_name='Fixture', users_root=tmp_path / 'users')
     queue = SQLiteMessageQueue(path, experimental_claim_fencing=True)
+    SQLiteOutboundStore(path)
     message_id = queue.enqueue_trusted_local_owner(prompt='fixture', peer_uid=os.getuid())
     acquired = queue.claim_next()
     task = TaskState.from_message(acquired.message, message_id=message_id)
@@ -80,3 +83,59 @@ def test_expiry_before_commit_rolls_back_caller_writes(owner_claim):
             conn.execute("INSERT INTO fixture_writes VALUES ('bad')")
     with queue._connect() as conn:
         assert conn.execute('SELECT COUNT(*) FROM fixture_writes').fetchone()[0] == 0
+
+
+@pytest.mark.parametrize('final_delta, error', [(timedelta(days=1), ClaimSuperseded),
+                                                (timedelta(seconds=-1), ClaimFenceUnavailable)])
+def test_finalizer_clock_failure_rolls_back_claim_and_writes(owner_claim, final_delta, error):
+    queue, claim, task, _ = owner_claim
+    now = datetime.now(timezone.utc)
+    samples = iter((now, now, now + final_delta))
+    def delete_claim(conn):
+        conn.execute('DELETE FROM v2_inbound_messages WHERE message_id=?', (claim.message_id,))
+    with pytest.raises(error):
+        with queue.trusted_local_owner_claim_transaction(claim, task, clock=lambda: next(samples),
+                                                         _finalize=delete_claim) as conn:
+            conn.execute("INSERT INTO fixture_writes VALUES ('bad')")
+    with queue._connect() as conn:
+        assert conn.execute('SELECT COUNT(*) FROM fixture_writes').fetchone()[0] == 0
+        assert conn.execute('SELECT 1 FROM v2_inbound_messages WHERE message_id=?', (claim.message_id,)).fetchone()
+
+
+def test_abandon_rejects_requeued_processing_message(owner_claim):
+    queue, claim, task, _ = owner_claim
+    SQLiteQuestionStore(queue.db_path)
+    with queue._connect() as conn:
+        # Unsafe old-writer fixture: pending status must not erase evidence of
+        # a previous processing attempt.
+        conn.execute("UPDATE v2_inbound_messages SET status='pending' WHERE message_id=?", (claim.message_id,))
+    with pytest.raises(ValueError, match='owner_abandon_unavailable'):
+        queue.abandon_trusted_owner_message(claim.message_id)
+    with queue._connect() as conn:
+        assert conn.execute('SELECT 1 FROM v2_inbound_messages WHERE message_id=?', (claim.message_id,)).fetchone()
+
+
+def test_abandon_pristine_pending_message_is_explicit_and_idempotent(owner_claim):
+    queue, _, _, _ = owner_claim
+    SQLiteQuestionStore(queue.db_path)
+    message_id = queue.enqueue_trusted_local_owner(prompt='not started', peer_uid=os.getuid())
+    expected = {'status': 'abandoned', 'delivery_status': 'no_pickup_recorded'}
+    assert queue.abandon_trusted_owner_message(message_id) == expected
+    assert queue.abandon_trusted_owner_message(message_id) == expected
+
+
+def test_abandon_rejects_tampered_origin_and_revoked_owner(owner_claim):
+    queue, _, _, owner = owner_claim
+    SQLiteQuestionStore(queue.db_path)
+    message_id = queue.enqueue_trusted_local_owner(prompt='not started', peer_uid=os.getuid())
+    with queue._connect() as conn:
+        conn.execute("UPDATE v2_inbound_messages SET prompt='changed' WHERE message_id=?", (message_id,))
+    with pytest.raises(ValueError, match='owner_abandon_unavailable'):
+        queue.abandon_trusted_owner_message(message_id)
+    with queue._connect() as conn:
+        conn.execute("UPDATE v2_inbound_messages SET prompt='not started' WHERE message_id=?", (message_id,))
+        conn.execute('UPDATE v2_users SET is_active=0 WHERE user_id=?', (owner.user_id,))
+    with pytest.raises(ValueError, match='owner_abandon_unavailable'):
+        queue.abandon_trusted_owner_message(message_id)
+    with queue._connect() as conn:
+        assert conn.execute('SELECT 1 FROM v2_inbound_messages WHERE message_id=?', (message_id,)).fetchone()
