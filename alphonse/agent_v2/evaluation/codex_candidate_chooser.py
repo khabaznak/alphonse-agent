@@ -121,7 +121,7 @@ class CodexSubscriptionChooser:
             'If its relevance is uncertain and it could resolve a material '
             'uncertainty, inspect it before answering. '
             'Use a question only when essential information is genuinely missing after available '
-            'host sources and their results have been considered. Do not ask the user to enable an '
+            'source descriptions and relevant observations have been considered. Do not ask the user to enable an '
             'already listed tool, and do not claim an observation that was not supplied.\n\n'
         )
         request = InferenceRequest(prompt=instructions + projection,

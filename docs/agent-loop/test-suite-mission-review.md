@@ -527,6 +527,63 @@ Its other checks and the separate processing-window test remain useful.
 Validation: `.venv/bin/python -m pytest -q tests/test_source_acquisition.py
 tests/test_findings.py` — **57 passed in 7.02 seconds**, not a full-suite run.
 
+### Conversation history and session routing: three files
+
+On 14 November, individually inspected **30 test functions / 31 collected
+cases** in `test_agent_v2_conversations.py` (16 functions),
+`test_agent_v2_memory_sessions.py` (7), and
+`test_agent_v2_project_sessions.py` (7). The project-session cross-channel
+question case is parameterized over two source channels. These are synthetic
+store/router and V3-bridge checks, not evidence that the simple-loop candidate
+can resume questions or deliver a household response.
+
+| Conversation function suffix | Disposition and behavior |
+| --- | --- |
+| `channel_records_project_user_turn_once` | Retain: duplicate inbound message ID records one turn. |
+| `desktop_history_combines_all_projects_for_one_local_day_in_order` | Retain: Desktop combines project, projectless, and cross-channel records in observed order. |
+| `desktop_history_refresh_sees_telegram_turns_without_daemon_restart` | Retain: a post-first-read Telegram turn becomes visible without restart. |
+| `desktop_history_uses_users_timezone_at_day_boundary` | Retain: UTC timestamps fall into the correct local dates. |
+| `user_seen_cursor_and_history_survive_store_restart` | Retain: persisted read marker and history survive reopening. |
+| `seen_cursor_is_scoped_to_user_and_local_day` | Retain for separate local-day cursors; the fixture has only one user, so the name does **not** demonstrate cross-user isolation. |
+| `blank_project_migration_keeps_unassociated_history_unassociated` | Retain: startup migration preserves projectless and associated scope. |
+| `startup_imports_legacy_user_and_project_ledgers_once_with_original_scope` | Retain: startup migration retains project scopes and avoids repeat imports. |
+| `timestamps_are_canonical_utc_and_sort_true_chronological_order` | Retain: offset normalization and chronological order. |
+| `same_timestamp_order_is_stable` | Retain: stable tie ordering and sequence on repeated reads. |
+| `project_seen_cursor_is_authoritative_and_project_scoped` | Retain: seeing one project does not mark a second project seen. |
+| `legacy_sequence_migration_initializes_existing_history_as_seen` | Retain: migrated sequence/order and subsequent unseen event. |
+| `store_startup_migrates_legacy_offset_timestamps_idempotently` | Retain: old timestamps normalize across two restarts. |
+| `legacy_ledger_recovers_only_visible_turns` | Retain: import excludes internal plan/tool entries. |
+| `desktop_history_imports_legacy_ledger_only_once` | Retain: import idempotence and unknown-date handling; remove its final `repeated == history` assertion because the earlier `history == repeated == []` already asserts it. No collected case was removed. |
+| `conversation_store_searches_memory_across_projects` | Retain for matching the requested text; only one project has a match, and the other owner's record does not match the query. It does **not** prove cross-project search or cross-owner isolation. |
+
+| Memory-session function suffix | Disposition and behavior |
+| --- | --- |
+| `bounded_context_never_loads_full_session_ledger` | Retain: bounded projection and truncation metadata while stored ledger is longer. The test inspects returned context and file length, not actual disk-read volume. |
+| `session_close_keeps_historical_view_without_promoting_project_memory` | Retain: stored summary remains session-scoped. |
+| `router_stamps_selected_session_before_queueing_and_supports_commands` | Retain: explicit-project session selection and cross-channel binding, with ordinary conversation projectless. |
+| `legacy_ledgers_are_archived_once_without_promoting_prose` | Retain: one-time archive without creating a project summary. |
+| `memory_session_store_keeps_bindings_per_project_and_rejects_closed_sessions` | Retain: distinct project bindings and closed-session behavior. |
+| `operational_task_prompt_omits_memory_context` | Retain: explicit prompt option excludes memory bytes. |
+| `memory_setting_persists_configurable_context_budget` | Retain: persisted budget survives store reopen. |
+
+| Project-session function suffix | Disposition and behavior |
+| --- | --- |
+| `project_session_never_routes_ordinary_messages_or_falls_back_to_home` | Retain: selected session does not force ordinary messages into a project across channels/threads. |
+| `explicit_project_context_is_authorized_and_projectless_task_is_valid` | Retain: explicit accessible project, projectless request and denied actor. |
+| `project_commands_are_deterministic_and_do_not_queue_capd_work` | Retain: commands update selected project and do not queue model work. |
+| `project_context_mutation_requires_owner_and_unknown_slash_bypasses_capd` | Retain: member cannot change owner context and unknown command does not invoke model work. |
+| `project_commands_do_not_grant_admins_access_to_other_users_private_projects` | Retain: listing/selection enforce owner and shared membership even for an admin. |
+| `cross_channel_reply_resumes_pending_question_with_original_task_context` | Retain both channel variants: an answer is correlated and retains original task/session context; it does not test simple-loop or actual message delivery. |
+| `explicit_desktop_project_request_is_new_work_and_checks_access` | Retain: explicit Desktop request bypasses pending-question routing and checks project authority. |
+
+Validation: all **31 cases passed** after the redundant assertion removal.
+Tests were run with a temporary pytest isolation plugin redirecting the
+default legacy users root to a disposable directory and with a temporary empty
+skills path, avoiding household storage; fixtures that explicitly provide a
+test users root keep it. This focused run is not a full-suite validation. The
+plugin changes the default-root environment and therefore does not itself
+verify the real default users-root configuration.
+
 ## Mission coverage and next review passes
 
 Keep behavior that protects real household outcomes while the relevant feature

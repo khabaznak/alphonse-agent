@@ -30,6 +30,29 @@ occurrences, authoritative stored checkpoints, question resumes and failure
 notice delivery still require end-to-end verification; memory setup precedes
 router validation and must not be treated as fenced by this regression.
 
-Removal requires #224–#228, reconciliation of #216–#218, a qualified release
-decision, and an explicit data-preserving recovery and rollback plan in #229.
-No household rollout or legacy data deletion is authorized by this inventory.
+Independently unused V2-only code may be removed before the broader release
+after its consumers, exports, replay, and legacy-state recovery are checked.
+Final removal of the V3 bridge and a single-loop production transition require
+the relevant #224–#228 work, reconciliation of #216–#218, a release decision,
+and a data-preserving recovery and rollback plan in #229. No household rollout
+or legacy data deletion is authorized by this inventory.
+
+## Targeted V2 removal audit — 14 November
+
+`basic.py` is no longer used by the runtime or repository tests, but
+`BasicIntelligenceProcessor` remains an explicit package export. Removing it
+would change the distributable API; absence of repository callers cannot rule
+out external users. The owner previously approved removing its two placeholder
+tests, not the exported implementation.
+
+The PDCA package is no longer selected for normal task dispatch, but the
+historical `evaluation/deterministic_adapters.py` still constructs
+`PDCAIntelligenceProcessor`, and repository tests directly exercise its nodes
+and replay. Its processor, graph, nodes and package exports therefore cannot
+be removed under an assumption that replay and public imports stay intact.
+An inventory of module-level private functions in the PDCA package found no
+definition with zero references in repository Python source and tests; that
+search does not prove each reference is live or discover dynamic external
+callers. No code was removed in this pass. To retire PDCA, first decide whether
+to preserve the executable historical replay baseline, replace it, or retain
+only its already-recorded evidence; separately decide the public API policy.

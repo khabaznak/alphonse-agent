@@ -54,6 +54,30 @@ for normal household conversations and the production release gates remain open.
 
 ## Guidance experiment
 
+### Paired source-selection contrast — 14 November
+
+The chooser's general question guidance was clarified to consider source
+descriptions and relevant observations, without implying that every source's
+contents must be read. A separately scored development contrast uses the same
+records and descriptions but asks about the exercise program, making the
+previous distractor relevant. The two tasks were scheduled before dispatch,
+with one subscription-backed attempt each, and the candidate received neither
+answer keys nor required-source lists.
+
+The pharmacy attempt answered correctly and read the prescription and
+conversation records, without reading the exercise record or index: **2 reads,
+4 model calls, 21.30 seconds**. The exercise attempt answered correctly and
+read the exercise record without reading the other records or index: **1 read,
+3 model calls, 13.76 seconds**. The plan and categorical receipts are
+`evidence/gym-cycle-2026-11-13/selective-contrast-pair-*-v1.jsonl` and
+`selective-contrast-pair-v1-plan.json`. Actual provider token use was unknown.
+These are encouraging task-specific observations, not a demonstrated causal
+effect of the wording change or an estimate of general reliability; the runs
+were concurrent, not held out, and earlier failures remain part of the record.
+Host trace identifies decisions and completed callbacks, while the bearer audit
+cannot prove process attribution or when an answer was formed. No real user
+delivery was assessed.
+
 ### Source-order diagnostic — 14 November
 
 An opt-in synthetic trace now records whitelisted source selections, completed
