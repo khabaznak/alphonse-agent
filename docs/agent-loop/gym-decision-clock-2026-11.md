@@ -56,6 +56,23 @@ for normal household conversations and the production release gates remain open.
 
 ### Reference and source-variant exercise — 14 November
 
+#### Paired current-reference contrast
+
+Two new synthetic cases have identical two-prescription records but different
+current prescription IDs in conversation; their correct answers differ. One
+prespecified subscription-backed attempt per case returned the matching answer
+and observed both designated sources. The first case also read the optional
+status and index (4 reads, 6 model calls, 32.20 seconds); the second read only
+the two designated sources (2 reads, 4 calls, 28.94 seconds). The candidate was
+not given the answer keys or required-source list. The plan and categorical
+receipts are `evidence/gym-cycle-2026-11-13/selective-reference-pair-v1-*`.
+
+This stronger contrast makes the conversation reference matter to which answer
+is correct. It remains one attempt per public development case, not held-out
+qualification or a general reliability estimate. Bearer audit does not prove
+reader identity or when the answer was formed. Actual delivery, question
+utility and provider token usage remain unassessed.
+
 #### Observed-source progress experiment
 
 An opt-in synthetic chooser experiment shows which advertised sources have

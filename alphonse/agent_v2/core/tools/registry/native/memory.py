@@ -65,7 +65,9 @@ def complete_conversation_read(actor: str, tool_id: str, arguments: dict[str, An
     source_id = arguments.get('source_id')
     if (not isinstance(actor, str) or not actor.strip() or tool_id != READ_MEMORY_SOURCE_TOOL_ID
             or not isinstance(source_id, str) or not source_id.startswith('conversation:')
-            or arguments.get('offset', 0) != 0 or payload.get('schema_version') != 2
+            or not source_id.removeprefix('conversation:').strip()
+            or type(arguments.get('offset', 0)) is not int or arguments.get('offset', 0) != 0
+            or type(payload.get('schema_version')) is not int or payload.get('schema_version') != 2
             or payload.get('status') != 'found' or payload.get('truncated') is not False
             or payload.get('next_offset') is not None or payload.get('historical_only') is not True):
         return False
@@ -76,12 +78,34 @@ def complete_conversation_read(actor: str, tool_id: str, arguments: dict[str, An
     source = item.get('source')
     access = source.get('access') if isinstance(source, dict) else None
     content = item.get('content')
-    return bool(item.get('source_id') == source_id and isinstance(source, dict)
+    if not (item.get('source_id') == source_id and isinstance(source, dict)
         and source.get('source_id') == source_id and source.get('kind') == 'conversation'
         and isinstance(access, dict) and access.get('owner_user_id') == actor
         and isinstance(content, str) and item.get('start_char') == 0
         and type(item.get('end_char')) is int and item['end_char'] == len(content)
-        and type(item.get('total_chars')) is int and item['total_chars'] == len(content))
+        and type(item.get('total_chars')) is int and item['total_chars'] == len(content)):
+        return False
+    # A read may also return adjacent messages. The anchor's owner does not
+    # authorize promoting arbitrary neighbor text into the candidate's evidence.
+    neighbors = payload.get('neighbors')
+    count = arguments.get('neighbors', 2)
+    if (type(count) is not int or not 0 <= count <= 5 or not isinstance(neighbors, list)
+            or len(neighbors) > 2 * count or payload.get('supporting_sources') != []):
+        return False
+    seen = {source_id}
+    for neighbor in neighbors:
+        if not isinstance(neighbor, dict):
+            return False
+        neighbor_source = neighbor.get('source')
+        neighbor_access = neighbor_source.get('access') if isinstance(neighbor_source, dict) else None
+        neighbor_id = neighbor_source.get('source_id') if isinstance(neighbor_source, dict) else None
+        if (not isinstance(neighbor_id, str) or not neighbor_id.startswith('conversation:')
+                or neighbor_id in seen or neighbor_source.get('kind') != 'conversation'
+                or not isinstance(neighbor_access, dict) or neighbor_access.get('owner_user_id') != actor
+                or not isinstance(neighbor.get('content'), str) or neighbor.get('truncated') is not False):
+            return False
+        seen.add(neighbor_id)
+    return True
 
 
 def revalidate_conversation_observation(

@@ -20,6 +20,14 @@ revocation during I/O, fence UI/memory events, or make publication safe. The
 experiment does not register a household host or use household data. Those
 boundaries still require the controls below before owner use.
 
+The direct-owner read validator also checks every adjacent message in the
+returned envelope: its source must be a distinct conversation owned by the
+same actor, and its text must be complete. It rejects unexpected supporting
+sources, excessive neighbors and malformed offsets. This prevents a mixed-owner
+or internally inconsistent response from being promoted as complete evidence;
+it does not replace the native tool's access checks or establish publication
+authority.
+
 The disposable candidate can now discover a conversation source using the
 actual `native.search_memory` operation, then read the discovered source with
 `native.read_memory_source`, instead of requiring a preknown source ID. The

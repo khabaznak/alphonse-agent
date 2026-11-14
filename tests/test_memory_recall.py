@@ -1,5 +1,6 @@
 """Structured retrieval, authorization, pagination and original-source recovery."""
 import json
+from copy import deepcopy
 from types import SimpleNamespace
 
 import pytest
@@ -13,6 +14,7 @@ from alphonse.agent_v2.memory_settings import SQLiteMemorySettingsStore
 from alphonse.agent_v2.core.tools.registry.native.memory import (
     execute_search_memory as search, execute_read_memory_source as read,
     build_read_memory_source_tool_definition, build_search_memory_tool_definition,
+    complete_conversation_read,
 )
 
 
@@ -82,6 +84,29 @@ def test_visibility_before_rank_and_live_expansion(context):
     with context.conversation_store._connect() as conn:
         conn.execute("UPDATE v2_conversation_events SET visibility='private', shared_with='[]' WHERE event_id=?", (public.event_id,))
     assert read({'source_id': public_id}, context=context)['status'] == 'not_found'
+
+
+def test_complete_owner_read_rejects_unowned_or_inconsistent_neighbor(context):
+    event(context, 'Earlier household question')
+    anchor = event(context, 'Current household answer')
+    arguments = {'source_id': f'conversation:{anchor.event_id}'}
+    observation = read(arguments, context=context)
+    assert observation['neighbors']
+    assert complete_conversation_read('alex', 'native.read_memory_source', arguments, observation)
+
+    wrong_owner = deepcopy(observation)
+    wrong_owner['neighbors'][0]['source']['access']['owner_user_id'] = 'other-user'
+    assert not complete_conversation_read('alex', 'native.read_memory_source', arguments, wrong_owner)
+
+    inconsistent = deepcopy(observation)
+    inconsistent['neighbors'][0]['truncated'] = True
+    assert not complete_conversation_read('alex', 'native.read_memory_source', arguments, inconsistent)
+
+    unexpected_sources = deepcopy(observation)
+    unexpected_sources['supporting_sources'] = [{'source_id': 'private'}]
+    assert not complete_conversation_read('alex', 'native.read_memory_source', arguments, unexpected_sources)
+    assert not complete_conversation_read('alex', 'native.read_memory_source',
+                                          {**arguments, 'offset': False}, observation)
 
 
 def test_neighbors_and_long_quote_pagination(context):

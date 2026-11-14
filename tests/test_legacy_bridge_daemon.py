@@ -24,6 +24,9 @@ def test_retired_queued_work_stops_without_running_another_engine(tmp_path, stam
     # one attempt. Use the real router but make a V3 dispatch observable.
     calls = []
     runtime.core.intelligence.v3.process = lambda *_args: calls.append(True)
+    memory_reads = []
+    if stamp in (None, "tactical_v2", "saved_checkpoint"):
+        runtime.core.memory.start_task = lambda *_args, **_kwargs: memory_reads.append(True)
     metadata = {"channel": channel_metadata(integration_id="desktop", provider_key="desktop",
                                              channel_target=user.user_id, alphonse_user_id=user.user_id)}
     if stamp == "saved_checkpoint":
@@ -42,6 +45,7 @@ def test_retired_queued_work_stops_without_running_another_engine(tmp_path, stam
     assert step.error == "intelligence_engine_unregistered"
     assert queue.status_for(queued.message_id) == "failed"
     assert not calls
+    assert not memory_reads
     with queue._connect() as conn:
         row = conn.execute("SELECT prompt, user_id, metadata_json, attempt_count FROM v2_inbound_messages WHERE message_id=?",
                            (queued.message_id,)).fetchone()

@@ -790,6 +790,13 @@ class AlphonseCore:
             )
             if context.is_cancelled():
                 raise RuntimeError("scheduled_task_cancelled")
+            # Legacy tasks are deliberately not resumed by the current router.
+            # Refuse them before loading memory or conversation history so an
+            # unsupported checkpoint cannot trigger those task-scoped reads.
+            if task.intelligence_engine == "tactical_v2":
+                from alphonse.agent_v2.core.intelligence.v3.processor import EngineRoutingProcessor
+                if isinstance(self.intelligence, EngineRoutingProcessor):
+                    raise ValueError("intelligence_engine_unregistered")
             start_memory = getattr(self.memory, "start_task", None)
             memory_options = {"cancel_checker": context.is_cancelled} if getattr(self.memory, "supports_knowledge_cancellation", False) else {}
             if callable(start_memory):

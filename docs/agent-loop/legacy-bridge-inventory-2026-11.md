@@ -28,7 +28,11 @@ daemon: no V3 dispatch, one failed attempt, retained queue record and a failure
 notice queued in the outbox. This is not a recovery UI or a delivery receipt. Scheduled
 occurrences, authoritative stored checkpoints, question resumes and failure
 notice delivery still require end-to-end verification; memory setup precedes
-router validation and must not be treated as fenced by this regression.
+router validation for other engines and must not be treated as generally fenced
+by this regression. For the normal `EngineRoutingProcessor`, V2-stamped or
+unstamped legacy tasks are now rejected before task memory and conversation
+history are loaded; daemon prework and the active-task callback still precede
+this check. The isolated historical replay processor remains separately usable.
 
 Independently unused V2-only code may be removed before the broader release
 after its consumers, exports, replay, and legacy-state recovery are checked.

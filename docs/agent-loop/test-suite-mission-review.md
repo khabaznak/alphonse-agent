@@ -990,6 +990,80 @@ alphonse_audit_isolation_step5 tests/test_agent_v2_skills.py
 tests/test_household_starter_skills.py` — **72 passed, 35 skipped in 0.41
 seconds**. This was a focused run, not the full suite.
 
+### Integration management and status: three files
+
+On 14 November, individually reviewed **18 test functions / 26 collected
+cases** in `test_integration_management.py` (11 functions),
+`test_integration_management_status.py` (4), and
+`test_agent_v2_integrations_store.py` (3). These use disposable accounts,
+fixtures and stores rather than live providers or household data. The tests
+exercise existing product services and bridge paths, not qualification of the
+simpler conversation loop.
+
+| Function | Reason retained |
+| --- | --- |
+| `owner_member_admin_catalog_isolation` | Different principals see scoped connections and resources; serialized catalog omits credential and scope details. |
+| `review_binds_exact_scope_actor_channel_and_single_use` | Confirmation is bound to actor/channel and cannot be replayed after activation. |
+| `stale_reviews_fail_closed` | Five separately altered authorities or revisions invalidate a saved review before policy creation. |
+| `invalid_scope_or_missing_details_cannot_review` | Invalid recipient/source and missing or invalid scheduling details stop review. |
+| `one_minute_window_and_stale_lifecycle_response` | Minimum time window, stale revision, resume and unauthorized project access. |
+| `grant_and_explicit_role_selection` | A grant must be bound and selected before its role becomes a source. |
+| `native_uses_task_identity_and_cancellation` | Task-bound review channel, cancellation, absent context and a verified management effect receipt. |
+| `legacy_dispatch_cannot_claim_authenticated_management` | Legacy IPC dispatch rejects a caller-supplied actor claim. |
+| `peer_identity_not_payload` | Authenticated peer controls identity; spoofed payload and wrong peer are rejected. |
+| `real_unix_peer_is_authenticated_without_python_getpeereid` | A real local socketpair exercises the platform peer-identity fallback. |
+| `review_save_rechecks_authority_after_preflight` | A project change during save invalidates the review. |
+| `operational_projection_retains_pending_partial_and_hides_checkpoints` | Partial acquisition and pending analysis remain visible without exposing private checkpoint data. |
+| `recipient_inbox_and_actual_delivery_outcomes_without_project_access` | Recipient-scoped visibility, queued status and grant revocation. The name overstates delivery coverage: the test only checks a pending queued state, not an actual delivery or receipt. |
+| `stale_offline_run_and_reconnect_policy_are_visible` | Stale lease and reconnect state affect the visible policy and next run. |
+| `irrelevant_items_do_not_remain_pending_analysis` | An irrelevant triage result clears the projected pending-analysis state. |
+| `integration_store_upserts_lists_and_masks_secrets` | Integration persistence/listing and masked versus explicitly unmasked serialization. |
+| `integration_store_can_disable_and_remove_token` | Disabling and removing a credential affect distinct stored fields. |
+| `default_integration_registry_exposes_telegram_descriptor` | The shipped Telegram descriptor and runtime factory are registered. |
+
+No cases were removed: inspection did not establish redundant coverage.
+Several parameterized negative tests accept either `PermissionError` or
+`ValueError`, so they do not establish the exact rejection reason. The socket
+case verifies local peer handling, not remote network authentication; the
+delivery projection checks do not establish a real provider delivery.
+Validation: `PYTHONPATH=/private/tmp:. .venv/bin/python -m pytest -q -p
+alphonse_audit_isolation_step5 tests/test_integration_management.py
+tests/test_integration_management_status.py tests/test_agent_v2_integrations_store.py`
+— **26 passed in 2.25 seconds**, with local socketpair access. The temporary
+isolation plugin redirects default user, skill and configuration roots. This
+was a focused run, not a full-suite run.
+
+### Ledger memory and offline replay: two files
+
+On 14 November, individually reviewed **13 test functions / 14 collected
+cases** in `test_agent_v2_ledger_memory.py` (5 functions) and
+`test_memory_replay.py` (8). They use temporary invented ledgers and a public
+development corpus. The replay checks exercise a V3 context-assembly and
+scoring characterization; they do not demonstrate a live model's answer
+quality or qualification of the simpler loop.
+
+| Function | Reason retained |
+| --- | --- |
+| `project_ledgers_are_scoped_per_user` | A project ledger event for one household member does not appear in another member's ledger. |
+| `rollover_links_previous_ledger_and_bounds_summary_words` | Ledger rotation preserves a previous-file link while applying a summary word bound. |
+| `generic_and_project_memory_do_not_mix` | Exercises separate generic and project ledger contexts. Its inequality assertion alone is weak evidence of content isolation; it does not seed a secret in one context and verify its absence from the other. |
+| `concurrent_ledger_appends_do_not_interleave_or_drop_events` | Concurrent writes preserve each of 100 distinct events exactly once. |
+| `generic_prompt_context_is_bounded_and_excludes_audit_plans` | Prompt projection excludes prior plans and criteria while leaving the underlying ledger available and respecting a token estimate bound. |
+| `offline_replay_is_reproducible_without_network` | Pins an offline characterization against recorded results and guards against unintended network access. Exact snapshot matching is intentionally sensitive to runtime changes, not a measure of model performance. |
+| `private_and_shared_records_exercise_real_owner_filter` | Contrasts shared visibility with a private record under its actual owner. |
+| `unavailable_search_is_distinct_from_missing_results` | Keeps an empty search separate from backend unavailability in structured coverage. |
+| `old_explicit_recall_uses_search_while_implicit_recall_is_missing` | Characterizes a relevant old explicit search hit and a missing implicit recall path. |
+| `live_scoring_rejects_unsupported_claims_and_historical_permissions` | Scoring distinguishes sourced historical statements from an unsupported claim of present authorization or an action. It tests scoring rules, not actual live safety. |
+| `optional_responder_gets_observed_context_without_answer_oracle` | A stub responder receives observed context and a response contract, without the synthetic answer key. |
+| `cli_requires_both_explicit_live_flags` | Both missing-flag configurations fail before invoking an unsupported responder or writing a result. |
+| `corpus_rejects_unknown_source_expectations` | A malformed expected-source reference is rejected instead of silently scored. |
+
+No cases were removed: these cover distinct boundaries or characterization
+purposes. Validation: `PYTHONPATH=/private/tmp:. .venv/bin/python -m pytest -q
+-p alphonse_audit_isolation_step5 tests/test_agent_v2_ledger_memory.py
+tests/test_memory_replay.py` — **14 passed in 0.72 seconds**. No live model,
+network, household data or full-suite run was involved.
+
 ## Mission coverage and next review passes
 
 Keep behavior that protects real household outcomes while the relevant feature
