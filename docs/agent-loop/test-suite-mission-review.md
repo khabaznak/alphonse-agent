@@ -39,7 +39,7 @@ tests exercise real shared boundaries.
 
 ### First removal candidates, with explicit lost coverage
 
-1. `tests/test_agent_v2_basic_intelligence.py` has two cases for the old
+1. **Removed:** `tests/test_agent_v2_basic_intelligence.py` had two cases for the old
    `BasicIntelligenceProcessor` echo and its `/project new` placeholder. The
    repository search found no use of the class outside its own two tests and
    its definition/export; the sole installed command enters the daemon CLI.
@@ -48,7 +48,9 @@ tests exercise real shared boundaries.
    low-value candidates for removal. **Tradeoff:** the class is explicitly
    exported from the distributable Python package, so removing the tests gives
    up coverage of an importable placeholder; unknown external users cannot be
-   ruled out. This is a product/API policy decision, not proof of zero risk.
+   ruled out. The owner accepted that tradeoff on 14 November; the exported
+   implementation remains in place, but these placeholder behaviors no longer
+   have direct test coverage. This is not proof of zero risk.
 2. Removed `tests/test_agent_v2_pdca_graph.py::test_pdca_do_node_stub_returns_task_state_unchanged`:
    it checked object identity on an empty, retired V2 node; it did not test an
    actual household outcome. `test_agent_v2_do_node.py` separately tests the
@@ -62,7 +64,7 @@ tests exercise real shared boundaries.
    the old node's routing and truthful failure; they do not preserve the
    identity assertion, which is intentionally abandoned here.
 
-Two identity-only tests were removed in this review. These candidates do not
+Two identity-only tests and the two placeholder tests were removed in this review. These candidates do not
 justify deleting the old Python implementation or its exported symbols.
 The remaining eight-file V2 group plus deterministic-replay and replay-harness
 checks passed together: **56 passed in 1.11 seconds**. The CSV is the earlier
@@ -73,8 +75,7 @@ loss; do not treat a reduction in count as an outcome in itself.
 ### Retirement and consolidation candidates requiring more work
 
 - The 53 cases in the eight-file narrow V2-internal snapshot were individually
-  inspected, including the two now removed. The remaining 51 include two
-  placeholder API tests noted above and 49 tests with behavior or structure
+  inspected, including the four now removed. The remaining 49 cover behavior or structure
   tied to that implementation. Examples include evidence-backed completion,
   failure and cancellation behavior, graph routing and prompt contracts. They
   are lower priority for the selected target, but not automatically valueless.
@@ -259,6 +260,147 @@ not proof of semantic equivalence or measured full-suite speedup.
 The TypeSafe live documentation was unavailable through the web tool during
 this review, and no installed TypeSafe SDK was found; the installed skill and
 repository System One code were used as fallback. No live Jev request was made.
+
+### Skill activation, bindings, execution and appearances: four files
+
+On 14 November, individually inspected all **58 original test functions**
+in `test_skill_activation.py` (18), `test_agent_v2_skill_bindings.py` (19),
+`test_skill_script_execution.py` (13), and `test_skill_appearances.py` (8).
+These four files collected **90 cases** before this change. The historical CSV
+remains a snapshot; this review does not turn its automated labels into
+individual verdicts. Disposable fixtures are used throughout.
+
+| File | Individual coverage and disposition |
+| --- | --- |
+| Activation | Retain: full-instruction budget, on-demand resources and receipts, seven distinct rejected paths, symlink escape and alias, discovery/read access recheck, changed/missing package, legacy privacy, bounded selection and prompt privacy, project-free direct reply, planning/invocation, missing-package failure, no eager resource bytes, actual executor dispatch, explicit resource failures, budget-before-inference, changed revision during inference, Bash access/revision recheck, and live cancellation. The selection/planning tests exercise the current V3 bridge; they are not proof that the new loop can do the same. |
+| Bindings | Retain: explicit choice/sharing/revocation, three actor states, inactive owner, admin-only attachment, disabled/deleted/missing-secret account, lifecycle and data persistence, missing/retargeted data, four invalid data locations, missing dependency, nested and Bash redaction, Bash authorization, key selection/rotation, configuration with SQLite, environment isolation, cross-skill identity, cancellation redaction, and safe preflight. Consolidate the separate context-service identity assertion into the existing Bash authorization test, which now executes a real bound command using the core-generated execution context and verifies redaction. |
+| Script execution | Retain: spaces and working directory independence, normal executable, six preflight failures, interpreter link and symlink escape, dependency diagnostics, selection/removal recheck, cancellation and partial output, write/resume/readback, four prior mutation states, failed command despite a positive judgment, project-free authenticated execution, timeout evidence, and child-process cancellation. These protect distinct production or bridge behaviors; the recovery fixture is not evidence of a qualified end-to-end candidate loop. |
+| Appearances | Retain: install/update/removal fallback, 11 incompatible specifications, unsafe/corrupt/animated images, install/update link laundering, both shipped presets, explicit leading-skill selection, IPC authorization and active-task projection, and selection checkpoint before reply. These serve an existing Desktop feature; their priority is lower than conversation reliability, but similar assertions do not establish duplication. |
+
+The consolidation removes **one collected case and one function**, leaving
+**89 cases** in these files. It loses the standalone assertion that the exact
+same service object is copied into the execution context; the remaining test
+instead proves the service actually supports a bound command and redacts the
+result through that context. It does not cover every production invocation
+path. The other cases were kept because their inputs, boundary, failure mode,
+or consumer differ; a high case count alone is not evidence of waste.
+Validation: `.venv/bin/python -m pytest -q tests/test_skill_activation.py
+tests/test_agent_v2_skill_bindings.py tests/test_skill_script_execution.py
+tests/test_skill_appearances.py` — **89 passed in 2.80 seconds**. No model
+calls or live household resources were used. This is not a full-suite run.
+
+### Scheduled work and uncertain delivery: three files
+
+On 14 November, individually inspected **49 test functions / 66 collected
+cases** in `test_agent_v2_native_scheduled_task_tool.py` (19 functions),
+`test_project_check_scheduling.py` (24), and
+`test_scheduled_delivery_uncertainty.py` (6). These files were not part of
+the preceding individual passes. All use synthetic data and fake or stubbed
+providers; this does not establish real provider delivery or new-loop
+qualification.
+
+| File | Individual coverage and disposition |
+| --- | --- |
+| Native scheduled task | Retain the one-off and recurring stores, lifecycle and history, project migration, editable/deleted state, native registry and actor/project context, configured timezone, relative duration, missing prompt, registered Telegram address, do-node result, idempotent direct reminder, one-off and recurring runners, inactive/not-due runner, planning prompt, stubbed plan-to-do path, TUI result, and exhausted recurrence. The two PDCA-specific tests for planning and stubbed selection are lower-priority historical replay coverage, not evidence the model chooses correctly or the candidate loop supports reminders. Their integration boundary is not duplicated by the separate direct do-node and tool tests; revisit when the replay baseline is retired. |
+| Project checks | Retain durable typed dispatch, four off-window offsets, six operation boundaries, retry/window cutoff, retry and pagination budgets after restart, claim recovery and concurrency, four authority changes, missed/coalesced runs, bounded lateness, overlap and policy isolation, end date and absent adapter, three DST examples, five invalid schemas, owner-scoped DST gaps, owner-scoped offline receipts, duplicate dispatch, unsupported stored version, in-flight lease expiry, concurrent in-memory claims, legacy prompt migration, acquisition budget, runtime deadline, and independently advancing acquisition/analysis. Similar tests protect different entry points or outcomes. |
+| Uncertain delivery | Retain failed send after restart, expired lease, V3 receipt timeout, non-scheduled retry migration, scheduled prior-attempt migration, and scheduled-occurrence migration with matching receipt. These cases distinguish an unknown external effect from an ordinary retry and protect different stored records. They do not show that a provider actually sent or reconciled a message. |
+
+No tests were removed in this pass: direct inspection did not establish a
+duplicate whose loss was justified. One test's name overstates its coverage:
+`test_byte_item_and_runtime_budgets_are_not_silently_complete` supplies 101
+items and observes runtime accounting, but does not exceed the byte budget;
+it is not evidence of byte-limit enforcement. The separate deadline test
+checks runtime enforcement. This is a coverage gap to address in behavior
+work, not a reason to claim a passing byte-limit regression.
+
+Validation: `.venv/bin/python -m pytest -q
+tests/test_agent_v2_native_scheduled_task_tool.py
+tests/test_project_check_scheduling.py tests/test_scheduled_delivery_uncertainty.py`
+— **66 passed in 2.37 seconds**. This was a focused run, not the full suite.
+
+### Account choice, grants and OAuth: four files
+
+On 14 November, individually inspected **57 test functions / 82 collected
+cases** in `test_gmail_account_choice.py` (4 functions),
+`test_account_grants.py` (26), `test_oauth_lifecycle.py` (23), and
+`test_oauth_loopback.py` (4). They use disposable identities and credentials;
+the loopback tests use a real localhost listener, while provider calls are
+synthetic. None verifies a live household account or candidate-loop
+end-to-end authorization.
+
+| File | Individual coverage and disposition |
+| --- | --- |
+| Gmail choice | Retain authenticated answer with context changes, rejection of model-authored challenges, task/actor isolation, and supersession of old answers. These protect distinct receipt and authorization boundaries. |
+| Account grants | Retain exact selection, secret-free handle, operation/resource/project/audience intersection, explicit project grant, restart rechecks, inactive actor/owner, connection and consent changes, disconnect, missing records, expiry, owner control, binding/grant intersection, revision/identity guards, package lifecycle, skill availability, legacy adoption, sharing removal, secure disconnect, redaction with in-flight revocation, locked vault, session identity, concurrent revisions, reserved ownership, tampered binding configuration, stale ACL, and explicit owner reconciliation. The actor, scope, state and storage mutations are independent failure modes, even where all produce denial. |
+| OAuth lifecycle | Retain minimal scopes/health, malformed callback variants, state owner/expiry/replay, missing scope/refresh token, reconnect identity/revocation, account isolation, authority change during refresh, pause during callback, serialized rotation, revoked consent/redaction, offline revoke, crash lease, PKCE/library transport and logging, optional dependency failure, trusted daemon session, refresh uncertainty/persistence failure, locked local deletion, token redaction, pending cleanup, provider revoke transport, project-policy lifecycle, and calendar/classroom scopes. Mocked library requests validate request formation, not live provider behavior. |
+| OAuth loopback | Retain callback/replay/log privacy, wrong path/state/consent, two provider paths on one listener, and non-loopback redirect rejection. The shared-listener case uses the same actor for both paths despite `keep_actors` in its name; it does **not** establish isolation between different actors. |
+
+No tests were removed: direct inspection did not establish redundant behavior.
+The initial sandboxed run reported **79 passed and 3 failed** because socket
+binding to `127.0.0.1` was prohibited. A separate permitted localhost run of
+`tests/test_oauth_loopback.py` passed **4 tests in 1.65 seconds**. The
+first run used `.venv/bin/python -m pytest -q` on all four files; the second
+used the same command on the loopback file outside that sandbox restriction.
+Together these runs exercise all **82 cases**, but neither is a full-suite run.
+
+### Gmail acquisition and unread count: two files
+
+On 14 November, individually inspected **36 functions / 58 cases** in
+`test_gmail_adapter.py` (19 functions) and `test_gmail_unread.py` (17).
+All decisions below are **retain**. Names omit the `test_` prefix. Fixtures
+use synthetic data and transports; no Gmail account or model is contacted.
+
+| Function in `test_gmail_adapter.py` | Reason retained |
+| --- | --- |
+| `buried_archived_notice_pagination_and_stable_identity` | Archived content, page cursor, bounded scope, identity and untrusted text. |
+| `query_or_cannot_escape_time_bound_and_scope_cursor_changes` | Query grouping and rejecting cursor scope changes. |
+| `history_paginated_tombstones_then_bounded_query_refresh` | History pagination, deletion, refresh and anchor. |
+| `expired_history_and_deleted_during_scan_are_honest` | Expired history and incomplete coverage on deletion. |
+| `provider_errors_never_no_match_or_implicit_retry` | Four error classes retain blocked/partial semantics. |
+| `revocation_fences_io_and_no_followup` | Revocation before and during provider IO. |
+| `cancellation_between_list_and_message_get` | No subsequent message fetch after cancellation. |
+| `malicious_html_is_inert_and_quotes_preserved` | Untrusted HTML sanitization and quoted content. |
+| `attachment_only_evidence_requires_permitted_expansion` | Attachment evidence and authorized expansion. |
+| `missing_or_disallowed_attachments_are_not_empty_success` | Four distinct missing, type, size and provider failures. |
+| `direct_read_scope_and_no_write_surface` | Requested and returned label checks; no write API. |
+| `limits` | Four independent pre-IO resource limits. |
+| `gmail_failure_before_accept_replays_fetch_without_skipping` | Durable worker failure before evidence acceptance. |
+| `gmail_crash_after_accept_keeps_evidence_and_cursor` | Recovery after acceptance with page cursor preserved. |
+| `mime_charset_and_attachment_manifest_id` | Character encoding and attachment identity. |
+| `capabilities_reauthorize_and_health_is_redacted` | Capability reauthorization and private health fields. |
+| `fixed_get_transport_stream_budget_no_redirect_or_retry` | Four fixed transport outcomes and no redirect/retry. |
+| `multiple_labels_history_keeps_original_anchor_and_separate_scope` | Independent label scopes and history anchor. |
+| `explicit_all_mail_does_not_add_implicit_inbox_label` | Explicit all-mail scan and history without inbox restriction. |
+
+| Function in `test_gmail_unread.py` | Reason retained |
+| --- | --- |
+| `scoped_count_is_one_label_request_without_message_content` | Message/thread counts and no content disclosure. |
+| `no_grant_or_project_only_grant_cannot_read_one_off` | A project grant is not ad-hoc read permission. |
+| `label_scope_narrow_and_all_mail_grant` | Label-specific, all-mail and path validation. |
+| `multiple_accounts_are_choice_not_implicit_selection` | Multiple accounts require a choice. |
+| `actor_cannot_use_someone_elses_grant_or_invent_account` | Other actor cannot access the grant/account. |
+| `revocation_during_io_and_cancellation_fence_response` | Revocation and cancellation after IO withhold result. |
+| `provider_failures_do_not_fabricate_zero` | Eight error/malformed-response cases never fabricate count. |
+| `native_tool_uses_authenticated_task_not_arguments` | Authenticated task supplies identity. |
+| `grant_beneficiary_can_read_but_other_accounts_are_not_exposed` | Explicit beneficiary can read; owner without grant cannot. |
+| `inflight_byte_budget_never_returns_a_count` | Oversize in-flight response cannot become a count. |
+| `tool_cancellation_and_missing_service_are_safe` | Missing service and cancellation fail safely. |
+| `fixture_registered_gmail_tool_curation_reveal_and_tactical_execution` | Scripted V3 registry/curation/execution integration; explicitly not live model accuracy. |
+| `choice_candidates_are_reauthorized_before_disclosure` | Revocation between discovery and disclosure. |
+| `group_channel_and_unproven_audience_cannot_read_mail` | Discord and Telegram destination privacy is not assumed. |
+| `only_server_issued_authenticated_choice_selects_between_accounts` | Authorized question and answer actually select a mailbox. |
+| `account_choice_is_invalidated_by_grant_revocation` | Revocation invalidates prior choice and prevents fallback. |
+| `private_audience_revoked_during_io_withholds_count` | Destination privacy change during IO withholds result. |
+
+No removals or consolidations were supported by direct inspection: even where
+the two files discuss the same grant or provider, one tests source acquisition
+and the other tests the count service or native-tool boundary. The V3 fixture
+manually registers a tool whose production registration is disabled; it does
+not prove normal conversations can use it. The cancellation test's guard
+depends on a count of internal checks and may be brittle; replace that timing
+mechanism with an observable boundary before relying on it as durable coverage.
+Validation: `.venv/bin/python -m pytest -q tests/test_gmail_adapter.py
+tests/test_gmail_unread.py` — **58 passed in 1.15 seconds**, not a full-suite run.
 
 ## Mission coverage and next review passes
 

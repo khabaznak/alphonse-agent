@@ -205,7 +205,7 @@ def _run_simple(*, url: str, provider: Any, model: str,
                 goal: str = GOAL, source_description: str = 'Read the synthetic clock source.',
                 allowed_source_names: tuple[str, ...] = ('index',),
                 required_source_names: tuple[str, ...] | None = ('index',),
-                verification_mode: str = 'fixture_diagnostic'):
+                verification_mode: str = 'fixture_diagnostic', max_source_reads: int = 4):
     """Run the actual read-only candidate with a subscription-backed chooser."""
     from alphonse.agent_v2.core.core import CoreLoopContext, ToolDescriptor, ToolKind
     from alphonse.agent_v2.core.intelligence.task_state import TaskState
@@ -216,6 +216,8 @@ def _run_simple(*, url: str, provider: Any, model: str,
     from .codex_candidate_chooser import CodexSubscriptionChooser
     from .simplified_loop import Run
 
+    if type(max_source_reads) is not int or not 1 <= max_source_reads <= 5:
+        raise ValueError('invalid_source_read_budget')
     if verification_mode not in {'fixture_diagnostic', 'matched_provenance'}:
         raise ValueError('invalid_verification_mode')
     if verification_mode == 'fixture_diagnostic':
@@ -292,7 +294,7 @@ def _run_simple(*, url: str, provider: Any, model: str,
     with TemporaryDirectory(prefix='codex-clock-candidate-') as directory:
         budgets = SyntheticEvaluationBudgetStore(str(Path(directory) / 'budget.db'))
         now = lambda: int(monotonic() * 1000)
-        budgets.create(task.task_id, TaskBudget(BudgetLimits(units(4, 11, 655560, 163940),
+        budgets.create(task.task_id, TaskBudget(BudgetLimits(units(max_source_reads, 11, 655560, 163940),
                        units(0, 1, 200, 100), 100000, 1000), started_at_ms=now()))
         def verify(actor, text, refs):
             if not (actor == ACTOR and bool(text.strip()) and bool(refs)
