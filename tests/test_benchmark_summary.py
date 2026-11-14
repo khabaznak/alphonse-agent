@@ -65,6 +65,39 @@ def test_cannot_promote_interruption_to_pass():
                   [attempt('one', 'traffic', 'candidate', 'interrupted', 'pass', 1)])
 
 
+def test_optional_observations_preserve_zero_false_and_missing_in_full_denominator():
+    schedule = [scheduled('one', 'traffic', 'candidate'), scheduled('two', 'traffic', 'candidate'),
+                scheduled('three', 'traffic', 'candidate')]
+    completed = attempt('one', 'traffic', 'candidate', 'finished', 'pass', 100)
+    completed.update(first_useful_progress_ms=0, delivery_observed=False, model_calls=2,
+                     tool_calls=0, human_interventions=0)
+    interrupted = attempt('two', 'traffic', 'candidate', 'interrupted', 'unknown', 50)
+    interrupted.update(first_useful_progress_ms=20, delivery_observed=True)
+
+    report = summarize(schedule, [completed, interrupted])['arms']['candidate']
+
+    assert report['observation_coverage']['delivery_observed'] == {'known': 2, 'unknown': 1}
+    assert report['observation_coverage']['tool_calls'] == {'known': 1, 'unknown': 2}
+    assert report['attempts'][0]['first_useful_progress_ms'] == 0
+    assert report['attempts'][0]['delivery_observed'] is False
+    assert report['attempts'][1]['delivery_observed'] is True
+    assert report['attempts'][2]['delivery_observed'] is None
+    assert report['attempts'][2]['tool_calls'] is None
+    assert report['unknown'] == 2 and report['missing'] == 1
+
+
+@pytest.mark.parametrize(('field', 'value'), [
+    ('first_useful_progress_ms', float('nan')), ('first_useful_progress_ms', True),
+    ('delivery_observed', 1), ('delivery_observed', 'yes'), ('model_calls', True),
+    ('tool_calls', -1), ('human_interventions', 1.5),
+])
+def test_invalid_optional_observations_are_rejected(field, value):
+    row = attempt('one', 'traffic', 'candidate', 'finished', 'pass', 1)
+    row[field] = value
+    with pytest.raises(ValueError, match='invalid_'):
+        summarize([scheduled('one', 'traffic', 'candidate')], [row])
+
+
 @pytest.mark.parametrize('elapsed', [-1, float('nan'), float('inf'), True, '10'])
 def test_invalid_timing_does_not_enter_report(elapsed):
     with pytest.raises(ValueError, match='invalid_elapsed'):

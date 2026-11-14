@@ -19,6 +19,35 @@ from .token_usage_diagnostics import usage_diagnostics
 _ALLOWED_SOURCES = frozenset({'index', 'conversation', 'prescription', 'treatment-status'})
 
 
+def _action_schema(sources: tuple[str, ...]) -> dict:
+    """Constrain the synthetic host's wire format, not access or correctness."""
+    return {'type': 'object', 'properties': {
+        'kind': {'type': 'string', 'enum': ['tool', 'answer', 'question']},
+        'tool_id': {'type': ['string', 'null']},
+        'arguments': {'anyOf': [
+            {'type': 'object', 'properties': {'source': {'type': 'string', 'enum': list(sources)}},
+             'required': ['source'], 'additionalProperties': False},
+            {'type': 'null'}]},
+        'text': {'type': ['string', 'null']},
+    }, 'required': ['kind', 'tool_id', 'arguments', 'text'], 'additionalProperties': False}
+
+
+def _valid_action(decision: dict, sources: tuple[str, ...]) -> bool:
+    """Check the action discriminator; the host still authorizes actual reads."""
+    if set(decision) != {'kind', 'tool_id', 'arguments', 'text'}:
+        return False
+    kind = decision.get('kind')
+    if kind == 'tool':
+        args = decision.get('arguments')
+        return (decision.get('tool_id') == 'native.fixture_read' and isinstance(args, dict)
+                and set(args) == {'source'} and isinstance(args['source'], str) and args['source'] in sources
+                and decision.get('text') is None)
+    if kind in ('answer', 'question'):
+        return (isinstance(decision.get('text'), str) and bool(decision['text'].strip())
+                and decision.get('tool_id') is None and decision.get('arguments') is None)
+    return False
+
+
 class CodexSubscriptionChooser:
     """Compose real candidate decisions with the existing Codex provider.
 
@@ -82,6 +111,10 @@ class CodexSubscriptionChooser:
             'and arguments containing a listed source. Alphonse executes that action and supplies '
             'the observation on the next decision; it is not a tool you need to call from Codex. '
             'If available evidence suffices, return {"kind":"answer","text":"..."}. '
+            'Always include kind, tool_id, arguments, and text; use null for fields not needed by the chosen action. '
+            'Before answering, consider whether another available authorized source could materially '
+            'change the conclusion, for example by clarifying timing, current status, or conflicting facts. '
+            'Inspect relevant sources when needed; do not assume missing context from a partial record. '
             'Use a question only when essential information is genuinely missing after available '
             'host sources and their results have been considered. Do not ask the user to enable an '
             'already listed tool, and do not claim an observation that was not supplied.\n\n'
@@ -90,7 +123,7 @@ class CodexSubscriptionChooser:
             purpose=InferencePurpose.SIMPLE_LOOP_ACTION,
             model_profile=ModelProfile(provider='openai_codex', model=self.model,
                                        profile_id='synthetic-subscription-comparison'),
-            cancel_checker=self.cancellation_checker,
+            cancel_checker=self.cancellation_checker, output_schema=_action_schema(self.allowed_source_names),
             metadata={'evaluation': 'synthetic_subscription_comparison'})
         # Include the same JSON envelope this provider actually renders. This
         # still cannot account for provider-side framing or hidden tokens.
@@ -139,5 +172,9 @@ class CodexSubscriptionChooser:
             raise ValueError('candidate_codex_' + status)
         decision = dict(result.json_value)
         decision.pop('usage', None)  # Model text cannot manufacture provider billing metadata.
+        if not _valid_action(decision, self.allowed_source_names):
+            # Preserve no model text; the candidate may use its existing
+            # bounded format-repair path, never dispatch an invalid action.
+            decision = {'kind': 'invalid'}
         decision['usage'] = provider_usage
         return decision

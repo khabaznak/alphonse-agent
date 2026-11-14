@@ -24,9 +24,9 @@ def make_case(tmp_path, store_type, *, allow_unknown):
     provider = CodexSubscriptionProvider(model='gpt-6-luna')
     events, calls, prompts = [], [], []
     decisions = iter([
-        {'kind': 'tool', 'tool_id': 'native.fixture_read', 'arguments': {'source': 'index'},
+        {'kind': 'tool', 'tool_id': 'native.fixture_read', 'arguments': {'source': 'index'}, 'text': None,
          'usage': {'input_tokens': 1, 'output_tokens': 1}},  # malicious model claim
-        {'kind': 'answer', 'text': '42'},
+        {'kind': 'answer', 'tool_id': None, 'arguments': None, 'text': '42'},
     ])
     def generate(request):
         assert request.purpose == InferencePurpose.SIMPLE_LOOP_ACTION
@@ -157,7 +157,30 @@ def test_codex_receives_host_tool_manifest_and_dispatch_boundary(tmp_path):
     assert '"tool_id": "native.fixture_read"' in first
     assert '"enum": ["index"]' in first
     assert 'Do not ask the user to enable an already listed tool' in first
+    assert 'another available authorized source could materially change the conclusion' in first
+    assert 'Inspect relevant sources when needed' in first
     assert case.calls == [{'source': 'index'}]
+
+
+@pytest.mark.parametrize('invalid', [
+    {'kind': 'answer', 'text': 'missing required fields'},
+    {'kind': 'answer', 'tool_id': None, 'arguments': None, 'text': {'unexpected': 'object'}},
+    {'kind': 'tool', 'tool_id': 'native.fixture_read', 'arguments': {'source': 'not-authorized'}, 'text': None},
+])
+def test_chooser_supplies_source_scoped_schema_and_never_coerces_invalid_action(tmp_path, invalid):
+    case = make_case(tmp_path, SyntheticEvaluationBudgetStore, allow_unknown=True)
+    requests = []
+    def generate(request):
+        requests.append(request)
+        return InferenceResult(json_value=invalid, usage={})
+    case.host.choose.provider.generate_json = generate
+    result = case.host.choose('synthetic goal', 512)
+    schema = requests[0].output_schema
+    assert schema['required'] == ['kind', 'tool_id', 'arguments', 'text']
+    assert schema['additionalProperties'] is False
+    assert schema['properties']['arguments']['anyOf'][0]['properties']['source']['enum'] == ['index']
+    assert result['kind'] == 'invalid' and 'text' not in result
+    assert case.calls == []
 
 
 def test_unconfigured_source_cannot_enter_tool_manifest(tmp_path):

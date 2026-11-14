@@ -11,7 +11,6 @@ from alphonse.agent_v2.core.intelligence.pdca import run_pdca_once
 from alphonse.agent_v2.core.intelligence.pdca.graph import _route_after_act
 from alphonse.agent_v2.core.intelligence.pdca.nodes import act_node
 from alphonse.agent_v2.core.intelligence.pdca.nodes import check_node
-from alphonse.agent_v2.core.intelligence.pdca.nodes import do_node
 from alphonse.agent_v2.core.intelligence.pdca.nodes import plan_node
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.core import CoreLoopContext
@@ -20,23 +19,11 @@ from alphonse.agent_v2.core.core import ToolKind
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
 
 
-def test_pdca_do_node_stub_returns_task_state_unchanged() -> None:
-    state = TaskState(goal="Review this request")
-
-    assert do_node(state) is state
-
-
 def test_pdca_plan_node_returns_task_state() -> None:
     state = TaskState(goal="Review this request", acceptance_criteria_md="1.- [ ] Done")
 
     assert plan_node(state) is state
     assert "tool_call_plan_prompt" in state.metadata
-
-
-def test_pdca_act_node_returns_task_state(pdca_decisions) -> None:
-    state = TaskState(goal="Review this request", check_verdict="new")
-
-    assert act_node(state, context=CoreLoopContext(messages=InMemoryMessageQueue(), system_one=pdca_decisions)) is state
 
 
 def test_pdca_check_node_sets_initial_verdict() -> None:

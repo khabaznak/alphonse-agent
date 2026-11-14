@@ -51,6 +51,26 @@ def test_guessed_answer_cannot_pass_without_source_and_invalid_time_fails():
         LoopbackClockPilot(INSTANT, 'Not/A_Zone')
 
 
+def test_same_instant_in_different_zones_requires_both_time_and_date_to_change():
+    """A clock answer must follow the observed zone, not a memorized fixture."""
+    tokyo_zone = 'Asia/Tokyo'
+    tokyo_answer = {'local_time': '14:30', 'local_date': '2026-04-15', 'timezone': tokyo_zone}
+    with LoopbackClockPilot(INSTANT, ZONE) as mexico:
+        assert read(mexico.url)['timezone'] == ZONE
+    with LoopbackClockPilot(INSTANT, tokyo_zone) as tokyo:
+        assert read(tokyo.url)['timezone'] == tokyo_zone
+
+    assert evaluate(mexico, response=ANSWER, expected_instant_utc=INSTANT, expected_timezone=ZONE)['passed']
+    assert evaluate(tokyo, response=tokyo_answer, expected_instant_utc=INSTANT,
+                    expected_timezone=tokyo_zone)['passed']
+    # Both observations are valid reads; swapping the answers must still fail.
+    wrong_mexico = evaluate(mexico, response=tokyo_answer, expected_instant_utc=INSTANT, expected_timezone=ZONE)
+    wrong_tokyo = evaluate(tokyo, response=ANSWER, expected_instant_utc=INSTANT, expected_timezone=tokyo_zone)
+    assert wrong_mexico['clock_source_matches'] and not wrong_mexico['answer_matches_key']
+    assert wrong_tokyo['clock_source_matches'] and not wrong_tokyo['answer_matches_key']
+    assert not wrong_mexico['passed'] and not wrong_tokyo['passed']
+
+
 class Chooser:
     offline = True
     def __init__(self):

@@ -73,17 +73,19 @@ def test_invalid_checkpoint_never_admits_work(fixture, change):
                 pytest.fail('invalid checkpoint reached callback')
 
 
-@pytest.mark.parametrize('sql', ["UPDATE v2_task_checkpoints SET status='cancelled' WHERE task_id='task'",
-                                 "UPDATE v2_task_checkpoints SET project_id='other' WHERE task_id='task'"])
-def test_mutating_checkpoint_or_expiring_claim_rolls_back_work(fixture, sql):
+def test_mutating_checkpoint_or_expiring_claim_rolls_back_work(fixture):
     queue, _, _, _, now = fixture
     with queue._connect() as conn:
-        with pytest.raises(ClaimFenceUnavailable, match='checkpoint_changed_by_caller'):
-            with boundary(conn, fixture):
-                conn.execute("INSERT INTO fixture_writes VALUES ('must rollback')")
-                conn.execute(sql)
-        assert conn.execute('SELECT count(*) FROM fixture_writes').fetchone()[0] == 0
-        assert conn.execute("SELECT status FROM v2_task_checkpoints WHERE task_id='task'").fetchone()[0] == 'running'
+        # Both mutations must roll back, but the independent expiry scenario
+        # need only run once rather than once for each SQL mutation.
+        for sql in ("UPDATE v2_task_checkpoints SET status='cancelled' WHERE task_id='task'",
+                    "UPDATE v2_task_checkpoints SET project_id='other' WHERE task_id='task'"):
+            with pytest.raises(ClaimFenceUnavailable, match='checkpoint_changed_by_caller'):
+                with boundary(conn, fixture):
+                    conn.execute("INSERT INTO fixture_writes VALUES ('must rollback')")
+                    conn.execute(sql)
+            assert conn.execute('SELECT count(*) FROM fixture_writes').fetchone()[0] == 0
+            assert conn.execute("SELECT status FROM v2_task_checkpoints WHERE task_id='task'").fetchone()[0] == 'running'
         moments = iter((now, now + timedelta(days=1)))
         with pytest.raises(ClaimSuperseded):
             with boundary(conn, fixture, clock=lambda: next(moments)):

@@ -19,7 +19,7 @@ class Case:
 
 
 CASES = tuple(Case(name) for name in (
-    'fallback', 'missing', 'denied', 'delivery_failed', 'delivery_unconfirmed', 'cancelled',
+    'fallback', 'missing', 'denied', 'delivery_failed', 'delivery_unconfirmed', 'cancelled', 'conflicting',
 ))
 
 # Synthetic environment state and expected outcomes are authored separately.
@@ -31,6 +31,7 @@ _FIXTURES = {
     'delivery_failed': {'primary': ('missing_identity', None), 'backup': ('missing_identity', None), 'channel': 'failed'},
     'delivery_unconfirmed': {'primary': ('missing_identity', None), 'backup': ('missing_identity', None), 'channel': 'unconfirmed'},
     'cancelled': {'primary': ('cancelled', None), 'backup': ('cancelled', None), 'channel': 'delivered'},
+    'conflicting': {'primary': ('ok', '09:30'), 'backup': ('ok', '10:30'), 'channel': 'delivered'},
 }
 _EXPECTED = {
     'fallback': {'kind': 'result', 'value': '09:30'},
@@ -39,6 +40,8 @@ _EXPECTED = {
     'delivery_failed': {'kind': 'handoff', 'blocker': 'missing_identity', 'question': 'appointment_identity'},
     'delivery_unconfirmed': {'kind': 'handoff', 'blocker': 'missing_identity', 'question': 'appointment_identity'},
     'cancelled': {'kind': 'cancelled'},
+    'conflicting': {'kind': 'handoff', 'blocker': 'conflicting_sources', 'question': 'appointment_time_confirmation',
+                    'observations': {'primary': '09:30', 'backup': '10:30'}},
 }
 
 
@@ -97,7 +100,9 @@ def evaluate(case: Case, fixture: FollowThroughFixture, *, processor_status: str
     For a result: exact {kind: result, value: ...}; for a handoff: exact
     {kind: handoff, blocker: ..., known: [], unknown: ['appointment_time'],
     question: ...}. A handoff is valid only for a fixture-defined necessary
-    blocker, observed before sending and within 30 seconds. Completion and
+    blocker, observed before sending and within 30 seconds. Conflicting-source
+    handoffs require both independently keyed source values before the message;
+    seeing just one source cannot establish a conflict. Completion and
     handoff are subject to a 60 second task deadline and independent simulated
     delivery. Cancelled work is expected to stop without a message. An unknown
     delivery receipt is never treated as a successful or silent failure.
@@ -135,7 +140,20 @@ def evaluate(case: Case, fixture: FollowThroughFixture, *, processor_status: str
             correct = message == {'kind': 'result', 'value': expected['value']} and verified
             avoidable = isinstance(message, dict) and message.get('kind') == 'handoff'
         else:
-            blockers = [e for e in earlier if e['status'] == expected['blocker']]
+            if expected['blocker'] == 'conflicting_sources':
+                # Require the independent answer key's two observed values,
+                # rather than accepting a model's assertion that they differ.
+                observed = {}
+                blockers = []
+                for event in earlier:
+                    if event['status'] == 'ok' and event['source'] in expected['observations']:
+                        observed[event['source']] = event.get('value')
+                    if observed == expected['observations'] and len(set(observed.values())) > 1:
+                        # A later repeated read must not restart the handoff clock.
+                        blockers = [event]
+                        break
+            else:
+                blockers = [e for e in earlier if e['status'] == expected['blocker']]
             correct = (message == {'kind': 'handoff', 'blocker': expected['blocker'], 'known': [],
                                    'unknown': ['appointment_time'], 'question': expected['question']}
                        and bool(blockers) and relevant_send['time'] - blockers[0]['time'] <= 30)

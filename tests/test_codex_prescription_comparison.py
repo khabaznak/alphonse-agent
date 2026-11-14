@@ -15,9 +15,10 @@ ANSWER, EXPECTED_SOURCES = comparison._expected()
 
 def test_simple_real_processor_reads_discoverable_sources_and_independent_oracle(monkeypatch):
     decisions = iter([
-        *({'kind': 'tool', 'tool_id': 'native.fixture_read', 'arguments': {'source': name}}
+        *({'kind': 'tool', 'tool_id': 'native.fixture_read', 'arguments': {'source': name}, 'text': None}
           for name in ('index', 'conversation', 'prescription', 'treatment-status')),
-        {'kind': 'answer', 'text': json.dumps(ANSWER)},
+        {'kind': 'answer', 'tool_id': None, 'arguments': None, 'text': json.dumps(ANSWER)},
+        {'kind': 'answer', 'tool_id': None, 'arguments': None, 'text': json.dumps(ANSWER)},
     ])
     observed = []
     def fake_provider(self, request):
@@ -28,7 +29,7 @@ def test_simple_real_processor_reads_discoverable_sources_and_independent_oracle
     result = comparison.run_prescription_arm(arm='simple', provider=CodexSubscriptionProvider(model=MODEL), model=MODEL)
     assert result['status'] == 'completed' and result['passed'] is True
     assert set(result['oracle']['observed_required_sources']) == set(EXPECTED_SOURCES)
-    assert len(observed) == 5 and all(request.model_profile.model == MODEL for request in observed)
+    assert len(observed) == 6 and all(request.model_profile.model == MODEL for request in observed)
     assert result['metrics']['provider_input_tokens'] is None
     assert result['delivery'] == result['qualification'] == 'unassessed'
 
@@ -125,9 +126,10 @@ def test_natural_question_does_not_force_redundant_index_or_source_hint(monkeypa
     assert 'find the prescription' not in comparison._GOAL.lower()
     assert 'treatment-start' not in comparison._GOAL.lower()
     decisions = iter([
-        *({'kind': 'tool', 'tool_id': 'native.fixture_read', 'arguments': {'source': name}}
+        *({'kind': 'tool', 'tool_id': 'native.fixture_read', 'arguments': {'source': name}, 'text': None}
           for name in ('conversation', 'prescription', 'treatment-status')),
-        {'kind': 'answer', 'text': json.dumps(ANSWER)},
+        {'kind': 'answer', 'tool_id': None, 'arguments': None, 'text': json.dumps(ANSWER)},
+        {'kind': 'answer', 'tool_id': None, 'arguments': None, 'text': json.dumps(ANSWER)},
     ])
     def fake_provider(self, request):
         value = next(decisions)
@@ -141,10 +143,11 @@ def test_natural_question_does_not_force_redundant_index_or_source_hint(monkeypa
 
 def test_early_answer_recovers_without_disclosing_oracle(monkeypatch):
     decisions = iter([
-        {'kind': 'answer', 'text': '{}'},
-        *({'kind': 'tool', 'tool_id': 'native.fixture_read', 'arguments': {'source': name}}
+        {'kind': 'answer', 'tool_id': None, 'arguments': None, 'text': '{}'},
+        {'kind': 'answer', 'tool_id': None, 'arguments': None, 'text': '{}'},
+        *({'kind': 'tool', 'tool_id': 'native.fixture_read', 'arguments': {'source': name}, 'text': None}
           for name in ('conversation', 'prescription', 'treatment-status')),
-        {'kind': 'answer', 'text': json.dumps(ANSWER)},
+        {'kind': 'answer', 'tool_id': None, 'arguments': None, 'text': json.dumps(ANSWER)},
     ])
     prompts = []
     def fake_provider(self, request):
@@ -154,11 +157,12 @@ def test_early_answer_recovers_without_disclosing_oracle(monkeypatch):
     monkeypatch.setattr(CodexSubscriptionProvider, 'generate_json', fake_provider)
     result = comparison.run_prescription_arm(arm='simple', provider=CodexSubscriptionProvider(model=MODEL), model=MODEL)
     assert result['passed'] is True
-    assert all('A previous answer was not verified' in prompt for prompt in prompts[1:])
+    assert 'A proposed answer has not been delivered' in prompts[1]
+    assert all('A previous answer was not verified' in prompt for prompt in prompts[2:])
     assert all('candidate_complete' not in prompt for prompt in prompts)
-    assert 'Started the prescribed course' in prompts[2]
+    assert 'Started the prescribed course' in prompts[3]
     assert json.dumps(ANSWER) not in prompts[1]
-    feedback = prompts[1].split('A previous answer was not verified', 1)[1]
+    feedback = prompts[2].split('A previous answer was not verified', 1)[1]
     assert 'conversation' not in feedback and 'treatment-status' not in feedback
 
 
@@ -168,8 +172,9 @@ def test_matched_mode_hidden_requirements_cannot_affect_candidate_run(monkeypatc
     for required in (('conversation',), ('prescription', 'treatment-status')):
         monkeypatch.setattr(comparison, '_REQUIRED', required)
         decisions = iter([
-            {'kind': 'tool', 'tool_id': 'native.fixture_read', 'arguments': {'source': 'conversation'}},
-            {'kind': 'answer', 'text': json.dumps(ANSWER)},
+            {'kind': 'tool', 'tool_id': 'native.fixture_read', 'arguments': {'source': 'conversation'}, 'text': None},
+            {'kind': 'answer', 'tool_id': None, 'arguments': None, 'text': json.dumps(ANSWER)},
+            {'kind': 'answer', 'tool_id': None, 'arguments': None, 'text': json.dumps(ANSWER)},
         ])
         prompts = []
         def fake_provider(self, request):
@@ -182,15 +187,16 @@ def test_matched_mode_hidden_requirements_cannot_affect_candidate_run(monkeypatc
         prompts_by_run.append(prompts)
     assert prompts_by_run[0] == prompts_by_run[1]
     assert [r['status'] for r in results] == ['completed', 'completed']
-    assert [r['metrics']['system_two_calls'] for r in results] == [2, 2]
+    assert [r['metrics']['system_two_calls'] for r in results] == [3, 3]
     assert [r['passed'] for r in results] == [True, False]  # post-run oracle only
     assert all(r['verification_mode'] == 'matched_provenance' for r in results)
 
 
 def test_matched_mode_does_not_confuse_provenance_with_correctness(monkeypatch):
     decisions = iter([
-        {'kind': 'tool', 'tool_id': 'native.fixture_read', 'arguments': {'source': 'conversation'}},
-        {'kind': 'answer', 'text': '{"status":"wrong"}'},
+        {'kind': 'tool', 'tool_id': 'native.fixture_read', 'arguments': {'source': 'conversation'}, 'text': None},
+        {'kind': 'answer', 'tool_id': None, 'arguments': None, 'text': '{"status":"wrong"}'},
+        {'kind': 'answer', 'tool_id': None, 'arguments': None, 'text': '{"status":"wrong"}'},
     ])
     def fake_provider(self, request):
         value = next(decisions)
@@ -206,12 +212,12 @@ def test_matched_mode_blocks_no_observation_without_retry_feedback(monkeypatch):
     prompts = []
     def fake_provider(self, request):
         prompts.append(request.prompt)
-        return InferenceResult(json_value={'kind': 'answer', 'text': json.dumps(ANSWER)})
+        return InferenceResult(json_value={'kind': 'answer', 'tool_id': None, 'arguments': None, 'text': json.dumps(ANSWER)})
     monkeypatch.setattr(CodexSubscriptionProvider, 'generate_json', fake_provider)
     result = comparison.run_prescription_arm(arm='simple', provider=CodexSubscriptionProvider(model=MODEL),
         model=MODEL, verification_mode='matched_provenance')
     assert result['status'] == 'blocked' and result['passed'] is False
-    assert len(prompts) == 1
+    assert len(prompts) == 2
 
 
 def test_invalid_matched_mode_fails_before_dispatch():

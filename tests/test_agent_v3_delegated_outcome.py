@@ -102,9 +102,22 @@ def test_original_outcome_controls_completion(goal, response, answers, rows, com
 
 
 @pytest.mark.parametrize('field', list(OUTCOME_QUESTIONS))
-@pytest.mark.parametrize('value', [None, True, float('nan'), float('inf'), -1, 2])
-def test_invalid_judgments_never_complete(field, value):
-    task, decision, _ = run_case('Explain the result', 'Explanation', judgments(**{field: value}))
+def test_missing_fixture_judgment_is_unresolved_for_each_field(field):
+    result = outcome_assessment(judgments(**{field: None}), [])
+    assert result['reason'] == 'missing_or_invalid_outcome_judgment' and not result['fulfilled']
+
+
+@pytest.mark.parametrize('value', [True, float('nan'), float('inf'), -1, 2])
+def test_invalid_fixture_judgment_types_and_ranges_are_unresolved(value):
+    result = outcome_assessment(judgments(mission_outcome_is_fulfilled=value), [])
+    assert result['reason'] == 'missing_or_invalid_outcome_judgment' and not result['fulfilled']
+
+
+def test_invalid_fixture_judgment_yields_an_unsupported_synthetic_act_response():
+    # The test-only adapter translates a rejected outcome into valid .01 Act
+    # judgments. This does not inject malformed answers into the real provider.
+    task, decision, _ = run_case('Explain the result', 'Explanation',
+                                 judgments(mission_outcome_is_fulfilled=None))
     assert decision.action != StrategicAction.COMPLETE
     assert task.status != 'completed'
 

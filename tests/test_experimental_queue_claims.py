@@ -64,7 +64,6 @@ def test_same_owner_reclaim_rotates_generation_and_legacy_ack_retry_cannot_steal
     assert not queue.ack_fenced(replace(newer, user_id='bob'))
     # A live generation alone cannot establish task completion or effects.
     assert not queue.ack_fenced(newer)
-    assert not queue.ack_fenced(newer)
     with queue._connect() as conn:
         row = conn.execute("SELECT status,claim_generation FROM v2_inbound_messages WHERE message_id='m'").fetchone()
         assert tuple(row) == ('processing', newer.claim_generation)

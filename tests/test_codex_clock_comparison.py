@@ -13,10 +13,27 @@ MODEL = 'gpt-6-luna'
 ANSWER = {'local_time': '08:00', 'local_date': '2026-04-12', 'timezone': 'America/Mexico_City'}
 
 
+def test_clock_answer_diagnostics_are_field_specific_and_sanitized():
+    def diagnose(value):
+        return comparison._clock_answer_diagnostics(value, expected_instant_utc='2026-04-12T14:00:00+00:00',
+                                                    expected_timezone='America/Mexico_City')
+    assert diagnose(json.dumps(ANSWER)) == {'format': 'object', 'exact_answer': True, 'extra_fields': False,
+                                            'local_time': 'expected', 'local_date': 'expected', 'timezone': 'expected'}
+    private = 'private-synthetic-secret'
+    result = diagnose(json.dumps({'local_time': private, 'local_date': 12, private: private}))
+    assert result == {'format': 'object', 'exact_answer': False, 'extra_fields': True,
+                      'local_time': 'other', 'local_date': 'invalid_type', 'timezone': 'missing'}
+    assert private not in repr(result)
+    assert diagnose(private) == {'format': 'invalid_json'}
+    assert diagnose('[]') == {'format': 'not_object'}
+    assert diagnose(None) == {'format': 'no_answer'}
+
+
 def test_candidate_actual_loop_runs_same_subscription_provider_and_checks_clock(monkeypatch):
     decisions = iter([
-        {'kind': 'tool', 'tool_id': 'native.fixture_read', 'arguments': {'source': 'index'}},
-        {'kind': 'answer', 'text': json.dumps(ANSWER)},
+        {'kind': 'tool', 'tool_id': 'native.fixture_read', 'arguments': {'source': 'index'}, 'text': None},
+        {'kind': 'answer', 'tool_id': None, 'arguments': None, 'text': json.dumps(ANSWER)},
+        {'kind': 'answer', 'tool_id': None, 'arguments': None, 'text': json.dumps(ANSWER)},
     ])
     seen = []
     def fake_generate(self, request):
@@ -27,13 +44,14 @@ def test_candidate_actual_loop_runs_same_subscription_provider_and_checks_clock(
     provider = CodexSubscriptionProvider(model=MODEL)
     result = comparison.run_clock_arm(arm='simple', provider=provider, model=MODEL)
     assert result['status'] == 'completed' and result['passed'] is True
-    assert len(seen) == 2 and all(item.model_profile.model == MODEL for item in seen)
+    assert result['answer_diagnostics']['exact_answer'] is True
+    assert len(seen) == 3 and all(item.model_profile.model == MODEL for item in seen)
     assert result['delivery'] == 'unassessed' and result['qualification'] == 'unassessed'
     events = [e for e in result['events'] if e['kind'] == 'system_two']
-    assert len(events) == 2
+    assert len(events) == 3
     assert all(e['usage_diagnostics']['input']['source'] == 'estimated' for e in events)
     assert all(e['provider_usage']['input_tokens'] is None for e in events)
-    assert result['metrics']['system_two_calls'] == 2
+    assert result['metrics']['system_two_calls'] == 3
     assert result['metrics']['provider_input_tokens'] is None
     assert result['metrics']['input_tokens_measured_or_estimated'] > 0
 
@@ -146,7 +164,7 @@ def test_each_failed_arm_is_preserved_and_error_text_not_exposed(monkeypatch):
 def test_opt_in_trace_categorizes_question_without_exposing_model_text(monkeypatch):
     secret = 'synthetic-sensitive-value'
     def fake_generate(self, request):
-        data = {'kind': 'question', 'text': 'Please enable the unavailable tool ' + secret}
+        data = {'kind': 'question', 'tool_id': None, 'arguments': None, 'text': 'Please enable the unavailable tool ' + secret}
         return InferenceResult(json_value=data, raw_response=json.dumps(data))
     monkeypatch.setattr(CodexSubscriptionProvider, 'generate_json', fake_generate)
     observed = []
@@ -160,8 +178,9 @@ def test_opt_in_trace_categorizes_question_without_exposing_model_text(monkeypat
 
 def test_trace_callback_failure_does_not_change_clock_result(monkeypatch):
     decisions = iter([
-        {'kind': 'tool', 'tool_id': 'native.fixture_read', 'arguments': {'source': 'index'}},
-        {'kind': 'answer', 'text': json.dumps(ANSWER)},
+        {'kind': 'tool', 'tool_id': 'native.fixture_read', 'arguments': {'source': 'index'}, 'text': None},
+        {'kind': 'answer', 'tool_id': None, 'arguments': None, 'text': json.dumps(ANSWER)},
+        {'kind': 'answer', 'tool_id': None, 'arguments': None, 'text': json.dumps(ANSWER)},
     ])
     def fake_generate(self, request):
         data = next(decisions)

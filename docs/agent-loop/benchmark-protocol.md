@@ -46,3 +46,31 @@ and flags cases whose scheduled repetition counts differ across arms. A single
 arm has unassessed balance. Matching counts alone do not establish paired,
 equivalent environments or a fair comparison; unavailable and interrupted
 attempts remain unknown even when schedules are balanced.
+
+Optional attempt fields `first_useful_progress_ms`, `delivery_observed`,
+`model_calls`, `tool_calls`, and `human_interventions` retain observations when
+the harness actually records them. Missing fields and missing attempts are
+unknown, not zero or false; per-arm coverage counts show the known and unknown
+denominators for each field. These inputs are caller-supplied observations: the
+helper does not establish that a message was delivered or that progress was
+useful. A reported `false` means delivery was not observed; it does not prove
+that no delivery occurred. Verify receipts independently and do not interpret these counters as a
+real external baseline, actual cost, or a measure over only successful runs.
+
+`synthetic_journal_summary.summarize_synthetic_journal` reads an existing valid
+offline synthetic-suite journal once and feeds its schedule, fixture grades and
+finished-attempt durations to the summary. Interrupted and unstarted attempts
+remain separate unknowns. A malformed or damaged journal, non-synthetic kind,
+or invalid duration is rejected. The journal reports fixture grades supplied by
+its adapter; this bridge rechecks available results against their preserved
+fixture details, but does not independently audit them or measure actual
+delivery. The input digest's syntax is checked, but its header and input bytes
+are not independently verified. The source journal cannot represent repeated identical case/arm pairs,
+and its header digest does not retain the inputs or attest the oracle/runtime.
+
+For a previously recorded synthetic-suite journal, run
+`python -m alphonse.agent_v2.evaluation.synthetic_journal_summary JOURNAL.jsonl`
+to print the summary without executing the suite again or changing its journal.
+A valid incomplete journal can be reported with interrupted and unstarted cases
+as unknown; an invalid or damaged journal produces no summary. A successful
+command means the journal could be summarized, not that any attempt passed.

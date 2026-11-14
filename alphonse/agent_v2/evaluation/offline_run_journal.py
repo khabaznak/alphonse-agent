@@ -135,7 +135,7 @@ def run_journal(corpus_path: str | Path, output: str | Path, *,
     return inspect_journal(output)
 
 
-def inspect_journal(path: str | Path) -> dict:
+def inspect_journal(path: str | Path, *, include_details: bool = False) -> dict:
     """Inspect a complete, interrupted, or damaged journal; never execute work."""
     records = []
     damage = None
@@ -168,6 +168,8 @@ def inspect_journal(path: str | Path) -> dict:
         return {'complete': False, 'valid': False, 'damage': 'duplicate_schedule',
                 'started': [], 'finished': [], 'unknown': [], 'not_started': []}
     started, finished, outcomes, final = [], [], {}, False
+    elapsed_seconds = {}
+    terminal_attempt_count = None
     for row in records[1:]:
         event, identity = row.get('event'), row.get('attempt_id')
         if row.get('run_id') != run_id or final:
@@ -187,21 +189,33 @@ def inspect_journal(path: str | Path) -> dict:
                 break
             finished.append(identity)
             outcomes[identity] = row['outcome']
+            elapsed_seconds[identity] = row.get('elapsed_seconds')
         elif event == 'run_finished':
             if len(finished) != len(expected) or row.get('attempt_count') != len(expected):
                 damage = damage or 'invalid_sequence'
                 break
+            terminal_attempt_count = row.get('attempt_count')
             final = True
         else:
             damage = damage or 'invalid_sequence'
             break
-    return {'run_id': run_id, 'corpus_sha256': header.get('corpus_sha256'),
+    result = {'run_id': run_id, 'corpus_sha256': header.get('corpus_sha256'),
             'complete': final and damage is None, 'valid': damage is None,
             'qualification': 'unassessed',
             'damage': damage, 'started': started, 'finished': finished,
             'unknown': [x for x in started if x not in finished],
             'not_started': expected[len(started):], 'outcomes': outcomes,
             'limitations': header.get('limitations', [])}
+    if include_details:
+        # These fields come from the same parsed snapshot as sequence/outcome
+        # validation. Elapsed values remain untrusted and require validation by
+        # any consumer that interprets them.
+        result['experiment_kind'] = header.get('experiment_kind')
+        result['header_schema_version'] = header.get('schema_version')
+        result['terminal_attempt_count'] = terminal_attempt_count
+        result['schedule'] = schedule
+        result['elapsed_seconds'] = elapsed_seconds
+    return result
 
 
 def main(argv=None):

@@ -465,6 +465,63 @@ class SQLiteOutboundStore:
             )
             return cursor.rowcount == 1
 
+    def acknowledge_desktop_claim(self, delivery: OutboundMessage, *, lease_owner: str) -> bool:
+        """Confirm the exact Desktop claim observed by the caller, if unchanged.
+
+        The Desktop protocol still identifies acknowledgements by client and
+        message, not by an acquisition token. This conditional write closes the
+        read/write race, but cannot distinguish a delayed acknowledgement from
+        an earlier acquisition already reclaimed by the same client before the
+        caller read the row. Do not treat it as complete delivery fencing.
+        """
+        if (not isinstance(delivery, OutboundMessage) or delivery.integration_id != 'desktop'
+                or not isinstance(lease_owner, str) or not lease_owner.strip()
+                or type(delivery.attempt_count) is not int or delivery.attempt_count < 1
+                or delivery.status not in {'claimed', 'unconfirmed'}):
+            return False
+        late = delivery.status == 'unconfirmed'
+        if ((not late and delivery.lease_owner != lease_owner) or
+                (late and delivery.metadata.get('unconfirmed_lease_owner') != lease_owner)):
+            return False
+        with self._connect() as conn:
+            # Sample only after the write lock is held; a pre-lock timestamp
+            # could otherwise validate a lease that expired during lock wait.
+            conn.execute('BEGIN IMMEDIATE')
+            start = _now()
+            now = start.isoformat()
+            if not late:
+                try:
+                    expires = datetime.fromisoformat(delivery.lease_expires_at)
+                    if expires.tzinfo is None or expires.utcoffset() is None or expires <= start:
+                        return False
+                except (ValueError, TypeError):
+                    return False
+            cursor = conn.execute(
+                """UPDATE main.v2_outbox SET status='delivered',
+                    metadata_json=CASE WHEN kind='finding'
+                        THEN json_set(metadata_json, '$.finding_delivery_state', 'delivered')
+                        WHEN json_valid(metadata_json) AND COALESCE(json_extract(metadata_json, '$.occurrence_key'), '') != ''
+                        THEN json_set(metadata_json, '$.delivery_state', 'confirmed') ELSE metadata_json END,
+                    provider_message_id='', delivered_at=?, updated_at=?, lease_owner='', lease_expires_at='',
+                    next_attempt_at='', last_error=''
+                WHERE outbox_message_id=? AND integration_id='desktop' AND status=? AND attempt_count=?
+                    AND claimed_at=? AND updated_at=? AND lease_owner=? AND lease_expires_at=?
+                    AND (?=1 OR (lease_expires_at != '' AND lease_expires_at > ?))
+                    AND (?=0 OR (json_valid(metadata_json)
+                         AND json_extract(metadata_json, '$.unconfirmed_lease_owner')=?))""",
+                (now, now, delivery.outbox_message_id, delivery.status, delivery.attempt_count,
+                 delivery.claimed_at, delivery.updated_at, delivery.lease_owner, delivery.lease_expires_at,
+                 int(late), now, int(late), lease_owner),
+            )
+            if cursor.rowcount != 1:
+                return False
+            if not late:
+                end = _now()
+                if end < start or end >= expires:
+                    conn.rollback()
+                    return False
+            return True
+
     def mark_failed(
         self,
         outbox_message_id: str,

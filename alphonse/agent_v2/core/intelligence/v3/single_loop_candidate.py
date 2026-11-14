@@ -33,9 +33,12 @@ class CandidateState:
     inflight: str = ''
     unsupported_retries: int = 0
     recovery_pending: bool = False
+    invalid_decision_retries: int = 0
+    decision_format_pending: bool = False
+    answer_review_state: str = 'not_started'
 
     def snapshot(self) -> dict[str, Any]:
-        return {'schema_version': 2, **deepcopy(asdict(self))}
+        return {'schema_version': 4, **deepcopy(asdict(self))}
 
     @classmethod
     def restore(cls, snapshot: dict[str, Any]) -> 'CandidateState':
@@ -43,9 +46,14 @@ class CandidateState:
             raise ValueError('candidate_checkpoint_invalid')
         version = snapshot.get('schema_version')
         base = {'schema_version', 'task_id', 'actor', 'goal_source', 'evidence_sources', 'status', 'response', 'blocker', 'inflight'}
-        if type(version) is not int or version not in (1, 2):
+        if type(version) is not int or version not in (1, 2, 3, 4):
             raise ValueError('candidate_checkpoint_version_unsupported')
-        if set(snapshot) != (base if version == 1 else base | {'unsupported_retries', 'recovery_pending'}):
+        expected = base if version == 1 else base | {'unsupported_retries', 'recovery_pending'}
+        if version >= 3:
+            expected |= {'invalid_decision_retries', 'decision_format_pending'}
+        if version == 4:
+            expected |= {'answer_review_state'}
+        if set(snapshot) != expected:
             raise ValueError('candidate_checkpoint_invalid')
         state = cls(**{key: deepcopy(value) for key, value in snapshot.items() if key != 'schema_version'})
         if (not all(isinstance(x, str) and x.strip() for x in (state.task_id, state.actor, state.goal_source))
@@ -56,7 +64,12 @@ class CandidateState:
                 or any(not isinstance(x, str) for x in (state.response, state.blocker, state.inflight))
                 or type(state.unsupported_retries) is not int or not 0 <= state.unsupported_retries <= 2
                 or type(state.recovery_pending) is not bool
-                or (state.recovery_pending and state.unsupported_retries == 0)):
+                or (state.recovery_pending and state.unsupported_retries == 0)
+                or type(state.invalid_decision_retries) is not int or not 0 <= state.invalid_decision_retries <= 1
+                or type(state.decision_format_pending) is not bool
+                or (state.decision_format_pending and state.invalid_decision_retries == 0)
+                or not isinstance(state.answer_review_state, str)
+                or state.answer_review_state not in {'not_started', 'pending', 'used'}):
             raise ValueError('candidate_checkpoint_invalid')
         return state
 
@@ -91,6 +104,8 @@ class CandidateHost:
     # remains unknown and full reservations are charged; never enable for users.
     synthetic_allow_unreported_usage: bool = False
     remaining_advertised_evidence: Callable[[str, tuple[str, ...]], bool] | None = None
+    # Evaluation-only self-review, not independent verification or authority.
+    synthetic_preanswer_review: bool = False
 
 
 def _save(host: CandidateHost, state: CandidateState) -> None:
@@ -157,6 +172,9 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
     if (type(host.synthetic_allow_unreported_usage) is not bool or
             (host.synthetic_allow_unreported_usage and type(host.budgets) is not SyntheticEvaluationBudgetStore)):
         return _terminal(host, state, 'blocked', 'candidate_synthetic_usage_policy_invalid')
+    if (type(host.synthetic_preanswer_review) is not bool or
+            (not host.synthetic_preanswer_review and state.answer_review_state != 'not_started')):
+        return _terminal(host, state, 'blocked', 'candidate_answer_review_policy_invalid')
     if (not state.task_id or not state.actor or state.actor != getattr(host.task, 'user', None)
             or state.task_id != getattr(host.task, 'task_id', None)):
         return _terminal(host, state, 'blocked', 'candidate_actor_mismatch')
@@ -165,6 +183,11 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
     if _cancelled(host):
         return _terminal(host, state, 'cancelled', 'cancelled')
     while state.status == 'running':
+        # A prior step's checkpoint or an external actor may have cancelled
+        # before this iteration. Do not load sources or reserve another model
+        # call after cancellation is already observable.
+        if _cancelled(host):
+            return _terminal(host, state, 'cancelled', 'cancelled')
         try:
             projection = _project(host, state)
             fingerprint = _projection_fingerprint(projection)
@@ -183,6 +206,18 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
                 decision_input += ('\nA previous answer was not verified. Consider whether the available evidence '
                                    'supports every part of the request; inspect relevant authorized sources before '
                                    'answering, or explain what prevents progress.')
+            if state.decision_format_pending:
+                decision_input += ('\nThe previous decision had an invalid format and was not executed. '
+                                   'Return one valid action: an answer or question with text, '
+                                   'or a tool action with tool_id and arguments.')
+            reviewing = state.answer_review_state == 'pending'
+            if reviewing:
+                decision_input += ('\nA proposed answer has not been delivered. Review the request and observed '
+                                   'evidence: which facts does the request depend on, and could any relevant '
+                                   'unexamined authorized source materially change the answer? Read a relevant '
+                                   'source if needed, ask if essential information remains unavailable, or '
+                                   'give a supported answer. Do not read unrelated sources just to exhaust '
+                                   'the catalog.')
             if len(decision_input.encode('utf-8')) > host.input_reservation:
                 return _terminal(host, state, 'blocked', 'candidate_input_reservation_too_small')
             budget = host.budgets.load(state.task_id)
@@ -194,6 +229,10 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
                 kind='model', amounts={'actions': 0, 'model_calls': 1, 'input_tokens': host.input_reservation,
                 'output_tokens': host.output_reservation}, now_ms=host.now_ms())
             state.inflight = call_id
+            # Consume the single review before dispatch and persist together
+            # with the model marker. Crashes cannot silently replay it.
+            if reviewing:
+                state.answer_review_state = 'used'
             _save(host, state)
         except (BudgetExhausted, EvidenceAccessError, ValueError, KeyError) as exc:
             return _terminal(host, state, 'blocked', type(exc).__name__ + ':' + str(exc))
@@ -232,6 +271,22 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
         if not _is_fresh(host, state, fingerprint):
             return _terminal(host, state, 'blocked', 'candidate_evidence_changed_or_revoked')
         kind = decision.get('kind')
+        valid_shape = (isinstance(kind, str) and (kind in {'answer', 'question'} or
+                       (kind == 'tool' and isinstance(decision.get('tool_id'), str)
+                        and isinstance(decision.get('arguments'), dict))))
+        if not valid_shape:
+            # Do not infer an answer or execute a malformed action. One generic
+            # repair opportunity is budgeted and checkpointed; the bad model
+            # output itself is not copied into subsequent prompts or state.
+            if state.invalid_decision_retries < 1:
+                state.invalid_decision_retries += 1
+                state.decision_format_pending = True
+                _save(host, state)
+                continue
+            return _terminal(host, state, 'blocked', 'candidate_decision_invalid')
+        if state.decision_format_pending:
+            state.decision_format_pending = False
+            _save(host, state)
         if kind in {'answer', 'question'}:
             text = decision.get('text')
             if not isinstance(text, str) or not text.strip():
@@ -240,6 +295,13 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
                 if _deadline_elapsed(host):
                     return _terminal(host, state, 'blocked', 'candidate_deadline_exceeded')
                 return _terminal(host, state, 'waiting_user', 'question_delivery_not_integrated', text)
+            if host.synthetic_preanswer_review and state.answer_review_state == 'not_started':
+                # Hold the proposal; do not persist, return, or pass its text as
+                # evidence. The next budgeted decision sees only the current
+                # authorized projection and the neutral review request.
+                state.answer_review_state = 'pending'
+                _save(host, state)
+                continue
             try:
                 # Re-read under the current actor before accepting any response.
                 grounded = host.verify_response(state.actor, text, tuple(state.evidence_sources)) is True

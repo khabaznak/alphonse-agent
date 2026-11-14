@@ -63,3 +63,25 @@ The acquisition receipt is not authorization, an effect receipt, or a proof of
 delivery. These prerequisites remain open until integrated tests exercise the
 normal path; standalone transaction primitives and synthetic results are not a
 production qualification.
+
+## Narrow production safeguards
+
+Desktop acknowledgements now condition the delivery update on the claim row
+observed by the daemon, including its owner, attempt and lease timestamps. A
+claimed row's lease is checked after acquiring the SQLite writer lock and again
+before committing. Existing late acknowledgement of an `unconfirmed` scheduled
+delivery still requires the recorded client. This narrows the read/write race,
+but Desktop sends only a client ID and message ID: an old acknowledgement
+arriving after the same client has already reacquired the row cannot be
+distinguished from the new attempt. Other outbox consumers still use the
+generation-less completion API; mixed-version writers and external effects are
+not fenced by the Desktop change.
+
+The daemon now refuses to mark a terminal checkpoint, emit terminal progress,
+or reconcile an event when an implemented queue acknowledgement or retry fails
+to return literal `True`. Its local active-work indicator is cleared and set to
+error, while cancellation and the generation-less core FSM are preserved.
+This local status is not a durable recovery record and a later empty turn may
+reset it to idle. Response projection, presence and some event work still happen
+before disposition and cannot be undone; the change does not prevent stale
+publication or automatically reconcile the unresolved queue row.

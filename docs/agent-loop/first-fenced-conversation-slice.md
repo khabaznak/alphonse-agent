@@ -31,10 +31,21 @@ not establish real delivery, production authority, or model quality.
 | Recovery and settlement | Fixture settlement can match a synthetic effect against a pending action. | After restart, authenticate the recovery actor and establish current authority and exact action/effect binding; only then settle atomically. Unknown or revoked remains pending, with no replay. |
 
 The existing experiments are intentionally unwired. In particular,
-`run_atomic_step` stops at communication, and the fixture lifecycle starts with
-an independently constructed reservation. Running those tests together is not
-an end-to-end result. The experimental staged schema and fixture evidence must
-not be installed in a household database or used as production authority.
+the opt-in synthetic `run_atomic_step` can now retain a fixture-verified answer
+under its claim, and a fixture test carries those exact bytes through reservation,
+staging, dispatch and settlement. An answer rejected by the final freshness
+check remains unaccepted and cannot be reserved. The disposable component test
+now begins with acquisition and creates the initial task and budget under that
+claim before the synthetic model and delivery steps. This is not the daemon
+entry point: fixture authority and evidence are forgeable. A separate fresh
+interpreter can now reconcile a matching fixture effect against the expired
+original queue generation and current fixture grants without a receipt, replay,
+queue acknowledgement or task continuation. This tests reconstruction after
+simulated process loss, not authenticated recovery or replacement-claim takeover.
+The fixture checker and source reads are not atomically bound to later dispatch
+or revocation; no real current-authority or provider-evidence check exists. The
+experimental staged schema and fixture evidence must not be installed in a
+household database or used as production authority.
 
 ## Acceptance checks
 

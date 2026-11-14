@@ -13,8 +13,8 @@ EMPTY = {'status': 'schedule', 'medications': []}
 
 
 @pytest.mark.parametrize(('case', 'answer'), [
-    ('day_three', DUE), ('local_date_boundary', DUE),
-    ('after_course', EMPTY), ('stopped', EMPTY),
+    ('first_day_local_boundary', DUE), ('day_three', DUE), ('local_date_boundary', DUE),
+    ('before_start_local_boundary', EMPTY), ('after_course', EMPTY), ('stopped', EMPTY),
 ])
 def test_scripted_arms_read_same_sources_and_match_oracle(case, answer):
     report = compare_safety(case, scripted_answer=answer)

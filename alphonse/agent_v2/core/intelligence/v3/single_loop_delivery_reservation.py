@@ -116,6 +116,15 @@ def _reserve_delivery(store: ExperimentalCheckpointStore, claim: ClaimReceipt, *
             if raw.get('message_id') != claim.message_id or raw.get('status') != 'running':
                 raise ClaimFenceUnavailable('delivery_reservation_unavailable')
             state, budget = store._decode(raw, task_id, actor)
+            selected = raw['metadata'].get('fixture_selected_answer')
+            if 'fixture_selected_answer' in raw['metadata']:
+                from alphonse.agent_v2.core.messages.experimental_claim_checkpoint import _claim_digest
+                if (managed_preflight is not None or not isinstance(selected, dict)
+                        or set(selected) != {'schema_version', 'message', 'claim_digest', 'accepted'}
+                        or type(selected.get('schema_version')) is not int or selected['schema_version'] != 1
+                        or selected.get('accepted') is not True
+                        or selected.get('message') != message or selected.get('claim_digest') != _claim_digest(claim)):
+                    raise CheckpointConflict('fixture_selected_answer_mismatch')
             if managed_preflight is not None:
                 # Managed preflight is generated internally by the separate
                 # experimental entry point; it never authorizes dispatch.

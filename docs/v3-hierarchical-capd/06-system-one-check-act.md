@@ -386,6 +386,16 @@ through the real Jev provider transport and a disposable schedule database. They
 the decision policy and request shape, not live model calibration. No household data
 or live provider requests are used for this issue.
 
+**Current-code correction, 2026-11-13:** The `outcome_assessment` helper and
+`OUTCOME_QUESTIONS` described in this section are not called by the current V3
+processor. The delegated-outcome tests use that helper as a synthetic adapter
+that emits valid Act answers; they do not prove that malformed outcome answers
+reach or are rejected by the live Act provider. Current V3 Act uses
+`ACT_QUESTIONS`; provider and outer-controller malformed-answer checks are in
+`test_agent_v2_system_one.py` and `test_agent_v3_outer_controller.py`. See the
+test-value review for the scope and limits of those tests. This correction does
+not claim that the original historical observations were invalid.
+
 Validation on 2026-11-03: full Python suite **1,511 passed, 37 skipped**. The
 focused V3, Jev and native scheduling suite passed before the full run. These are
 synthetic decision/effect checks; they do not qualify the live household workflow

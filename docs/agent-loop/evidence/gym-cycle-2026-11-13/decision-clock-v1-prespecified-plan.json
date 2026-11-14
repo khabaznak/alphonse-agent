@@ -1,0 +1,44 @@
+{
+  "created_at_utc": "2026-11-14T06:11:36.253324+00:00",
+  "jev": false,
+  "limitations": [
+    "Synthetic development cases, not held-out or production evidence.",
+    "Provider usage and real delivery are unknown.",
+    "Stop after provider/authentication failure; never silently retry."
+  ],
+  "model": "gpt-6-luna",
+  "per_call_timeout_seconds": 35,
+  "phase": "decision-clock-v1",
+  "prescription_fixture": "v2",
+  "provider": "CodexSubscriptionProvider",
+  "python_inventory_sha256": "f0e598a785ae4ccb5c83d6b81b960ad8c72c2a913cb1f1d953656fc911d4edb5",
+  "runner_sha256": "e0bbb8c925f5e1661605967565c680b056720df33ea9385c226cf862c3959578",
+  "schedule": [
+    {
+      "case": "prescription",
+      "output": "decision-clock-v1-prescription.jsonl"
+    },
+    {
+      "case": "clock",
+      "output": "decision-clock-v1-clock.jsonl"
+    },
+    {
+      "case": "inbox",
+      "output": "decision-clock-v1-inbox.jsonl"
+    }
+  ],
+  "source_sha256": {
+    "alphonse/agent_v2/core/intelligence/v3/single_loop_candidate.py": "1d8fb5be82470286da5353bf4530d6828a93d09567942ea4be9866c744fda56f",
+    "alphonse/agent_v2/evaluation/clock_responses_attempt.py": "b4b9fce305434659e23867e67e81d0bacf8e9a69a4bb3cf5effa3d6bb82aa714",
+    "alphonse/agent_v2/evaluation/codex_candidate_chooser.py": "b72af5e9f97e50a339a9feb7a811056492fff7b469c2d2ab4dc0e8315298bb0d",
+    "alphonse/agent_v2/evaluation/codex_clock_comparison.py": "d1b125a5c033e61dc29c7ed4e13b5a17ed15a7b2ec5ed4256f0691fad47cb4cc",
+    "alphonse/agent_v2/evaluation/codex_mail_comparison.py": "5374a7e66e2c7a2b36d7dff20be99347895178bc6fe9f7ddedb5dd2ece21b087",
+    "alphonse/agent_v2/evaluation/codex_prescription_comparison.py": "38010c58036b67b06afdb13eda9209d57ba8019b2e2c78b040f5281531f0b220",
+    "alphonse/agent_v2/evaluation/codex_subscription_provider.py": "7a6886fa3898b201c1be7d55646a4aa43addc3e8265d136dfa6372f4b7c03eed",
+    "alphonse/agent_v2/evaluation/loopback_clock_pilot.py": "f98c4956ee2e6953a5b0919766cf40efed8ed27939cf1422c0fff2560b325337",
+    "alphonse/agent_v2/evaluation/loopback_mail_pilot.py": "3c2ce61fc48a5f3d5b077348e2b554a5db951befef048b53eaf38a997021e174",
+    "alphonse/agent_v2/evaluation/loopback_prescription_pilot.py": "1877f5534721f9e05abd168599a6217f3a6e9fd329e73e21d48e018c35fbd35f"
+  },
+  "task_timeout_seconds": 90,
+  "verification_mode": "matched_provenance"
+}

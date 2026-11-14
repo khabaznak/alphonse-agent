@@ -75,6 +75,172 @@ def test_no_fabricated_completion_without_grounding(fixture):
     assert (result.status, result.blocker) == ('blocked', 'candidate_answer_unsupported')
 
 
+def test_invalid_action_format_gets_one_bounded_repair_without_execution(fixture):
+    decisions = iter([
+        {'status': 'answer in the wrong envelope', 'usage': {'input_tokens': 10, 'output_tokens': 10}},
+        {'kind': 'answer', 'text': 'supported', 'usage': {'input_tokens': 10, 'output_tokens': 10}},
+    ])
+    prompts = []
+    def choose(text, _):
+        prompts.append(text)
+        return next(decisions)
+    host = replace(fixture.host, choose=choose, verify_response=lambda *_: True, input_reservation=1024)
+    result = run_candidate(fixture.state, host)
+    assert (result.status, result.response, result.invalid_decision_retries) == ('completed', 'supported', 1)
+    assert fixture.calls == [] and len(prompts) == 2
+    assert 'invalid format and was not executed' in prompts[1]
+    assert 'answer in the wrong envelope' not in prompts[1]
+    assert CandidateState.restore(fixture.snapshots[-1]).invalid_decision_retries == 1
+
+
+def test_repeated_invalid_action_is_bounded_and_cannot_bypass_authorization(fixture):
+    decisions = iter([
+        {'kind': [], 'usage': {'input_tokens': 10, 'output_tokens': 10}},
+        {'unexpected': 'still invalid', 'usage': {'input_tokens': 10, 'output_tokens': 10}},
+    ])
+    host = replace(fixture.host, choose=lambda *_: next(decisions), input_reservation=1024)
+    result = run_candidate(fixture.state, host)
+    assert (result.status, result.blocker, result.invalid_decision_retries) == ('blocked', 'candidate_decision_invalid', 1)
+    assert fixture.calls == []
+
+
+def test_repair_does_not_authorize_an_effectful_tool(fixture):
+    decisions = iter([
+        {'kind': 'invalid', 'usage': {'input_tokens': 10, 'output_tokens': 10}},
+        {'kind': 'tool', 'tool_id': 'native.write', 'arguments': {}, 'usage': {'input_tokens': 10, 'output_tokens': 10}},
+    ])
+    result = run_candidate(fixture.state, replace(fixture.host, choose=lambda *_: next(decisions), input_reservation=1024))
+    assert (result.status, result.blocker) == ('blocked', 'candidate_requires_read_only_native_tool')
+    assert fixture.calls == []
+
+
+def test_format_retry_is_not_reset_by_restart(fixture):
+    def checkpoint(snapshot):
+        fixture.snapshots.append(snapshot)
+        if snapshot['decision_format_pending']:
+            raise RuntimeError('simulated restart')
+    invalid = lambda *_: {'kind': 'invalid', 'usage': {'input_tokens': 10, 'output_tokens': 10}}
+    host = replace(fixture.host, choose=invalid, checkpoint=checkpoint, input_reservation=1024)
+    with pytest.raises(RuntimeError, match='simulated restart'):
+        run_candidate(fixture.state, host)
+    restored = CandidateState.restore(fixture.snapshots[-1])
+    result = run_candidate(restored, replace(host, checkpoint=fixture.snapshots.append))
+    assert (result.status, result.blocker, result.invalid_decision_retries) == ('blocked', 'candidate_decision_invalid', 1)
+    assert fixture.calls == []
+
+
+def test_cancellation_prevents_format_repair_call(fixture):
+    cancelled = {'value': False}
+    calls = []
+    def choose(*_):
+        calls.append(True)
+        return {'kind': 'invalid', 'usage': {'input_tokens': 10, 'output_tokens': 10}}
+    def checkpoint(snapshot):
+        if snapshot['decision_format_pending']:
+            cancelled['value'] = True
+    fixture.host.context.cancellation_checker = lambda: cancelled['value']
+    result = run_candidate(fixture.state, replace(fixture.host, choose=choose, checkpoint=checkpoint,
+                                                  input_reservation=1024))
+    assert result.status == 'cancelled' and len(calls) == 1
+    assert fixture.calls == []
+
+
+def test_older_candidate_snapshots_restore_without_format_retries():
+    snapshot = CandidateState('task', 'actor', 'goal').snapshot()
+    for version in (1, 2, 3):
+        old = {key: value for key, value in snapshot.items() if key != 'answer_review_state'}
+        if version < 3:
+            old.pop('invalid_decision_retries')
+            old.pop('decision_format_pending')
+        old['schema_version'] = version
+        if version == 1:
+            old.pop('unsupported_retries')
+            old.pop('recovery_pending')
+        restored = CandidateState.restore(old)
+        assert restored.invalid_decision_retries == 0 and not restored.decision_format_pending
+        assert restored.answer_review_state == 'not_started'
+
+
+def test_answer_review_allows_relevant_read_without_forcing_distractors(fixture):
+    decisions = iter([
+        {'kind': 'answer', 'text': 'provisional private draft', 'usage': {'input_tokens': 10, 'output_tokens': 10}},
+        {'kind': 'tool', 'tool_id': 'native.read', 'arguments': {'key': 'relevant'},
+         'usage': {'input_tokens': 10, 'output_tokens': 10}},
+        {'kind': 'answer', 'text': 'supported', 'usage': {'input_tokens': 10, 'output_tokens': 10}},
+    ])
+    prompts = []
+    def choose(text, _):
+        prompts.append(text)
+        return next(decisions)
+    host = replace(fixture.host, choose=choose, verify_response=lambda *_: True,
+                   input_reservation=1024, synthetic_preanswer_review=True)
+    result = run_candidate(fixture.state, host)
+    assert (result.status, result.response, result.answer_review_state) == ('completed', 'supported', 'used')
+    assert fixture.calls == [{'key': 'relevant'}]
+    assert len(prompts) == 3 and 'unexamined authorized source' in prompts[1]
+    assert 'provisional private draft' not in str(fixture.snapshots) + str(prompts)
+
+
+def test_answer_review_never_grants_read_authorization(fixture):
+    decisions = iter([
+        {'kind': 'answer', 'text': 'provisional', 'usage': {'input_tokens': 10, 'output_tokens': 10}},
+        {'kind': 'tool', 'tool_id': 'native.read', 'arguments': {'key': 'denied'},
+         'usage': {'input_tokens': 10, 'output_tokens': 10}},
+    ])
+    host = replace(fixture.host, choose=lambda *_: next(decisions), authorize_read=lambda *_: False,
+                   input_reservation=1024, synthetic_preanswer_review=True)
+    result = run_candidate(fixture.state, host)
+    assert (result.status, result.blocker) == ('blocked', 'candidate_read_denied')
+    assert fixture.calls == []
+
+
+def test_answer_review_restart_does_not_repeat_completed_review(fixture):
+    decisions = iter([
+        {'kind': 'answer', 'text': 'provisional', 'usage': {'input_tokens': 10, 'output_tokens': 10}},
+        {'kind': 'tool', 'tool_id': 'native.read', 'arguments': {'key': 'relevant'},
+         'usage': {'input_tokens': 10, 'output_tokens': 10}},
+        {'kind': 'answer', 'text': 'supported', 'usage': {'input_tokens': 10, 'output_tokens': 10}},
+    ])
+    def checkpoint(snapshot):
+        fixture.snapshots.append(snapshot)
+        if snapshot['answer_review_state'] == 'used' and snapshot['evidence_sources']:
+            raise RuntimeError('synthetic restart')
+    host = replace(fixture.host, choose=lambda *_: next(decisions), checkpoint=checkpoint,
+                   verify_response=lambda *_: True, input_reservation=1024, synthetic_preanswer_review=True)
+    with pytest.raises(RuntimeError, match='synthetic restart'):
+        run_candidate(fixture.state, host)
+    restored = CandidateState.restore(fixture.snapshots[-1])
+    assert restored.answer_review_state == 'used' and not restored.inflight
+    result = run_candidate(restored, replace(host, checkpoint=fixture.snapshots.append))
+    assert (result.status, result.response) == ('completed', 'supported')
+    assert fixture.calls == [{'key': 'relevant'}]
+
+
+def test_cancellation_prevents_answer_review_call(fixture):
+    cancelled = {'value': False}
+    calls = []
+    source_loads_after_cancellation = []
+    def choose(*_):
+        calls.append(True)
+        return {'kind': 'answer', 'text': 'provisional', 'usage': {'input_tokens': 10, 'output_tokens': 10}}
+    def checkpoint(snapshot):
+        if snapshot['answer_review_state'] == 'pending':
+            cancelled['value'] = True
+    def load_source(actor, ref):
+        if cancelled['value']:
+            source_loads_after_cancellation.append(ref)
+        return fixture.host.load_source(actor, ref)
+    fixture.host.context.cancellation_checker = lambda: cancelled['value']
+    host = replace(fixture.host, choose=choose, checkpoint=checkpoint, input_reservation=1024,
+                   synthetic_preanswer_review=True, load_source=load_source)
+    result = run_candidate(fixture.state, host)
+    assert result.status == 'cancelled' and len(calls) == 1
+    assert source_loads_after_cancellation == []
+    budget = host.budgets.load('task')
+    assert not budget.usage()['in_flight']
+    assert len(budget.to_dict()['reservations']) == 1
+
+
 @pytest.mark.parametrize('checker', [lambda: None, lambda: (_ for _ in ()).throw(RuntimeError('clock failed'))])
 def test_ambiguous_or_failed_deadline_checker_stops_before_model_dispatch(fixture, checker):
     def no_dispatch(*_args):

@@ -165,6 +165,8 @@ class ExperimentalCheckpointStore:
             state, budget = self._decode(raw, task_id, actor)
             if 'single_loop_model_claim' in raw['metadata']:
                 raise CheckpointConflict('claim_model_binding_unresolved')
+            if 'fixture_selected_answer' in raw['metadata']:
+                raise CheckpointConflict('fixture_selected_answer_unresolved')
             if state.inflight:
                 raise CheckpointConflict('single_loop_inflight_requires_reconciliation')
             if budget.usage()['unknown_usage']:

@@ -33,6 +33,7 @@ def _reason_category(reason: Any) -> str | None:
         'candidate_model_unavailable': 'model_unavailable',
         'candidate_model_usage_unknown_or_overrun': 'model_usage_unknown_or_overrun',
         'candidate_model_settlement_unavailable': 'model_settlement_unavailable',
+        'candidate_decision_invalid': 'invalid_decision',
         'candidate_evidence_changed_or_revoked': 'evidence_unavailable',
         'candidate_answer_unsupported': 'evidence_unavailable',
         'candidate_read_denied': 'access_denied',

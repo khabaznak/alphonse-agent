@@ -92,6 +92,8 @@ def reserve_model_under_claim(
                     raise CheckpointConflict('single_loop_inflight_requires_reconciliation')
                 if MODEL_CLAIM_KEY in raw['metadata']:
                     raise CheckpointConflict('claim_model_binding_unresolved')
+                if 'fixture_selected_answer' in raw['metadata']:
+                    raise CheckpointConflict('fixture_selected_answer_unresolved')
                 if budget.usage()['unknown_usage']:
                     raise CheckpointConflict('single_loop_model_usage_unresolved')
                 if any(item['kind'] == 'model' and item['status'] == 'settled'
@@ -144,7 +146,7 @@ def settle_model_under_claim(
     store: ExperimentalCheckpointStore, claim: ClaimReceipt, *, task_id: str,
     actor: str, expected_version: int, reservation_id: str, outcome: str,
     input_tokens: int | None, output_tokens: int | None,
-    clock: Callable[[], datetime],
+    clock: Callable[[], datetime], fixture_answer: str | None = None, fixture_mode: bool = False,
 ) -> Checkpoint:
     """Settle one model reservation only under the exact acquiring claim.
 
@@ -158,7 +160,10 @@ def settle_model_under_claim(
             or not isinstance(actor, str) or not actor.strip()
             or not isinstance(reservation_id, str) or not reservation_id.strip()
             or type(expected_version) is not int or expected_version < 1
-            or outcome not in {'success', 'failure', 'timeout'} or not callable(clock)):
+            or outcome not in {'success', 'failure', 'timeout'} or not callable(clock)
+            or type(fixture_mode) is not bool
+            or (fixture_answer is not None and (not fixture_mode or outcome != 'success' or not isinstance(fixture_answer, str)
+                or not fixture_answer.strip() or len(fixture_answer.encode('utf-8')) > 12000))):
         raise ValueError('claim_model_settlement_arguments_invalid')
     if claim.user_id != actor:
         raise ClaimFenceUnavailable('claim_model_settlement_unavailable')
@@ -202,6 +207,20 @@ def settle_model_under_claim(
                 pending = budget.to_dict()['reservations'].get(reservation_id)
                 if not isinstance(pending, dict) or pending['kind'] != 'model' or pending['status'] != 'reserved':
                     raise CheckpointConflict('claim_model_binding_unavailable')
+                if fixture_mode:
+                    # Evaluation-only intent: exact selected bytes and acquisition
+                    # are committed with model accounting. This does not establish
+                    # production authority, grounding, or a provider effect.
+                    if ('fixture_selected_answer' in raw['metadata'] or
+                            (fixture_answer is not None and (type(input_tokens) is not int or
+                            type(output_tokens) is not int or input_tokens < 0 or output_tokens < 0 or
+                            input_tokens > pending['reserved']['input_tokens'] or
+                            output_tokens > pending['reserved']['output_tokens']))):
+                        raise CheckpointConflict('fixture_selected_answer_unavailable')
+                    raw['metadata']['fixture_selected_answer'] = {
+                        'schema_version': 1, 'message': fixture_answer,
+                        'claim_digest': _claim_digest(claim), 'accepted': False,
+                    }
                 budget.settle(reservation_id, outcome=outcome, input_tokens=input_tokens, output_tokens=output_tokens)
                 state.inflight = ''
                 del raw['metadata'][MODEL_CLAIM_KEY]
@@ -222,3 +241,34 @@ def settle_model_under_claim(
                 return result
         except (OSError, sqlite3.Error, StopIteration):
             raise ClaimFenceUnavailable('claim_model_settlement_storage_unavailable') from None
+
+
+def _accept_fixture_answer(store: ExperimentalCheckpointStore, claim: ClaimReceipt, *, task_id: str,
+                           actor: str, expected_version: int, answer: str,
+                           clock: Callable[[], datetime]) -> Checkpoint:
+    """Mark a fixture answer accepted after the caller's final freshness check.
+
+    Only synthetic callers may trust that check. This is not production
+    authorization, grounding, or atomicity with external source revocation.
+    """
+    with store.store._connect() as conn:
+        with fenced_claim_transaction(conn, claim, clock=clock):
+            if claim.user_id != actor or conn.execute(
+                    'SELECT 1 FROM main.v2_users WHERE user_id=? AND is_active=1', (actor,)).fetchone() is None:
+                raise ClaimFenceUnavailable('fixture_answer_unavailable')
+            row = store._row(conn, task_id)
+            raw = store._validate_identity(row, task_id, actor, expected_version)
+            state, budget = store._decode(raw, task_id, actor)
+            expected = {'schema_version': 1, 'message': answer,
+                        'claim_digest': _claim_digest(claim), 'accepted': False}
+            marker = raw['metadata'].get('fixture_selected_answer')
+            if (raw.get('message_id') != claim.message_id or state.inflight or
+                    not isinstance(marker, dict) or type(marker.get('schema_version')) is not int or
+                    type(marker.get('accepted')) is not bool or marker != expected):
+                raise CheckpointConflict('fixture_answer_unavailable')
+            marker['accepted'] = True
+            result = store._write(conn, row, raw, state, budget)
+            saved = store._validate_identity(store._row(conn, task_id), task_id, actor, result.version)
+            if saved != raw:
+                raise ClaimFenceUnavailable('fixture_answer_changed')
+            return result

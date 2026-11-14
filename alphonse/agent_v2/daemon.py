@@ -1461,7 +1461,7 @@ class V2Daemon:
                       (delivery.status == "unconfirmed" and late_owner == expected_owner))
         if delivery is None or delivery.integration_id != "desktop" or not valid_lease:
             return False
-        acknowledged = self.runtime.outbox.mark_delivered(outbox_message_id)
+        acknowledged = self.runtime.outbox.acknowledge_desktop_claim(delivery, lease_owner=expected_owner)
         if acknowledged:
             self._on_outbox_delivered(delivery)
         if acknowledged and delivery.task_id and delivery.kind != "task_acknowledgement":
@@ -2600,9 +2600,18 @@ class V2Daemon:
                 acknowledge = getattr(self.runtime.queue, "ack", None)
                 if callable(acknowledge):
                     if event_execution_id and step.status in {LoopStepStatus.PARKED, LoopStepStatus.WAITING}:
-                        acknowledge(step.queued_message_id, lease_owner=self.daemon_id, outcome="processing")
+                        acknowledged = acknowledge(step.queued_message_id, lease_owner=self.daemon_id, outcome="processing")
                     else:
-                        acknowledge(step.queued_message_id, lease_owner=self.daemon_id)
+                        acknowledged = acknowledge(step.queued_message_id, lease_owner=self.daemon_id)
+                    if acknowledged is not True:
+                        # The legacy queue may have lost ownership before the
+                        # disposition. Projection already happened and cannot
+                        # be undone; do not additionally claim terminal success,
+                        # complete the checkpoint, or reconcile this event.
+                        # A durable claim-bound publication protocol is still
+                        # required to prevent the earlier stale projection.
+                        logger.warning("Inbound acknowledgement was rejected; reconciliation is required")
+                        return self._rejected_queue_disposition(step)
             if step.status == LoopStepStatus.PROCESSED:
                 self._mark_snapshot_checkpoint_terminal(snapshot, status="done")
                 if occurrence_key:
@@ -2612,9 +2621,12 @@ class V2Daemon:
             acknowledge = getattr(self.runtime.queue, "ack", None)
             if callable(acknowledge):
                 if event_execution_id:
-                    acknowledge(step.queued_message_id, lease_owner=self.daemon_id, outcome="cancelled")
+                    acknowledged = acknowledge(step.queued_message_id, lease_owner=self.daemon_id, outcome="cancelled")
                 else:
-                    acknowledge(step.queued_message_id, lease_owner=self.daemon_id)
+                    acknowledged = acknowledge(step.queued_message_id, lease_owner=self.daemon_id)
+                if acknowledged is not True:
+                    logger.warning("Inbound cancellation acknowledgement was rejected; reconciliation is required")
+                    return self._rejected_queue_disposition(step)
             self._mark_snapshot_checkpoint_terminal(snapshot, status="cancelled")
             if occurrence_key:
                 self.runtime.schedule_store.mark_occurrence_cancelled(occurrence_key)
@@ -2628,13 +2640,19 @@ class V2Daemon:
                 self._record_selected_model_access_warning(error)
             retry = getattr(self.runtime.queue, "retry", None)
             if callable(retry):
-                retry(
+                disposition_recorded = retry(
                     step.queued_message_id,
                     error=error,
                     next_attempt_at=datetime.now(timezone.utc) + timedelta(seconds=5),
                     lease_owner=self.daemon_id,
                     max_attempts=1 if non_retryable else self.inbound_max_attempts,
                 )
+                if disposition_recorded is not True:
+                    # The queue did not accept this worker's outcome. Avoid
+                    # announcing failure/retry or reconciling another owner's
+                    # event based on a disposition that never happened.
+                    logger.warning("Inbound retry disposition was rejected; reconciliation is required")
+                    return self._rejected_queue_disposition(step)
             status_for = getattr(self.runtime.queue, "status_for", None)
             terminal = non_retryable or (callable(status_for) and status_for(step.queued_message_id) == "failed")
             if terminal:
@@ -3032,6 +3050,15 @@ class V2Daemon:
             task_id=task_id, user=owner, integration_id="desktop", channel_target=owner,
             progress=_task_progress_snapshot(task),
         ))
+
+    def _rejected_queue_disposition(self, step: Any) -> Any:
+        # These are daemon-local indicators, not the task checkpoint or the
+        # generation-less core FSM. Do not clear cancellation or reset the FSM:
+        # ownership and the durable outcome still require reconciliation.
+        with self._active_work_lock:
+            self._active_work = {}
+            self._activity_status = {"state": "error", "updated_at": datetime.now(timezone.utc).isoformat()}
+        return replace(step, status=LoopStepStatus.SUPERSEDED, queued_message_id=None, error=None)
 
     def _set_activity_status(self, state: str) -> None:
         with self._active_work_lock:

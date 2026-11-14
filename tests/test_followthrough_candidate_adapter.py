@@ -50,6 +50,16 @@ def test_necessary_question_is_not_reported_as_delivered_by_candidate():
     assert bridged['product_delivery'] == 'not_integrated' and bridged['decision_qualified'] is False
 
 
+def test_conflicting_appointments_require_synthetic_question_after_both_reads():
+    question = {'kind': 'handoff', 'blocker': 'conflicting_sources', 'known': [],
+                'unknown': ['appointment_time'], 'question': 'appointment_time_confirmation'}
+    chooser = script(read('primary'), read('backup'), communication('question', question))
+    result = run_candidate_fixture(CASES['conflicting'], chooser, simulate_delivery=True)
+    assert result['processor_status'] == 'waiting_user'
+    assert result['fixture_outcome']['passed']
+    assert result['product_delivery'] == 'not_integrated' and not result['decision_qualified']
+
+
 def test_early_handoff_and_unconfirmed_delivery_fail_or_are_unknown():
     question = {'kind': 'handoff', 'blocker': 'unavailable', 'known': [],
                 'unknown': ['appointment_time'], 'question': None}

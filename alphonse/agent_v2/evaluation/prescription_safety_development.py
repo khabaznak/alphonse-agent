@@ -21,6 +21,9 @@ class Case:
 
 
 CASES = (
+    # Both instants fall on April 10 UTC, but on different local calendar days.
+    Case('before_start_local_boundary', '2026-04-10T05:30:00+00:00'),
+    Case('first_day_local_boundary', '2026-04-10T06:30:00+00:00'),
     Case('day_three', '2026-04-12T14:00:00+00:00'),
     Case('last_day', '2026-04-14T14:00:00+00:00'),
     Case('after_course', '2026-04-15T14:00:00+00:00'),
@@ -67,6 +70,8 @@ _SOURCE_OVERRIDES = {
 # Independently specified expectations, rather than computed from _SOURCES.
 # These values are publicly visible and are for development checks only.
 _KEYS = {
+    'before_start_local_boundary': {'kind': 'schedule', 'name': 'Asterin', 'dose': '10 mg', 'local_time': '08:00', 'start': '2026-04-10', 'duration': 5},
+    'first_day_local_boundary': {'kind': 'schedule', 'name': 'Asterin', 'dose': '10 mg', 'local_time': '08:00', 'start': '2026-04-10', 'duration': 5},
     'day_three': {'kind': 'schedule', 'name': 'Asterin', 'dose': '10 mg', 'local_time': '08:00', 'start': '2026-04-10', 'duration': 5},
     'last_day': {'kind': 'schedule', 'name': 'Asterin', 'dose': '10 mg', 'local_time': '08:00', 'start': '2026-04-10', 'duration': 5},
     'after_course': {'kind': 'schedule', 'name': 'Asterin', 'dose': '10 mg', 'local_time': '08:00', 'start': '2026-04-10', 'duration': 5},

@@ -1,10 +1,12 @@
 # Synthetic prescription safety development fixture
 
-`alphonse.agent_v2.evaluation.prescription_safety_development` provides eight
+`alphonse.agent_v2.evaluation.prescription_safety_development` provides eleven
 **public development** cases for the #217/#218 experiment. It checks a
-synthetic medicine name, dose, morning local time, inclusive final course day,
-day after the course, and UTC/local date boundary. Missing treatment start or
-conflicting doses require a specific clarification; a stopped treatment produces
+synthetic medicine name, dose, morning local time, the local day before a future
+start, the first and inclusive final course days, the day after the course, and
+UTC/local date boundaries. The first-day and preceding-day instants share the
+same UTC date but fall on different local dates. Missing treatment start or
+status and conflicting doses require a specific clarification; a stopped treatment produces
 an empty schedule; denied access requires an observed denial and a blocked
 response. The source and answer key are separately specified, and grading also
 requires observed source values to match independently specified expectations.

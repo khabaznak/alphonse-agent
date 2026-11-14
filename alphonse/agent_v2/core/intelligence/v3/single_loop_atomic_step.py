@@ -23,7 +23,7 @@ from alphonse.agent_v2.core.messages.claim_fence import (
     ClaimFenceUnavailable, ClaimReceipt, ClaimSuperseded, _time, fenced_claim_transaction,
 )
 from alphonse.agent_v2.core.messages.experimental_claim_checkpoint import (
-    MODEL_CLAIM_KEY, _claim_digest, reserve_model_under_claim, settle_model_under_claim,
+    MODEL_CLAIM_KEY, _claim_digest, _accept_fixture_answer, reserve_model_under_claim, settle_model_under_claim,
 )
 
 
@@ -36,7 +36,8 @@ class AtomicStepResult:
 
 def run_atomic_step(state: CandidateState, host: CandidateHost, checkpoints: ExperimentalCheckpointStore,
                     *, expected_version: int, claim: ClaimReceipt | None = None,
-                    claim_clock: Callable[[], datetime] | None = None) -> AtomicStepResult:
+                    claim_clock: Callable[[], datetime] | None = None,
+                    retain_fixture_answer: bool = False) -> AtomicStepResult:
     """Run one synthetic decision, leaving every effectful path disabled.
 
     The only permitted external operation is the host's injected chooser;
@@ -48,6 +49,8 @@ def run_atomic_step(state: CandidateState, host: CandidateHost, checkpoints: Exp
     synthetic adapter remains unwired: no daemon, tool, user output or external
     provider execution is authorized by the claim.
     """
+    if type(retain_fixture_answer) is not bool or (retain_fixture_answer and claim is None):
+        return AtomicStepResult('blocked', 'claim_configuration_invalid', None)
     if (claim is None) != (claim_clock is None) or (claim is not None and
             (not isinstance(claim, ClaimReceipt) or not callable(claim_clock))):
         return AtomicStepResult('blocked', 'claim_configuration_invalid', None)
@@ -182,6 +185,21 @@ def run_atomic_step(state: CandidateState, host: CandidateHost, checkpoints: Exp
         return AtomicStepResult('cancelled', 'cancelled_after_model', reserved.version)
     usage = decision.get('usage') if isinstance(decision, dict) else None
     usage = usage if isinstance(usage, dict) else {}
+    fixture_answer = None
+    fixture_candidate = None
+    if retain_fixture_answer and isinstance(decision, dict) and decision.get('kind') == 'answer':
+        answer = decision.get('text')
+        if isinstance(answer, str) and answer.strip() and len(answer.encode('utf-8')) <= 12000:
+            fixture_candidate = answer
+            try:
+                if (_is_fresh(host, state, fingerprint) and not _cancelled(host)
+                        and host.verify_response(state.actor, answer, tuple(state.evidence_sources)) is True):
+                    if _is_fresh(host, state, fingerprint) and not _cancelled(host):
+                        fixture_answer = answer
+            except Exception:
+                pass
+    if _cancelled(host):
+        return AtomicStepResult('cancelled', 'cancelled_after_model', reserved.version)
     try:
         if claim is None:
             settled = checkpoints.settle(state.task_id, state.actor, expected_version=reserved.version,
@@ -191,7 +209,8 @@ def run_atomic_step(state: CandidateState, host: CandidateHost, checkpoints: Exp
             settled = settle_model_under_claim(checkpoints, claim, task_id=state.task_id, actor=state.actor,
                 expected_version=reserved.version, reservation_id=reservation_id,
                 outcome='success' if isinstance(decision, dict) else 'failure',
-                input_tokens=usage.get('input_tokens'), output_tokens=usage.get('output_tokens'), clock=checked_clock)
+                input_tokens=usage.get('input_tokens'), output_tokens=usage.get('output_tokens'), clock=checked_clock,
+                fixture_answer=fixture_candidate, fixture_mode=retain_fixture_answer)
     except (CheckpointConflict, ClaimFenceUnavailable, ClaimSuperseded, ValueError, KeyError):
         return AtomicStepResult('blocked', 'model_settlement_unavailable', None)
     if (type(usage.get('input_tokens')) is not int or type(usage.get('output_tokens')) is not int
@@ -204,5 +223,14 @@ def run_atomic_step(state: CandidateState, host: CandidateHost, checkpoints: Exp
     if decision.get('kind') == 'tool':
         return AtomicStepResult('blocked', 'tool_dispatch_and_evidence_not_integrated', settled.version)
     if decision.get('kind') in {'answer', 'question'}:
+        if fixture_answer is not None:
+            if _cancelled(host):
+                return AtomicStepResult('cancelled', 'cancelled_after_model', settled.version)
+            try:
+                accepted = _accept_fixture_answer(checkpoints, claim, task_id=state.task_id, actor=state.actor,
+                    expected_version=settled.version, answer=fixture_answer, clock=checked_clock)
+            except (CheckpointConflict, ClaimFenceUnavailable, ClaimSuperseded, sqlite3.Error, ValueError):
+                return AtomicStepResult('blocked', 'fixture_answer_acceptance_unavailable', None)
+            return AtomicStepResult('blocked', 'fixture_answer_retained_not_delivered', accepted.version)
         return AtomicStepResult('blocked', 'communication_and_completion_not_integrated', settled.version)
     return AtomicStepResult('blocked', 'invalid_model_decision', settled.version)

@@ -32,8 +32,8 @@ def grade(case, fixture, answer):
 
 
 @pytest.mark.parametrize(('name', 'answer'), [
-    ('day_three', DUE), ('last_day', DUE), ('local_date_boundary', DUE),
-    ('after_course', EMPTY), ('stopped', EMPTY),
+    ('first_day_local_boundary', DUE), ('day_three', DUE), ('last_day', DUE), ('local_date_boundary', DUE),
+    ('before_start_local_boundary', EMPTY), ('after_course', EMPTY), ('stopped', EMPTY),
     ('missing_start', {'status': 'clarification', 'question': 'treatment_start'}),
     ('missing_status', {'status': 'clarification', 'question': 'treatment_status'}),
     ('conflicting', {'status': 'clarification', 'question': 'prescription_conflict'}),
@@ -45,6 +45,13 @@ def test_expected_synthetic_outcomes_require_observed_sources(name, answer):
     assert outcome['passed'] is True
     assert outcome['delivery'] == 'unassessed'
     assert outcome['decision_qualified'] is False
+
+
+def test_local_start_boundary_rejects_utc_date_guess_and_omitted_first_day():
+    before, before_fixture = exercise('before_start_local_boundary')
+    first, first_fixture = exercise('first_day_local_boundary')
+    assert grade(before, before_fixture, DUE)['correct_structured_response'] is False
+    assert grade(first, first_fixture, EMPTY)['correct_structured_response'] is False
 
 
 @pytest.mark.parametrize('field, value', [
@@ -135,6 +142,28 @@ def test_stopped_treatment_can_be_resolved_from_index_and_status():
     fixture.read('index')
     fixture.read('status')
     assert grade(case, fixture, EMPTY)['passed'] is True
+
+
+@pytest.mark.parametrize(('variant', 'changed_source', 'variant_answer'), [
+    ('stopped', 'status', EMPTY),
+    ('missing_start', 'start', {'status': 'clarification', 'question': 'treatment_start'}),
+])
+def test_single_source_change_changes_the_independent_expected_outcome(variant, changed_source, variant_answer):
+    """Contrast public dev cases; these do not establish clinical correctness."""
+    base, other = CASES_BY_NAME['day_three'], CASES_BY_NAME[variant]
+    assert (base.instant_utc, base.timezone) == (other.instant_utc, other.timezone)
+    base_fixture, other_fixture = PrescriptionFixture(base), PrescriptionFixture(other)
+    for source in ('index', 'prescription', 'start', 'status'):
+        baseline, changed = base_fixture.read(source), other_fixture.read(source)
+        assert baseline['status'] == changed['status'] == 'ok'
+        assert (baseline['value'] != changed['value']) == (source == changed_source)
+    assert grade(base, base_fixture, DUE)['passed']
+    assert grade(other, other_fixture, variant_answer)['passed']
+
+    # Holding the answer fixed despite the changed source must not pass. Use a
+    # new fixture because an oracle must not see reads after a prior response.
+    other, fixture = exercise(variant)
+    assert not grade(other, fixture, DUE)['passed']
 
 
 def test_mismatched_case_and_fixture_cannot_be_graded():

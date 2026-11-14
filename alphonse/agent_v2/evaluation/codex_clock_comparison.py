@@ -14,7 +14,7 @@ from tempfile import TemporaryDirectory
 from time import monotonic
 from typing import Any, Callable
 
-from .loopback_clock_pilot import LoopbackClockPilot, evaluate
+from .loopback_clock_pilot import LoopbackClockPilot, _parse, evaluate
 from .clock_responses_attempt import _reason_category
 from .prescription_http_processors import LocalSource
 from .token_usage_diagnostics import usage_diagnostics
@@ -22,6 +22,32 @@ from .token_usage_diagnostics import usage_diagnostics
 ACTOR = 'synthetic-evaluation-user'
 GOAL = ('Read the synthetic clock and provide the local time and date in its '
         'timezone. Answer as a JSON object with local_time, local_date and timezone.')
+
+
+def _clock_answer_diagnostics(response: object, *, expected_instant_utc: str,
+                              expected_timezone: str) -> dict:
+    """Post-run closed-set diagnosis; never preserve or echo response content.
+
+    The expected values are derived from evaluator inputs and must not be sent
+    back to the candidate. This categorizes differences, not their cause.
+    """
+    if not isinstance(response, str) or not response.strip():
+        return {'format': 'no_answer'}
+    try:
+        answer = json.loads(response)
+    except (TypeError, ValueError):
+        return {'format': 'invalid_json'}
+    if not isinstance(answer, dict):
+        return {'format': 'not_object'}
+    instant = _parse(expected_instant_utc, expected_timezone)
+    expected = {'local_time': instant.strftime('%H:%M'), 'local_date': instant.date().isoformat(),
+                'timezone': expected_timezone}
+    result = {'format': 'object', 'exact_answer': answer == expected,
+              'extra_fields': bool(set(answer) - set(expected))}
+    for key, value in expected.items():
+        result[key] = ('missing' if key not in answer else 'invalid_type' if not isinstance(answer[key], str)
+                       else 'expected' if answer[key] == value else 'other')
+    return result
 
 
 def _summarize_events(events: list[dict]) -> dict:
@@ -282,7 +308,8 @@ def _run_simple(*, url: str, provider: Any, model: str,
             verify,
             now, input_reservation=65536, output_reservation=16384, projection_budget=65536,
             deadline_checker=cancelled, synthetic_allow_unreported_usage=True,
-            remaining_advertised_evidence=(remaining_advertised if verification_mode == 'fixture_diagnostic' else None))
+            remaining_advertised_evidence=(remaining_advertised if verification_mode == 'fixture_diagnostic' else None),
+            synthetic_preanswer_review=True)
         state = run_candidate(CandidateState(task.task_id, ACTOR, 'goal'), host)
     return Run(status=state.status, response=state.response, reason=state.blocker or None)
 
@@ -339,7 +366,9 @@ def run_clock_arm(*, arm: str, provider: Any, model: str, jev: Any = None,
             'reason_category': _reason_category(run.reason) if run else None,
             'passed': bool(run and run.status == 'completed' and oracle['passed']),
             'error_type': error, 'elapsed_seconds': monotonic() - start,
-            'oracle': oracle, 'events': events, 'metrics': _summarize_events(events), 'delivery': 'unassessed',
+            'oracle': oracle, 'answer_diagnostics': _clock_answer_diagnostics(
+                run.response if run else None, expected_instant_utc=instant_utc, expected_timezone=timezone),
+            'events': events, 'metrics': _summarize_events(events), 'delivery': 'unassessed',
             'qualification': 'unassessed',
             'limitations': ['Synthetic fixture and tools, not the full desktop conversation path.',
                             'Subscription login checks do not prove billing mode during dispatch.',
