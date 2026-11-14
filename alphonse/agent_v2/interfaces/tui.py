@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from dataclasses import dataclass, field
 from threading import Lock, Thread
@@ -802,9 +803,44 @@ def format_current_project_status(runtime: TuiRuntime) -> str:
     return project.name
 
 
+class TuiOwnerModeUnavailable(RuntimeError):
+    """The terminal interface cannot send owner-only simple-loop messages."""
+
+
+def _check_tui_daemon_mode(client: V2DaemonClient, *, external_daemon: bool) -> None:
+    """Refuse owner-only mode before constructing an embedded V3 runtime.
+
+    A successful owner-status endpoint, including an unready worker, identifies
+    the owner-only surface. Older or normal daemons report an unavailable or
+    unknown method. Other errors must not be mistaken for a V3 daemon.
+    """
+    if os.environ.get("ALPHONSE_OWNER_ONLY_SIMPLE_LOOP") == "1":
+        raise TuiOwnerModeUnavailable(
+            "The terminal interface does not support owner-only simple-loop conversations yet. Use Desktop."
+        )
+    if not external_daemon:
+        return
+    try:
+        status = client.request("experimental_owner_status")
+    except RuntimeError as exc:
+        if str(exc) in {"owner_status_unavailable", "daemon_method_not_found: experimental_owner_status"}:
+            return
+        raise TuiOwnerModeUnavailable("Unable to verify the daemon mode; the terminal interface was not started.") from exc
+    except Exception as exc:
+        raise TuiOwnerModeUnavailable("Unable to verify the daemon mode; the terminal interface was not started.") from exc
+    if isinstance(status, dict) and type(status.get("processing_ready")) is bool:
+        raise TuiOwnerModeUnavailable(
+            "The terminal interface does not support owner-only simple-loop conversations yet. Use Desktop."
+        )
+    raise TuiOwnerModeUnavailable("Unable to verify the daemon mode; the terminal interface was not started.")
+
+
 def main() -> None:
-    app_cls = _build_textual_app_class()
-    app_cls().run()
+    try:
+        app_cls = _build_textual_app_class()
+        app_cls().run()
+    except TuiOwnerModeUnavailable as exc:
+        raise SystemExit(str(exc)) from None
 
 
 def _build_textual_app_class() -> type[Any]:
@@ -1890,13 +1926,14 @@ def _build_textual_app_class() -> type[Any]:
 
         def __init__(self) -> None:
             super().__init__()
+            self.daemon_client = V2DaemonClient()
+            self.external_daemon = _daemon_is_available(self.daemon_client)
+            _check_tui_daemon_mode(self.daemon_client, external_daemon=self.external_daemon)
             integration_store = SQLiteIntegrationStore.default()
             inference_settings_store = SQLiteInferenceSettingsStore.default()
             agent_config_store = AgentConfigStore(V2UserStore.default().agent_config_root())
             project_session_store = SQLiteProjectSessionStore.default()
             self.decision_work_log = {}
-            self.daemon_client = V2DaemonClient()
-            self.external_daemon = _daemon_is_available(self.daemon_client)
             self.daemon_connection_status = "connected" if self.external_daemon else "embedded"
             current_user = ""
             if self.external_daemon:

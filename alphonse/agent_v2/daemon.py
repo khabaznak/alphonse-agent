@@ -333,6 +333,43 @@ class V2Daemon:
         return bool(self.experimental_owner_only and self._processor_thread is not None
                     and self._processor_thread.is_alive() and not self._stop.is_set())
 
+    def owner_delivered_questions(self) -> list[dict[str, str]]:
+        """List bounded, acknowledged owner questions for explicit reply selection.
+
+        The socket handler authenticates the local peer; every candidate is
+        revalidated again during enqueue and under the new task's live claim.
+        """
+        import os
+        from alphonse.agent_v2.core.intelligence.v3.owner_clarification import resolve_owner_question
+        if not self.experimental_owner_only:
+            raise ValueError('owner_question_context_unavailable')
+        try:
+            with self.runtime.queue._connect() as conn:
+                conn.execute('BEGIN')
+                admin = conn.execute("""SELECT u.user_id FROM v2_users u JOIN v2_user_settings s
+                    ON s.key='admin_user_id' AND s.value=u.user_id
+                    WHERE u.role='admin' AND u.is_active=1""").fetchone()
+                if admin is None:
+                    return []
+                actor = str(admin['user_id'])
+                rows = conn.execute("""SELECT c.task_id FROM v2_task_checkpoints c
+                    JOIN v2_trusted_owner_ingress o ON o.message_id=c.task_id
+                    JOIN v2_conversation_events e ON e.source_message_id=('outbound:owner:' || c.task_id)
+                    WHERE c.owner_id=? AND o.owner_id=? AND o.peer_uid=? AND e.owner_user_id=?
+                    ORDER BY e.sequence DESC LIMIT 50""", (actor, actor, os.getuid(), actor)).fetchall()
+                result = []
+                for row in rows:
+                    try:
+                        _, question, _ = resolve_owner_question(conn, actor, row['task_id'])
+                    except ValueError:
+                        continue
+                    result.append({'message_id': row['task_id'], 'question': question[:240]})
+                    if len(result) >= 10:
+                        break
+                return result
+        except Exception:
+            return []
+
     def owner_message_status(self, message_id: str) -> str:
         if not isinstance(message_id, str) or re.fullmatch(r'[0-9a-f]{32}', message_id) is None:
             return 'unavailable'
@@ -1583,7 +1620,7 @@ class V2Daemon:
                 or context.claim_receipt is not checkpoint.receipt or checkpoint.task.message_id != checkpoint.task.task_id):
             raise ValueError('owner_desktop_pickup_unavailable')
         saved, _ = checkpoint.load(expected_version=checkpoint.version)
-        if saved.state.status != 'completed':
+        if saved.state.status not in {'completed', 'waiting_user'}:
             raise ValueError('owner_desktop_pickup_unavailable')
         with self._owner_checkpoint_lock:
             if checkpoint.task.message_id in self._owner_checkpoints:

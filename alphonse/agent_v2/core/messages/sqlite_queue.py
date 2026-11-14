@@ -95,7 +95,8 @@ class SQLiteMessageQueue:
             )
         return queued
 
-    def enqueue_trusted_local_owner(self, *, prompt: str, peer_uid: int) -> str:
+    def enqueue_trusted_local_owner(self, *, prompt: str, peer_uid: int,
+                                    reply_to_message_id: str | None = None) -> str:
         """Atomically bind a local-peer ingress to its newly created queue row.
 
         The caller must independently verify the peer UID. This record is not
@@ -117,8 +118,12 @@ class SQLiteMessageQueue:
             if admin is None:
                 raise PermissionError('owner_ingress_admin_unavailable')
             actor = str(admin['user_id'])
-            metadata = json.dumps({'intelligence_engine': 'single_loop_experimental',
-                'intelligence_schema_version': 1, 'routing_disposition': 'pdca_task'}, sort_keys=True)
+            metadata_fields = {'intelligence_engine': 'single_loop_experimental',
+                'intelligence_schema_version': 1, 'routing_disposition': 'pdca_task'}
+            if reply_to_message_id is not None:
+                from alphonse.agent_v2.core.intelligence.v3.owner_clarification import bind_owner_question
+                metadata_fields['owner_clarification'] = bind_owner_question(conn, actor, reply_to_message_id)
+            metadata = json.dumps(metadata_fields, sort_keys=True)
             payload = [message_id, timestamp, prompt.strip(), actor, '', '', '', '', metadata]
             digest = hashlib.sha256(json.dumps(payload, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
             conn.execute("""CREATE TABLE IF NOT EXISTS v2_trusted_owner_ingress (

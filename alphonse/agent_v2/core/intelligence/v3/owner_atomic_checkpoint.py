@@ -78,7 +78,9 @@ def verify_finalized_owner_ack(queue: SQLiteMessageQueue, message_id: str, token
             supplied = hashlib.sha256(token.encode('ascii')).hexdigest()
             if (raw.get('task_id') != message_id or raw.get('message_id') != message_id
                     or raw.get('user') != row['owner_id'] or raw.get('intelligence_engine') != 'single_loop_experimental'
-                    or state.task_id != message_id or state.actor != row['owner_id'] or state.status != 'completed'
+                    or state.task_id != message_id or state.actor != row['owner_id']
+                    or state.status not in {'completed', 'waiting_user'}
+                    or selected.get('kind') != ('answer' if state.status == 'completed' else 'question')
                     or state.inflight or marker.get('status') != 'client_acknowledged'
                     or not isinstance(marker.get('acknowledgement_sha256'), str)
                     or not hmac.compare_digest(marker['acknowledgement_sha256'], supplied)
@@ -190,14 +192,17 @@ class OwnerAtomicCheckpoint:
         with self._transaction() as conn:
             row, raw, state, budget = self._load(conn, expected_version)
             metadata = raw['metadata']
+            if 'owner_clarification' in self.task.metadata:
+                from .owner_clarification import load_bound_owner_question
+                load_bound_owner_question(conn, self.task.user, self.task.metadata['owner_clarification'])
             selected = metadata.get('owner_read_selected_draft')
             observations = metadata.get('owner_read_observations')
-            if (state.status != 'completed' or state.inflight or not state.response.strip()
+            if (state.status not in {'completed', 'waiting_user'} or state.inflight or not state.response.strip()
                     or context.cancellation_checker() is not False
                     or 'owner_read_pending_decision' in metadata or 'owner_read_pending_action' in metadata
                     or 'owner_read_desktop_pickup_started' in metadata
                     or not isinstance(selected, dict) or selected.get('schema_version') != 1
-                    or selected.get('kind') != 'answer'
+                    or selected.get('kind') != ('answer' if state.status == 'completed' else 'question')
                     or selected.get('claim_digest') != _claim_digest(self.receipt)
                     or selected.get('answer_sha256') != hashlib.sha256(state.response.encode('utf-8')).hexdigest()
                     or selected.get('evidence_refs') != state.evidence_sources
@@ -212,6 +217,7 @@ class OwnerAtomicCheckpoint:
             }
             result = self.store._write(conn, row, raw, state, budget)
             response = {'message_id': self.task.message_id, 'message': state.response,
+                        'kind': selected['kind'],
                         'delivery_status': 'started_unconfirmed', 'acknowledgement_token': acknowledgement_token}
         self.version = result.version
         return response
@@ -244,7 +250,7 @@ class OwnerAtomicCheckpoint:
             _, raw, state, budget = self._load(conn, result.version)
             marker = raw['metadata'].get('owner_read_desktop_pickup_started')
             has_outbox = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_outbox'").fetchone()
-            if (state.status != 'completed' or state.inflight or budget.usage()['in_flight']
+            if (state.status not in {'completed', 'waiting_user'} or state.inflight or budget.usage()['in_flight']
                     or budget.usage()['unknown_usage'] or not isinstance(marker, dict)
                     or marker.get('status') != 'client_acknowledged'
                     or 'owner_read_pending_decision' in raw['metadata']
@@ -265,12 +271,13 @@ class OwnerAtomicCheckpoint:
             marker = raw['metadata'].get('owner_read_desktop_pickup_started')
             selected = raw['metadata'].get('owner_read_selected_draft')
             token_digest = hashlib.sha256(token.encode('ascii')).hexdigest()
-            if (state.status != 'completed' or context.cancellation_checker() is not False
+            if (state.status not in {'completed', 'waiting_user'} or context.cancellation_checker() is not False
                     or not isinstance(marker, dict) or marker.get('status') not in {'started_unconfirmed', 'client_acknowledged'}
                     or marker.get('claim_digest') != _claim_digest(self.receipt)
                     or not isinstance(marker.get('acknowledgement_sha256'), str)
                     or not hmac.compare_digest(marker['acknowledgement_sha256'], token_digest)
                     or not isinstance(selected, dict) or marker.get('answer_sha256') != selected.get('answer_sha256')
+                    or selected.get('kind') != ('answer' if state.status == 'completed' else 'question')
                     or marker.get('answer_sha256') != hashlib.sha256(state.response.encode('utf-8')).hexdigest()):
                 raise CheckpointConflict('owner_desktop_ack_unavailable')
             if marker['status'] == 'client_acknowledged':

@@ -25,6 +25,8 @@ import { daemonRequest, ensureDaemon, playAlertSound, showInFinder, stopDaemon }
 import { assertLegacyConversationAvailable, OwnerConversation } from "./ownerConversation";
 import { abandonOwnerRequest, listOwnerRecovery, type OwnerRecoveryItem } from "./ownerRecovery";
 import { OwnerRecovery } from "./OwnerRecoveryPanel";
+import { OwnerQuestionSelector } from "./OwnerQuestionSelector";
+import { listOwnerQuestions, type OwnerQuestion } from "./ownerQuestions";
 import { SKILL_NAME_MAX_LENGTH, SKILL_DESCRIPTION_MAX_LENGTH, skillTextLength, limitSkillText } from "./skillFormat";
 import { DESKTOP_COMMANDS, matchingCommands } from "./commands";
 import { mergeFreshConversationHistory } from "./conversationHistory";
@@ -149,8 +151,13 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const [ownerConversationBusy, setOwnerConversationBusy] = useState(false);
   const [ownerRecoveryItems, setOwnerRecoveryItems] = useState<OwnerRecoveryItem[]>([]);
   const [ownerRecoveryNotice, setOwnerRecoveryNotice] = useState("");
+  const [ownerClarificationNotice, setOwnerClarificationNotice] = useState("");
+  const [ownerQuestions, setOwnerQuestions] = useState<OwnerQuestion[]>([]);
+  const [ownerQuestionScope, setOwnerQuestionScope] = useState("");
+  const [ownerReplyTarget, setOwnerReplyTarget] = useState("");
   const [ownerRecoveryStopping, setOwnerRecoveryStopping] = useState("");
   const ownerRecoveryGeneration = useRef(0);
+  const ownerQuestionGeneration = useRef(0);
   const ownerConversation = useMemo(() =>
     isAdmin && ownerConversationEnabled ? new OwnerConversation(daemonRequest) : null,
     [isAdmin, ownerConversationEnabled, user]);
@@ -169,6 +176,8 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
     if (ownerConversationBusy || (enabled && !ownerWorkerReady)) return;
     window.localStorage.setItem("alphonse.desktop.experimentalOwnerConversation", String(enabled));
     ownerConversationNotice.current = "";
+    setOwnerClarificationNotice("");
+    setOwnerReplyTarget("");
     setOwnerConversationEnabled(enabled);
   };
   const refreshOwnerRecovery = useCallback(async () => {
@@ -183,16 +192,32 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       if (generation === ownerRecoveryGeneration.current) setOwnerRecoveryNotice("Unfinished requests could not be checked.");
     }
   }, []);
+  const refreshOwnerQuestions = useCallback(async () => {
+    const generation = ++ownerQuestionGeneration.current;
+    try {
+      const items = await listOwnerQuestions(daemonRequest);
+      if (generation === ownerQuestionGeneration.current) { setOwnerQuestions(items); setOwnerQuestionScope(user); }
+    } catch {
+      if (generation === ownerQuestionGeneration.current) setOwnerQuestions([]);
+    }
+  }, [user]);
   useEffect(() => {
+    // Do not carry a prior account's selected or visible question across a
+    // user/mode change while the newly scoped list is loading.
+    setOwnerQuestions([]);
+    setOwnerQuestionScope("");
+    setOwnerReplyTarget("");
     if (!isAdmin || !ownerConversationEnabled) {
       ++ownerRecoveryGeneration.current;
+      ++ownerQuestionGeneration.current;
       setOwnerRecoveryItems([]);
       return;
     }
     void refreshOwnerRecovery();
-    const interval = window.setInterval(() => void refreshOwnerRecovery(), 10000);
-    return () => { ++ownerRecoveryGeneration.current; window.clearInterval(interval); };
-  }, [isAdmin, ownerConversationEnabled, refreshOwnerRecovery]);
+    void refreshOwnerQuestions();
+    const interval = window.setInterval(() => { void refreshOwnerRecovery(); void refreshOwnerQuestions(); }, 10000);
+    return () => { ++ownerRecoveryGeneration.current; ++ownerQuestionGeneration.current; window.clearInterval(interval); };
+  }, [isAdmin, ownerConversationEnabled, refreshOwnerRecovery, refreshOwnerQuestions, user]);
   const stopOwnerRequest = async (messageId: string) => {
     if (ownerRecoveryStopping) return;
     setOwnerRecoveryStopping(messageId);
@@ -409,12 +434,20 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       }
       if (ownerConversation) {
         try {
-          const acknowledgementRecovered = await ownerConversation.poll((messageId, answer) => appendMessage({
-            // Match the daemon's durable outbound:owner:<message_id> source
-            // identity so a later history refresh does not duplicate it.
-            id: `owner:${messageId}`, role: "assistant", content: answer,
-            created_at: new Date().toISOString(), project_id: "",
-          }));
+          let sawQuestion = false;
+          const acknowledgementRecovered = await ownerConversation.poll((messageId, answer, kind) => {
+            appendMessage({
+              // Match the daemon's durable outbound:owner:<message_id> source
+              // identity so a later history refresh does not duplicate it.
+              id: `owner:${messageId}`, role: "assistant", content: answer,
+              created_at: new Date().toISOString(), project_id: "",
+            });
+            sawQuestion = kind === "question";
+            setOwnerClarificationNotice(kind === "question"
+              ? "After the question is confirmed, select it below to include it in a new reply request."
+              : "");
+          });
+          if (sawQuestion || acknowledgementRecovered) void refreshOwnerQuestions();
           setOwnerConversationBusy(ownerConversation.hasPending());
           if (acknowledgementRecovered) { ownerConversationNotice.current = ""; setError(""); }
         } catch (cause) {
@@ -430,7 +463,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       setError(cause instanceof Error ? cause.message : "Daemon connection lost");
       setActivity("idle");
     }
-  }, [appendMessage, clientId, contextProjects, desktopNotifications, diagnosticBehavior.commitsPollResponses, ownerConversation, pollTransport, reconcileWidgets, user]);
+  }, [appendMessage, clientId, contextProjects, desktopNotifications, diagnosticBehavior.commitsPollResponses, ownerConversation, pollTransport, reconcileWidgets, refreshOwnerQuestions, user]);
 
   const showOwnerAnswer = async (messageId: string) => {
     if (!ownerConversation) return;
@@ -632,8 +665,13 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       const messagePrompt = value;
       if (ownerConversation) {
         if (composerProject) throw new Error("Project conversations are not available in this owner conversation path.");
+        if (ownerReplyTarget && (ownerQuestionScope !== user || !ownerQuestions.some((item) => item.message_id === ownerReplyTarget))) {
+          throw new Error("The selected question is no longer available. Choose it again before sending.");
+        }
         setOwnerConversationBusy(true);
-        const queued = await ownerConversation.send(messagePrompt);
+        const queued = await ownerConversation.send(messagePrompt, ownerReplyTarget || undefined);
+        setOwnerClarificationNotice("");
+        setOwnerReplyTarget("");
         setOwnerConversationBusy(true);
         setPrompt("");
         const today = localDay(timezone);
@@ -806,8 +844,11 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
           {isAdmin && (ownerWorkerReady || ownerConversationEnabled) && <label className="composer-hint"><input type="checkbox" checked={ownerConversationEnabled} disabled={ownerConversationBusy || (!ownerWorkerReady && !ownerConversationEnabled)} onChange={(event) => changeOwnerConversation(event.target.checked)} /> Try the simpler conversation loop for your own messages</label>}
           {isAdmin && ownerWorkerReady && !ownerConversationEnabled && <p className="composer-hint">Turn this on to send messages while the owner-only service is running.</p>}
           {isAdmin && ownerConversationEnabled && !ownerWorkerReady && <p className="composer-hint">The simpler conversation loop is not ready. Messages will not be sent until it is available.</p>}
+          {isAdmin && ownerConversationEnabled && <p className="composer-hint">Each message starts a separate request. Choose a question below to include it as context for a reply.</p>}
+          {isAdmin && ownerConversationEnabled && ownerQuestionScope === user && <OwnerQuestionSelector questions={ownerQuestions} selectedId={ownerReplyTarget} disabled={ownerConversationBusy} onSelect={setOwnerReplyTarget} />}
           {isAdmin && ownerConversationEnabled && <OwnerRecovery items={ownerRecoveryItems} stopping={ownerRecoveryStopping} onStop={(id) => void stopOwnerRequest(id)} onShow={(id) => void showOwnerAnswer(id)} />}
           {isAdmin && ownerConversationEnabled && ownerRecoveryNotice && <p className="composer-hint" role="status">{ownerRecoveryNotice}</p>}
+          {isAdmin && ownerConversationEnabled && ownerClarificationNotice && <p className="composer-hint" role="status">{ownerClarificationNotice}</p>}
         </section>
         </section></section>
         {visited.has("projects") && <section className="workspace-panel" tabIndex={-1} aria-label="Projects and tasks workspace" hidden={workspace !== "projects"}><ProjectsWorkspace active={workspace === "projects"} user={user} initialTaskId={workTaskForView} initialProjectId={projectForView.id} selectionRequest={projectForView.request} onAgenda={(id) => { setScheduledTaskForView(id); navigate("agenda"); }} onConversation={(day) => { if (day) setConversationDay(day); navigate("conversation"); }} onDelegate={(project) => { setComposerProject({ id: project.project_id, name: project.name }); setConversationDay(localDay(timezone)); navigate("conversation"); window.setTimeout(() => textareaRef.current?.focus(), 0); }} onQuestions={() => navigate("attention")} onClose={() => navigate("conversation")} /></section>}

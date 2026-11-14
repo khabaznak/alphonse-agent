@@ -1,5 +1,26 @@
 # Legacy loop bridge inventory (2026-11-12)
 
+## Current surface audit — 14 November, after `4e3e6a39`
+
+This section supersedes the dated observations below where they conflict. It
+describes source and disposable tests, not the process currently running on a
+household computer or a qualified release. The owner selected one simple loop;
+V3 remains the normal production bridge until the supported replacement is
+verified. Git preserves the retired code and recorded history.
+
+| Surface | Current state | Remaining work before #229 closes |
+| --- | --- | --- |
+| Runtime / daemon | The default `build_runtime_host` still registers V3. `ALPHONSE_OWNER_ONLY_SIMPLE_LOOP=1` explicitly selects the experimental owner-only daemon worker and actual simple-loop read processor; unset/`0` keeps V3. It requires a fenced file-backed queue and shared queue/user/question/conversation/outbox database. | Qualify the supported path, then migrate normal ingestion and lifecycle to the simple loop; retire the V3 bridge and selectors only after their useful capabilities move. The experimental worker is not the general CoreLoop fenced path. |
+| Desktop | The owner checkbox, request, answer, acknowledgment and manual recovery use peer-verified owner-only socket methods. In the experimental daemon, legacy generic submission is refused; legacy outbox claims and question backfills are suppressed. | Verify real owner use, truthful blockers/questions and recovery. The current slice reads owner conversation sources only and does not run schedules, external integrations or chores. OS UID identifies a local account, not a separate household member. |
+| TUI and CLI | The CLI starts the daemon with its environment. The TUI still uses a V3 runtime and generic queue messages; before constructing it, the TUI now rejects an owner-only daemon or an explicit owner-only environment with a clear instruction to use Desktop. Its ordinary embedded fallback remains V3. | Provide an intentional simple-loop TUI path when supported; verify all startup, status, error and mode-switch cases without silent message loss. Package/class/database names containing `v2` are not proof that a V2 loop remains. |
+| Engine settings and ingestion | `IntelligenceEngineSettings` accepts V3 only, remaps the old `tactical_v2` preference for **new** work, and retains `v3_project_ids`; normal channel ingress stamps V3. The experimental owner socket stamps the simple engine/schema itself. | Remove legacy settings/selection only with an explicit migration for persisted task stamps and preferences. Do not reinterpret old checkpoints as new-loop tasks. |
+| Legacy state and recovery | Old/unknown engine stamps fail closed; the owner worker can explicitly abandon eligible pristine pending or expired owner reads, leaving uncertain delivery truthful. Acknowledged owner answers record conversation history and finalize their exact claim. | Recovery of old V3 tasks, external effects and uncertain deliveries remains incomplete; questions and automatic claim renewal/recovery are unsupported. Never silently replay effects or treat uncertainty as completion. |
+| Mode switch / rollback | Current queue code refuses conflicting fenced and unfenced claim generations. Explicit owner recovery handles only its narrow eligible read-only requests; unresolved, malformed, live or effect-bearing work may remain blocked. | Document and verify an operational migration and rollback that preserves jobs, data, history, provenance and effects. A simple binary/config switch cannot guarantee a safe transition, and old binaries can bypass in-process guards. |
+| Packaging and dependencies | The V2 PDCA implementation, executable replay harness, old prompt templates and unused LangChain/LangGraph requirements were removed in `4e3e6a39`; the old source and reports remain in Git. Shared `agent_v2` package and `v2_` storage prefixes remain active interfaces. | Audit installed artifacts and imports again as V3 is retired; preserve user data and historical evidence while removing obsolete loop code. |
+| Tests and documentation | The current owner-only path has disposable daemon/socket and Desktop checks. The historical evidence and evaluation-arm review document earlier evidence; later owner direction supersedes any recommendation to keep old loop executors for replay. | Add end-to-end question/resume, integration and recovery evidence for capabilities actually migrated; remove or update stale active documentation and choices. Old snapshots remain explicitly dated historical material. |
+
+## Historical inventory — 12 November
+
 Working inventory for #222, based on the integration branch at `246d3d19`.
 It is not a complete removal plan or a release qualification. The chosen simple
 loop is experimental; V3 remains the production bridge, limited to security and

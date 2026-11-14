@@ -4,7 +4,7 @@ export type OwnerRequest = <T>(method: string, params?: Record<string, unknown>)
 type Pending = { messageId: string; pickupStarted: boolean; acknowledgementToken?: string; acknowledgementInFlight?: boolean; acknowledgementRetryAttempted?: boolean };
 type Status = "pending" | "ready" | "started_unconfirmed" | "client_acknowledged" | "failed" | "unavailable";
 type StatusReply = { processing_ready?: boolean; status?: Status };
-type Pickup = { message_id: string; message: string; acknowledgement_token: string; delivery_status: string };
+type Pickup = { message_id: string; message: string; acknowledgement_token: string; delivery_status: string; kind?: "answer" | "question" };
 
 /** The exclusive owner worker cannot process the legacy queue. */
 export function assertLegacyConversationAvailable(ownerWorkerReady: boolean): void {
@@ -39,15 +39,20 @@ export class OwnerConversation {
     if (!current) this.pending.set(messageId, { messageId, pickupStarted: false });
   }
 
-  async send(prompt: string): Promise<{ message_id: string }> {
+  async send(prompt: string, replyToMessageId?: string): Promise<{ message_id: string }> {
     if (this.hasPending()) throw new Error("Wait for the current conversation to finish or resolve its uncertain result.");
+    if (replyToMessageId !== undefined && !/^[0-9a-f]{32}$/.test(replyToMessageId)) {
+      throw new Error("This question could not be selected for a reply.");
+    }
     this.submitting = true;
     let queued: { message_id: string };
     try {
       const capability = await this.request<StatusReply>("experimental_owner_status", {});
       if (capability.processing_ready !== true) throw new Error("Owner conversation is not ready; your message was not sent.");
       try {
-        queued = await this.request("experimental_owner_ingress", { prompt });
+        queued = await this.request("experimental_owner_ingress", {
+          prompt, ...(replyToMessageId === undefined ? {} : { reply_to_message_id: replyToMessageId }),
+        });
       } catch {
         this.submissionUncertain = true;
         throw new Error("Message submission could not be confirmed. Check the conversation before sending it again.");
@@ -63,7 +68,7 @@ export class OwnerConversation {
     }
   }
 
-  async poll(onAnswer: (messageId: string, answer: string) => void): Promise<boolean> {
+  async poll(onAnswer: (messageId: string, answer: string, kind: "answer" | "question") => void): Promise<boolean> {
     let acknowledgementRecovered = false;
     for (const pending of this.pending.values()) {
       if (pending.pickupStarted) {
@@ -77,7 +82,13 @@ export class OwnerConversation {
           acknowledgementRecovered = true;
           continue;
         }
-        if (state.status !== "started_unconfirmed") {
+        // A daemon restart loses its in-memory status cache even when the
+        // original acknowledgment committed. The server's exact-token
+        // acknowledgment endpoint verifies the durable owner, checkpoint,
+        // history and token before returning success, so the same bounded
+        // retry is safe when status is unavailable too. This never repeats
+        // the one-shot pickup or proves that a person read the answer.
+        if (state.status !== "started_unconfirmed" && state.status !== "unavailable") {
           throw new Error("The answer is shown, but saving it to conversation history could not be confirmed.");
         }
         if (pending.acknowledgementRetryAttempted) {
@@ -112,10 +123,11 @@ export class OwnerConversation {
         throw new Error("The answer could not be confirmed. It will not be fetched again automatically.");
       }
       if (!pickup || pickup.message_id !== pending.messageId || typeof pickup.message !== "string"
-          || typeof pickup.acknowledgement_token !== "string" || pickup.delivery_status !== "started_unconfirmed") {
+          || typeof pickup.acknowledgement_token !== "string" || pickup.delivery_status !== "started_unconfirmed"
+          || (pickup.kind !== undefined && pickup.kind !== "answer" && pickup.kind !== "question")) {
         throw new Error("The answer could not be confirmed. It will not be fetched again automatically.");
       }
-      onAnswer(pending.messageId, pickup.message);
+      onAnswer(pending.messageId, pickup.message, pickup.kind ?? "answer");
       pending.acknowledgementToken = pickup.acknowledgement_token;
       await this.acknowledge(pending);
     }
@@ -126,9 +138,10 @@ export class OwnerConversation {
     if (!pending.acknowledgementToken || pending.acknowledgementInFlight) return;
     pending.acknowledgementInFlight = true;
     try {
-      await this.request("experimental_owner_ack_draft", {
+      const result = await this.request<{ status?: string }>("experimental_owner_ack_draft", {
         message_id: pending.messageId, acknowledgement_token: pending.acknowledgementToken,
       });
+      if (result?.status !== "client_acknowledged") throw new Error("acknowledgment unavailable");
       this.pending.delete(pending.messageId);
     } catch {
       throw new Error("The answer is shown, but saving it to conversation history could not be confirmed.");

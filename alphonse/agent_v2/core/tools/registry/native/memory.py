@@ -17,7 +17,8 @@ SEARCH_MEMORY_TOOL_NAME = "search_memory"
 READ_MEMORY_SOURCE_TOOL_ID = "native.read_memory_source"
 
 
-def complete_conversation_search(actor: str, tool_id: str, arguments: dict[str, Any], payload: dict[str, Any]) -> bool:
+def complete_conversation_search(actor: str, tool_id: str, arguments: dict[str, Any], payload: dict[str, Any], *,
+                                 allow_excerpt_truncation: bool = False) -> bool:
     """Recognize a complete direct-owner search page, not an absence proof.
 
     The native tool must have run under the authenticated actor. This checks
@@ -33,7 +34,8 @@ def complete_conversation_search(actor: str, tool_id: str, arguments: dict[str, 
             or type(payload.get('schema_version')) is not int or payload.get('schema_version') != 2
             or payload.get('query') != query.strip() or payload.get('status') not in ('found', 'empty')
             or payload.get('coverage') != {'conversation': 'complete'} or payload.get('backend') != 'sqlite_fts5'
-            or payload.get('next_offset') is not None or payload.get('truncated') is not False):
+            or payload.get('next_offset') is not None or type(payload.get('truncated')) is not bool
+            or (payload['truncated'] and not allow_excerpt_truncation)):
         return False
     results = payload.get('results')
     if (not isinstance(results, list) or type(payload.get('total_matches')) is not int
@@ -50,9 +52,12 @@ def complete_conversation_search(actor: str, tool_id: str, arguments: dict[str, 
                 or item.get('source_type') != 'conversation' or not isinstance(source, dict)
                 or source.get('source_id') != source_id or source.get('kind') != 'conversation'
                 or not isinstance(access, dict) or access.get('owner_user_id') != actor
-                or item.get('truncated') is not False):
+                or type(item.get('truncated')) is not bool
+                or (item['truncated'] and not allow_excerpt_truncation)):
             return False
-    return True
+    # A complete result page can still contain deliberately shortened source
+    # excerpts. Never confuse those with a missing/paginated result page.
+    return payload['truncated'] == any(item['truncated'] for item in results)
 
 
 def complete_conversation_read(actor: str, tool_id: str, arguments: dict[str, Any], payload: dict[str, Any]) -> bool:
@@ -110,6 +115,7 @@ def complete_conversation_read(actor: str, tool_id: str, arguments: dict[str, An
 
 def revalidate_conversation_observation(
     actor: str, tool_id: str, arguments: dict[str, Any], payload: dict[str, Any], *, context: ToolExecutionContext,
+    allow_excerpt_truncation: bool = False,
 ) -> bool:
     """Re-read an owner-scoped observation before promoting it to evidence.
 
@@ -127,10 +133,12 @@ def revalidate_conversation_observation(
         if cancelled is not None and (not callable(cancelled) or cancelled() is not False):
             return False
         if tool_id == SEARCH_MEMORY_TOOL_ID:
-            if not complete_conversation_search(actor, tool_id, arguments, payload):
+            if not complete_conversation_search(actor, tool_id, arguments, payload,
+                                                allow_excerpt_truncation=allow_excerpt_truncation):
                 return False
             current = execute_search_memory(arguments, context=context)
-            valid = complete_conversation_search(actor, tool_id, arguments, current)
+            valid = complete_conversation_search(actor, tool_id, arguments, current,
+                                                  allow_excerpt_truncation=allow_excerpt_truncation)
         elif tool_id == READ_MEMORY_SOURCE_TOOL_ID:
             if not complete_conversation_read(actor, tool_id, arguments, payload):
                 return False

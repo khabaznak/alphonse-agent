@@ -84,6 +84,173 @@ def test_owner_candidate_uses_real_memory_and_blocks_replay(tmp_path):
     assert len(provider.requests) == 3
 
 
+@pytest.mark.parametrize('read_source', [True, False])
+@pytest.mark.parametrize('include_unrelated', [False, True])
+def test_owner_search_truncated_excerpt_is_discovery_only(tmp_path, read_source, include_unrelated):
+    users = V2UserStore(':memory:')
+    owner = users.onboard(display_name='Synthetic owner', users_root=tmp_path / 'users')
+    conversation = SQLiteConversationStore(tmp_path / 'conversation.db')
+    event = conversation.record(owner_user_id=owner.user_id, role='user',
+        content='Synthetic willow picnic Thursday. ' + ('Routine planning. ' * 100) + 'Moved to Saturday.',
+        source='test', source_message_id='long-fixture')
+    unrelated = None
+    if include_unrelated:
+        unrelated = conversation.record(owner_user_id=owner.user_id, role='user',
+            content='Willow picnic seating inventory: plates and chairs.',
+            source='test', source_message_id='other-fixture')
+    registry = InMemoryToolRegistry()
+    registry.register(build_search_memory_tool_definition())
+    registry.register(build_read_memory_source_tool_definition())
+
+    class TruncatedProvider:
+        supports_image_input = False
+        def __init__(self):
+            self.requests = []
+        def generate_json(self, request):
+            self.requests.append(request)
+            if len(self.requests) == 1:
+                decision = {'kind': 'tool', 'tool_id': 'native.search_memory',
+                            'arguments': {'query': 'willow picnic', 'source_types': ['conversation']}, 'text': None}
+            elif len(self.requests) == 2 and read_source:
+                assert 'Shortened previews are withheld' in request.prompt
+                assert 'Thursday' not in request.prompt
+                assert 'Moved to Saturday.' not in request.prompt
+                assert event.event_id in request.prompt
+                if unrelated:
+                    assert unrelated.event_id in request.prompt
+                    assert 'seating inventory' in request.prompt
+                decision = {'kind': 'tool', 'tool_id': 'native.read_memory_source',
+                            'arguments': {'source_id': 'conversation:' + event.event_id, 'neighbors': 0}, 'text': None}
+            else:
+                if read_source:
+                    assert 'Moved to Saturday.' in request.prompt
+                decision = {'kind': 'answer', 'tool_id': None, 'arguments': None, 'text': 'Saturday.'}
+            return InferenceResult(json_value=decision, raw_response=json.dumps(decision),
+                                   usage={'input_tokens': 100, 'output_tokens': 20})
+
+    provider = TruncatedProvider()
+    router = InferenceRouter(provider=provider, default_profile=ModelProfile('test', 'fixture', 'offline'))
+    task = TaskState(task_id='message-long', message_id='message-long', user=owner.user_id,
+                     goal='What is the current willow picnic day?',
+                     intelligence_engine='single_loop_experimental', intelligence_schema_version=1)
+    context = CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry, inference=router,
+                              conversation_store=conversation, cancellation_checker=lambda: False)
+    processor = OwnerReadConversationProcessor(users=users, budgets=SQLiteTaskBudgetStore(str(tmp_path / 'budget.db')),
+        authorize_claim=lambda *_: True, save_checkpoint=lambda *_: None, now_ms=lambda: 100)
+    result = processor.process(task, context)
+    if read_source:
+        assert result.status == ProcessingStatus.WAITING, result.error
+        assert result.snapshot.metadata['draft'] == 'Saturday.'
+        # One relevant full source is enough; the unrelated search hit is not
+        # forced to be read. This does not prove semantic grounding.
+        assert len(provider.requests) == 3
+    elif include_unrelated:
+        # The other matching source is complete. This allows a model to use
+        # complete search evidence without reading an unrelated long source;
+        # it does not prove this scripted answer is grounded.
+        assert result.status == ProcessingStatus.WAITING
+        assert len(provider.requests) == 2
+    else:
+        assert result.status == ProcessingStatus.FAILED
+        assert len(provider.requests) == 2
+
+
+def test_shortened_preview_is_hidden_even_if_model_guesses_after_reading_other_source(tmp_path):
+    users = V2UserStore(':memory:')
+    owner = users.onboard(display_name='Synthetic owner', users_root=tmp_path / 'users')
+    conversation = SQLiteConversationStore(tmp_path / 'conversation.db')
+    conversation.record(owner_user_id=owner.user_id, role='user',
+        content='Willow picnic Thursday. ' + ('Planning details. ' * 100) + 'Update: Saturday.',
+        source='test', source_message_id='fixture-a')
+    other = conversation.record(owner_user_id=owner.user_id, role='user',
+        content='Willow picnic equipment: blanket and plates.', source='test', source_message_id='fixture-b')
+    registry = InMemoryToolRegistry()
+    registry.register(build_search_memory_tool_definition())
+    registry.register(build_read_memory_source_tool_definition())
+
+    class WrongSourceProvider:
+        supports_image_input = False
+        def __init__(self):
+            self.requests = []
+        def generate_json(self, request):
+            self.requests.append(request)
+            if len(self.requests) == 1:
+                decision = {'kind': 'tool', 'tool_id': 'native.search_memory',
+                            'arguments': {'query': 'willow picnic', 'source_types': ['conversation']}, 'text': None}
+            elif len(self.requests) == 2:
+                assert 'Thursday' not in request.prompt
+                assert 'Willow picnic equipment: blanket and plates.' in request.prompt
+                decision = {'kind': 'tool', 'tool_id': 'native.read_memory_source',
+                            'arguments': {'source_id': 'conversation:' + other.event_id, 'neighbors': 0}, 'text': None}
+            else:
+                # The model can still guess from its own output even though
+                # the shortened source's content was withheld.
+                assert 'Thursday' not in request.prompt
+                decision = {'kind': 'answer', 'tool_id': None, 'arguments': None, 'text': 'Thursday.'}
+            return InferenceResult(json_value=decision, raw_response=json.dumps(decision),
+                                   usage={'input_tokens': 100, 'output_tokens': 20})
+
+    provider = WrongSourceProvider()
+    router = InferenceRouter(provider=provider, default_profile=ModelProfile('test', 'fixture', 'offline'))
+    task = TaskState(task_id='wrong-source', message_id='wrong-source', user=owner.user_id,
+                     goal='When is the willow picnic?', intelligence_engine='single_loop_experimental',
+                     intelligence_schema_version=1)
+    context = CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry, inference=router,
+                              conversation_store=conversation, cancellation_checker=lambda: False)
+    processor = OwnerReadConversationProcessor(users=users, budgets=SQLiteTaskBudgetStore(str(tmp_path / 'budget.db')),
+        authorize_claim=lambda *_: True, save_checkpoint=lambda *_: None, now_ms=lambda: 100)
+    result = processor.process(task, context)
+    # Diagnostic of the remaining semantic limitation, not an oracle pass:
+    # the complete unrelated hit allows an answer, which is wrong here.
+    assert result.status == ProcessingStatus.WAITING
+    assert result.snapshot.metadata['draft'] == 'Thursday.'
+    assert result.snapshot.metadata['draft'] != 'Saturday.'
+    assert len(provider.requests) == 3
+
+
+def test_complete_search_result_does_not_force_unrelated_overlong_source_read(tmp_path):
+    users = V2UserStore(':memory:')
+    owner = users.onboard(display_name='Synthetic owner', users_root=tmp_path / 'users')
+    conversation = SQLiteConversationStore(tmp_path / 'conversation.db')
+    conversation.record(owner_user_id=owner.user_id, role='user',
+        content='Willow picnic: the latest plan is Saturday.', source='test', source_message_id='relevant')
+    conversation.record(owner_user_id=owner.user_id, role='user',
+        content='Willow picnic equipment list. ' + ('unrelated supplies. ' * 800),
+        source='test', source_message_id='long-unrelated')
+    registry = InMemoryToolRegistry()
+    registry.register(build_search_memory_tool_definition())
+    registry.register(build_read_memory_source_tool_definition())
+
+    class Provider:
+        supports_image_input = False
+        def __init__(self): self.requests = []
+        def generate_json(self, request):
+            self.requests.append(request)
+            if len(self.requests) == 1:
+                decision = {'kind': 'tool', 'tool_id': 'native.search_memory',
+                            'arguments': {'query': 'willow picnic', 'source_types': ['conversation']}, 'text': None}
+            else:
+                assert 'the latest plan is Saturday' in request.prompt
+                assert 'unrelated supplies' not in request.prompt
+                decision = {'kind': 'answer', 'tool_id': None, 'arguments': None, 'text': 'Saturday.'}
+            return InferenceResult(json_value=decision, raw_response=json.dumps(decision),
+                                   usage={'input_tokens': 100, 'output_tokens': 20})
+
+    provider = Provider()
+    task = TaskState(task_id='short-source', message_id='short-source', user=owner.user_id,
+        goal='What is the latest willow picnic day?', intelligence_engine='single_loop_experimental',
+        intelligence_schema_version=1)
+    context = CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry,
+        inference=InferenceRouter(provider=provider, default_profile=ModelProfile('test', 'fixture', 'offline')),
+        conversation_store=conversation, cancellation_checker=lambda: False)
+    processor = OwnerReadConversationProcessor(users=users, budgets=SQLiteTaskBudgetStore(str(tmp_path / 'budget.db')),
+        authorize_claim=lambda *_: True, save_checkpoint=lambda *_: None, now_ms=lambda: 100)
+    result = processor.process(task, context)
+    assert result.status == ProcessingStatus.WAITING, result.error
+    assert result.snapshot.metadata['draft'] == 'Saturday.'  # independent synthetic oracle
+    assert len(provider.requests) == 2  # no unrelated source read
+
+
 def test_owner_host_requires_trusted_claim_and_active_owner(tmp_path):
     users = V2UserStore(':memory:')
     owner = users.onboard(display_name='Synthetic owner', users_root=tmp_path / 'users')

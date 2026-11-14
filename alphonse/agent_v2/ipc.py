@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import socket
 import sys
 import threading
@@ -385,6 +386,8 @@ class V2DaemonServer:
                     result = self._owner_abandon(connection, request)
                 elif isinstance(request, dict) and request.get('method') == 'experimental_owner_recovery_list':
                     result = self._owner_recovery_list(connection, request)
+                elif isinstance(request, dict) and request.get('method') == 'experimental_owner_questions':
+                    result = self._owner_questions(connection, request)
                 else:
                     result = self._dispatch(request)
                 response = {"version": PROTOCOL_VERSION, "request_id": _request_id(request), "ok": True, "result": result}
@@ -404,8 +407,13 @@ class V2DaemonServer:
         if request.get('version') != PROTOCOL_VERSION:
             raise ValueError('daemon_protocol_version_unsupported')
         params = request.get('params')
-        if not isinstance(params, dict) or set(params) != {'prompt'}:
+        if (not isinstance(params, dict) or 'prompt' not in params
+                or set(params) - {'prompt', 'reply_to_message_id'}):
             raise ValueError('owner_ingress_payload_denied')
+        if ('reply_to_message_id' in params and
+                (not isinstance(params['reply_to_message_id'], str)
+                 or re.fullmatch(r'[0-9a-f]{32}', params['reply_to_message_id']) is None)):
+            raise ValueError('owner_question_context_unavailable')
         uid = self._local_peer_uid(connection)
         if (getattr(self.daemon, 'experimental_owner_only', False) is True
                 and not self.daemon.owner_processing_ready()):
@@ -414,7 +422,8 @@ class V2DaemonServer:
         queue = self.daemon.runtime.queue
         if type(queue) is not SQLiteMessageQueue:
             raise PermissionError('owner_ingress_unavailable')
-        return {'message_id': queue.enqueue_trusted_local_owner(prompt=params['prompt'], peer_uid=uid)}
+        return {'message_id': queue.enqueue_trusted_local_owner(prompt=params['prompt'], peer_uid=uid,
+                    reply_to_message_id=params.get('reply_to_message_id'))}
 
     def _owner_status(self, connection, request):
         if not self.experimental_owner_ingress:
@@ -462,6 +471,16 @@ class V2DaemonServer:
             raise ValueError('owner_desktop_pickup_payload_denied')
         self._local_peer_uid(connection)
         return self.daemon.take_owner_desktop_draft(params['message_id'])
+
+    def _owner_questions(self, connection, request):
+        if not self.experimental_owner_ingress:
+            raise PermissionError('owner_question_context_unavailable')
+        if request.get('version') != PROTOCOL_VERSION:
+            raise ValueError('daemon_protocol_version_unsupported')
+        if request.get('params') != {}:
+            raise ValueError('owner_question_context_unavailable')
+        self._local_peer_uid(connection)
+        return {'questions': self.daemon.owner_delivered_questions()}
 
     def _owner_ack_draft(self, connection, request):
         if not self.experimental_owner_ingress:

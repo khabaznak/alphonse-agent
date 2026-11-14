@@ -5,6 +5,31 @@ const id = "a".repeat(32);
 const token = "b".repeat(32);
 
 describe("explicit owner conversation transport", () => {
+  it("binds a reply only when a question was explicitly selected", async () => {
+    const request = vi.fn(async (method: string) => method === "experimental_owner_status"
+      ? { processing_ready: true } : { message_id: id });
+    const client = new OwnerConversation(request as OwnerRequest);
+    const questionId = "c".repeat(32);
+    await client.send("The blue one", questionId);
+    expect(request).toHaveBeenCalledWith("experimental_owner_ingress", {
+      prompt: "The blue one", reply_to_message_id: questionId,
+    });
+  });
+
+  it("rejects malformed question selection before making a request", async () => {
+    const request = vi.fn();
+    const client = new OwnerConversation(request as OwnerRequest);
+    await expect(client.send("reply", "invalid")).rejects.toThrow("question could not be selected");
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("sends a new message without binding any previous question", async () => {
+    const request = vi.fn(async (method: string) => method === "experimental_owner_status"
+      ? { processing_ready: true } : { message_id: id });
+    const client = new OwnerConversation(request as OwnerRequest);
+    await client.send("A different topic");
+    expect(request).toHaveBeenCalledWith("experimental_owner_ingress", { prompt: "A different topic" });
+  });
   it("blocks the legacy send route while the exclusive owner worker is running", () => {
     expect(() => assertLegacyConversationAvailable(true)).toThrow("Turn on the simpler conversation loop");
     expect(() => assertLegacyConversationAvailable(false)).not.toThrow();
@@ -49,9 +74,39 @@ describe("explicit owner conversation transport", () => {
     await client.send("hello");
     await client.poll(seen);
     await client.poll(seen);
-    expect(seen).toHaveBeenCalledExactlyOnceWith(id, "answer");
+    expect(seen).toHaveBeenCalledExactlyOnceWith(id, "answer", "answer");
     expect(calls).toEqual(["experimental_owner_status", "experimental_owner_ingress", "experimental_owner_status", "experimental_owner_take_draft", "display", "experimental_owner_ack_draft"]);
     expect(request).toHaveBeenLastCalledWith("experimental_owner_ack_draft", { message_id: id, acknowledgement_token: token });
+  });
+
+  it("exposes a delivered clarification as a question", async () => {
+    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === "experimental_owner_status") return params?.message_id ? { status: "ready" } : { processing_ready: true };
+      if (method === "experimental_owner_ingress") return { message_id: id };
+      if (method === "experimental_owner_take_draft") return { message_id: id, message: "Which one?", kind: "question", acknowledgement_token: token, delivery_status: "started_unconfirmed" };
+      return { status: "client_acknowledged" };
+    });
+    const client = new OwnerConversation(request as OwnerRequest);
+    const seen = vi.fn();
+    await client.send("hello");
+    await client.poll(seen);
+    expect(seen).toHaveBeenCalledExactlyOnceWith(id, "Which one?", "question");
+    expect(client.hasPending()).toBe(false);
+  });
+
+  it("does not display or acknowledge an unknown pickup kind", async () => {
+    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === "experimental_owner_status") return params?.message_id ? { status: "ready" } : { processing_ready: true };
+      if (method === "experimental_owner_ingress") return { message_id: id };
+      if (method === "experimental_owner_take_draft") return { message_id: id, message: "answer", kind: "other", acknowledgement_token: token, delivery_status: "started_unconfirmed" };
+      return { status: "client_acknowledged" };
+    });
+    const client = new OwnerConversation(request as OwnerRequest);
+    const seen = vi.fn();
+    await client.send("hello");
+    await expect(client.poll(seen)).rejects.toThrow("could not be confirmed");
+    expect(seen).not.toHaveBeenCalled();
+    expect(request.mock.calls.filter(([method]) => method === "experimental_owner_ack_draft")).toHaveLength(0);
   });
 
   it("never repeats a pickup whose response was lost", async () => {
@@ -128,7 +183,7 @@ describe("explicit owner conversation transport", () => {
     expect(request).not.toHaveBeenCalled();
     client.adoptReady(id);
     await client.poll(seen);
-    expect(seen).toHaveBeenCalledExactlyOnceWith(id, "answer");
+    expect(seen).toHaveBeenCalledExactlyOnceWith(id, "answer", "answer");
     expect(client.hasPending()).toBe(false);
   });
 
@@ -149,6 +204,64 @@ describe("explicit owner conversation transport", () => {
     expect(seen).toHaveBeenCalledTimes(1);
     expect(client.hasPending()).toBe(false);
     expect(request.mock.calls.filter(([method]) => method === "experimental_owner_ack_draft")).toHaveLength(1);
+  });
+
+  it("retries only the same ack token after a daemon restart loses status", async () => {
+    let ackAttempts = 0;
+    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === "experimental_owner_status") return params?.message_id ? { status: ackAttempts ? "unavailable" : "ready" } : { processing_ready: true };
+      if (method === "experimental_owner_ingress") return { message_id: id };
+      if (method === "experimental_owner_take_draft") return { message_id: id, message: "answer", acknowledgement_token: token, delivery_status: "started_unconfirmed" };
+      if (++ackAttempts === 1) throw new Error("ack response lost");
+      return { status: "client_acknowledged" };
+    });
+    const client = new OwnerConversation(request as OwnerRequest);
+    const seen = vi.fn();
+    await client.send("hello");
+    await expect(client.poll(seen)).rejects.toThrow("could not be confirmed");
+    expect(client.hasPending()).toBe(true);
+    await expect(client.poll(seen)).resolves.toBe(true);
+    expect(client.hasPending()).toBe(false);
+    expect(seen).toHaveBeenCalledTimes(1);
+    expect(request.mock.calls.filter(([method]) => method === "experimental_owner_take_draft")).toHaveLength(1);
+    expect(request.mock.calls.filter(([method]) => method === "experimental_owner_ack_draft")).toEqual([
+      ["experimental_owner_ack_draft", { message_id: id, acknowledgement_token: token }],
+      ["experimental_owner_ack_draft", { message_id: id, acknowledgement_token: token }],
+    ]);
+  });
+
+  it("keeps an unconfirmed answer when the restarted daemon rejects its token", async () => {
+    let ackAttempts = 0;
+    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === "experimental_owner_status") return params?.message_id ? { status: ackAttempts ? "unavailable" : "ready" } : { processing_ready: true };
+      if (method === "experimental_owner_ingress") return { message_id: id };
+      if (method === "experimental_owner_take_draft") return { message_id: id, message: "answer", acknowledgement_token: token, delivery_status: "started_unconfirmed" };
+      ackAttempts++;
+      throw new Error("acknowledgment unavailable");
+    });
+    const client = new OwnerConversation(request as OwnerRequest);
+    const seen = vi.fn();
+    await client.send("hello");
+    await expect(client.poll(seen)).rejects.toThrow("could not be confirmed");
+    await expect(client.poll(seen)).rejects.toThrow("could not be confirmed");
+    await expect(client.poll(seen)).rejects.toThrow("could not be confirmed");
+    expect(client.hasPending()).toBe(true);
+    expect(ackAttempts).toBe(2);
+    expect(seen).toHaveBeenCalledTimes(1);
+    expect(request.mock.calls.filter(([method]) => method === "experimental_owner_take_draft")).toHaveLength(1);
+  });
+
+  it("does not treat a malformed acknowledgment response as success", async () => {
+    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === "experimental_owner_status") return params?.message_id ? { status: "ready" } : { processing_ready: true };
+      if (method === "experimental_owner_ingress") return { message_id: id };
+      if (method === "experimental_owner_take_draft") return { message_id: id, message: "answer", acknowledgement_token: token, delivery_status: "started_unconfirmed" };
+      return { status: "unexpected" };
+    });
+    const client = new OwnerConversation(request as OwnerRequest);
+    await client.send("hello");
+    await expect(client.poll(() => {})).rejects.toThrow("could not be confirmed");
+    expect(client.hasPending()).toBe(true);
   });
 
   it("retries only the same exact token if an ack was not committed", async () => {

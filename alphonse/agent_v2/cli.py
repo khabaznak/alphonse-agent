@@ -1,4 +1,4 @@
-"""Command-line lifecycle controls for the v2 daemon."""
+"""Command-line lifecycle controls for the Alphonse daemon."""
 
 from __future__ import annotations
 
@@ -14,14 +14,14 @@ from alphonse.agent_v2.ipc import V2DaemonClient
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="alphonse", description="Alphonse v2 daemon controls")
+    parser = argparse.ArgumentParser(prog="alphonse", description="Alphonse daemon controls")
     subparsers = parser.add_subparsers(dest="command", required=True)
-    start_parser = subparsers.add_parser("start", help="Start the v2 daemon or TUI")
+    start_parser = subparsers.add_parser("start", help="Start the daemon or TUI")
     start_parser.add_subparsers(dest="start_target", required=False).add_parser(
         "tui", help="Start the daemon if needed, then open the TUI"
     )
-    subparsers.add_parser("status", help="Show v2 daemon health and queue status")
-    subparsers.add_parser("stop", help="Gracefully stop the v2 daemon")
+    subparsers.add_parser("status", help="Show daemon health and queue status")
+    subparsers.add_parser("stop", help="Gracefully stop the daemon")
     coding = subparsers.add_parser("configure-codex-sandbox", help="Select a trusted immutable coding sandbox image")
     coding.add_argument("image_id", help="Docker image ID (sha256:...), or 'off' to disable")
     return parser

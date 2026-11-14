@@ -39,7 +39,7 @@ def restore_owner_read_observations(checkpoint: OwnerAtomicCheckpoint, context: 
         saved, bindings = checkpoint.load(expected_version=expected_version)
         state = saved.state
         if (type(allow_completed) is not bool
-                or state.status not in ({'running', 'completed'} if allow_completed else {'running'})
+                or state.status not in ({'running', 'completed', 'waiting_user'} if allow_completed else {'running'})
                 or state.inflight or saved.budget.usage()['unknown_usage']):
             raise OwnerRecoveryUnavailable('owner_recovery_unavailable')
         # The checkpoint load refuses an uncommitted model decision. A known
@@ -93,7 +93,8 @@ def restore_owner_read_observations(checkpoint: OwnerAtomicCheckpoint, context: 
             # separately instead of continuing after a mid-read revocation.
             recheck()
             if (not hmac.compare_digest(observation_digest(observation), item['observation_sha256'])
-                    or not revalidate_conversation_observation(state.actor, tool, args, observation, context=execution)):
+                    or not revalidate_conversation_observation(state.actor, tool, args, observation,
+                                                               context=execution, allow_excerpt_truncation=True)):
                 raise OwnerRecoveryUnavailable('owner_recovery_unavailable')
             recheck()
             reconstructed[ref] = {'actor': state.actor, 'tool_id': tool, 'arguments': args, 'observation': observation}

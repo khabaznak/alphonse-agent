@@ -87,9 +87,8 @@ def test_registered_processor_hands_server_checkpoint_to_sink_after_selection(tm
     result = runtime.processor.owner_read_candidate.process(task, context)
     assert result.status == ProcessingStatus.WAITING, result.error
     assert result.snapshot.metadata['draft'] == 'Synthetic answer.'
-    if kind == 'answer':
-        received = daemon._owner_checkpoints[message_id]
-        assert received[0].receipt == acquired.claim_receipt
-        assert received[1] is context and task.user == owner.user_id
-    else:
-        assert message_id not in daemon._owner_checkpoints
+    received = daemon._owner_checkpoints[message_id]
+    assert received[0].receipt == acquired.claim_receipt
+    assert received[1] is context and task.user == owner.user_id
+    saved, _ = received[0].load(expected_version=received[0].version)
+    assert saved.state.status == ('completed' if kind == 'answer' else 'waiting_user')

@@ -80,7 +80,7 @@ def test_daemon_main_composes_selected_runtime_without_starting_workers(monkeypa
     assert callable(captured['runtime']['owner_selected_draft_sink']) is opt_in
 
 
-@pytest.mark.parametrize('mode', ['answer', 'cancel', 'abandon', 'unknown_effect', 'unknown_outbox', 'bad_schema', 'bad_status'])
+@pytest.mark.parametrize('mode', ['answer', 'question', 'question_context_changed', 'cancel', 'abandon', 'unknown_effect', 'unknown_outbox', 'bad_schema', 'bad_status'])
 def test_explicit_owner_worker_routes_to_socket_and_saves_history(tmp_path, monkeypatch, mode):
     holder = {}
     class Provider:
@@ -90,6 +90,7 @@ def test_explicit_owner_worker_routes_to_socket_and_saves_history(tmp_path, monk
             self.calls = 0
         def generate_json(self, request):
             self.calls += 1
+            self.last_prompt = request.prompt
             if self.calls == 1:
                 value = {'kind': 'tool', 'tool_id': 'native.search_memory', 'arguments': {
                     'query': 'apples', 'source_types': ['conversation']}, 'text': None}
@@ -97,12 +98,15 @@ def test_explicit_owner_worker_routes_to_socket_and_saves_history(tmp_path, monk
                 value = {'kind': 'tool', 'tool_id': 'native.read_memory_source', 'arguments': {
                     'source_id': self.source_id, 'neighbors': 0}, 'text': None}
             else:
-                assert 'Synthetic apples.' in request.prompt
+                if self.calls == 3:
+                    assert 'Synthetic apples.' in request.prompt
                 if mode == 'cancel':
                     outcome = holder['daemon'].trigger_killswitch(actor_user_id=holder['owner_id'])
                     assert outcome['status'] == 'cancel_requested'
                     assert outcome['notification_error'] == 'owner_notice_unavailable'
-                value = {'kind': 'answer', 'tool_id': None, 'arguments': None, 'text': 'Synthetic answer.'}
+                question = mode in {'question', 'question_context_changed'} and self.calls == 3
+                value = {'kind': 'question' if question else 'answer', 'tool_id': None,
+                         'arguments': None, 'text': 'Which apples?' if question else 'Synthetic answer.'}
             return InferenceResult(json_value=value, raw_response=json.dumps(value),
                                    usage={'input_tokens': 100, 'output_tokens': 20})
 
@@ -197,9 +201,15 @@ def test_explicit_owner_worker_routes_to_socket_and_saves_history(tmp_path, monk
             with pytest.raises(RuntimeError, match='owner_abandon_live_claim'):
                 client.request('experimental_owner_abandon', message_id=message_id)
             draft = client.request('experimental_owner_take_draft', message_id=message_id)
-            assert draft['message'] == 'Synthetic answer.'
+            is_question = mode in {'question', 'question_context_changed'}
+            assert draft['message'] == ('Which apples?' if is_question else 'Synthetic answer.')
+            assert draft['kind'] == ('question' if is_question else 'answer')
             assert len(conversation.list(owner_user_id=owner.user_id)) == 1
             token = draft['acknowledgement_token']
+            if is_question:
+                assert client.request('experimental_owner_questions')['questions'] == []
+                with pytest.raises(RuntimeError, match='owner_question_context_unavailable'):
+                    client.request('experimental_owner_ingress', prompt='Too soon', reply_to_message_id=message_id)
             if mode in {'abandon', 'unknown_effect', 'unknown_outbox', 'bad_schema', 'bad_status'}:
                 # Simulate lost pickup and expired lease: explicit abandonment
                 # does not claim whether the client received the answer.
@@ -242,7 +252,67 @@ def test_explicit_owner_worker_routes_to_socket_and_saves_history(tmp_path, monk
             assert client.request('experimental_owner_status', message_id=message_id)['status'] == 'client_acknowledged'
             assert [(event.role, event.content) for event in conversation.list(owner_user_id=owner.user_id)] == [
                 ('user', 'Synthetic apples.'), ('user', 'Find the apples note.'),
-                ('assistant', 'Synthetic answer.')]
+                ('assistant', 'Which apples?' if is_question else 'Synthetic answer.')]
+            if is_question:
+                assert client.request('experimental_owner_questions')['questions'] == [
+                    {'message_id': message_id, 'question': 'Which apples?'}]
+                from alphonse.agent_v2.core.intelligence.v3.owner_clarification import bind_owner_question
+                with queue._connect() as conn, pytest.raises(ValueError, match='owner_question_context_unavailable'):
+                    bind_owner_question(conn, 'different-owner', message_id)
+                with queue._connect() as conn:
+                    baseline = json.loads(conn.execute('SELECT task_state_json FROM v2_task_checkpoints WHERE task_id=?',
+                                                       (message_id,)).fetchone()[0])
+                    for tamper in ('origin', 'peer', 'digest', 'effect'):
+                        conn.execute('BEGIN')
+                        if tamper == 'origin':
+                            conn.execute('DELETE FROM v2_trusted_owner_ingress WHERE message_id=?', (message_id,))
+                        elif tamper == 'peer':
+                            conn.execute('UPDATE v2_trusted_owner_ingress SET peer_uid=-1 WHERE message_id=?', (message_id,))
+                        else:
+                            changed = json.loads(json.dumps(baseline))
+                            if tamper == 'digest':
+                                changed['metadata']['owner_read_desktop_pickup_started']['claim_digest'] = '0' * 64
+                            else:
+                                changed['metadata']['unknown_external_effect'] = {'status': 'uncertain'}
+                            conn.execute('UPDATE v2_task_checkpoints SET task_state_json=? WHERE task_id=?',
+                                         (json.dumps(changed), message_id))
+                        with pytest.raises(ValueError, match='owner_question_context_unavailable'):
+                            bind_owner_question(conn, owner.user_id, message_id)
+                        conn.rollback()
+                with pytest.raises(RuntimeError, match='owner_question_context_unavailable'):
+                    client.request('experimental_owner_ingress', prompt='fixture', reply_to_message_id='0' * 32)
+                for invalid in (None, True, 'xyz'):
+                    with pytest.raises(RuntimeError, match='owner_question_context_unavailable'):
+                        client.request('experimental_owner_ingress', prompt='fixture', reply_to_message_id=invalid)
+                reply_id = client.request('experimental_owner_ingress', prompt='The green ones.',
+                                          reply_to_message_id=message_id)['message_id']
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline:
+                    reply_status = client.request('experimental_owner_status', message_id=reply_id)['status']
+                    if reply_status != 'pending':
+                        break
+                    time.sleep(.02)
+                assert reply_status == 'ready'
+                assert 'The green ones.' in provider.last_prompt
+                assert 'Find the apples note.' in provider.last_prompt
+                assert 'Which apples?' in provider.last_prompt
+                assert 'quoted conversation context only' in provider.last_prompt
+                # The earlier question remains waiting_user; the reply is a new task.
+                with queue._connect() as conn:
+                    raw = json.loads(conn.execute('SELECT task_state_json FROM v2_task_checkpoints WHERE task_id=?',
+                                                  (message_id,)).fetchone()[0])
+                    assert raw['metadata']['single_loop_checkpoint']['state']['status'] == 'waiting_user'
+                if mode == 'question_context_changed':
+                    with queue._connect() as conn:
+                        conn.execute('DELETE FROM v2_conversation_events WHERE source_message_id=?',
+                                     (f'outbound:owner:{message_id}',))
+                    with pytest.raises(RuntimeError, match='owner_question_context_unavailable'):
+                        client.request('experimental_owner_take_draft', message_id=reply_id)
+                    return
+                reply = client.request('experimental_owner_take_draft', message_id=reply_id)
+                assert reply['kind'] == 'answer'
+                client.request('experimental_owner_ack_draft', message_id=reply_id,
+                               acknowledgement_token=reply['acknowledgement_token'])
             assert not SQLiteMessageQueue(path).claim_mode_blocked()
             users.update_user(owner.user_id, is_active=False)
             assert client.request('experimental_owner_status', message_id=message_id)['status'] == 'unavailable'
