@@ -49,8 +49,8 @@ tests exercise real shared boundaries.
    exported from the distributable Python package, so removing the tests gives
    up coverage of an importable placeholder; unknown external users cannot be
    ruled out. The owner accepted that tradeoff on 14 November; the exported
-   implementation remains in place, but these placeholder behaviors no longer
-   have direct test coverage. This is not proof of zero risk.
+   implementation was subsequently removed as part of V2 retirement; its
+   public import is no longer available. This is not proof of zero risk.
 2. Removed `tests/test_agent_v2_pdca_graph.py::test_pdca_do_node_stub_returns_task_state_unchanged`:
    it checked object identity on an empty, retired V2 node; it did not test an
    actual household outcome. `test_agent_v2_do_node.py` separately tests the
@@ -583,6 +583,56 @@ skills path, avoiding household storage; fixtures that explicitly provide a
 test users root keep it. This focused run is not a full-suite validation. The
 plugin changes the default-root environment and therefore does not itself
 verify the real default users-root configuration.
+
+### Questions and visible follow-through: three files
+
+On 14 November, individually reviewed **25 test functions / 31 collected
+cases** in `test_agent_v2_ask_question_ui.py` (5 functions),
+`test_agent_v2_native_ask_question_tool.py` (8), and
+`test_desktop_questions.py` (12). Questions are a current shared user-facing
+boundary even though some tests drive retired PDCA. Disposable fixtures and
+scripted processors do not establish model judgment or simpler-loop delivery.
+
+| Question UI function | Review decision and behavior |
+| --- | --- |
+| `tui_renders_yes_no_question_interrupt` | Retain: renders the supported yes/no response format. |
+| `tui_answer_resumes_pending_question` | Retain: queues the matching question ID and normalized answer. |
+| `tui_invalid_choice_answer_does_not_resume` | Retain: rejects an invalid choice without queueing. |
+| `ag_ui_adapter_emits_interrupt_run_finished_with_snapshots` | Retain: interrupt identity and boolean response schema reach the AG-UI consumer. |
+| `ag_ui_resume_resolves_question_through_store` | Retain: resolved interrupt maps to the corresponding resumed task. |
+
+| Native question function | Review decision and behavior |
+| --- | --- |
+| `native_registry_registers_ask_question_tool` | Retain: active native descriptor exposes the expected question schema and interrupt capability. |
+| `question_project_migration_backfills_checkpoint_idempotently` | Retain: legacy migration preserves project and survives restart. |
+| `do_node_executes_ask_question_and_parks_task` | Retain for historical PDCA replay: tool invocation creates a pending question; this does not test the selected simple loop. |
+| `question_answer_resumes_serialized_task_state` | Retain: answer routing updates the matching stored task and execution result. |
+| `question_store_normalizes_multi_choice_and_datetime_answers` | Retain: choice labels and timezone conversion are distinct forms. |
+| `multiple_pending_questions_are_ambiguous_without_direct_reference` | Retain: no arbitrary continuation when several questions match. |
+| `pdca_processor_returns_parked_status_for_waiting_question` | Retain for historical PDCA replay: processor-to-UI parked event; not current simple-loop coverage. |
+| `core_parked_result_leaves_loop_available` | Retain: parked processing returns the shared core to available; its processor is retired PDCA, so it cannot establish current V3 or simple-loop execution. |
+
+| Desktop question function | Review decision and behavior |
+| --- | --- |
+| `desktop_rejects_wrong_respondent_without_impersonating_owner` | Retain: wrong respondent cannot answer or queue work. |
+| `desktop_cancel_requires_respondent` | Retain: separate cancel authorization. |
+| `question_answer_queues_exact_checkpoint_once` | Retain five cases: form-specific payloads, exact resume identity, duplicate answer, and Desktop surface removal. |
+| `poll_reconciles_terminal_questions_and_reconnect` | Retain three cases: expire, cancel and external answer each clear stale surfaces. |
+| `desktop_missing_actor_and_stale_context_do_not_authorize` | Retain: missing actor and unavailable context do not grant authority. The tested member poll is rejected, but this is not a complete multi-user privacy study. |
+| `question_context_checks_current_artifact_access_and_availability` | Retain: delegated resource availability, revoked sharing and respondent ownership. |
+| `missing_checkpoint_does_not_report_answer_success` | Retain: missing stored task cannot become a successful answer. |
+| `ipc_answer_runs_resumed_continuation_once` | Retain: daemon consumes one IPC-resumed task and does not rerun it on duplicate answer, with a scripted fixture processor and disposable file. |
+| `native_question_context_schema_persists_explicit_context` | Retain: native context persists and invalid HTML-shaped data is rejected. |
+| `question_cannot_resurrect_terminal_checkpoint` | Retain: stale question cannot restart a cancelled checkpoint. |
+| `question_delivery_and_history_share_identity_and_occurrence_time` | Retain: simulated outbox, Desktop acknowledgement, history identity and restart consistency. This is not external recipient delivery. |
+| `delayed_question_delivery_stays_on_question_day` | Retain: question chronology despite next-day outbox record. |
+
+No function or case was removed: overlaps across interfaces are not equivalent
+entry points or outcomes, and three older tests remain explicitly scoped to
+PDCA. Focused validation with a temporary pytest plugin redirecting fallback
+users and skills paths to per-test disposable directories: **31 passed in
+0.70 seconds**. This does not test configured household roots or a real model,
+channel, or new-loop resume.
 
 ## Mission coverage and next review passes
 

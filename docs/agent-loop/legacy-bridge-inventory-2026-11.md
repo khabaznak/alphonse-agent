@@ -13,7 +13,7 @@ critical fixes until the replacement is qualified. The `agent_v2` package and
 | Saved and queued work | `TaskState.from_dict` and `from_message` interpret absent/blank engine stamps as V2; the router rejects V2 and unknown engines. V3 checkpoint loading and question/scheduled handoff occur in `core/core.py` and `core/questions.py`. | Define visible, explicit recovery for old tasks and uncertain effects; do not erase history or silently replay work in another engine. Test queued, resumed, scheduled and malformed states end to end. |
 | Questions, delivery, scheduling | `core/questions.py`, `core/io/`, `services/scheduled_worker.py`, `services/event_worker.py`, and `daemon.py` own shared persistence, dispatch and delivery state; V3 has loop-specific resumption and scheduled-delivery metadata. | Separate shared lifecycle from V3 assumptions; preserve question identity, actor and actual delivery receipts. Prepared or queued is not delivered. |
 | Fencing and recovery | `core/messages/supersession_inspection.py` and `supersession_hold.py` contain experimental machinery; `CoreLoop` refuses runtime claim-fencing mode. #216 remains open. | Complete end-to-end stale-worker fencing, uncertain-effect reconciliation and publication/queue ownership before rollout; do not infer safety from the experimental components. |
-| Loop code and shared capabilities | `core/intelligence/pdca/` and `basic.py` remain; V3 is under `core/intelligence/v3/`, alongside experimental candidate code. Tools, skills, actor authorization, memory, storage and integrations are shared infrastructure. | Classify dependencies before deleting anything; preserve bindings, privacy, household data and recovery state. |
+| Loop code and shared capabilities | `core/intelligence/pdca/` remains for replay; the unused V2 `basic.py` placeholder has been removed. V3 is under `core/intelligence/v3/`, alongside experimental candidate code. Tools, skills, actor authorization, memory, storage and integrations are shared infrastructure. | Classify dependencies before deleting anything; preserve bindings, privacy, household data and recovery state. |
 | Evaluations and evidence | `evaluation/` includes historical V2/V3 and candidate adapters; `docs/v3-hierarchical-capd/` retains exploratory results. | Keep historical evidence labeled and failures intact. Scripted fixtures do not establish autonomous performance or real delivery. |
 
 The V2 retirement tests in `tests/test_agent_v3_engine_rollout.py` exercise
@@ -39,11 +39,12 @@ or legacy data deletion is authorized by this inventory.
 
 ## Targeted V2 removal audit — 14 November
 
-`basic.py` is no longer used by the runtime or repository tests, but
-`BasicIntelligenceProcessor` remains an explicit package export. Removing it
-would change the distributable API; absence of repository callers cannot rule
-out external users. The owner previously approved removing its two placeholder
-tests, not the exported implementation.
+On the owner's direction to continue V2 retirement, removed `basic.py` and the
+`BasicIntelligenceProcessor` export. This retired placeholder had no remaining
+repository callers and did not execute real tasks. Its removal changes the
+distributable Python API: external imports of that class will fail, and
+repository searches cannot rule out unknown external users. No shared runtime,
+V3 router, stored state, history, or deterministic PDCA replay was removed.
 
 The PDCA package is no longer selected for normal task dispatch, but the
 historical `evaluation/deterministic_adapters.py` still constructs

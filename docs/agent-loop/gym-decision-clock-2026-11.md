@@ -54,6 +54,22 @@ for normal household conversations and the production release gates remain open.
 
 ## Guidance experiment
 
+### Conflicting-source exercise — 14 November
+
+A synthetic development case asks which pharmacy is associated with a current
+prescription, while two records for the same prescription disagree. Its
+post-run oracle checks for a structured unknown and separately observes the
+relevant reads. In one subscription-backed attempt, the candidate read both
+relevant sources and returned the expected unknown; it also read the unrelated
+exercise record (3 reads, 5 model calls, 27.25 seconds). Thus the attempt
+handled this ambiguity but did not avoid an unnecessary source. The candidate
+was not given the expected answer or required-read list. Its plan and receipt
+are `evidence/gym-cycle-2026-11-13/selective-ambiguity-v1-plan.json` and
+`selective-ambiguity-v1.jsonl`. Questions and actual delivery were not assessed;
+provider token usage was unknown. One development attempt is not held-out or
+evidence of general reliability, and the bearer audit cannot prove who read a
+source or when the answer was formed.
+
 ### Paired source-selection contrast — 14 November
 
 The chooser's general question guidance was clarified to consider source

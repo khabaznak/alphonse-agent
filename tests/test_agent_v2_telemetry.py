@@ -66,6 +66,22 @@ def test_inference_router_emits_bounded_success_and_failure_telemetry() -> None:
     assert "Read one record" not in str(success)
 
 
+def test_simple_loop_provider_failure_does_not_leak_source_data_to_telemetry() -> None:
+    class FailingProvider(_Provider):
+        def generate_json(self, request: InferenceRequest) -> InferenceResult:
+            raise ValueError("synthetic-private-source-data")
+
+    events: list[dict[str, Any]] = []
+    router = InferenceRouter(provider=FailingProvider(),
+        default_profile=ModelProfile(provider="test", model="model", profile_id="profile"),
+        telemetry_sink=events.append)
+    request = InferenceRequest(prompt="synthetic request", purpose=InferencePurpose.SIMPLE_LOOP_ACTION)
+    with pytest.raises(ValueError):
+        router.generate_json(request)
+    assert events[0]["error"] == "simple_loop_provider_error"
+    assert "synthetic-private-source-data" not in str(events)
+
+
 def test_tool_invocation_emits_result_scope_and_failures() -> None:
     events: list[dict[str, Any]] = []
     registry = InMemoryToolRegistry()
