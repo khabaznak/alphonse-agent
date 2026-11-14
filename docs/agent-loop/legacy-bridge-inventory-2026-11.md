@@ -57,3 +57,12 @@ search does not prove each reference is live or discover dynamic external
 callers. No code was removed in this pass. To retire PDCA, first decide whether
 to preserve the executable historical replay baseline, replace it, or retain
 only its already-recorded evidence; separately decide the public API policy.
+
+## Isolate replay imports — 14 November
+
+The shared intelligence package now loads PDCA only when a legacy export is
+requested. The deterministic comparison likewise imports the V2 processor only
+for its V2 arm. A fresh interpreter importing `TaskState` no longer loads the
+PDCA package; the legacy import remains available and the V2/V3 replay checks
+still pass. This separates ordinary shared imports and V3 replay from an eager
+legacy dependency; it does not remove the V2 replay implementation or retire V3.

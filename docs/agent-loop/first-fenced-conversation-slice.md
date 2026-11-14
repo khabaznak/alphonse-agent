@@ -20,8 +20,14 @@ path: queue, engine router, candidate, inference router, authorized fixture
 read, and undelivered draft.
 It checks action shape and preserves unknown provider usage; tool authorization
 and argument enforcement remain host responsibilities. It has only been tested
-with a synthetic provider, not enabled in the real host. Normal durable budget
-policy does not accept unreported usage merely because a fixture did.
+with a synthetic provider, not enabled in the real host. The configured Codex
+provider now requests CLI JSON events for `simple_loop_action` and captures
+only unambiguous reported input/output counters. An offline test drives two
+decisions through that provider and the normal durable budget, without the
+synthetic unknown-usage allowance. Live CLI usage reporting and accounting
+semantics are not yet verified; absent, malformed or ambiguous counters remain
+unknown, and the budget still refuses to proceed. This does not implement
+pre-dispatch provider token limits, authenticated authority or delivery.
 
 The next integration step is a disposable daemon/SQLite-queue exercise of the
 configured inference router, one actor-authorized read operation, and the real

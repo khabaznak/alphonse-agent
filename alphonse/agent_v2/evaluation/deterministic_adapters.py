@@ -12,7 +12,6 @@ from typing import Any, Callable
 from alphonse.agent_v2.core.core import CoreLoopContext, ToolDescriptor, ToolKind
 from alphonse.agent_v2.core.inference import InferencePurpose, InferenceRequest, InferenceResult
 from alphonse.agent_v2.core.inference import InferenceRouter, ModelProfile
-from alphonse.agent_v2.core.intelligence import PDCAIntelligenceProcessor
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.intelligence.v3 import HierarchicalCAPDProcessor
 from alphonse.agent_v2.core.intelligence.v3.contracts import PhaseStatus, TacticalAction, new_tactical_state
@@ -262,7 +261,11 @@ def _run(
         else:
             state.v3_index = 1
 
-    processor = HierarchicalCAPDProcessor() if engine == "hierarchical_v3" else PDCAIntelligenceProcessor()
+    if engine == "hierarchical_v3":
+        processor = HierarchicalCAPDProcessor()
+    else:
+        from alphonse.agent_v2.core.intelligence.pdca import PDCAIntelligenceProcessor
+        processor = PDCAIntelligenceProcessor()
     try:
         result = processor.process(task, context)
     except Exception as exc:

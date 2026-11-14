@@ -54,6 +54,37 @@ for normal household conversations and the production release gates remain open.
 
 ## Guidance experiment
 
+### Reference and source-variant exercise — 14 November
+
+Four new development variants share the pharmacy question and source
+descriptions: agreeing records, a missing current record, a superseded record,
+and a conflict resolved by an explicitly referenced third source. The
+independently specified development key checks both the answer and designated
+source coverage after the run; it is not supplied to the chooser. In the first
+prespecified batch, all four attempts omitted the conversation source that
+identifies the current prescription. Three answers happened to match the key,
+but missed its source criterion; the missing-record case also produced the
+wrong answer. All four read the status source, which the fixture required only
+for conflict resolution. A matching answer without the source criterion is
+not counted as a complete pass.
+
+The evaluation-only chooser was then given general guidance to establish what
+current, named or user-specific item a request refers to from evidence. In one
+prespecified repeat of each same case, agreement matched the answer and both
+designated sources, while missing remained wrong and missed the conversation;
+superseded and resolution matched their answer keys but also missed the
+conversation. Agreement also read the optional status and index. Repeats are
+tuned development observations, not independent evidence or a causal result.
+The source criterion itself is a conservative fixture requirement; the key
+and fixture are developer-authored, and the audit cannot establish who read a
+record or when the answer formed. A waiting question and real delivery were
+not assessed. Provider token usage was unknown.
+
+All eight attempts and their plans are retained under
+`evidence/gym-cycle-2026-11-13/selective-variants-v{1,2}-*`. Next work is to
+make source descriptions and task-reference reasoning useful across varied
+records without feeding the candidate the oracle or requiring unnecessary reads.
+
 ### Conflicting-source exercise — 14 November
 
 A synthetic development case asks which pharmacy is associated with a current

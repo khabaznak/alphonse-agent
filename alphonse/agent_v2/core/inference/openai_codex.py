@@ -47,7 +47,14 @@ class OpenAICodexProvider:
         if tactical:
             from .tactical_wire import SCHEMA, INSTRUCTIONS
             request = replace(request, output_schema=SCHEMA, prompt=request.prompt + "\n" + INSTRUCTIONS)
-        output = self._run_codex(_json_envelope(request), request)
+        # The normal Codex CLI can report token counters as JSONL events. Only
+        # the simple-loop path opts in; subclasses may implement a different
+        # transport and must not be silently switched to this one.
+        if request.purpose.value == "simple_loop_action" and type(self) is OpenAICodexProvider:
+            output, usage = self._run_codex_with_usage(_json_envelope(request), request)
+        else:
+            output = self._run_codex(_json_envelope(request), request)
+            usage = {}
         if tactical:
             try:
                 parsed = json.loads(output)
@@ -62,7 +69,7 @@ class OpenAICodexProvider:
             if parsed is None:
                 raise ValueError("openai_codex_invalid_json")
         return InferenceResult(json_value=parsed, model_profile=request.model_profile,
-                               raw_response=None if tactical else output)
+                               raw_response=None if tactical else output, usage=usage)
 
     def plan_tool_call(self, request: InferenceRequest) -> InferenceResult:
         output = self._run_codex(_tool_planning_envelope(request), request)
@@ -77,6 +84,13 @@ class OpenAICodexProvider:
         )
 
     def _run_codex(self, prompt: str, request: InferenceRequest) -> str:
+        output, _ = self._execute_codex(prompt, request, collect_usage=False)
+        return output
+
+    def _run_codex_with_usage(self, prompt: str, request: InferenceRequest) -> tuple[str, dict[str, int]]:
+        return self._execute_codex(prompt, request, collect_usage=True)
+
+    def _execute_codex(self, prompt: str, request: InferenceRequest, *, collect_usage: bool) -> tuple[str, dict[str, int]]:
         model = _model_for_request(request)
         if self.config.require_explicit_model and not model:
             raise ValueError("openai_codex_model_not_configured")
@@ -92,6 +106,9 @@ class OpenAICodexProvider:
 
         try:
             with tempfile.TemporaryDirectory(prefix="alphonse-codex-") as workdir:
+                output_path = Path(workdir) / "last-message.txt"
+                if collect_usage:
+                    command.extend(["--json", "--output-last-message", str(output_path)])
                 if request.output_schema is not None:
                     schema_path = Path(workdir) / "response-schema.json"
                     schema_path.write_text(json.dumps(request.output_schema), encoding="utf-8")
@@ -118,6 +135,10 @@ class OpenAICodexProvider:
                         cwd=workdir,
                         cancel_checker=request.cancel_checker,
                     )
+                # Read the file while the private temporary directory exists.
+                # Never include raw event text in the result or errors.
+                last_message = (output_path.read_text(encoding="utf-8").strip()
+                                if collect_usage and output_path.is_file() else "")
         except subprocess.TimeoutExpired as exc:
             raise ValueError("openai_codex_timeout") from exc
 
@@ -151,9 +172,36 @@ class OpenAICodexProvider:
             )):
                 raise ValueError(f"openai_codex_model_image_input_unsupported: {model or 'selected model'}")
             raise ValueError(f"openai_codex_exec_failed: exit_code={completed.returncode}")
+        if collect_usage:
+            if not last_message:
+                raise ValueError("openai_codex_empty_response")
+            return last_message, _reported_codex_usage(stdout)
         if not stdout:
             raise ValueError("openai_codex_empty_response")
-        return stdout
+        return stdout, {}
+
+
+def _reported_codex_usage(jsonl: str) -> dict[str, int]:
+    """Return counters only for an unambiguous completed CLI turn.
+
+    CLI event data may contain private source content; discard it immediately.
+    Missing, malformed, duplicate, failed or partial events are unknown, not 0.
+    """
+    try:
+        events = [json.loads(line) for line in jsonl.splitlines() if line.strip()]
+    except (TypeError, ValueError):
+        return {}
+    if not events or any(not isinstance(event, dict) for event in events):
+        return {}
+    completed = [event for event in events if event.get("type") == "turn.completed"]
+    if (len(completed) != 1 or events[-1].get("type") != "turn.completed"
+            or any(event.get("type") in ("turn.failed", "error") for event in events)):
+        return {}
+    usage = completed[0].get("usage")
+    if not isinstance(usage, dict):
+        return {}
+    return {key: usage[key] for key in ("input_tokens", "output_tokens")
+            if type(usage.get(key)) is int and usage[key] >= 0}
 
 
 def _markdown_envelope(request: InferenceRequest) -> str:

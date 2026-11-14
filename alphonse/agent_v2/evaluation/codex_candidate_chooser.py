@@ -117,6 +117,8 @@ class CodexSubscriptionChooser:
             'Inspect relevant sources when needed; do not assume missing context from a partial record. '
             'Choose sources using the request, available source descriptions, and observations already read: '
             'prefer a source that can resolve a specific missing fact or material uncertainty. '
+            'For references to a current, named, or user-specific item, establish which item '
+            'the request refers to from available evidence rather than assuming a match. '
             'Do not read a source whose description is clearly unrelated just because it is available. '
             'If its relevance is uncertain and it could resolve a material '
             'uncertainty, inspect it before answering. '

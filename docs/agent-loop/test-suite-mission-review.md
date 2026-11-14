@@ -634,6 +634,74 @@ users and skills paths to per-test disposable directories: **31 passed in
 0.70 seconds**. This does not test configured household roots or a real model,
 channel, or new-loop resume.
 
+### Conversation continuity and bounded memory formatting: two files
+
+On 14 November, individually reviewed all **17 functions / 21 collected
+cases** in `test_memory_continuity.py` (11 functions) and
+`test_memory_formatting.py` (6 functions, including five budget cases).
+These use invented data and in-memory or temporary SQLite stores; they do not
+execute a live model or the new conversation host.
+
+| Function in `test_memory_continuity.py` | Decision and behavior |
+| --- | --- |
+| `complete_exchange_omission_and_exact_manifest` | Retain: old conversation exchange omitted together, both omissions identified, stored content preserved. |
+| `recent_exchanges_preserve_retry_pronouns_and_channel_changes` | Retain: recent context accompanies short follow-ups across project and channel changes. |
+| `completed_history_does_not_accumulate_and_repeated_yes_remains_distinct` | Retain: bounded recent history, repeated identical user messages and source/omission counts. |
+| `multiline_steering_is_one_checkpoint_record` | Retain: multiline steering survives checkpoint as one indivisible record and is entirely omitted if over budget. |
+| `legacy_markdown_is_omitted_as_one_unit` | Retain: oversized legacy transcript does not leave fragments beside new steering. |
+| `tiny_budgets_never_slice_any_record` | Retain: exhaustive small transcript budgets do not return a partial message. |
+| `question_answer_and_constraints_survive_restart_and_compaction` | Retain: SQLite restart, routed answer and user constraints remain available in continuity context. |
+| `multiple_tasks_require_explicit_answer_target_and_owner` | Retain: ambiguity, wrong-owner refusal, correct question routing and unrelated pending task. |
+| `pending_question_and_failed_evidence_do_not_become_success` | Retain: pending and failed states appear honestly and do not leak into another task. |
+| `overflow_and_unavailable_history_are_explicit` | Retain: reserved continuity overflow and history backend failure are surfaced in separate projection flags. |
+| `downstream_section_budget_never_cuts_a_question` | Retain: downstream section joining omits an indivisible question/answer when it cannot fit. |
+
+| Function in `test_memory_formatting.py` | Decision and behavior |
+| --- | --- |
+| `every_memory_budget_keeps_whole_records` | Retain five budgets: bounded output, whole claims, and explicit omissions across several sizes. They are size variants of one behavior, not five separate features. |
+| `v3_and_desktop_preserve_record_status_and_citations` | Retain: actual V3 context and desktop snapshot consumers carry disputed status and source citations. It does not establish candidate-loop integration. |
+| `final_composed_prompt_does_not_recut_complete_memory_records` | Retain: final V3 prompt composition after a long preamble does not slice previously bounded memory claims. |
+| `unstructured_oversized_memory_is_omitted_instead_of_sliced` | Retain: oversized unstructured prose is omitted, including an extremely small budget. |
+| `nested_limits_and_tiny_remaining_space_never_emit_partial_claims` | Retain: repeated bounding and small remainder after a prior section avoid partial claims. |
+| `request_tail_cannot_forge_a_memory_boundary_during_shortening` | Retain: a forged memory-like line in a later request is not treated as a durable memory record. |
+
+No test was removed: similar whole-record checks operate at different
+boundaries, and individual inspection did not establish a duplicate whose
+deletion preserves those behaviors. Some tests rely on rendered strings rather
+than an end-to-end model decision; a passing string check does not establish
+that Alphonse will use the information correctly. Validation:
+`.venv/bin/python -m pytest -q tests/test_memory_continuity.py
+tests/test_memory_formatting.py` — **21 passed in 0.25 seconds**.
+
+### Skill management and distribution: two files
+
+On 14 November, individually reviewed **8 functions / 9 collected cases** in
+`test_skill_management.py` (7 functions) and `test_skill_distribution.py`
+(one function, clean/bytecode-polluted builds). These use synthetic skills in
+temporary directories; a temporary pytest plugin redirects the default legacy
+user root to disposable storage. They cover the existing package-management
+contract, not an end-to-end new-loop skill execution.
+
+| Function | Decision and behavior |
+| --- | --- |
+| `customize_conflict_update_export_uninstall` | Retain: customization, upstream conflict, explicit replacement, recovery copy, binary export, uninstall and preservation of colocated legacy data. Its broad workflow covers several state transitions. |
+| `binary_metadata_and_path_authority` | Retain: binary editing denial, valid/invalid metadata edit, protected definition, traversal/absolute path and symlink refusal. |
+| `export_refuses_conventional_private_state` | Retain: private file blocks export and replacement while remaining unchanged. |
+| `ipc_management_authorization_and_readiness` | Retain: cross-actor and member IPC denial, install/update/customize and binary read, missing dependency projection, and binding retained across deletion. It checks IPC/store behavior, not whether the new loop invokes a skill. |
+| `invalid_update_keeps_active_revision_and_bundled_updates_are_visible` | Retain: invalid upstream package leaves active revision unchanged and bundled changes are reported. |
+| `harness_state_cannot_escape_by_symlink` | Retain: state-directory symlink prevents customization without creating a package. |
+| `large_asset_import_and_legacy_link_diagnostics` | Retain: imported large binary remains non-text and a legacy symlink is reported as invalid. |
+| `installed_distribution_includes_nested_skill_resources` | Retain both clean and bytecode-polluted source builds: sdist→wheel→install retains nested resources, executable mode, starter packages, and excludes bytecode. This checks packaging; it does not prove real household activation. |
+
+No removal was justified: these checks cover different product entry points,
+privacy boundaries or package lifecycle states. The two distribution cases
+are variations of one packaging behavior, not two distinct product features.
+Validation: `PYTHONPATH=/private/tmp:. .venv/bin/python -m pytest -q -p
+alphonse_audit_isolation_plugin tests/test_skill_management.py
+tests/test_skill_distribution.py` — **9 passed in 4.12 seconds**. The
+isolation plugin is temporary and is not a product dependency or retained
+test fixture.
+
 ## Mission coverage and next review passes
 
 Keep behavior that protects real household outcomes while the relevant feature

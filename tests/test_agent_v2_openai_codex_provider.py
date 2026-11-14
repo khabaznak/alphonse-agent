@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -96,6 +97,44 @@ def test_codex_provider_json_parses_fenced_json(monkeypatch: pytest.MonkeyPatch)
     )
 
     assert result.json_value == {"ok": True}
+
+
+def test_simple_loop_provider_returns_cli_reported_usage_without_raw_trace(monkeypatch):
+    private_marker = 'synthetic-sensitive-source'
+    def fake_run(command, **kwargs):
+        assert '--json' in command
+        Path(command[command.index('--output-last-message') + 1]).write_text('{"kind":"answer"}')
+        trace = '\n'.join(json.dumps(event) for event in [
+            {'type': 'item.completed', 'item': {'type': 'agent_message', 'text': private_marker}},
+            {'type': 'turn.completed', 'usage': {'input_tokens': 100, 'cached_input_tokens': 25,
+                                                  'output_tokens': 15}},
+        ])
+        return SimpleNamespace(returncode=0, stdout=trace, stderr='')
+    monkeypatch.setattr('alphonse.agent_v2.core.inference.openai_codex.shutil.which', lambda _: '/bin/codex')
+    monkeypatch.setattr('alphonse.agent_v2.core.inference.openai_codex.subprocess.run', fake_run)
+    result = OpenAICodexProvider().generate_json(InferenceRequest(
+        prompt='fixture', purpose=InferencePurpose.SIMPLE_LOOP_ACTION))
+    assert result.json_value == {'kind': 'answer'}
+    assert result.usage == {'input_tokens': 100, 'output_tokens': 15}
+    assert private_marker not in repr(result)
+
+
+@pytest.mark.parametrize('events', [
+    [{'type': 'turn.completed', 'usage': {'input_tokens': 1, 'output_tokens': 2}},
+     {'type': 'turn.completed', 'usage': {'input_tokens': 1, 'output_tokens': 2}}],
+    [{'type': 'turn.completed', 'usage': {'input_tokens': 1, 'output_tokens': 2}}, {'type': 'error'}],
+    [{'type': 'turn.completed', 'usage': {'input_tokens': True, 'output_tokens': -1}}],
+    [{'type': 'turn.completed'}],
+])
+def test_cli_usage_remains_unknown_for_ambiguous_or_invalid_events(events):
+    from alphonse.agent_v2.core.inference.openai_codex import _reported_codex_usage
+    assert _reported_codex_usage('\n'.join(json.dumps(e) for e in events)) == {}
+
+
+def test_cli_usage_does_not_fill_missing_counters_or_accept_malformed_trace():
+    from alphonse.agent_v2.core.inference.openai_codex import _reported_codex_usage
+    assert _reported_codex_usage('{"type":"turn.completed","usage":{"input_tokens":3}}') == {'input_tokens': 3}
+    assert _reported_codex_usage('{"type":"turn.completed","usage":{"input_tokens":3}}\n{') == {}
 
 
 def test_codex_provider_plan_tool_call_transports_tools_and_normalizes_result(
