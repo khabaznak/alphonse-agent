@@ -782,17 +782,21 @@ class EngineRoutingProcessor:
         # never registers it and no household engine selector exposes it.
         self.synthetic_owner_candidate = synthetic_owner_candidate
 
-    def process(self, task: "TaskState", context: "CoreLoopContext") -> ProcessingResult:
+    def processor_for(self, task: "TaskState") -> "IntelligenceProcessor":
+        """Validate a task's engine stamp before task-scoped context is loaded."""
         if task.intelligence_engine == "hierarchical_v3" and task.intelligence_schema_version == 3:
-            return self.v3.process(task, context)
+            return self.v3
         if (task.intelligence_engine == "synthetic_owner_candidate" and task.intelligence_schema_version == 1
                 and self.synthetic_owner_candidate is not None):
-            return self.synthetic_owner_candidate.process(task, context)
+            return self.synthetic_owner_candidate
         # An unregistered engine must never silently execute under a different
         # processor, especially on queue retry or checkpoint resumption. The
         # core loop turns this into a failed processing result without running
         # the normal successful-task finalization path.
         raise ValueError("intelligence_engine_unregistered")
+
+    def process(self, task: "TaskState", context: "CoreLoopContext") -> ProcessingResult:
+        return self.processor_for(task).process(task, context)
 
 
 def _await_scheduled_delivery(task: "TaskState", context: "CoreLoopContext", waiting: dict) -> bool:

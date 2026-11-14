@@ -24,10 +24,25 @@ with a synthetic provider, not enabled in the real host. The configured Codex
 provider now requests CLI JSON events for `simple_loop_action` and captures
 only unambiguous reported input/output counters. An offline test drives two
 decisions through that provider and the normal durable budget, without the
-synthetic unknown-usage allowance. Live CLI usage reporting and accounting
-semantics are not yet verified; absent, malformed or ambiguous counters remain
+synthetic unknown-usage allowance. Full configured-provider usage reporting and
+accounting semantics are not yet verified; absent, malformed or ambiguous counters remain
 unknown, and the budget still refuses to proceed. This does not implement
 pre-dispatch provider token limits, authenticated authority or delivery.
+
+One subsequent synthetic CLI contract probe used an API-credential-scrubbed
+environment, checked that the CLI reported ChatGPT login, and invoked the
+installed CLI with `--json`, `--output-last-message`, an output schema and a
+read-only sandbox. The expected last-message JSON was returned, and the parser
+extracted one `turn.completed` usage record: 14,588 input and 15 output tokens
+reported by the CLI. The receipt is
+`evidence/gym-cycle-2026-11-13/codex-usage-contract-v1.jsonl`; it contains no
+raw CLI output. The unexpectedly large reported input count for a tiny prompt
+also shows that visible prompt size is not a reliable substitute for the
+provider's count. This establishes that the parser works for one actual CLI
+event stream, not the complete normal-provider path: the probe deliberately
+scrubbed credentials and ignored user config, the normal provider does not do
+the same auth preflight, counter semantics and costs remain unverified, and no
+pre-dispatch hard cap or real user delivery was tested.
 
 The next integration step is a disposable daemon/SQLite-queue exercise of the
 configured inference router, one actor-authorized read operation, and the real

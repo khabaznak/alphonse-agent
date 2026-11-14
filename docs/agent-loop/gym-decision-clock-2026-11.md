@@ -56,6 +56,26 @@ for normal household conversations and the production release gates remain open.
 
 ### Reference and source-variant exercise — 14 November
 
+#### Resolved versus unresolved conflict
+
+Two new synthetic cases present identical conversation and conflicting
+prescription records. The status source either resolves the conflict or says
+that it remains inconclusive. One prespecified subscription-backed attempt per
+case returned the expected structured answer in each. The resolved case read
+prescription and status but omitted the designated conversation source; it also
+read the index (3 reads, 5 model calls, 28.16 seconds). The unresolved case
+read all three designated sources and the index (4 reads, 6 model calls, 38.78
+seconds). Neither case establishes that all possible conflicts are handled
+correctly or that every extra read is needed.
+
+The plan and categorical receipts are
+`evidence/gym-cycle-2026-11-13/selective-conflict-pair-v1-*`; no answer key or
+required-read list was supplied to the candidate. These are public development
+cases, one attempt each, not held-out or causal evidence. Source coverage is a
+fixture criterion; bearer access cannot prove process identity or when an
+answer was formed. Question utility, real delivery and provider token usage
+were not assessed.
+
 #### Paired current-reference contrast
 
 Two new synthetic cases have identical two-prescription records but different

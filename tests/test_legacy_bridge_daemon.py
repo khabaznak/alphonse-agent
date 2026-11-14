@@ -13,7 +13,7 @@ from alphonse.agent_v2.runtime import build_runtime_host
 from alphonse.agent_v2.users import V2UserStore
 
 
-@pytest.mark.parametrize("stamp", [None, "tactical_v2", "unknown_engine", "saved_checkpoint"])
+@pytest.mark.parametrize("stamp", [None, "tactical_v2", "unknown_engine", "v3_wrong_schema", "saved_checkpoint"])
 def test_retired_queued_work_stops_without_running_another_engine(tmp_path, stamp):
     users = V2UserStore(":memory:")
     user = users.onboard(display_name="Admin", users_root=tmp_path / "users")
@@ -25,14 +25,16 @@ def test_retired_queued_work_stops_without_running_another_engine(tmp_path, stam
     calls = []
     runtime.core.intelligence.v3.process = lambda *_args: calls.append(True)
     memory_reads = []
-    if stamp in (None, "tactical_v2", "saved_checkpoint"):
-        runtime.core.memory.start_task = lambda *_args, **_kwargs: memory_reads.append(True)
+    runtime.core.memory.start_task = lambda *_args, **_kwargs: memory_reads.append(True)
     metadata = {"channel": channel_metadata(integration_id="desktop", provider_key="desktop",
                                              channel_target=user.user_id, alphonse_user_id=user.user_id)}
     if stamp == "saved_checkpoint":
         metadata["task_state"] = {"task_id": "saved-task", "user": user.user_id, "goal": "Original task",
                                   "intelligence_engine": "tactical_v2", "intelligence_schema_version": 2,
                                   "facts_md": "Earlier evidence"}
+    elif stamp == "v3_wrong_schema":
+        metadata["intelligence_engine"] = "hierarchical_v3"
+        metadata["intelligence_schema_version"] = 2
     elif stamp is not None:
         metadata["intelligence_engine"] = stamp
         metadata["intelligence_schema_version"] = 2

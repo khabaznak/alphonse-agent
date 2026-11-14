@@ -1064,6 +1064,81 @@ purposes. Validation: `PYTHONPATH=/private/tmp:. .venv/bin/python -m pytest -q
 tests/test_memory_replay.py` — **14 passed in 0.72 seconds**. No live model,
 network, household data or full-suite run was involved.
 
+### Desktop acknowledgement, settings and memory scoring: three files
+
+On 14 November, individually reviewed **15 functions / 45 collected cases** in
+`test_desktop_ack_claim_race.py` (3 functions / 4 cases),
+`test_desktop_settings_workspace.py` (2 / 2), and `test_memory_scoring.py`
+(10 / 39). These tests use disposable fixtures, existing synthetic evaluation
+data and stubbed providers. Their retention does not establish simpler-loop
+conversation qualification, real recipient delivery or general semantic
+accuracy of the scoring rubric.
+
+| Function | Individual value and disposition |
+| --- | --- |
+| `reclaim_between_desktop_read_and_ack_preserves_new_claim` | Retain: a second owner and a reused owner ID each protect a new claim against the older Desktop acknowledgement; no delivered callback. |
+| `expired_desktop_claim_is_not_acknowledged_before_reclaim` | Retain: expiry alone blocks ack before another worker claims. |
+| `desktop_ack_rolls_back_if_lease_expires_during_write` | Retain: lease expires across two clock observations during write; no delivered callback. |
+| `settings_skill_package_lifecycle_and_member_denial` | Retain: Desktop IPC skill lifecycle, conflict resolution, file handling and member denials; this is a broad integration path rather than proof of all individual permission outcomes. |
+| `settings_retired_artifact_commands_preserve_files` | Retain: legacy IPC refuses retired artifact mutations while preserving the file and record. |
+| `response_requirements_distinguish_close_counterexamples` | Retain: twelve distinct positive/negative response pairs check rubric proxy distinctions such as refusal, uncertainty, correction and risky false effects. |
+| `source_support_accepts_role_labels_and_safe_partial_quotes` | Retain: three role-label/whitespace variants ensure a grounded quotation remains recognized. |
+| `factual_support_is_independent_of_forbidden_context` | Retain: supported historical quote is still distinguishable from forbidden context; verified completion remains unknown. |
+| `invalid_citations_and_changed_identifiers_are_not_supported` | Retain: six distinct wrong, missing, altered or incompletely cited source cases. |
+| `partial_quotes_cannot_discard_qualifiers` | Retain: five negative, uncertain or superseded source phrases resist false affirmative extraction. |
+| `rescore_uses_saved_responses_without_network_and_preserves_inputs` | Retain: rescoring the recorded synthetic evidence is deterministic, offline and non-mutating; checks known historical scores. |
+| `rescore_rejects_mismatched_or_incomplete_evidence` | Retain: five different corpus, case, response and source integrity failures. |
+| `cli_cannot_overwrite_original_evidence` | Retain: input evidence cannot be selected as the CLI output. |
+| `responder_requires_versioned_rubric_before_any_call` | Retain: missing rubric fails before a responder is invoked. |
+| `rubric_validation_fails_before_provider_use` | Retain: malformed version, missing case, empty group and invalid regex fail; the broad `(ValueError, re.error)` assertion does not establish a specific failure reason. |
+
+No cases were removed: inspected inputs and outcomes protect different failure
+modes, and no exact duplicate was established. Focused validation with the
+temporary isolation plugin redirecting default user/skill/config locations:
+`.venv/bin/python -m pytest -q -p alphonse_audit_isolation_step5
+tests/test_desktop_ack_claim_race.py tests/test_desktop_settings_workspace.py
+tests/test_memory_scoring.py` — **45 passed in 0.53 seconds**. This was not a
+full-suite run.
+
+### Credential storage and inference telemetry: two files
+
+On 14 November, individually reviewed **19 functions / 25 collected cases** in
+`test_secure_credentials.py` (15 functions / 21 cases) and
+`test_agent_v2_telemetry.py` (4 / 4). The credentials and identities are
+disposable; no real account, host keychain, provider write or network is used.
+The telemetry checks use a stubbed provider and do not establish that every
+live provider path or external logging sink is free of sensitive content.
+
+| Function | Individual value and disposition |
+| --- | --- |
+| `encrypted_roundtrip_restart_and_metadata_only_projections` | Retain: encrypted round-trip and restart, redacted representations and scans of SQLite sidecars. |
+| `connection_generation_and_reference_are_authenticated` | Retain: cross-account, wrong-generation and copied ciphertext rejection. |
+| `unavailable_backend_fails_closed` | Retain: seven distinct missing/corrupt/locked/permission/symlink/wrong-key failures, with sanitized error. |
+| `key_must_be_separate_and_references_cannot_traverse` | Retain: key placement and traversal rejection with key preservation. |
+| `missing_optional_import_does_not_break_store_or_messaging` | Retain: optional imports fail closed while an existing legacy bot-token record remains accessible; despite the name, it does not exercise sending a message. |
+| `backend_unconfigured_and_failure_before_switch` | Retain: unavailable backend leaves generation and reference unchanged. |
+| `rotation_race_across_store_instances_has_one_winner` | Retain: concurrent credential rotations have one winner and old ciphertext is removed. |
+| `disconnect_wins_inflight_rotation` | Retain: disconnect during write prevents a stale rotation. |
+| `disconnect_without_backend_blocks_use_and_retries_deletion` | Retain: failed local deletion prevents reuse and supports later cleanup while remote revocation remains pending. |
+| `explicit_migration_preserves_account_and_does_not_touch_messaging` | Retain: explicit account migration, idempotency, denied legacy migration and ordinary account update. It checks a messaging record, not actual message delivery. |
+| `secure_binding_delivery_redaction_and_denied_actor` | Retain: bound credential selection, nested redaction, actor denial, sanitized exception and backend health. |
+| `keychain_selects_only_native_backend_and_sanitizes_locked_errors` | Retain: mocked macOS backend selection and sanitized keychain failure; it does not use a real keychain. |
+| `failed_migration_preserves_legacy_row_for_explicit_recovery` | Retain: storage failure retains the old credential row and generation. |
+| `resolve_rechecks_disconnect_during_backend_read` | Retain: disconnect between ciphertext read and credential resolution rejects stale credentials. |
+| `secure_bash_output_and_task_evidence_never_contain_credentials` | Retain: actual disposable Bash binding output, task and package instructions do not disclose synthetic credentials. |
+| `inference_router_emits_bounded_success_and_failure_telemetry` | Retain: router telemetry status, measured provider usage, tool metadata, token redaction and absence of prompt text. It does not assert that the failure error is sanitized. |
+| `simple_loop_provider_failure_does_not_leak_source_data_to_telemetry` | Retain: simple-loop provider exception payload is absent from emitted telemetry; caller still receives the exception. |
+| `tool_invocation_emits_result_scope_and_failures` | Retain: operation success scope and invalid-argument failure events. |
+| `runtime_collects_router_telemetry_without_discarding_injected_sink` | Retain: injected telemetry sink and runtime collection both receive the event. |
+
+No cases were removed; the apparently similar credential and redaction tests
+exercise different backend, actor, race or output boundaries. Focused
+validation with the temporary isolation plugin redirecting default
+user/skill/config locations: `.venv/bin/python -m pytest -q -p
+alphonse_audit_isolation_step5 tests/test_secure_credentials.py
+tests/test_agent_v2_telemetry.py` — **25 passed in 0.32 seconds**. This was
+not a full-suite run.
+
 ## Mission coverage and next review passes
 
 Keep behavior that protects real household outcomes while the relevant feature
