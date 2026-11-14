@@ -248,6 +248,11 @@ def _run_simple(*, url: str, provider: Any, model: str,
         emit({'kind': 'tool', 'tool': 'native.fixture_read'})
         result = source.read(args)
         emit({'kind': 'source_read', 'source': args['source']})
+        if trace is not None:
+            try:
+                trace({'event': 'source_read_observed', 'arm': 'simple', 'source': args['source']})
+            except Exception:
+                pass
         return result
 
     registry.register(ToolDefinition(descriptor, read))
@@ -278,18 +283,29 @@ def _run_simple(*, url: str, provider: Any, model: str,
                                         source_description=source_description)
     class TracedChooser:
         max_input_tokens = chooser.max_input_tokens
+        answer_proposed = False
         def __call__(self, projection, output_cap):
             decision = chooser(projection, output_cap)
             if trace is not None:
                 kind = decision.get('kind')
                 tool = decision.get('tool_id')
+                args = decision.get('arguments')
+                selected = args.get('source') if isinstance(args, dict) else None
                 text = decision.get('text') if isinstance(decision.get('text'), str) else ''
                 lowered = text.casefold()
-                trace({'event': 'model_decision', 'arm': 'simple',
-                       'kind': kind if isinstance(kind, str) and kind in {'tool', 'answer', 'question'} else 'other',
-                       'tool': tool if tool == 'native.fixture_read' else None,
-                       'mentions_tool_availability': kind == 'question' and
-                           any(term in lowered for term in ('enable', 'unavailable', 'cannot access', 'not available'))})
+                try:
+                    trace({'event': 'model_decision', 'arm': 'simple',
+                           'kind': kind if isinstance(kind, str) and kind in {'tool', 'answer', 'question'} else 'other',
+                           'tool': tool if tool == 'native.fixture_read' else None,
+                           'source': selected if kind == 'tool' and isinstance(selected, str)
+                               and selected in allowed_source_names else None,
+                           'after_answer_proposal': self.answer_proposed,
+                           'mentions_tool_availability': kind == 'question' and
+                               any(term in lowered for term in ('enable', 'unavailable', 'cannot access', 'not available'))})
+                except Exception:
+                    pass
+            if decision.get('kind') == 'answer':
+                self.answer_proposed = True
             return decision
     with TemporaryDirectory(prefix='codex-clock-candidate-') as directory:
         budgets = SyntheticEvaluationBudgetStore(str(Path(directory) / 'budget.db'))

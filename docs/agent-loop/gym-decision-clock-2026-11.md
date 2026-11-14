@@ -54,6 +54,23 @@ for normal household conversations and the production release gates remain open.
 
 ## Guidance experiment
 
+### Source-order diagnostic — 14 November
+
+An opt-in synthetic trace now records whitelisted source selections, completed
+source-read callbacks and whether the chooser had previously proposed an answer;
+it retains neither model text nor record contents. In one new subscription-backed
+attempt on the same development case, the candidate selected prescription,
+exercise-program (`treatment-status`), and conversation in that order, all
+before its first answer proposal. It then answered correctly (three reads, five
+model calls, 26.53 seconds). This locates the extra selection in this attempt
+before the self-review, rather than during the review; it does not establish
+the model's reasoning or explain earlier attempts. The bearer service audit
+does not independently identify the reader or determine when an answer was
+formed; the order reported here is from host/chooser instrumentation. The
+receipt is `evidence/gym-cycle-2026-11-13/selective-sources-order-v1.jsonl`.
+This is one further development observation, not held-out evidence or proof
+of an improved selection strategy. Provider token usage remained unknown.
+
 After the first attempt below, the synthetic subscription chooser was updated
 to prefer sources that can resolve a specific missing fact or material
 uncertainty, skip clearly unrelated descriptions, and inspect uncertain

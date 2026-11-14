@@ -402,6 +402,131 @@ mechanism with an observable boundary before relying on it as durable coverage.
 Validation: `.venv/bin/python -m pytest -q tests/test_gmail_adapter.py
 tests/test_gmail_unread.py` — **58 passed in 1.15 seconds**, not a full-suite run.
 
+### Calendar and Classroom acquisition: two files
+
+On 14 November, individually inspected **32 functions / 59 cases** in
+`test_calendar_acquisition.py` (18 functions) and
+`test_classroom_adapter.py` (14). All decisions below are **retain**. Names
+omit the `test_` prefix. Synthetic provider responses and disposable accounts
+exercise adapter and worker behavior, not real provider semantics or a
+qualified new-loop conversation.
+
+| Function in `test_calendar_acquisition.py` | Reason retained |
+| --- | --- |
+| `recurrence_exception_identity_dst_and_all_day_dates` | Recurring identity, exceptions, DST, all-day values and scoped read. |
+| `paginated_baseline_and_delta_anchor_cancellation_and_move` | Cursor progression, cancelled and moved event behavior. |
+| `expiry_and_changed_scope_require_bounded_resync` | Expiry and project/resource/window scope changes. |
+| `revoked_calendar_and_provider_failure_never_absence` | Five provider errors stay blocked/partial, not absent. |
+| `grant_revocation_fences_results` | Revocation before and during IO. |
+| `partial_redacted_events_and_missing_token_are_not_empty_success` | Redacted data and absent sync token do not imply complete coverage. |
+| `discovery_consent_is_independent_of_mail_and_event_reads` | Discovery consent and read permissions remain separate. |
+| `direct_read_exact_resource_identity_and_window` | Exact resource, event identity, window and read-only surface. |
+| `budgets_before_io` | Four distinct resource limits prevent IO. |
+| `multiple_selected_calendars_keep_separate_tokens` | Independent per-calendar sync cursors. |
+| `fixed_transport_bounds_and_no_credential_forwarding` | Fixed URL, streaming, bounded data, timeout and no redirect following. |
+| `calendar_worker_persists_page_before_cursor_and_recovers` | Durable acceptance and cursor after a simulated crash. |
+| `calendar_worker_failure_coverage_is_never_no_match` | Expired, redacted and revoked worker outcomes. |
+| `calendar_and_mail_references_reconcile_without_completing_assignment` | Cross-source evidence, incomplete assignment and revoked access. |
+| `all_day_exclusive_end_uses_calendar_zone_at_window_boundary` | Calendar timezone at an exclusive all-day boundary. |
+| `cancellation_and_window_mismatch_prevent_io` | Cancellation, mismatched window and non-exact ID deny IO. |
+| `busy_only_visibility_keeps_coverage_partial` | Two visibility restrictions remain partial. |
+| `incremental_page_size_remains_stable_as_budget_shrinks` | Pagination parameters stay stable across a shrinking budget. |
+
+| Function in `test_classroom_adapter.py` | Reason retained |
+| --- | --- |
+| `student_role_checked_before_content_and_unknowns_preserved` | Role before content and unknown assignment fields. |
+| `guardian_only_or_school_restricted_role_never_reads_content` | Three missing/restricted role responses stop before content. |
+| `school_restriction_revoked_consent_and_unavailable_are_explicit` | Five provider failures preserve blocked/partial outcomes. |
+| `revocation_and_cancellation_fence_io` | Revocation and cancellation prevent unauthorized continuation. |
+| `repeated_corrected_and_missing_assignment_fields` | Stable and corrected versions, with missing fields unknown. |
+| `announcements_require_explicit_operation_and_scope` | Announcement-specific operation and consent. |
+| `pages_scope_cursor_expiry_and_refresh_preserve_original_lower_bound` | Paging, changed scope and lower-bound preservation. |
+| `multiple_courses_have_independent_truthful_coverage` | Per-course pending and completed coverage. |
+| `limits_before_io` | Four budget and deadline cases stop IO. |
+| `read_scope_identity_and_no_write_or_impersonation_surface` | Scoped read, no attachment, no write/impersonation surface. |
+| `transport_fixed_get_bounded_stream_and_no_redirect` | Fixed endpoint, streamed budget, timeout and redirect rejection. |
+| `durable_crash_resume_and_corrected_assignment_versions` | Resume after acceptance, revised evidence and publication. |
+| `durable_replay_deduplicates_same_assignment_version` | Repeated identical evidence is deduplicated. |
+| `permission_denied_worker_never_reports_no_match` | Provider denial remains blocked, not a negative finding. |
+
+No test was removed: similar budget and transport cases run different provider
+implementations, and the durable recovery tests use distinct adapters and
+evidence. The calendar transport test demonstrates that redirects are disabled
+and only one fixed-endpoint request is made; it does not inspect an actual
+redirect destination or prove every credential-forwarding path despite its
+name. The Classroom role test models missing/restricted student responses,
+not an actual guardian account or live school policy. In the parametrized
+Classroom revocation test, the identical cancellation check runs twice; that
+small duplicate setup is a candidate for tidying, but removing a case would
+also remove a distinct pre/during-revocation scenario.
+
+Validation: `.venv/bin/python -m pytest -q tests/test_calendar_acquisition.py
+tests/test_classroom_adapter.py` — **59 passed in 1.30 seconds**, not a
+full-suite run.
+
+### Source acquisition and findings: two files
+
+On 14 November, individually inspected **36 functions / 57 cases** in
+`test_source_acquisition.py` (19 functions) and `test_findings.py` (17).
+All decisions below are **retain**. Names omit the `test_` prefix. These use
+disposable accounts, synthetic source pages and delivery stores; they are not
+evidence of a real provider effect or a qualified simple-loop conversation.
+
+| Function in `test_source_acquisition.py` | Reason retained |
+| --- | --- |
+| `bounded_context_durable_page_and_independent_model_failure` | Scoped context, persisted evidence and independent failed analysis. |
+| `quiet_no_match_and_partial_is_never_no_match` | Completed empty acquisition has no-match outcome and no event. |
+| `incomplete_and_expired_cursor_bounded_resync` | Two partial/expired cursor paths preserve coverage gaps. |
+| `restart_after_atomic_accept_never_skips_or_replays_page` | Recovery after page and cursor acceptance. |
+| `transaction_rolls_back_evidence_and_cursor_together` | Storage failure rolls back page and stream changes. |
+| `publication_crash_replay_one_scoped_event` | Crash after journal write, replay deduplication and scoped event. |
+| `adapter_scope_and_budget_violations_are_not_success` | Four adapter scope, budget and stalled-cursor violations. |
+| `revocation_prevents_next_page_and_private_expansion` | Revocation stops another fetch and evidence disclosure. |
+| `attachment_limits_window_and_grant_enforced` | Authorized attachment, byte accounting, wrong resource and window. |
+| `inert_html_and_quoted_evidence` | Sanitization, quoted evidence, link safety and size. |
+| `processing_outside_window_cannot_manufacture_completion` | Processing checkpoints cannot advance outside the window. |
+| `query_and_folder_revision_start_new_baseline` | Changed query causes a new bounded scan. |
+| `crash_after_final_page_recovers_without_another_read` | Final-page crash recovery does not fetch again. |
+| `incremental_cursor_then_expiry_and_adapter_version_baseline` | Incremental cursor, expiry and subsequent version change. |
+| `content_removal_leaves_only_provenance` | Expiry, revocation and source deletion remove content. |
+| `folder_change_uses_new_bounded_baseline` | Changed authorized folder gets a new cursor and scope. |
+| `adapter_version_change_between_pages_never_reuses_old_cursor` | Mid-scan adapter change discards old page cursor. |
+| `failed_acquisition_publishes_failure_without_private_error` | Failure event excludes provider diagnostic. |
+| `subscription_before_first_result_routes_existing_event_execution` | Existing subscription gets the first scoped event. |
+
+| Function in `test_findings.py` | Reason retained |
+| --- | --- |
+| `persistence_scope_provenance_and_reference_only_checkpoint` | Durable provenance, reference-only checkpoint and actor/audience access. |
+| `reported_sources_cannot_manufacture_verified_outcomes` | Four outcome predicates cannot be inferred as verified. |
+| `sender_statements_remain_reports` | Three sender assertions stay reports, not verified facts. |
+| `missing_due_date_timezone_and_grade_units` | Unknown dates/timezone and explicit grade units. |
+| `correction_duplicate_and_old_quote_create_one_alert_per_version` | Corrections, duplicate evidence, old quotes and alert versioning. |
+| `unrelated_and_ambiguous_identity_never_merge` | Five identity changes cannot merge unrelated commitments. |
+| `replay_after_checkpoint_crash_recovers_without_new_version` | Checkpoint crash replay avoids duplicate finding/delivery. |
+| `ambiguous_send_is_durable_and_never_automatically_retried` | Exception and expired lease preserve unknown delivery. |
+| `revocation_deletion_propagates_all_versions_and_local_delivery` | Five authority/retention changes gate and purge local versions. |
+| `historical_version_revalidates_its_own_retention` | Historical record honors its own retention deadline. |
+| `restored_evidence_cannot_override_current_revocation` | Stale restored evidence cannot override current authority. |
+| `unwired_outbox_consumer_fails_closed` | Unconfigured consumer cannot claim protected outbox item. |
+| `partial_coverage_remains_explicit` | Partial source coverage reaches the notification. |
+| `recipient_delivery_and_ambiguity_are_independent` | Separate recipients retain separate delivery states. |
+| `retained_findings_preserve_history_after_cache_expiry_or_pause` | Expired cache and paused policy preserve appropriate history. |
+| `independent_accounts_reconcile_one_finding_with_separate_provenance` | Two source accounts reconcile while retaining provenance. |
+| `forged_evidence_and_cross_actor_cannot_record` | Forged evidence and different actor cannot create a finding. |
+
+No removals were justified: apparently similar cases exercise different
+transaction, identity, revocation, or lifecycle boundaries. Two names
+overstate individual assertions: `quiet_no_match_and_partial_is_never_no_match`
+checks the no-match branch; the next parametrized test checks partial coverage.
+`query_and_folder_revision_start_new_baseline` changes the query only; the
+separate folder-change test covers folders. The attachment/window test uses
+`pytest.raises(Exception)` for the expired window, so an unrelated exception
+could satisfy that assertion; it is weaker evidence of the intended reason.
+Its other checks and the separate processing-window test remain useful.
+
+Validation: `.venv/bin/python -m pytest -q tests/test_source_acquisition.py
+tests/test_findings.py` — **57 passed in 7.02 seconds**, not a full-suite run.
+
 ## Mission coverage and next review passes
 
 Keep behavior that protects real household outcomes while the relevant feature

@@ -172,8 +172,41 @@ def test_opt_in_trace_categorizes_question_without_exposing_model_text(monkeypat
                                       model=MODEL, private_trace=observed.append)
     assert result['status'] == 'waiting_user'
     assert observed == [{'event': 'model_decision', 'arm': 'simple', 'kind': 'question',
-                         'tool': None, 'mentions_tool_availability': True}]
+                         'tool': None, 'source': None, 'after_answer_proposal': False,
+                         'mentions_tool_availability': True}]
     assert secret not in repr(observed) and secret not in repr(result)
+
+
+def test_candidate_trace_records_read_order_without_source_contents(monkeypatch):
+    secret = 'synthetic-private-source-content'
+    decisions = iter([
+        {'kind': 'tool', 'tool_id': 'native.fixture_read', 'arguments': {'source': 'conversation'}, 'text': None},
+        {'kind': 'answer', 'tool_id': None, 'arguments': None, 'text': 'initial response'},
+        {'kind': 'tool', 'tool_id': 'native.fixture_read', 'arguments': {'source': 'treatment-status'}, 'text': None},
+        {'kind': 'answer', 'tool_id': None, 'arguments': None, 'text': 'final response'},
+    ])
+    def fake_generate(self, request):
+        data = next(decisions)
+        return InferenceResult(json_value=data, raw_response=json.dumps(data))
+    class FakeSource:
+        def __init__(self, url, *, allowed_source_names):
+            pass
+        def read(self, args):
+            return {'source': args['source'], 'content': {'value': secret}, 'candidate_complete': True}
+    monkeypatch.setattr(CodexSubscriptionProvider, 'generate_json', fake_generate)
+    monkeypatch.setattr(comparison, 'LocalSource', FakeSource)
+    observed = []
+    outcome = comparison._run_simple(url='fixture', provider=CodexSubscriptionProvider(model=MODEL),
+        model=MODEL, emit=lambda _: None, cancelled=lambda: False, trace=observed.append,
+        allowed_source_names=('conversation', 'treatment-status'), required_source_names=None,
+        verification_mode='matched_provenance')
+    assert outcome.status == 'completed'
+    assert [(e['event'], e.get('source'), e.get('after_answer_proposal')) for e in observed] == [
+        ('model_decision', 'conversation', False), ('source_read_observed', 'conversation', None),
+        ('model_decision', None, False), ('model_decision', 'treatment-status', True),
+        ('source_read_observed', 'treatment-status', None), ('model_decision', None, True),
+    ]
+    assert secret not in repr(observed) and 'initial response' not in repr(observed)
 
 
 def test_trace_callback_failure_does_not_change_clock_result(monkeypatch):

@@ -1,5 +1,36 @@
 # First fenced conversation slice
 
+## Disposable CoreLoop and inference-router progress — 14 November
+
+The default router can now accept an explicitly injected synthetic processor
+for a fixture-only engine stamp. A test queues a disposable message through
+the actual CoreLoop and router, executes the candidate with an in-memory native
+read tool and returns an undelivered draft. The adapter rejects persistent
+queues, real memory, conversation storage and publication sinks; it uses a
+synthetic budget, and its same-process duplicate check does not survive restart.
+The normal runtime does not register or select this engine. CoreLoop's WAITING
+state is not a safety fence: core prework occurs before processor checks, and
+memory finalization and consumed-message acknowledgement can still occur. Never
+attach the fixture processor to a household core or treat its draft as delivered.
+
+An evaluation-only chooser now exercises the existing InferenceRouter with an
+explicit read-only tool catalog, rather than the fixture-specific source enum.
+The queued CoreLoop test uses this chooser and a scripted provider in the same
+path: queue, engine router, candidate, inference router, authorized fixture
+read, and undelivered draft.
+It checks action shape and preserves unknown provider usage; tool authorization
+and argument enforcement remain host responsibilities. It has only been tested
+with a synthetic provider, not enabled in the real host. Normal durable budget
+policy does not accept unreported usage merely because a fixture did.
+
+The next integration step is a disposable daemon/SQLite-queue exercise of the
+configured inference router, one actor-authorized read operation, and the real
+response/outbox projection. That needs durable task identity, claim-bound
+publication, and cancellation/restart behavior at the actual boundaries. A
+draft in a processor snapshot is not a real response, and simply relabeling it
+as WAITING does not solve delivery or stale-worker handling. Until those pieces
+are proven for the path, this work is not an owner-use opt-in.
+
 Working acceptance target for #216, #221, #224, #225, #226 and #228. This is
 not an implementation or approval to enable the experimental runtime. Keep V3
 as the production bridge while the candidate is default-off.
