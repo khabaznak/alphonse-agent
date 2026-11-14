@@ -16,6 +16,35 @@ SEARCH_MEMORY_TOOL_NAME = "search_memory"
 READ_MEMORY_SOURCE_TOOL_ID = "native.read_memory_source"
 
 
+def complete_conversation_read(actor: str, tool_id: str, arguments: dict[str, Any], payload: dict[str, Any]) -> bool:
+    """Recognize a complete direct-owner conversation read, not current authority.
+
+    Invoke the native tool under the authenticated actor first. This checks the
+    returned envelope only; it cannot fence revocation, publication or prove
+    that historical text is current or supports a particular answer.
+    """
+    source_id = arguments.get('source_id')
+    if (not isinstance(actor, str) or not actor.strip() or tool_id != READ_MEMORY_SOURCE_TOOL_ID
+            or not isinstance(source_id, str) or not source_id.startswith('conversation:')
+            or arguments.get('offset', 0) != 0 or payload.get('schema_version') != 2
+            or payload.get('status') != 'found' or payload.get('truncated') is not False
+            or payload.get('next_offset') is not None or payload.get('historical_only') is not True):
+        return False
+    items = payload.get('items')
+    if not isinstance(items, list) or len(items) != 1 or not isinstance(items[0], dict):
+        return False
+    item = items[0]
+    source = item.get('source')
+    access = source.get('access') if isinstance(source, dict) else None
+    content = item.get('content')
+    return bool(item.get('source_id') == source_id and isinstance(source, dict)
+        and source.get('source_id') == source_id and source.get('kind') == 'conversation'
+        and isinstance(access, dict) and access.get('owner_user_id') == actor
+        and isinstance(content, str) and item.get('start_char') == 0
+        and type(item.get('end_char')) is int and item['end_char'] == len(content)
+        and type(item.get('total_chars')) is int and item['total_chars'] == len(content))
+
+
 def _identity(context):
     if context is None or not str(context.task.user or "").strip():
         raise ValueError("memory_requester_required")

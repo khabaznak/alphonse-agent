@@ -702,6 +702,90 @@ tests/test_skill_distribution.py` — **9 passed in 4.12 seconds**. The
 isolation plugin is temporary and is not a product dependency or retained
 test fixture.
 
+### Memory migration and source contracts: two files
+
+Individually reviewed **22 functions / 29 cases** in `test_memory_migration.py`
+(9) and `test_memory_contracts.py` (13). All use synthetic data in temporary
+or in-memory stores. These exercise shared memory infrastructure and do not
+establish that the candidate loop can discover or use that infrastructure.
+
+| Function in `test_memory_migration.py` | Disposition and specific value |
+| --- | --- |
+| `dry_run_is_read_only_and_apply_is_additive_idempotent` | Retain: original bytes, idempotence, private unverified provenance and candidate identity. |
+| `partial_migration_adopts_identical_copy` | Retain: interrupted migration can reuse an identical archive without duplication. |
+| `conflicts_fail_before_any_copy_and_preserve_both` | Retain: divergent archive aborts before mutations. |
+| `receipt_never_guesses_changed_or_ambiguous_state` | Retain five cases: changed original/archive, missing original, owner mismatch and future receipt version. |
+| `migration_rejects_symlink_sources_and_destinations` | Retain: symlinked input and archive destination cannot escape the scope. |
+| `backup_restore_includes_wal_and_never_overwrites_new_data` | Retain: consistent WAL backup, separate restore and destination protection. |
+| `corrupt_backup_and_unsafe_destinations_fail_closed` | Retain: nested backup rejection and tampered checkpoint refusal. |
+| `restore_does_not_accept_checkpoint_changed_during_copy` | Retain: catches changes between validation and the copied snapshot. |
+| `repeated_migration_preserves_canonical_events_knowledge_and_daily_views` | Retain: repeated migration does not duplicate canonical events or materialized daily views. |
+
+| Function in `test_memory_contracts.py` | Disposition and specific value |
+| --- | --- |
+| `contract_roundtrip_versions_and_derived_audience` | Retain: serialization, audience restriction and invalid-version/visibility rejection. |
+| `read_recall_and_assembly_share_identity_across_midnight_and_projects` | Retain: source identity is stable across transcript, recall and direct read. |
+| `visibility_is_filtered_before_any_backend_content_is_rendered` | Retain: adversarial backend cannot leak a private record and duplicate shared results are collapsed. |
+| `legacy_import_never_invents_date_speaker_or_channel` | Retain: idempotent import with honest missing provenance. |
+| `additive_migration_preserves_original_events_and_ambiguous_imports` | Retain: old SQLite events survive restart without fabricated observation or unseen-state changes. |
+| `rebuild_and_erasure_preserve_ids_remove_all_generated_copies` | Retain: owner-only erasure, projection cleanup and no resurrection on redelivery/restart. |
+| `erasure_projection_failure_leaves_no_stale_generated_text` | Retain: deletion behavior when derived-view rebuild fails. |
+| `recall_envelope_distinguishes_empty_and_unavailable_backends` | Retain: empty search is distinct from backend failure. |
+| `derived_memory_rechecks_current_sources_after_erasure` | Retain: cached derived knowledge cannot outlive source erasure. |
+| `task_evidence_projection_is_owner_scoped_and_preserves_attempts` | Retain: failed and successful attempts remain separate and owner-scoped. |
+| `historical_reference_cannot_preserve_revoked_sharing` | Retain: a stale shared-source reference cannot override current revocation. |
+| `recording_an_everyday_message_requires_no_project` | Retain: ordinary conversation has no mandatory project boundary. |
+| `malformed_recipients_are_never_interpreted_as_grants` | Retain four malformed recipient types at contract, projection and stored-read boundaries. |
+
+No test removal was justified: similar migration, visibility and provenance
+checks use different entry points or failure states. The erasure-failure test
+does not assert that a daily file existed before injecting the failure, so it
+does not independently establish removal of an already written stale file.
+Validation:
+`.venv/bin/python -m pytest -q tests/test_memory_migration.py
+tests/test_memory_contracts.py` — **29 passed in 0.25 seconds**. No household
+data or model calls were used.
+
+### Coding-skill configuration and delegation: two files
+
+Individually reviewed **17 functions / 20 cases** in
+`test_coding_skill_runtime.py` (4) and `test_coding_skill_service.py` (13).
+These use synthetic packages and providers; they do not run a real container,
+model or personal household program, and their V3 phase test does not establish
+that the simpler loop can use the same capability.
+
+| Function in `test_coding_skill_runtime.py` | Disposition and specific value |
+| --- | --- |
+| `factory_requires_explicit_immutable_image_and_persistent_household` | Retain: disabled without pinned image, shared provider/verifier runner, reject ephemeral workspace. |
+| `factory_rejects_mutable_image_and_symlinked_root` | Retain: rejects mutable image and escaping workspace root. |
+| `persistent_image_setting_is_validated` | Retain: configured digest roundtrip, rejection and clearing. |
+| `misconfigured_optional_delegation_does_not_block_runtime` | Retain: unavailable delegation is surfaced without breaking unrelated runtime. |
+
+| Function in `test_coding_skill_service.py` | Disposition and specific value |
+| --- | --- |
+| `fixture_provider_creates_verified_skill_that_can_be_used_and_replayed` | Retain: verify/install/use, idempotent replay and changed-package reconciliation. |
+| `native_tool_is_only_registered_for_explicitly_configured_service` | Retain: registration, task activation, real fixture Bash use and mismatched store rejection. |
+| `phase_builds_activates_and_uses_skill_for_original_task` | Retain: scripted V3 phase builds and uses capability for original task; not live model behavior. |
+| `runtime_refresh_retains_explicitly_configured_coding_service` | Retain: configured tool survives runtime refresh. |
+| `provider_and_verification_are_required_before_reserving_work` | Retain: provider absence and unauthorized actor reject the request. The test does not independently demonstrate a verifier-only failure. |
+| `failed_or_revoked_work_never_publishes` | Retain four cases: invalid package, failed verification, cancellation and revoked access leave no installation. |
+| `package_cannot_change_during_verification` | Retain: package mutation between generation and verification cannot publish. |
+| `package_symlink_is_rejected_before_verification` | Retain: generated link is rejected and not installed. |
+| `lost_publication_receipt_requires_reconciliation_and_no_replay` | Retain: installed effect with missing receipt requires reconciliation rather than repeat. |
+| `reconcile_stops_both_containers_without_replaying_or_claiming_success` | Retain: unauthorized actor refused and both simulated containers stopped. |
+| `reconcile_keeps_job_running_if_container_removal_unconfirmed` | Retain: unresolved cleanup does not become success. |
+| `native_reconciliation_requires_owner_and_original_task` | Retain: successful native reconciliation targets original task; the test does not itself check a wrong owner or wrong target. |
+| `unconfirmed_provider_cleanup_preserves_running_job_for_reconciliation` | Retain: uncertain cleanup prevents re-execution. |
+
+No case was removed: apparent overlap uses different APIs, actors or lifecycle
+states. The four-case failure test accepts several exception classes, so it
+establishes no publication but not that each scenario raised its intended
+reason. Validation: with a temporary pytest plugin redirecting the legacy user
+root into disposable storage, `.venv/bin/python -m pytest -q
+tests/test_coding_skill_runtime.py tests/test_coding_skill_service.py` —
+**20 passed in 0.38 seconds**. No live account, container or household data was
+used.
+
 ## Mission coverage and next review passes
 
 Keep behavior that protects real household outcomes while the relevant feature

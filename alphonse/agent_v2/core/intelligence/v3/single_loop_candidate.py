@@ -106,6 +106,10 @@ class CandidateHost:
     remaining_advertised_evidence: Callable[[str, tuple[str, ...]], bool] | None = None
     # Evaluation-only self-review, not independent verification or authority.
     synthetic_preanswer_review: bool = False
+    # A real read may have an operation-specific completion contract instead
+    # of the synthetic candidate_complete marker. This only validates the
+    # observation shape; it is not authority or a publication fence.
+    validate_observation: Callable[[str, str, dict[str, Any], dict[str, Any]], bool] | None = None
 
 
 def _save(host: CandidateHost, state: CandidateState) -> None:
@@ -394,7 +398,13 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
         payload = result.get('result')
         # Tool-specific coverage/partial semantics must be verified by the host;
         # this prototype only accepts a deliberately explicit fixture contract.
-        if not isinstance(payload, dict) or payload.get('candidate_complete') is not True:
+        try:
+            complete = (isinstance(payload, dict) and
+                (payload.get('candidate_complete') is True if host.validate_observation is None
+                 else host.validate_observation(state.actor, tool_id, deepcopy(args), deepcopy(payload)) is True))
+        except Exception:
+            complete = False
+        if not complete:
             return _terminal(host, state, 'blocked', 'candidate_observation_incomplete')
         ref = host.record_evidence(state.actor, result)
         if not isinstance(ref, str) or not ref.strip() or ref == state.goal_source or ref in state.evidence_sources:

@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 from alphonse.agent_v2.core.core import CoreLoopContext, ProcessingStatus
 from alphonse.agent_v2.core.io import OutboundSelector
-from alphonse.agent_v2.core.intelligence import PDCAIntelligenceProcessor
+from alphonse.agent_v2.core.intelligence.pdca import PDCAIntelligenceProcessor
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
 from alphonse.agent_v2.core.messages import SQLiteMessageQueue

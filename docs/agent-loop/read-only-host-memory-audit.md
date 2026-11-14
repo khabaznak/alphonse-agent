@@ -3,6 +3,23 @@
 Working audit for #221 and #226. This does not admit any operation to a
 production host. The candidate remains synthetic and default-off.
 
+## Disposable direct-owner read experiment
+
+The candidate can now ask an explicitly supplied host observation validator
+to assess an operation's returned payload, rather than requiring every native
+tool to manufacture the synthetic `candidate_complete` field. A default-off
+experiment uses `complete_conversation_read` for the actual native
+`read_memory_source` operation. A disposable SQLite conversation is read via
+the real registry and invocation service, then included in the candidate's
+evidence projection; wrong-owner and truncated reads are rejected, as are
+validator failures. Existing hosts with no validator retain the prior fixture
+rule. The validator accepts a complete direct-owner conversation envelope only,
+and marks its content as historical; it does not authorize the read, establish
+current truth, verify the answer, prove a source set complete, prevent
+revocation during I/O, fence UI/memory events, or make publication safe. The
+experiment does not register a household host or use household data. Those
+boundaries still require the controls below before owner use.
+
 `native.search_memory` and `native.read_memory_source` are plausible first
 operations because they support multi-source conversation tasks and advertise
 read-only descriptors. Their behavior still needs a production host contract

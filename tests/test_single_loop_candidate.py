@@ -68,6 +68,50 @@ def test_partial_result_cannot_complete(fixture):
     assert result.evidence_sources == []
 
 
+@pytest.mark.parametrize('owner,content,expected', [
+    ('fixture-user', 'The synthetic meeting starts at ten.', 'completed'),
+    ('another-user', 'A private synthetic note.', 'candidate_observation_incomplete'),
+    ('fixture-user', 'Long text ' * 500, 'candidate_observation_incomplete'),
+])
+def test_real_conversation_read_requires_visible_complete_owner_observation(tmp_path, fixture, owner, content, expected):
+    from alphonse.agent_v2.conversations import SQLiteConversationStore
+    from alphonse.agent_v2.core.tools.registry.native.memory import (
+        build_read_memory_source_tool_definition, complete_conversation_read,
+    )
+    conversations = SQLiteConversationStore(tmp_path / 'conversations.sqlite')
+    event = conversations.record(owner_user_id=owner, role='user', content=content, source='test',
+                                 source_message_id='synthetic-note')
+    source_id = 'conversation:' + event.event_id
+    fixture.host.context.conversation_store = conversations
+    fixture.registry.register(build_read_memory_source_tool_definition())
+    decisions = iter([
+        {'kind': 'tool', 'tool_id': 'native.read_memory_source', 'arguments': {'source_id': source_id},
+         'usage': {'input_tokens': 100, 'output_tokens': 20}},
+        {'kind': 'answer', 'text': 'The synthetic meeting starts at ten.',
+         'usage': {'input_tokens': 100, 'output_tokens': 20}},
+    ])
+    host = replace(fixture.host, choose=lambda *_: next(decisions),
+                   authorize_read=lambda actor, tool, args: actor == 'fixture-user' and
+                       tool == 'native.read_memory_source' and args == {'source_id': source_id},
+                   verify_response=lambda actor, response, refs: bool(refs) and response == content,
+                   validate_observation=complete_conversation_read, input_reservation=2048)
+    result = run_candidate(fixture.state, host)
+    if expected == 'completed':
+        assert result.status == 'completed' and result.response == content, result.blocker
+        assert source_id in fixture.sources[result.evidence_sources[0]]
+    else:
+        assert (result.status, result.blocker) == ('blocked', expected)
+        assert result.evidence_sources == []
+
+
+def test_observation_validator_error_fails_closed(fixture):
+    def invalid(*_):
+        raise RuntimeError('private diagnostic')
+    result = run_candidate(fixture.state, replace(fixture.host, validate_observation=invalid))
+    assert (result.status, result.blocker) == ('blocked', 'candidate_observation_incomplete')
+    assert not result.evidence_sources
+
+
 def test_no_fabricated_completion_without_grounding(fixture):
     host = replace(fixture.host, choose=lambda _, cap: {'kind': 'answer', 'text': '42',
                    'usage': {'input_tokens': 10, 'output_tokens': 10}}, verify_response=lambda *args: False)

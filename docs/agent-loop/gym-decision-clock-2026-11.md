@@ -56,6 +56,28 @@ for normal household conversations and the production release gates remain open.
 
 ### Reference and source-variant exercise — 14 November
 
+#### Neutral source-catalog follow-up
+
+The chooser already received the available source names, but the original
+catalog described conversation only as "conversation context". A separately
+versioned catalog describes conversation as context and references from earlier
+interactions and prescription as records and identifiers. It does not provide
+the candidate an answer or required-source list. The four existing variants
+were each attempted once, with this catalog and a changed candidate source
+hash. Agreement matched the answer and designated source criterion, reading
+only those two sources. The missing-record case still produced an incorrect
+answer and read only prescription. Superseded and resolution matched their
+answer keys but still omitted the conversation source; the latter did read the
+status source needed to resolve its conflict. This does not establish a
+general source-selection fix or a causal effect of description changes.
+
+The plan and categorical receipts are
+`evidence/gym-cycle-2026-11-13/selective-catalog-v2-*`. These are repeated,
+public development cases, not held-out evaluation; source coverage is a
+fixture criterion, questions and real delivery remain unassessed, and provider
+token usage was unknown. The loopback bearer audit cannot establish reader
+identity or the moment of answer formation.
+
 Four new development variants share the pharmacy question and source
 descriptions: agreeing records, a missing current record, a superseded record,
 and a conflict resolved by an explicitly referenced third source. The

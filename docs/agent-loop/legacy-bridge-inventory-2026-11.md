@@ -60,9 +60,9 @@ only its already-recorded evidence; separately decide the public API policy.
 
 ## Isolate replay imports — 14 November
 
-The shared intelligence package now loads PDCA only when a legacy export is
-requested. The deterministic comparison likewise imports the V2 processor only
-for its V2 arm. A fresh interpreter importing `TaskState` no longer loads the
-PDCA package; the legacy import remains available and the V2/V3 replay checks
-still pass. This separates ordinary shared imports and V3 replay from an eager
-legacy dependency; it does not remove the V2 replay implementation or retire V3.
+The shared intelligence package no longer re-exports the retired PDCA processor
+or graph helpers. Historical replay imports the retained implementation directly
+and only for its V2 arm. A fresh interpreter importing `TaskState` does not load
+the PDCA package. This removes three public package-level Python imports; callers
+of those aliases must migrate. The internal legacy PDCA module and historical
+V2/V3 replay remain for now. This does not retire V3.
