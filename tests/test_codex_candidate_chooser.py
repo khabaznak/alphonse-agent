@@ -152,8 +152,8 @@ def test_codex_receives_host_tool_manifest_and_dispatch_boundary(tmp_path):
     result = run_candidate(case.state, case.host)
     assert result.status == 'completed'
     first = case.prompts[0]
-    assert 'Alphonse has the following host tool available' in first
-    assert 'not a tool you need to call from Codex' in first
+    assert 'Alphonse has the following host tools available' in first
+    assert 'not tools you need to call from Codex' in first
     assert '"tool_id": "native.fixture_read"' in first
     assert '"enum": ["index"]' in first
     assert 'Do not ask the user to enable an already listed tool' in first

@@ -410,6 +410,21 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
             complete = False
         if not complete:
             return _terminal(host, state, 'blocked', 'candidate_observation_incomplete')
+        # Validation may itself perform I/O. Its success does not preserve the
+        # authority, deadline, cancellation or earlier evidence state that was
+        # checked before it began. Recheck before recording an observation.
+        if _cancelled(host):
+            return _terminal(host, state, 'cancelled', 'cancelled')
+        if _deadline_elapsed(host):
+            return _terminal(host, state, 'blocked', 'candidate_deadline_exceeded')
+        try:
+            permitted = host.authorize_read(state.actor, tool_id, args) is True
+        except Exception:
+            permitted = False
+        if not permitted:
+            return _terminal(host, state, 'blocked', 'candidate_read_revoked')
+        if not _is_fresh(host, state, fingerprint):
+            return _terminal(host, state, 'blocked', 'candidate_evidence_changed_or_revoked')
         try:
             ref = (host.record_evidence(state.actor, result) if host.record_bound_observation is None
                    else host.record_bound_observation(state.actor, tool_id, deepcopy(args), deepcopy(result)))

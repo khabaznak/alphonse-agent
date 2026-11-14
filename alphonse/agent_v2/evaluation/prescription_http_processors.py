@@ -18,8 +18,9 @@ from urllib.request import HTTPRedirectHandler, ProxyHandler, build_opener
 from .simplified_loop import Run
 
 _SOURCES = {'index': '', 'conversation': 'conversation',
-            'prescription': 'prescription', 'treatment-status': 'treatment-status'}
-_DEFAULT_ALLOWED = tuple(_SOURCES)
+            'prescription': 'prescription', 'treatment-status': 'treatment-status',
+            'calendar': 'calendar', 'contacts': 'contacts', 'household-note': 'household-note'}
+_DEFAULT_ALLOWED = ('index', 'conversation', 'prescription', 'treatment-status')
 _ACTOR = 'synthetic-evaluation-user'
 
 
@@ -37,7 +38,7 @@ class _NoRedirect(HTTPRedirectHandler):
 
 
 class LocalSource:
-    """Read exactly four capability-scoped paths from a numeric loopback URL."""
+    """Read explicitly allowed capability-scoped paths from a numeric loopback URL."""
     def __init__(self, base_url, *, allowed_source_names=_DEFAULT_ALLOWED):
         self._allowed = frozenset(_allowed_sources(allowed_source_names))
         if not isinstance(base_url, str):

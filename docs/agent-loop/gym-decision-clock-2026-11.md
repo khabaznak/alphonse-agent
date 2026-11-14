@@ -56,6 +56,46 @@ for normal household conversations and the production release gates remain open.
 
 ### Reference and source-variant exercise — 14 November
 
+#### Shared chooser policy regression
+
+The gym subscription adapter and simpler-loop runtime adapter now share request
+construction, source-selection/uncertainty guidance, schema construction and
+action-shape normalization. The gym still restricts fixture source names and
+uses its own subscription telemetry; runtime host authorization, observation
+progress, self-review and accounting are not made equivalent by this change.
+The real daemon does not yet register the candidate.
+
+One predeclared subscription-backed attempt on each of four public development
+cases (two appointment and two identity/conflict variants) returned the
+expected answer and observed all designated sources. Both appointment attempts
+also read the unrelated household note; the plumber case additionally read the
+index. Both conflict attempts used the three designated sources without index.
+Prior appointment attempts did not read the note. The prompt framing changed
+and these are repeated stochastic cases, so the difference is a regression
+signal to investigate, not proof of cause or an estimate of general reliability.
+Plans and categorical receipts are `evidence/gym-cycle-2026-11-13/shared-policy-v1-*`.
+No real delivery, question usefulness, process attribution, answer-formation
+order or provider token usage was assessed.
+
+#### Appointment and contact contrast
+
+A nonmedical synthetic pair asks for the current service appointment's time
+and address. Conversation identifies the current visit; calendar provides the
+time and contact; contacts provides the address. An unrelated household note
+is available. In one prespecified subscription-backed attempt per case, both
+answers matched the independently specified keys and all three designated
+sources were observed. Neither attempt read the household note. The plumber
+case also read the index (4 reads, 6 model calls, 34.20 seconds); the electrician
+case used 3 reads and 5 calls in 28.00 seconds. The candidate received no
+answer key or required-source list. Plans and receipts are
+`evidence/gym-cycle-2026-11-13/appointment-pair-v1-*`.
+
+The cases share public synthetic records and are development tests, not
+held-out qualification, a general reliability estimate, or a fair comparison
+of latencies. Bearer access does not prove reader identity or answer-formation
+order; question utility, provider token usage and real delivery were not
+assessed.
+
 #### Identity with conflicting records
 
 Two synthetic cases contain the same conflicting prescription and verification

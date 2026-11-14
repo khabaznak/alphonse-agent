@@ -101,3 +101,11 @@ Their labels can be migrated later only with compatibility for persisted tasks;
 deleting or renaming the values alone would disrupt the active bridge. Shared
 task-state and processor docstrings no longer describe that state as a future
 V2 graph.
+
+The unused V2 LangChain tool adapter and its two adapter-only tests have been
+removed: repository searches found no runtime or historical replay callers.
+Historical experiment manifests still retain their original file hashes, and
+the old source remains in Git history. The removed module was an importable
+Python path, so external callers must migrate or pin an older release. The
+`langchain-core` and `langgraph` dependencies remain for executable historical
+PDCA replay; this removal does not retire that replay or the V3 bridge.

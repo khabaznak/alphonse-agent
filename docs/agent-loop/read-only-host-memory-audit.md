@@ -114,3 +114,11 @@ and end-to-end acceptance tests; the descriptor is not authorization.
 Existing `tests/test_memory_recall.py`, `tests/test_memory_contracts.py`, and
 `tests/test_paired_memory.py` provide useful component coverage; they do not
 establish these integrated ownership, publication or recovery properties.
+
+The candidate now rechecks cancellation, deadline, read authorization and
+prior evidence freshness after operation-specific observation validation and
+before recording it. Validation may itself perform a second native read; a
+disposable SQLite test exercises cancellation, revocation and deadline changes
+inside that interval. No observation is recorded when they are observed. This
+narrows the checked interval but does not make validation, recording, external
+revocation or publication atomic, and the candidate remains default-off.

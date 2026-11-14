@@ -1,5 +1,56 @@
 # First fenced conversation slice
 
+## Owner-only integration work — 14 November
+
+An explicitly injected, default-off owner-read processor now exercises the
+candidate and shared chooser with the actual conversation search/read tools and
+a file-backed budget. It requires an active canonical administrator plus a
+trusted claim-authorization callback, binds each observation to its action and
+revalidates before reuse. Its search scope is restricted to owner conversation
+records; its response is only an undelivered draft. The integrated disposable
+queue test supplies a fake claim and an in-memory checkpoint collector. These
+are not production authentication or durable recovery.
+
+An explicitly registered candidate may use the queue message ID as its task ID
+and load only a matching owner/engine/schema checkpoint. Existing budgets block
+blind replay; observation reconstruction is not implemented. The existing
+outbox projector refuses candidate snapshots rather than publishing through an
+unfenced legacy path. The normal runtime still registers only V3; generic IPC
+can accept caller-provided identity/channel metadata, so it must not be used as
+an owner credential. Budget and checkpoint writes are not atomic, and there is
+no claim-fenced response delivery. Consequently, this work does not yet enable
+owner-only conversations on restart.
+
+A separate, constructor-opt-in experimental socket route now checks the local
+peer's OS UID and accepts only a prompt. In the same SQLite transaction it
+selects the active canonical admin and creates a server-ID queue message plus
+an origin record containing the UID and a digest of the stored payload. It
+bypasses normal inbound routing and conversation-history recording. A verifier
+checks this record, the exact task and payload, the active admin, and the current
+unexpired queue claim in a fenced transaction. A disposable test passes that
+verifier as the real owner-read processor's authorization callback and reaches
+an undelivered synthetic draft. Other tests reject spoofed request fields,
+different actors, stale claims, changed payloads, missing origins and inactive
+admins, and check transaction rollback.
+
+This is a component integration, not the normal conversation path: the daemon
+does not enable the route and CoreLoop refuses fenced receipts before processing.
+CoreLoop can now carry the acquired receipt internally into its processor context,
+and an owner authorization callback verifies it against the queue. The existing
+fenced-worker refusal remains in force, so this transport is not active in the
+normal daemon. The UID check assumes
+the local OS principal is allowed to act as the configured admin; it does not
+identify a household member independently. The origin record is ordinary
+same-database state, not protection against a process able to rewrite that
+database. Its retention and deletion lifecycle has not been integrated. A
+successful check is point-in-time only: it does not fence later inference,
+reads, checkpoint or budget writes, publication, delivery or revocation.
+The queue also exposes a trusted-owner claim transaction that checks the owner
+and origin before and after writes on its own SQLite connection, rolling them
+back if authority or the claim changes. Candidate budget, checkpoint and
+evidence transitions do not yet use it; it cannot protect other databases or
+external calls.
+
 ## Disposable CoreLoop and inference-router progress — 14 November
 
 The default router can now accept an explicitly injected synthetic processor
@@ -13,8 +64,21 @@ state is not a safety fence: core prework occurs before processor checks, and
 memory finalization and consumed-message acknowledgement can still occur. Never
 attach the fixture processor to a household core or treat its draft as delivered.
 
-An evaluation-only chooser now exercises the existing InferenceRouter with an
-explicit read-only tool catalog, rather than the fixture-specific source enum.
+The candidate's router chooser is now in the shared runtime code and uses the
+existing InferenceRouter with an explicit read-only tool catalog, rather than
+the fixture-specific source enum. Its caller supplies a task with actor, task
+ID and project ID; these are carried into each inference request, and changes
+to that identity before or during a call block the returned decision. This is
+an identity binding, not authentication, a claim fence or authorization. The
+evaluation import remains as a compatibility alias. The normal daemon does not
+register the candidate or instantiate this chooser.
+The runtime and gym adapters now call a shared next-action request builder,
+schema builder and action-shape normalizer, including the source-selection and
+uncertainty guidance. The gym retains fixture-only schema, telemetry and
+subscription checks. Optional runtime observation-progress labels must be
+supplied by a host that independently enforces current actor access; no
+production host currently supplies them. Synthetic self-review and the
+synthetic unknown-usage allowance remain evaluation-only.
 The queued CoreLoop test uses this chooser and a scripted provider in the same
 path: queue, engine router, candidate, inference router, authorized fixture
 read, and undelivered draft.
@@ -95,7 +159,7 @@ not establish real delivery, production authority, or model quality.
 
 | Boundary | Existing evidence | Work before this slice passes |
 | --- | --- | --- |
-| Acquisition to processor | The fenced queue can issue receipts; `V2Daemon` and `AlphonseCore` currently refuse fenced work. | Acquire before per-message side effects, carry the opaque receipt internally to the selected candidate and every relevant sink, and dispose of each outcome safely. Preserve the refusal until the whole path is ready. |
+| Acquisition to processor | The fenced queue issues receipts; an opt-in local-ingress component binds a queue row to an active admin and verifies its origin against a current claim. CoreLoop has an internal receipt field and a disposable owner-processor test supplies a real receipt. `V2Daemon` and `AlphonseCore` currently refuse fenced work. | Acquire before per-message side effects, propagate the receipt to every relevant sink, and dispose of each outcome safely. Preserve the refusal until the whole path is ready. |
 | Decision and checkpoint | `run_atomic_step` reserves and settles a synthetic model call under the supplied claim. | Connect the acquired receipt to the actual candidate execution path, including renewal or an explicit safe time bound; do not serialize it to model or user surfaces. |
 | Publication and dispatch | Experimental staging checks claim and checkpoint; synthetic dispatch persists a started attempt. | Connect the candidate's response to a claim-bound publication and distinct dispatch lifecycle. Stop stale writers and make an attempt durable before the synthetic effect. |
 | Recovery and settlement | Fixture settlement can match a synthetic effect against a pending action. | After restart, authenticate the recovery actor and establish current authority and exact action/effect binding; only then settle atomically. Unknown or revoked remains pending, with no replay. |

@@ -1217,6 +1217,132 @@ tests do not by themselves prove the behaviors implied by those names.
 Validation: `.venv/bin/python -m pytest -q tests/test_task_budget_foundation.py`
 with isolated default storage — **15 passed in 0.13 seconds**.
 
+### Event automation and recovery: two files
+
+On 14 November, individually reviewed **26 test functions / 39 collected cases**
+in `test_agent_v2_event_automations.py` (5 functions) and
+`test_agent_v2_event_recovery.py` (21). These use disposable/in-memory or
+`tmp_path` stores and synthetic event sources. The checks protect the existing
+runtime's event automation, not a qualified simpler-loop conversation.
+
+| Function | Reason retained |
+| --- | --- |
+| `event_rejects_unregistered_worker_and_invalid_payload` | Distinguishes unregistered sender and invalid event schema before any event is stored. |
+| `event_fanout_filters_deduplicates_and_prunes_history` | Checks filter fanout, deduplication, pinned active history and post-prune receipt. |
+| `daemon_enqueues_event_automation_with_structured_event_metadata` | Checks event payload and type survive into the queued task. |
+| `publish_event_is_available_over_daemon_ipc_dispatch` | Exercises IPC dispatch wiring for event publication; does not independently establish authentication. |
+| `automation_catalog_includes_existing_scheduled_tasks` | Checks scheduled work remains visible alongside event automations. |
+| `concurrent_publish_and_claims_are_atomic` | Checks concurrent duplicate publication and execution claims yield one winner. |
+| `restart_at_each_handoff_boundary` | Eight distinct insertion, processing and acknowledgement crash boundaries; verifies a receipt blocks replay. |
+| `expired_claim_fences_stale_owner_and_retries` | Stale lease cannot enqueue/retry another owner's claim; tests retry timing. |
+| `repeated_dispatch_failure_backoff_and_attempt_limit` | Retry delay and terminal failure after bounded dispatch attempts. |
+| `background_recovery_without_new_events_and_bounded_batch` | Restarted worker drains backlog without a new publish and respects its batch size. |
+| `cancellation_blocks_late_insertion` | Pending, claimed and queued cancellations each reject a stale dispatch. |
+| `active_processing_cancellation_requires_kill_switch` | Processing cannot be cancelled as if it were still queued; consumes cancellation outcome. |
+| `history_and_retention_protect_recovery_but_not_terminal_payloads` | Pending event evidence survives pruning, terminal receipts retain deduplication, replay expiry uses accepted time. |
+| `transaction_rolls_back_fanout_and_receipt_together` | Injected fanout insert failure rolls back event/receipt and permits retry. The `Exception` assertion is broad but checks the injected message. |
+| `enqueue_callback_failure_after_insert_recovers_without_duplicate` | Callback fails after insert; recovery finds one existing queue item. |
+| `dispatch_does_not_hold_database_transaction` | Another writer can commit during the handoff callback. |
+| `migrates_legacy_claimed_and_enqueued_rows_without_changing_ids` | Migrates legacy execution/receipt state and preserves execution identity. |
+| `parked_event_is_processing_until_original_checkpoint_finishes` | Parked automation remains processing until checkpoint terminal update. |
+| `terminal_failure_survives_pruned_queue_row` | Recovery preserves failure when the failed queue row was pruned before lifecycle update. |
+| `recovery_expiry_uses_acceptance_time` | Cancels overdue recovery rather than enqueueing old work. |
+| `cancel_cannot_overwrite_completion_receipt` | Cancellation cannot replace an already completed queue receipt. |
+| `daemon_event_lifecycle_callbacks` | Five processor outcomes map to distinct automation/queue statuses. |
+| `queue_receipt_rolls_back_with_failed_insertion` | Failed queue insert cannot leave a stale success receipt that blocks a retry; the raised type is not narrowed. |
+| `cancellation_inside_inflight_handoff_never_enqueues` | Cancellation during the dispatch callback prevents a late enqueue. |
+| `tick_recovers_inbound_lease_that_expires_after_restart` | A new daemon recovers an expired inbound lease. |
+| `tick_preserves_current_daemon_long_running_model_call` | Current owner’s long-running work is not reclaimed by its own tick. |
+
+No deletions were justified: similar cases cover different transitions, timing,
+store records or observed outcomes. The source fixtures and callbacks are
+synthetic, and the daemon lifecycle cases use a scripted processor; none proves
+provider delivery, production mixed-version fencing, or candidate-loop
+qualification. The background worker test uses a short real-time polling loop,
+so it can be timing-sensitive. Focused check with disposable default roots:
+`PYTHONPATH=/private/tmp:. .venv/bin/python -m pytest -q -p alphonse_audit_isolation_step5 tests/test_agent_v2_event_automations.py tests/test_agent_v2_event_recovery.py` — **39 passed in 1.17 seconds**. No household data or provider calls.
+
+### Retired LangChain adapter tests
+
+The unused V2 `core/inference/langchain_adapter.py` was removed as part of
+legacy retirement, along with its two adapter-only tests in
+`test_agent_v2_langchain_adapter.py`. Repository search found no runtime or
+replay caller; this deliberately drops direct behavior coverage of a previously importable
+legacy module and removes its old import path. Earlier manifest hashes and Git
+history remain historical evidence, not proof of runtime compatibility.
+
+### Family calendar package: one file
+
+On 14 November, individually reviewed **16 test functions / 41 collected cases**
+in `test_family_calendar.py`. This exercises the shipped family-calendar skill
+with invented account grants, fixture data and mocked Google responses. It is
+not a live Google provider test or proof that the simpler loop can select or
+invoke the skill. The script executes only against synthetic authorization or
+stops before any network in its Bash case.
+
+| Function | Reason retained |
+| --- | --- |
+| `create_readback_and_resume_after_uncertain_network_write` | Lost create response reconciles by stable ID; one event and one POST. |
+| `create_conflicting_id_never_claims_success_or_duplicates` | Reusing an operation ID for different intent fails readback. |
+| `update_if_match_and_resume_without_second_patch` | Lost update response reconciles without a second PATCH. |
+| `update_rejects_conflicts_scope_guests_and_failed_readback` | Five stale/revision/guest/scope/readback failures, including pre-dispatch checks. |
+| `deterministic_access_and_exact_effect_denials_before_network` | Nine distinct grant, scope, actor-bound request, provider and mutation-shape denials; no network call. |
+| `scope_checks` | Five combinations distinguish calendar scopes and operation support. |
+| `fresh_scope_evidence_overrides_stored_grant_and_revocation_fails_closed` | Live token-scope evidence and revoked credentials fail before network. |
+| `ambiguous_dates_dst_and_unsupported_fields_fail_before_network` | Six invalid time/recurrence/attendee cases reject before effects. |
+| `all_day_and_recurring_series_and_instance_updates` | Distinguishes whole-series and instance updates for an all-day recurrence. |
+| `listing_expands_recurrences_and_follows_pages` | Expansion flag and paging return both result pages. |
+| `freebusy_errors_are_not_free` | Missing, incomplete and error availability responses remain unknown. |
+| `package_binding_boundary_rechecks_actor_account_and_grant` | Real binding service checks actor selection, explicit effect authorization and account disablement; provider itself is a fixture. |
+| `concurrent_create_conflict_is_reconciled_by_readback` | A create collision is resolved by observing the matching existing event. |
+| `oauth_and_api_errors_are_static_without_secret_bodies` | Five mocked HTTP statuses do not expose synthetic secret text in errors. |
+| `main_uses_managed_credentials_and_real_http_encoding_without_logging` | Exercises script entry point, request encoding, OAuth/readback and secret-safe output with monkeypatched HTTP. |
+| `native_bash_runs_shipped_package_without_catalog_or_network` | Executes packaged script through Bash with a real binding, denies missing exact-effect authorization and redacts the synthetic secret. |
+
+No tests were removed: source inspection did not show redundant behavior, and
+similar failures protect distinct operations or boundaries. The update-failure,
+exact-effect and date matrices use a broad `CalendarError` assertion, so they
+prove failure and selected no-network behavior but not every exact failure
+reason. These fixtures do not establish real Google delivery or atomic external
+effect reconciliation.
+
+Validation with isolated defaults:
+`PYTHONPATH=/private/tmp:. .venv/bin/python -m pytest -q -p alphonse_audit_isolation_step5 tests/test_family_calendar.py`
+— **41 passed in 0.21 seconds**. No real household data or external calls.
+
+### Queue ordering, selection and restart: two files
+
+Individually reviewed 14 functions / 14 collected cases in
+`test_agent_v2_message_queue.py` and `test_agent_v2_sqlite_message_queue.py`.
+These are active shared queue behaviors, not proof that the simpler loop is
+integrated or that generation-bound claim fencing is enabled.
+
+| Function | Decision and distinct behavior |
+| --- | --- |
+| `test_dequeue_uses_fifo_order` | Retain: in-memory FIFO removal order. |
+| `test_dequeue_can_select_next_message_from_user` | Retain: selected actor is dequeued while earlier other-actor work remains. |
+| `test_selector_filters_by_project_id_and_tag` | Retain: project and tag selection on peek. |
+| `test_selector_filters_by_correlation_id` | Retain: correlation-specific dequeue. |
+| `test_peek_does_not_remove_messages` | Retain: peek preserves queue size and later availability. |
+| `test_list_pending_preserves_fifo_and_can_select_exact_message` | Retain: pending-list order and exact message selection. |
+| `test_core_run_once_processes_only_matching_message` | Retain: core delegates only the selected message and leaves another queued. |
+| `test_sqlite_queue_persists_messages_and_acknowledges_processing` | Retain: message identity and channel metadata survive reopening and acknowledgement removes pending work. |
+| `test_sqlite_queue_lists_pending_in_arrival_order_and_filters_by_message_id` | Retain: persistent pending ordering and exact-message peek. |
+| `test_sqlite_queue_reclaims_expired_processing_messages` | Retain: a second worker can recover an expired ordinary lease. |
+| `test_sqlite_queue_does_not_reclaim_active_processing_lease` | Retain: a second worker cannot reclaim an active lease. |
+| `test_sqlite_queue_does_not_return_the_callers_owned_processing_message` | Retain: ordinary dequeue excludes an owned claim while explicit include-owned access finds it. |
+| `test_sqlite_queue_reclaims_legacy_processing_rows_without_a_lease` | Retain: ordinary recovery of historical processing rows lacking a lease. |
+| `test_sqlite_queue_marks_inbound_message_failed_after_retry_limit` | Retain: ordinary retry-limit failure and exclusion from pending. |
+
+No cases were removed: similar in-memory and SQLite cases exercise different
+implementations and persistence boundaries. Lease tests exercise the ordinary
+queue, not the disabled generation-fenced runtime; the retry-limit test checks
+failed status and pending exclusion, not delivery of a user-visible failure.
+Validation with the disposable-defaults plugin: `PYTHONPATH=/private/tmp:.
+.venv/bin/python -m pytest -q -p alphonse_audit_isolation_step5
+tests/test_agent_v2_message_queue.py tests/test_agent_v2_sqlite_message_queue.py`
+— **14 passed in 0.16 seconds**. No household data or model was used.
+
 ## Mission coverage and next review passes
 
 Keep behavior that protects real household outcomes while the relevant feature

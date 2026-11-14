@@ -511,6 +511,41 @@ class SQLiteQuestionStore:
         task._checkpoint_version = int(row["version"])
         return task
 
+    def load_single_loop_task_checkpoint(self, task_id: str, *, owner_id: str) -> TaskState | None:
+        """Load a matching running candidate checkpoint or fail closed.
+
+        This validates stored identity in one read; it does not authenticate
+        the caller, grant task ownership, or make a restart/replay safe.
+        """
+        if not isinstance(task_id, str) or not task_id.strip() or not isinstance(owner_id, str) or not owner_id.strip():
+            raise ValueError("candidate_checkpoint_unavailable")
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT owner_id, status, task_state_json, version FROM v2_task_checkpoints WHERE task_id = ?",
+                (task_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        try:
+            raw = json.loads(row["task_state_json"])
+            metadata = raw.get("metadata") if isinstance(raw, dict) else None
+            if (row["owner_id"] != owner_id or row["status"] != "running"
+                    or not isinstance(raw, dict) or not isinstance(metadata, dict)
+                    or raw.get("task_id") != task_id or raw.get("message_id") != task_id
+                    or raw.get("user") != owner_id or raw.get("status") != "running"
+                    or raw.get("intelligence_engine") != "single_loop_experimental"
+                    or type(raw.get("intelligence_schema_version")) is not int
+                    or raw["intelligence_schema_version"] != 1
+                    or metadata.get("intelligence_engine", "single_loop_experimental") != "single_loop_experimental"
+                    or type(metadata.get("intelligence_schema_version", 1)) is not int
+                    or metadata.get("intelligence_schema_version", 1) != 1):
+                raise ValueError
+            task = _task_state_cls().from_dict(raw)
+            task._checkpoint_version = int(row["version"])
+            return task
+        except (TypeError, ValueError, KeyError):
+            raise ValueError("candidate_checkpoint_unavailable") from None
+
     def mark_task_checkpoint_terminal(self, task_id: str, *, status: str) -> bool:
         normalized = str(status or "").strip().lower()
         if normalized not in {"done", "failed", "cancelled"}:

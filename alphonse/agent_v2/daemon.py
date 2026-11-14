@@ -3315,6 +3315,7 @@ def _scheduled_failure_is_non_retryable(error: str) -> bool:
         "capd_processing_failed",
         "inference_cancelled",
         "intelligence_engine_unregistered",
+        "candidate_checkpoint_unavailable",
         "openai_codex_auth_required",
         "openai_codex_cli_missing",
         "openai_codex_cli_upgrade_required",
@@ -3336,7 +3337,7 @@ def _scheduled_failure_message(task_name: str, error: str) -> str:
     code = _scheduled_failure_code(error)
     if error == "v3_task_failed:scheduled_delivery_repetition_unresolved":
         detail = "A similar message was already queued or delivered. I stopped to avoid sending it again; please check before retrying."
-    elif code == "intelligence_engine_unregistered":
+    elif code in {"intelligence_engine_unregistered", "candidate_checkpoint_unavailable"}:
         detail = "This saved task cannot run in the current version. Its previous state needs review before any work is restarted."
     elif code == "system_one_unavailable":
         detail = _system_one_failure_detail(error)
@@ -3375,7 +3376,7 @@ def _system_one_failure_detail(error: str) -> str:
 def _inbound_failure_message(error: str, model_id: str, *, task_state=None) -> str:
     code = _scheduled_failure_code(error)
     model = str(model_id or "").strip()
-    if code == "intelligence_engine_unregistered":
+    if code in {"intelligence_engine_unregistered", "candidate_checkpoint_unavailable"}:
         return "I couldn't run this saved task in the current version. Its previous state needs review before any work is restarted."
     if code == "system_one_unavailable":
         detail = _system_one_failure_detail(error)

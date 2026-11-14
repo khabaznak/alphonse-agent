@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
-from dataclasses import dataclass, field, replace
+from dataclasses import InitVar, dataclass, field, replace
 from datetime import datetime
 from enum import Enum
 from threading import Lock
@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     from alphonse.agent_v2.core.inference import InferenceImage, InferenceRouter
     from alphonse.agent_v2.core.intelligence.task_state import TaskState
     from alphonse.agent_v2.core.messages.queue import MessageSelector, QueuedMessage
+    from alphonse.agent_v2.core.messages.claim_fence import ClaimReceipt
     from alphonse.agent_v2.core.tools.registry import ToolDefinition
 
 
@@ -248,6 +249,11 @@ class CoreLoopContext:
     browser_workflow_service: Any | None = None
     consumed_message_ids: list[str] = field(default_factory=list)
     scheduled_handoff_enabled: bool = False
+    claim_receipt: InitVar[ClaimReceipt | None] = None
+
+    def __post_init__(self, claim_receipt: ClaimReceipt | None) -> None:
+        # Runtime-only capability; dataclass serialization and repr omit it.
+        self.claim_receipt = claim_receipt
 
     def image_inputs(self, task: TaskState) -> tuple[InferenceImage, ...]:
         """Resolve authorized images for a substantive System Two call."""
@@ -667,7 +673,43 @@ class AlphonseCore:
         queued_engine = str(queued.message.metadata.get("intelligence_engine") or "").strip()
         task = None
         handoff_task_id = getattr(self.messages, "handoff_task_id", lambda *_: "")(queued.message_id, queued.message.user)
-        if handoff_task_id:
+        # The candidate is never selected implicitly. Only a router that has
+        # explicitly registered it may use the stable message identity or
+        # read its checkpoint; the default router keeps refusing this stamp.
+        registered_candidate = False
+        if queued_engine == "single_loop_experimental":
+            from alphonse.agent_v2.core.intelligence.v3.processor import EngineRoutingProcessor
+            if isinstance(self.intelligence, EngineRoutingProcessor):
+                probe = TaskState.from_message(queued.message, message_id=queued.message_id)
+                # Check registration independently of untrusted schema; the
+                # original value is validated below before any dispatch.
+                probe.intelligence_schema_version = 1
+                try:
+                    registered_candidate = self.intelligence.processor_for(probe) is not None
+                except ValueError:
+                    pass
+        if registered_candidate:
+            raw_schema = queued.message.metadata.get("intelligence_schema_version")
+            candidate_invalid = (type(raw_schema) is not int or raw_schema != 1
+                or not isinstance(queued.message_id, str) or not queued.message_id.strip()
+                or not isinstance(queued.message.user, str) or not queued.message.user.strip()
+                or bool(handoff_task_id) or "task_state" in queued.message.metadata
+                or queued.message.metadata.get("routing_disposition") == "correlated_response")
+            try:
+                loader = getattr(self.question_store, "load_single_loop_task_checkpoint", None)
+                if candidate_invalid or not callable(loader):
+                    raise ValueError("candidate_checkpoint_unavailable")
+                task = loader(queued.message_id, owner_id=queued.message.user)
+                if task is None:
+                    task = TaskState.from_message(queued.message, message_id=queued.message_id)
+                    task.task_id = queued.message_id
+            except Exception:
+                snapshot = StateSnapshot(current_work="", metadata={"status": "failed", "reason": "candidate_checkpoint_unavailable"})
+                self.state.update(snapshot)
+                return LoopStepResult(status=LoopStepStatus.FAILED, state_before=state_before,
+                    state_after=self._transition(PROCESSOR_FAILED), queued_message_id=queued.message_id,
+                    error="candidate_checkpoint_unavailable")
+        elif handoff_task_id:
             task = self.question_store.load_task_checkpoint(handoff_task_id) if self.question_store is not None else None
             question_id = str(queued.message.metadata.get("answered_question_id") or "")
             question = self.question_store.get_question(question_id) if self.question_store is not None and question_id else None
@@ -714,7 +756,11 @@ class AlphonseCore:
                     error="browser_resumption_unavailable")
             task = authoritative
             task.message_id = queued.message_id
-        if queued_engine == "hierarchical_v3" and not is_correlated_resume and not handoff_task_id:
+        if registered_candidate:
+            # Candidate identity was either restored from the owner-bound row
+            # or set from this queue message; never replace it with a new UUID.
+            pass
+        elif queued_engine == "hierarchical_v3" and not is_correlated_resume and not handoff_task_id:
             # A queue delivery may be retried, but it is still the same V3 task.
             # Using the durable message id prevents a retry from silently creating
             # a new acceptance contract and a different execution history.
@@ -787,6 +833,7 @@ class AlphonseCore:
                 program_runner=self.program_runner,
                 cancellation_checker=_task_is_cancelled,
                 scheduled_handoff_enabled=self.scheduled_handoff_enabled,
+                claim_receipt=queued.claim_receipt,
             )
             if context.is_cancelled():
                 raise RuntimeError("scheduled_task_cancelled")

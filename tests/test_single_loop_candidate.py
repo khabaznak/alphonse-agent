@@ -192,6 +192,43 @@ def test_candidate_rejects_conversation_deleted_after_read(tmp_path, fixture):
     assert result.evidence_sources == []
 
 
+@pytest.mark.parametrize('change,expected_status,expected_reason', [
+    ('cancel', 'cancelled', 'cancelled'),
+    ('revoke', 'blocked', 'candidate_read_revoked'),
+    ('deadline', 'blocked', 'candidate_deadline_exceeded'),
+])
+def test_real_memory_validation_rechecks_before_recording(tmp_path, fixture, change, expected_status, expected_reason):
+    from alphonse.agent_v2.conversations import SQLiteConversationStore
+    from alphonse.agent_v2.core.tools.registry.native.memory import (
+        build_read_memory_source_tool_definition, revalidate_conversation_observation,
+    )
+    conversations = SQLiteConversationStore(tmp_path / 'conversations.sqlite')
+    event = conversations.record(owner_user_id='fixture-user', role='user', content='Synthetic note',
+                                 source='test', source_message_id='synthetic-note')
+    source_id = 'conversation:' + event.event_id
+    fixture.host.context.conversation_store = conversations
+    fixture.registry.register(build_read_memory_source_tool_definition())
+    conditions = {'cancel': False, 'revoke': False, 'deadline': False}
+    recorded = []
+    context = fixture.host.context
+    context.cancellation_checker = lambda: conditions['cancel']
+    def validate(actor, tool_id, args, payload):
+        assert revalidate_conversation_observation(actor, tool_id, args, payload,
+            context=context.tool_execution_context(fixture.host.task))
+        conditions[change] = True
+        return True
+    host = replace(fixture.host, validate_observation=validate,
+        authorize_read=lambda *_: not conditions['revoke'],
+        deadline_checker=lambda: conditions['deadline'],
+        record_bound_observation=lambda *args: recorded.append(args) or 'unexpected',
+        choose=lambda *_: {'kind': 'tool', 'tool_id': 'native.read_memory_source',
+                           'arguments': {'source_id': source_id, 'neighbors': 0},
+                           'usage': {'input_tokens': 100, 'output_tokens': 20}})
+    result = run_candidate(fixture.state, host)
+    assert (result.status, result.blocker) == (expected_status, expected_reason)
+    assert not recorded and not result.evidence_sources
+
+
 def test_candidate_revalidates_action_bound_search_before_answer(tmp_path, fixture):
     from alphonse.agent_v2.conversations import SQLiteConversationStore
     from alphonse.agent_v2.core.tools.registry.native.memory import (

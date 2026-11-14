@@ -297,7 +297,10 @@ class V2DaemonClient:
 
 
 class V2DaemonServer:
-    def __init__(self, daemon: Any, socket_path: str | Path | None = None) -> None:
+    def __init__(self, daemon: Any, socket_path: str | Path | None = None, *, experimental_owner_ingress: bool = False) -> None:
+        if type(experimental_owner_ingress) is not bool:
+            raise ValueError('owner_ingress_configuration_invalid')
+        self.experimental_owner_ingress = experimental_owner_ingress
         self.daemon = daemon
         self.socket_path = Path(socket_path) if socket_path is not None else default_socket_path()
         self._server: socket.socket | None = None
@@ -366,6 +369,8 @@ class V2DaemonServer:
                 request = json.loads(_read_line(connection))
                 if isinstance(request, dict) and request.get('method') == 'optional_management':
                     result = self._optional_management(connection, request)
+                elif isinstance(request, dict) and request.get('method') == 'experimental_owner_ingress':
+                    result = self._owner_ingress(connection, request)
                 else:
                     result = self._dispatch(request)
                 response = {"version": PROTOCOL_VERSION, "request_id": _request_id(request), "ok": True, "result": result}
@@ -379,11 +384,26 @@ class V2DaemonServer:
                 }
             connection.sendall((json.dumps(response, sort_keys=True) + "\n").encode("utf-8"))
 
-    def _optional_management(self, connection, request):
+    def _owner_ingress(self, connection, request):
+        if not self.experimental_owner_ingress:
+            raise PermissionError('owner_ingress_unavailable')
+        if request.get('version') != PROTOCOL_VERSION:
+            raise ValueError('daemon_protocol_version_unsupported')
+        params = request.get('params')
+        if not isinstance(params, dict) or set(params) != {'prompt'}:
+            raise ValueError('owner_ingress_payload_denied')
+        uid = self._local_peer_uid(connection)
+        from alphonse.agent_v2.core.messages.sqlite_queue import SQLiteMessageQueue
+        queue = self.daemon.runtime.queue
+        if type(queue) is not SQLiteMessageQueue:
+            raise PermissionError('owner_ingress_unavailable')
+        return {'message_id': queue.enqueue_trusted_local_owner(prompt=params['prompt'], peer_uid=uid)}
+
+    @staticmethod
+    def _local_peer_uid(connection):
         # The owner-only Unix socket and kernel peer identity authenticate the
         # local OS principal. Payload user/actor fields are never credentials.
         import struct
-        from alphonse.agent_v2.accounts import AccountSession
         if hasattr(connection, 'getpeereid'):
             uid, _ = connection.getpeereid()
         elif sys.platform == 'darwin':
@@ -404,6 +424,11 @@ class V2DaemonServer:
             raise PermissionError('management_peer_auth_unavailable')
         if uid != os.getuid():
             raise PermissionError('management_peer_denied')
+        return uid
+
+    def _optional_management(self, connection, request):
+        from alphonse.agent_v2.accounts import AccountSession
+        self._local_peer_uid(connection)
         session = AccountSession(self.daemon.runtime.user)
         params = request.get('params', {})
         if set(params) - {'action', 'values'}:

@@ -15,14 +15,14 @@ from alphonse.agent_v2.core.intelligence.v3.task_budget import BudgetLimits, Syn
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
 from alphonse.agent_v2.core.state import reset_state
 from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry, ToolDefinition
-from alphonse.agent_v2.evaluation.router_candidate_chooser import RouterCandidateChooser
+from alphonse.agent_v2.core.intelligence.v3.router_candidate_chooser import RouterCandidateChooser
 
 
 def _vector(actions=0, model_calls=0, input_tokens=0, output_tokens=0):
     return dict(actions=actions, model_calls=model_calls, input_tokens=input_tokens, output_tokens=output_tokens)
 
 
-def _host_factory(tmp_path, calls, *, read=False, chooser=None):
+def _host_factory(tmp_path, calls, *, read=False, chooser_factory=None):
     def factory(task, context):
         store = SyntheticEvaluationBudgetStore(str(tmp_path / 'synthetic.db'))
         store.create(task.task_id, TaskBudget(BudgetLimits(_vector(1, 3, 30000, 2000),
@@ -38,7 +38,8 @@ def _host_factory(tmp_path, calls, *, read=False, chooser=None):
         def record(actor, result):
             sources['observation'] = result['result']['value']
             return 'observation'
-        host = CandidateHost(task, context, store, lambda _: None, chooser or choose,
+        chooser = chooser_factory(task) if chooser_factory else choose
+        host = CandidateHost(task, context, store, lambda _: None, chooser,
             lambda actor, ref: actor == 'owner' and ref in sources,
             lambda actor, ref: sources[ref], lambda actor, tool, args: read and actor == 'owner' and tool == 'native.fixture_read', record,
             lambda actor, text, refs: actor == 'owner' and text == 'Synthetic answer' and (not read or 'observation' in refs), lambda: 100,
@@ -79,8 +80,8 @@ def test_queued_fixture_message_reaches_candidate_but_is_not_marked_delivered(tm
                                    usage={'input_tokens': 10, 'output_tokens': 10})
     provider = Provider()
     router = InferenceRouter(provider=provider, default_profile=ModelProfile('fake', 'fixture', 'offline'))
-    chooser = RouterCandidateChooser(router=router, tools=(descriptor,), max_input_tokens=8192)
-    processor = SyntheticOwnerConversationProcessor(owner='owner', host_factory=_host_factory(tmp_path, calls, read=True, chooser=chooser))
+    chooser_factory = lambda task: RouterCandidateChooser(router=router, task=task, tools=(descriptor,), max_input_tokens=8192)
+    processor = SyntheticOwnerConversationProcessor(owner='owner', host_factory=_host_factory(tmp_path, calls, read=True, chooser_factory=chooser_factory))
     state = SimpleNamespace(value=None)
     state.update = lambda value: setattr(state, 'value', value)
     state.snapshot = lambda: state.value or StateSnapshot()
@@ -92,6 +93,7 @@ def test_queued_fixture_message_reaches_candidate_but_is_not_marked_delivered(tm
     result = core.step()
     assert result.status is LoopStepStatus.WAITING, [(x.status, x.blocker) for x in outcomes]
     assert len(provider.requests) == 2 and all(r.purpose is InferencePurpose.SIMPLE_LOOP_ACTION for r in provider.requests)
+    assert all(r.user == 'owner' and r.task_id for r in provider.requests)
     assert 'Synthetic question' in provider.requests[0].prompt
     assert reads == [{}] and 'Synthetic source value' in provider.requests[1].prompt
     assert state.value.metadata['draft'] == 'Synthetic answer'

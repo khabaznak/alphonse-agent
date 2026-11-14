@@ -776,11 +776,13 @@ class HierarchicalCAPDProcessor:
 class EngineRoutingProcessor:
     """Delegate to the engine stamped on the queued task."""
 
-    def __init__(self, *, v3: "IntelligenceProcessor", synthetic_owner_candidate: "IntelligenceProcessor | None" = None) -> None:
+    def __init__(self, *, v3: "IntelligenceProcessor", synthetic_owner_candidate: "IntelligenceProcessor | None" = None,
+                 owner_read_candidate: "IntelligenceProcessor | None" = None) -> None:
         self.v3 = v3
         # Explicitly injected development adapter only; the normal runtime
         # never registers it and no household engine selector exposes it.
         self.synthetic_owner_candidate = synthetic_owner_candidate
+        self.owner_read_candidate = owner_read_candidate
 
     def processor_for(self, task: "TaskState") -> "IntelligenceProcessor":
         """Validate a task's engine stamp before task-scoped context is loaded."""
@@ -789,6 +791,9 @@ class EngineRoutingProcessor:
         if (task.intelligence_engine == "synthetic_owner_candidate" and task.intelligence_schema_version == 1
                 and self.synthetic_owner_candidate is not None):
             return self.synthetic_owner_candidate
+        if (task.intelligence_engine == "single_loop_experimental" and task.intelligence_schema_version == 1
+                and self.owner_read_candidate is not None):
+            return self.owner_read_candidate
         # An unregistered engine must never silently execute under a different
         # processor, especially on queue retry or checkpoint resumption. The
         # core loop turns this into a failed processing result without running

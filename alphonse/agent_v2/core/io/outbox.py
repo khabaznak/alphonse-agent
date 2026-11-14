@@ -936,13 +936,25 @@ def project_snapshot_to_outbox(
     """Project a completed task snapshot response into the outbox."""
     metadata = snapshot.metadata or {}
     task_state = metadata.get("task_state")
+    task_metadata = task_state.get("metadata") if isinstance(task_state, dict) else None
+    if (metadata.get("engine") == "single_loop_experimental"
+            or (isinstance(task_state, dict)
+                and task_state.get("intelligence_engine") == "single_loop_experimental")
+            or (isinstance(task_metadata, dict)
+                and task_metadata.get("intelligence_engine") == "single_loop_experimental")):
+        # Ordinary projection creates a dispatchable outbox row before inbound
+        # acknowledgement and has no claim-aware release or delivery fence.
+        # Fail explicitly instead of silently acknowledging an undelivered
+        # candidate answer. A future candidate publisher must bind current
+        # authority, task/checkpoint, queue claim and delivery lifecycle.
+        raise ValueError("candidate_response_publication_unavailable")
     if not isinstance(task_state, dict):
         return None
     # A prepared response is intermediate evidence, not permission to announce
     # completion. Parked tasks can retain one while awaiting a user answer.
     if task_state.get("status") != "completed":
         return None
-    task_metadata = task_state.get("metadata") if isinstance(task_state.get("metadata"), dict) else {}
+    task_metadata = task_metadata if isinstance(task_metadata, dict) else {}
     origin = channel_address_from_metadata(task_metadata)
     if origin is None:
         return None

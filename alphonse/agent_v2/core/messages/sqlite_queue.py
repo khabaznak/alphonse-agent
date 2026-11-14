@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
+import hashlib
+import hmac
 import os
 import sqlite3
 import time
@@ -10,6 +13,7 @@ from threading import RLock
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from alphonse.agent_v2.core.core import CoreMessage
 from alphonse.agent_v2.core.messages.queue import MessageSelector
@@ -90,6 +94,103 @@ class SQLiteMessageQueue:
                 ),
             )
         return queued
+
+    def enqueue_trusted_local_owner(self, *, prompt: str, peer_uid: int) -> str:
+        """Atomically bind a local-peer ingress to its newly created queue row.
+
+        The caller must independently verify the peer UID. This record is not
+        a claim or authorization to execute; consumers must verify both later.
+        """
+        if not self.experimental_claim_fencing or self.db_path == ':memory:':
+            raise ValueError('owner_ingress_unavailable')
+        if type(peer_uid) is not int or peer_uid != os.getuid():
+            raise PermissionError('owner_ingress_peer_denied')
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise ValueError('prompt_required')
+        message_id = uuid4().hex
+        timestamp = _now_iso()
+        with self._connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            admin = conn.execute("""SELECT u.user_id FROM v2_users u JOIN v2_user_settings s
+                ON s.key='admin_user_id' AND s.value=u.user_id
+                WHERE u.role='admin' AND u.is_active=1""").fetchone()
+            if admin is None:
+                raise PermissionError('owner_ingress_admin_unavailable')
+            actor = str(admin['user_id'])
+            metadata = json.dumps({'intelligence_engine': 'single_loop_experimental',
+                'intelligence_schema_version': 1, 'routing_disposition': 'pdca_task'}, sort_keys=True)
+            payload = [message_id, timestamp, prompt.strip(), actor, '', '', '', '', metadata]
+            digest = hashlib.sha256(json.dumps(payload, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
+            conn.execute("""CREATE TABLE IF NOT EXISTS v2_trusted_owner_ingress (
+                message_id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, peer_uid INTEGER NOT NULL,
+                payload_sha256 TEXT NOT NULL, created_at TEXT NOT NULL) STRICT""")
+            conn.execute("""INSERT INTO v2_inbound_messages
+                (message_id,sequence,timestamp,prompt,user_id,project_id,tag,correlation_id,memory_session_id,
+                 metadata_json,queued_at,status) VALUES (?,?,?,?,?,?,?,?,?,?,?,'pending')""",
+                (message_id, time.time_ns(), timestamp, prompt.strip(), actor, '', '', '', '', metadata, timestamp))
+            conn.execute('INSERT INTO v2_trusted_owner_ingress VALUES (?,?,?,?,?)',
+                         (message_id, actor, peer_uid, digest, timestamp))
+        return message_id
+
+    @contextmanager
+    def trusted_local_owner_claim_transaction(self, receipt: Any, task: Any, *, clock=None):
+        """Run same-database writes under a verified local-owner claim.
+
+        Both the active admin and immutable ingress payload are verified on the
+        queue connection before and after the caller's work, within the same
+        immediate claim-fenced transaction. The caller must use this connection,
+        not commit or roll back, and perform no external I/O inside the block.
+        This does not authorize particular writes, external calls or delivery,
+        fence other databases, or enable the experimental daemon path.
+        """
+        from alphonse.agent_v2.core.messages.claim_fence import (
+            ClaimFenceUnavailable, ClaimReceipt, fenced_claim_transaction,
+        )
+        if (not self.experimental_claim_fencing or not isinstance(receipt, ClaimReceipt)
+                or getattr(task, 'task_id', None) != receipt.message_id
+                or getattr(task, 'message_id', None) != receipt.message_id
+                or getattr(task, 'user', None) != receipt.user_id
+                or getattr(task, 'intelligence_engine', None) != 'single_loop_experimental'
+                or type(getattr(task, 'intelligence_schema_version', None)) is not int
+                or task.intelligence_schema_version != 1):
+            raise ClaimFenceUnavailable('owner_claim_authorization_unavailable')
+
+        def check(conn):
+            row = conn.execute("""SELECT q.message_id,q.timestamp,q.prompt,q.user_id,q.project_id,q.tag,
+                q.correlation_id,q.memory_session_id,q.metadata_json,o.owner_id,o.peer_uid,o.payload_sha256
+                FROM v2_inbound_messages q JOIN v2_trusted_owner_ingress o ON o.message_id=q.message_id
+                JOIN v2_user_settings s ON s.key='admin_user_id' AND s.value=q.user_id
+                JOIN v2_users u ON u.user_id=q.user_id AND u.role='admin' AND u.is_active=1
+                WHERE q.message_id=?""", (receipt.message_id,)).fetchone()
+            if row is None or row['owner_id'] != receipt.user_id or row['peer_uid'] != os.getuid():
+                raise ClaimFenceUnavailable('owner_claim_authorization_unavailable')
+            payload = [row[key] for key in ('message_id', 'timestamp', 'prompt', 'user_id', 'project_id',
+                       'tag', 'correlation_id', 'memory_session_id', 'metadata_json')]
+            digest = hashlib.sha256(json.dumps(payload, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
+            if (not isinstance(row['payload_sha256'], str) or not hmac.compare_digest(row['payload_sha256'], digest)
+                    or getattr(task, 'goal', None) != row['prompt']
+                    or any(getattr(task, key, None) != row[key]
+                           for key in ('project_id', 'tag', 'correlation_id', 'memory_session_id'))
+                    or json.dumps(getattr(task, 'metadata', None), sort_keys=True) != row['metadata_json']):
+                raise ClaimFenceUnavailable('owner_claim_authorization_unavailable')
+
+        with self._connect() as conn:
+            with fenced_claim_transaction(conn, receipt, clock=clock or (lambda: datetime.now(timezone.utc))):
+                check(conn)
+                yield conn
+                check(conn)
+
+    def verify_trusted_local_owner_claim(self, receipt: Any, task: Any, *, clock=None) -> bool:
+        """Check origin and the live claim together at a point in time.
+
+        Subsequent work needs its own claim-fenced transaction. External calls,
+        publication and delivery are not protected by this check.
+        """
+        try:
+            with self.trusted_local_owner_claim_transaction(receipt, task, clock=clock):
+                return True
+        except Exception:
+            return False
 
     def peek(self, selector: MessageSelector | None = None) -> QueuedMessage | None:
         with self._connect() as conn:
