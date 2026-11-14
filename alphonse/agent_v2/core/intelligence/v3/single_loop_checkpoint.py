@@ -123,6 +123,8 @@ class ExperimentalCheckpointStore:
             conn.execute('BEGIN IMMEDIATE')
             row = self._row(conn, task_id)
             raw = self._validate_identity(row, task_id, actor, expected_version)
+            if 'single_loop_model_claim' in raw['metadata']:
+                raise CheckpointConflict('claim_model_binding_unresolved')
             if STATE_KEY in raw['metadata']:
                 raise CheckpointConflict('single_loop_already_initialized')
             return self._write(conn, row, raw, state, budget)
@@ -161,6 +163,8 @@ class ExperimentalCheckpointStore:
             row = self._row(conn, task_id)
             raw = self._validate_identity(row, task_id, actor, expected_version)
             state, budget = self._decode(raw, task_id, actor)
+            if 'single_loop_model_claim' in raw['metadata']:
+                raise CheckpointConflict('claim_model_binding_unresolved')
             if state.inflight:
                 raise CheckpointConflict('single_loop_inflight_requires_reconciliation')
             if budget.usage()['unknown_usage']:
@@ -195,6 +199,8 @@ class ExperimentalCheckpointStore:
             row = self._row(conn, task_id)
             raw = self._validate_identity(row, task_id, actor, expected_version)
             state, budget = self._decode(raw, task_id, actor)
+            if 'single_loop_model_claim' in raw['metadata']:
+                raise CheckpointConflict('claim_model_fenced_settlement_required')
             if not state.inflight or state.inflight != reservation_id:
                 raise CheckpointConflict('single_loop_inflight_mismatch')
             pending = budget.to_dict()['reservations'][reservation_id]

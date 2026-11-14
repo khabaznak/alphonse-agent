@@ -37,7 +37,7 @@ def test_wrong_dose_cannot_pass_any_processor():
         assert result['oracle']['correct_structured_response'] is False
 
 
-@pytest.mark.parametrize('case', ['missing_start', 'conflicting', 'denied', 'unknown'])
+@pytest.mark.parametrize('case', ['missing_start', 'missing_status', 'conflicting', 'denied', 'unknown'])
 def test_unintegrated_questions_and_denial_are_unavailable(case):
     report = compare_safety(case, scripted_answer={})
     assert all(result['availability'] == 'unavailable' and result['passed'] is None

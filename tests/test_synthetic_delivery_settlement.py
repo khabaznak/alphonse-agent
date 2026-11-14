@@ -1,7 +1,9 @@
 """Synthetic fixture-only settlement, never a real provider or authorization."""
 from datetime import timedelta
 from unsafe_reclaim_fixture import simulate_old_writer_requeue
+import json
 import sqlite3
+from uuid import NAMESPACE_URL, uuid5
 
 import pytest
 
@@ -9,11 +11,22 @@ from test_single_loop_delivery_reservation import setup, reserve
 from alphonse.agent_v2.evaluation.synthetic_delivery_settlement import settle_fixture_delivery
 from alphonse.agent_v2.core.intelligence.v3.single_loop_checkpoint import ExperimentalCheckpointStore
 from alphonse.agent_v2.core.messages.claim_fence import ClaimFenceUnavailable, ClaimSuperseded
+from alphonse.agent_v2.core.io.experimental_staged_outbox import _ATTEMPT_TABLE, _ATTEMPT_GUARDS
 
 
-def seed_fixture(f, *, grant=True, effect=True):
+def seed_fixture(f, *, grant=True, effect=True, marker=True):
     _, _, questions, _, _, _, _, binding = f
     with questions._connect() as conn:
+        conn.execute(_ATTEMPT_TABLE)
+        for sql in _ATTEMPT_GUARDS.values():
+            conn.execute(sql)
+        task = json.loads(conn.execute("SELECT task_state_json FROM v2_task_checkpoints WHERE task_id='task'").fetchone()[0])
+        action = task['metadata']['single_loop_delivery_action']
+        staged_id = str(uuid5(NAMESPACE_URL, 'alphonse-experimental-stage:' +
+                              json.dumps(['task', binding.idempotency_key], ensure_ascii=True, separators=(',', ':'))))
+        if marker:
+            conn.execute('INSERT INTO experimental_staged_dispatch_attempts VALUES (?,?,?,?,?,?)',
+                         (staged_id, 'task', 'alice', binding.action_id, action['claim_digest'], 'started'))
         conn.execute('''CREATE TABLE fixture_delivery_grants(actor TEXT,recipient TEXT,integration TEXT,
                      provider TEXT,channel TEXT,grant_id TEXT,revision INTEGER,connection_revision INTEGER,active INTEGER)''')
         conn.execute('''CREATE TABLE fixture_delivery_effects(task_id TEXT,actor TEXT,action_id TEXT,
@@ -50,6 +63,28 @@ def test_verified_fixture_effect_settles_once_and_survives_restart(setup):
     with pytest.raises(ValueError):
         settle(setup, pending.version)
     assert store.load('task', 'alice', expected_version=settled.version).state.inflight == ''
+
+
+def test_fixture_effect_without_dispatch_marker_cannot_settle(setup):
+    _, _, _, store, _, _, _, binding = setup
+    pending = reserve(setup)
+    seed_fixture(setup, marker=False)
+    with pytest.raises(ClaimFenceUnavailable):
+        settle(setup, pending.version)
+    assert store.load('task', 'alice', expected_version=pending.version).state.inflight == binding.action_id
+
+
+def test_new_claim_cannot_adopt_old_delivery_effect_without_handoff(setup):
+    queue, _, _, store, old_claim, _, now, binding = setup
+    pending = reserve(setup)
+    seed_fixture(setup)
+    # Simulate an old writer bypassing the current queue's fail-closed reclaim.
+    simulate_old_writer_requeue(queue, 'message')
+    replacement = queue.claim_next(lease_seconds=60).claim_receipt
+    assert replacement.claim_generation != old_claim.claim_generation
+    with pytest.raises(ClaimFenceUnavailable):
+        settle(setup, pending.version, claim=replacement, clock=lambda: now)
+    assert store.load('task', 'alice', expected_version=pending.version).state.inflight == binding.action_id
 
 
 def test_old_binding_does_not_settle_even_with_matching_fixture_evidence(setup):

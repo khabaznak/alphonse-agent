@@ -21,7 +21,7 @@ _PRESCRIPTION = 'household/prescription.md'
 _CONTINUITY = 'household/treatment-start.md'
 _PATHS = (_INDEX, _PRESCRIPTION, _CONTINUITY)
 _ARMS = ('current_v3', 'targeted_v3_projection', 'single_loop')
-_HANDOFF_CASES = {'missing_start', 'conflicting', 'denied'}
+_HANDOFF_CASES = {'missing_start', 'missing_status', 'conflicting', 'denied'}
 
 
 def compare_safety(case_name: str, *, scripted_answer: dict) -> dict:

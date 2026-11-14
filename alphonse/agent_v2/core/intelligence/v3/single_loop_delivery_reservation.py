@@ -10,6 +10,9 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from datetime import datetime
 import hashlib
+import hmac
+import json
+import re
 from typing import Callable
 
 from alphonse.agent_v2.core.messages.claim_fence import ClaimFenceUnavailable, ClaimReceipt, fenced_claim_transaction
@@ -18,7 +21,23 @@ from .task_budget import BudgetExhausted
 
 
 ACTION_KEY = 'single_loop_delivery_action'
-ACTION_SCHEMA_VERSION = 2
+ACTION_SCHEMA_VERSION = 4
+
+
+def _delivery_claim_digest(claim: ClaimReceipt) -> str:
+    """Bind an action to its acquisition without storing the generation token."""
+    value = ['single-loop-delivery-claim-v1', claim.message_id, claim.user_id,
+             claim.lease_owner, claim.claim_generation]
+    return hashlib.sha256(json.dumps(value, ensure_ascii=True, separators=(',', ':')).encode('utf-8')).hexdigest()
+
+
+def delivery_claim_matches(action: object, claim: ClaimReceipt) -> bool:
+    """Check acquisition identity, not authorization or effect evidence."""
+    if not isinstance(action, dict) or not isinstance(claim, ClaimReceipt):
+        return False
+    digest = action.get('claim_digest')
+    return (isinstance(digest, str) and re.fullmatch(r'[0-9a-f]{64}', digest) is not None
+            and hmac.compare_digest(digest, _delivery_claim_digest(claim)))
 
 
 @dataclass(frozen=True)
@@ -102,7 +121,8 @@ def _reserve_delivery(store: ExperimentalCheckpointStore, claim: ClaimReceipt, *
                 # experimental entry point; it never authorizes dispatch.
                 managed_preflight.check_locked(conn, actor=actor, task_id=task_id, raw=raw, binding=binding)
             if (state.inflight or ACTION_KEY in raw['metadata']
-                    or 'single_loop_managed_preflight' in raw['metadata']):
+                    or 'single_loop_managed_preflight' in raw['metadata']
+                    or 'single_loop_model_claim' in raw['metadata']):
                 raise CheckpointConflict('delivery_action_already_bound_or_inflight')
             if budget.usage()['unknown_usage']:
                 raise CheckpointConflict('single_loop_model_usage_unresolved')
@@ -121,7 +141,10 @@ def _reserve_delivery(store: ExperimentalCheckpointStore, claim: ClaimReceipt, *
             else:
                 state.inflight = binding.action_id
                 raw['metadata'][ACTION_KEY] = {'schema_version': ACTION_SCHEMA_VERSION, 'operation': 'delivery',
-                                               'task_id': task_id, 'actor': actor, **asdict(binding)}
+                                               'task_id': task_id, 'actor': actor,
+                                               'authority_mode': 'managed' if managed_preflight is not None else 'synthetic',
+                                               'claim_digest': _delivery_claim_digest(claim),
+                                               **asdict(binding)}
                 if managed_preflight is not None:
                     raw['metadata']['single_loop_managed_preflight'] = managed_preflight.record
                 result = store._write(conn, row, raw, state, budget)

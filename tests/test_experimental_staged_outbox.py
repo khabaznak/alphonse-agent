@@ -25,6 +25,7 @@ from alphonse.agent_v2.core.messages.claim_fence import ClaimFenceUnavailable, C
 from alphonse.agent_v2.core.messages.sqlite_queue import SQLiteMessageQueue
 from alphonse.agent_v2.core.questions import SQLiteQuestionStore
 from alphonse.agent_v2.users import V2UserStore
+from unsafe_reclaim_fixture import simulate_old_writer_requeue
 
 
 @pytest.fixture
@@ -84,6 +85,23 @@ def test_staged_row_is_not_dispatchable_or_legacy_settleable(setup):
         SQLiteOutboundStore(path)
 
 
+@pytest.mark.parametrize('already_staged', [False, True])
+def test_replacement_claim_cannot_stage_or_restamp_old_action(setup, already_staged):
+    path, queue, _, _, old_claim, _, _ = setup
+    if already_staged:
+        stage(setup)
+    # This simulates an unsafe old writer; it is not a supported reclaim path.
+    simulate_old_writer_requeue(queue, 'message')
+    replacement = queue.claim_next().claim_receipt
+    assert replacement.claim_generation != old_claim.claim_generation
+    changed = list(setup)
+    changed[4] = replacement
+    with pytest.raises(ClaimFenceUnavailable):
+        stage(tuple(changed))
+    with sqlite3.connect(path) as conn:
+        assert conn.execute('SELECT count(*) FROM v2_outbox').fetchone()[0] == int(already_staged)
+
+
 def test_empty_staging_rollback_restores_restart_without_changing_existing_rows(tmp_path):
     path = tmp_path / 'runtime.sqlite'
     outbox = SQLiteOutboundStore(path)
@@ -130,6 +148,20 @@ def test_rollback_with_foreign_view_rolls_back_trigger_removal(tmp_path):
     with sqlite3.connect(path) as conn:
         assert conn.execute("SELECT type,name,sql FROM sqlite_master WHERE name LIKE 'experimental_staged_outbox_%' ORDER BY name").fetchall() == before
         assert conn.execute("SELECT count(*) FROM sqlite_master WHERE name='household_view'").fetchone()[0] == 1
+
+
+def test_rollback_refuses_foreign_attempt_table_view_without_dropping_guards(tmp_path):
+    path = tmp_path / 'runtime.sqlite'
+    outbox = SQLiteOutboundStore(path)
+    install_experimental_staging(outbox)
+    with sqlite3.connect(path) as conn:
+        conn.execute('CREATE VIEW foreign_attempts AS SELECT * FROM experimental_staged_dispatch_attempts')
+        before = conn.execute("SELECT type,name,sql FROM sqlite_master WHERE name LIKE 'experimental_%' ORDER BY name").fetchall()
+    with pytest.raises(ClaimFenceUnavailable, match='attempt_dependency_unavailable'):
+        rollback_empty_experimental_staging(path)
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT type,name,sql FROM sqlite_master WHERE name LIKE 'experimental_%' ORDER BY name").fetchall() == before
+        assert conn.execute('SELECT count(*) FROM foreign_attempts').fetchone()[0] == 0
 
 
 def test_rollback_holds_writer_lock_and_restores_guards_on_failure(tmp_path, monkeypatch):
@@ -416,6 +448,7 @@ def test_staging_checks_managed_preflight_shape(setup, change):
     with questions._connect() as conn:
         raw = json.loads(conn.execute("SELECT task_state_json FROM v2_task_checkpoints WHERE task_id='task'").fetchone()[0])
         action = raw['metadata']['single_loop_delivery_action']
+        action['authority_mode'] = 'managed'
         preflight = {'schema_version': 1, 'actor': 'alice', 'task_id': 'task', 'action_id': action['action_id'],
             'skill_id': 'skill', 'role': 'mail', 'binding_id': 'binding', 'binding_revision': 1,
             'required_scopes': [], 'required_executables': [], 'operation': 'send', 'resources': ['alice'],
@@ -459,4 +492,35 @@ def test_staging_does_not_guess_upgrade_for_legacy_v1_action(setup):
         restored = json.loads(conn.execute("SELECT task_state_json FROM v2_task_checkpoints WHERE task_id='task'").fetchone()[0])
         assert restored['metadata']['single_loop_delivery_action'] == action
         assert restored['metadata']['single_loop_checkpoint']['state']['inflight'] == 'action'
+        assert conn.execute('SELECT count(*) FROM v2_outbox').fetchone()[0] == 0
+
+
+def test_synthetic_action_rejects_orphaned_managed_preflight(setup):
+    path, _, questions, _, _, _, _ = setup
+    with questions._connect() as conn:
+        raw = json.loads(conn.execute("SELECT task_state_json FROM v2_task_checkpoints WHERE task_id='task'").fetchone()[0])
+        assert raw['metadata']['single_loop_delivery_action']['authority_mode'] == 'synthetic'
+        raw['metadata']['single_loop_managed_preflight'] = {'schema_version': 1}
+        conn.execute("UPDATE v2_task_checkpoints SET task_state_json=? WHERE task_id='task'", (json.dumps(raw),))
+    with pytest.raises(ClaimFenceUnavailable, match='binding_unavailable'):
+        stage(setup)
+    with sqlite3.connect(path) as conn:
+        assert conn.execute('SELECT count(*) FROM v2_outbox').fetchone()[0] == 0
+
+
+@pytest.mark.parametrize('mode', [None, [], 'other'])
+def test_staging_rejects_missing_or_invalid_authority_mode(setup, mode):
+    path, _, questions, _, _, _, _ = setup
+    with questions._connect() as conn:
+        raw = json.loads(conn.execute("SELECT task_state_json FROM v2_task_checkpoints WHERE task_id='task'").fetchone()[0])
+        action = raw['metadata']['single_loop_delivery_action']
+        if mode is None:
+            del action['authority_mode']
+            action['schema_version'] = 2
+        else:
+            action['authority_mode'] = mode
+        conn.execute("UPDATE v2_task_checkpoints SET task_state_json=? WHERE task_id='task'", (json.dumps(raw),))
+    with pytest.raises(ClaimFenceUnavailable, match='binding_unavailable'):
+        stage(setup)
+    with sqlite3.connect(path) as conn:
         assert conn.execute('SELECT count(*) FROM v2_outbox').fetchone()[0] == 0

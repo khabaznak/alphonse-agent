@@ -19,8 +19,16 @@ critical fixes until the replacement is qualified. The `agent_v2` package and
 The V2 retirement tests in `tests/test_agent_v3_engine_rollout.py` exercise
 settings, stamps and router rejection. They do not establish safe user-visible
 recovery of all previously queued or checkpointed tasks. The core loop catches
-router failures as processing failures, but the full daemon/queue and delivery
-behavior for each legacy state still needs the end-to-end audit in #222.
+router failures as processing failures. The daemon now treats an unregistered
+engine or mismatched schema as non-retryable and prepares a notice that the
+saved state needs review; it does not claim that review or delivery occurred.
+`tests/test_legacy_bridge_daemon.py` exercises unstamped, V2, unknown and
+embedded V2 checkpoint messages through the durable queue, core router and
+daemon: no V3 dispatch, one failed attempt, retained queue record and a failure
+notice queued in the outbox. This is not a recovery UI or a delivery receipt. Scheduled
+occurrences, authoritative stored checkpoints, question resumes and failure
+notice delivery still require end-to-end verification; memory setup precedes
+router validation and must not be treated as fenced by this regression.
 
 Removal requires #224–#228, reconciliation of #216–#218, a qualified release
 decision, and an explicit data-preserving recovery and rollback plan in #229.

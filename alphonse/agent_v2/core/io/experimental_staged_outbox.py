@@ -23,7 +23,7 @@ from .checkpoint_claim_fence import experimental_checkpoint_claim_transaction
 from .outbox import SQLiteOutboundStore, _OUTBOX_STATUSES, _outbox_status_schema, _validate_outbox_rebuild
 from alphonse.agent_v2.core.messages.claim_fence import ClaimReceipt, ClaimFenceUnavailable
 from alphonse.agent_v2.core.intelligence.v3.single_loop_checkpoint import ExperimentalCheckpointStore
-from alphonse.agent_v2.core.intelligence.v3.single_loop_delivery_reservation import ACTION_KEY, ACTION_SCHEMA_VERSION, DeliveryBinding
+from alphonse.agent_v2.core.intelligence.v3.single_loop_delivery_reservation import ACTION_KEY, ACTION_SCHEMA_VERSION, DeliveryBinding, delivery_claim_matches
 from alphonse.agent_v2.core.intelligence.v3.single_loop_managed_delivery import MANAGED_PREFLIGHT_KEY, _capture, managed_record_matches
 
 
@@ -37,6 +37,23 @@ _GUARDS = {
     'experimental_staged_outbox_insert': """CREATE TRIGGER experimental_staged_outbox_insert BEFORE INSERT ON v2_outbox
         WHEN EXISTS (SELECT 1 FROM v2_outbox WHERE outbox_message_id=NEW.outbox_message_id AND status='staged')
         BEGIN SELECT RAISE(ABORT, 'staged_outbox_requires_reconciliation'); END""",
+}
+
+# A committed attempt means dispatch may have started.  It is deliberately
+# immutable: neither expiry nor a missing fixture effect proves non-dispatch.
+_ATTEMPT_TABLE = """CREATE TABLE experimental_staged_dispatch_attempts (
+    outbox_message_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, actor TEXT NOT NULL,
+    action_id TEXT NOT NULL, claim_digest TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status='started')
+) STRICT"""
+_ATTEMPT_GUARDS = {
+    'experimental_dispatch_attempt_update': """CREATE TRIGGER experimental_dispatch_attempt_update BEFORE UPDATE ON experimental_staged_dispatch_attempts
+        BEGIN SELECT RAISE(ABORT, 'dispatch_attempt_requires_reconciliation'); END""",
+    'experimental_dispatch_attempt_delete': """CREATE TRIGGER experimental_dispatch_attempt_delete BEFORE DELETE ON experimental_staged_dispatch_attempts
+        BEGIN SELECT RAISE(ABORT, 'dispatch_attempt_requires_reconciliation'); END""",
+    'experimental_dispatch_attempt_insert': """CREATE TRIGGER experimental_dispatch_attempt_insert BEFORE INSERT ON experimental_staged_dispatch_attempts
+        WHEN EXISTS (SELECT 1 FROM experimental_staged_dispatch_attempts WHERE outbox_message_id=NEW.outbox_message_id)
+        BEGIN SELECT RAISE(ABORT, 'dispatch_attempt_requires_reconciliation'); END""",
 }
 
 
@@ -69,6 +86,22 @@ def _validate_guards(conn: sqlite3.Connection) -> None:
         row = conn.execute("SELECT type,sql FROM main.sqlite_master WHERE name=?", (name,)).fetchone()
         if row is None or row[0] != 'trigger' or not isinstance(row[1], str) or _normalize(row[1]) != _normalize(expected):
             raise ClaimFenceUnavailable('staged_outbox_guards_unavailable')
+    _validate_dispatch_schema(conn)
+
+
+def _validate_dispatch_schema(conn: sqlite3.Connection) -> None:
+    """Require the exact immutable attempt ledger inside the current transaction."""
+    row = conn.execute("SELECT sql FROM main.sqlite_master WHERE type='table' AND name='experimental_staged_dispatch_attempts'").fetchone()
+    if row is None or not isinstance(row[0], str) or _normalize(row[0]) != _normalize(_ATTEMPT_TABLE):
+        raise ClaimFenceUnavailable('staged_outbox_attempt_schema_unavailable')
+    names = {row[0] for row in conn.execute(
+        "SELECT name FROM main.sqlite_master WHERE type='trigger' AND tbl_name='experimental_staged_dispatch_attempts'")}
+    if names != set(_ATTEMPT_GUARDS):
+        raise ClaimFenceUnavailable('staged_outbox_attempt_schema_unavailable')
+    for name, expected in _ATTEMPT_GUARDS.items():
+        row = conn.execute("SELECT sql FROM main.sqlite_master WHERE type='trigger' AND name=?", (name,)).fetchone()
+        if row is None or not isinstance(row[0], str) or _normalize(row[0]) != _normalize(expected):
+            raise ClaimFenceUnavailable('staged_outbox_attempt_schema_unavailable')
 
 
 def install_experimental_staging(store: SQLiteOutboundStore) -> None:
@@ -89,7 +122,8 @@ def install_experimental_staging(store: SQLiteOutboundStore) -> None:
         sql = str(row[0] or '') if row else ''
         if sql.count(_OLD) != 1 or _normalize(sql) != _canonical_outbox_sql():
             raise ValueError('staged_outbox_schema_unsupported')
-        if any(conn.execute('SELECT 1 FROM main.sqlite_master WHERE name=?', (name,)).fetchone() for name in _GUARDS):
+        if any(conn.execute('SELECT 1 FROM main.sqlite_master WHERE name=?', (name,)).fetchone()
+               for name in (*_GUARDS, 'experimental_staged_dispatch_attempts', *_ATTEMPT_GUARDS)):
             raise ValueError('staged_outbox_schema_conflict')
         indexes = [row[0] for row in conn.execute("SELECT sql FROM main.sqlite_master WHERE type='index' AND tbl_name='v2_outbox' AND sql IS NOT NULL")]
         conn.execute('ALTER TABLE main.v2_outbox RENAME TO experimental_old_outbox')
@@ -99,6 +133,9 @@ def install_experimental_staging(store: SQLiteOutboundStore) -> None:
         for index in indexes:
             conn.execute(index)
         for trigger in _GUARDS.values():
+            conn.execute(trigger)
+        conn.execute(_ATTEMPT_TABLE)
+        for trigger in _ATTEMPT_GUARDS.values():
             conn.execute(trigger)
 
 
@@ -121,11 +158,23 @@ def rollback_empty_experimental_staging(db_path: str | Path) -> None:
         conn.execute('PRAGMA foreign_keys = ON')
         conn.execute('BEGIN IMMEDIATE')
         _validate_guards(conn)
+        if conn.execute('SELECT 1 FROM main.experimental_staged_dispatch_attempts LIMIT 1').fetchone():
+            raise ClaimFenceUnavailable('staged_outbox_reconciliation_required')
+        # Dropping even an empty attempt table can invalidate a foreign view,
+        # trigger, index, or foreign key. Only our own exact guards may refer to
+        # it; do not silently destroy or strand unrelated schema objects.
+        for name, sql in conn.execute("SELECT name,sql FROM main.sqlite_master WHERE sql IS NOT NULL"):
+            if (name != 'experimental_staged_dispatch_attempts' and name not in _ATTEMPT_GUARDS
+                    and 'experimental_staged_dispatch_attempts' in sql.casefold()):
+                raise ClaimFenceUnavailable('staged_outbox_attempt_dependency_unavailable')
         if conn.execute("""SELECT 1 FROM main.v2_outbox WHERE status NOT IN
                 ('pending','claimed','retry_wait','delivered','failed','unconfirmed','staged') LIMIT 1""").fetchone():
             raise ClaimFenceUnavailable('staged_outbox_schema_unavailable')
         if conn.execute("SELECT 1 FROM main.v2_outbox WHERE status='staged' LIMIT 1").fetchone():
             raise ClaimFenceUnavailable('staged_outbox_reconciliation_required')
+        for name in _ATTEMPT_GUARDS:
+            conn.execute(f'DROP TRIGGER main.{name}')
+        conn.execute('DROP TABLE main.experimental_staged_dispatch_attempts')
         for name in _GUARDS:
             conn.execute(f'DROP TRIGGER main.{name}')
         # Validate after removing only our known guards. Any other dependent
@@ -295,9 +344,10 @@ def _stage_managed_experimental_response(target: SQLiteOutboundStore | Path, cla
                 state, budget = checkpoints._decode(raw, task_id, actor)
                 action = raw['metadata'].get(ACTION_KEY)
                 keys = set(DeliveryBinding.__dataclass_fields__)
-                if (not isinstance(action, dict) or set(action) != keys | {'schema_version', 'operation', 'task_id', 'actor'}
+                if (not isinstance(action, dict) or set(action) != keys | {'schema_version', 'operation', 'task_id', 'actor', 'authority_mode', 'claim_digest'}
                         or type(action['schema_version']) is not int or action['schema_version'] != ACTION_SCHEMA_VERSION
-                        or action['operation'] != 'delivery' or action['task_id'] != task_id or action['actor'] != actor):
+                        or action['operation'] != 'delivery' or action['task_id'] != task_id or action['actor'] != actor
+                        or action['authority_mode'] != 'managed' or not delivery_claim_matches(action, claim)):
                     raise ClaimFenceUnavailable('managed_stage_unavailable')
                 binding = DeliveryBinding(**{key: action[key] for key in keys})
                 pending = budget.to_dict()['reservations'].get(state.inflight)
@@ -368,7 +418,7 @@ def _stage_experimental_response(target: SQLiteOutboundStore | Path, claim: Clai
             try:
                 keys = {'action_id', 'integration_id', 'provider_key', 'channel_target', 'recipient_user_id',
                         'message_digest', 'idempotency_key', 'grant_id', 'grant_revision', 'connection_revision'}
-                if set(action) != keys | {'schema_version', 'operation', 'task_id', 'actor'}:
+                if set(action) != keys | {'schema_version', 'operation', 'task_id', 'actor', 'authority_mode', 'claim_digest'}:
                     raise ValueError('invalid binding')
                 binding = DeliveryBinding(**{key: action[key] for key in keys})
             except (ValueError, TypeError, KeyError):
@@ -376,6 +426,8 @@ def _stage_experimental_response(target: SQLiteOutboundStore | Path, claim: Clai
             pending = budget.to_dict()['reservations'].get(state.inflight)
             if (action['schema_version'] != ACTION_SCHEMA_VERSION or action['operation'] != 'delivery'
                     or action['task_id'] != task_id or action['actor'] != actor
+                    or not isinstance(action['authority_mode'], str)
+                    or action['authority_mode'] not in {'synthetic', 'managed'} or not delivery_claim_matches(action, claim)
                     or state.inflight != binding.action_id or not isinstance(pending, dict)
                     or pending['kind'] != 'tool' or pending['status'] != 'reserved'
                     or binding.integration_id != integration_id or binding.provider_key != provider_key
@@ -383,8 +435,14 @@ def _stage_experimental_response(target: SQLiteOutboundStore | Path, claim: Clai
                     or binding.recipient_user_id != actor or binding.idempotency_key != idempotency_key
                     or binding.message_digest != hashlib.sha256(message.encode('utf-8')).hexdigest()):
                 raise ClaimFenceUnavailable('staged_outbox_binding_unavailable')
-            # A managed preflight, when recorded, must describe this exact
-            # action. Shape matching is not a current authorization check.
+            # The action declares whether a managed preflight is required.
+            # Shape matching is not a current authorization check. An old
+            # writer can still rewrite the whole checkpoint; mixed-writer
+            # exclusion is necessary before any household use.
+            if action['authority_mode'] == 'managed' and MANAGED_PREFLIGHT_KEY not in raw['metadata']:
+                raise ClaimFenceUnavailable('managed_stage_authority_required')
+            if action['authority_mode'] == 'synthetic' and (MANAGED_PREFLIGHT_KEY in raw['metadata'] or managed_authority is not None):
+                raise ClaimFenceUnavailable('staged_outbox_binding_unavailable')
             if (MANAGED_PREFLIGHT_KEY in raw['metadata']
                     and not managed_record_matches(raw, task_id=task_id, actor=actor, binding=binding)):
                 raise ClaimFenceUnavailable('staged_outbox_binding_unavailable')

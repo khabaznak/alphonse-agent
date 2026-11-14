@@ -15,8 +15,11 @@ but no operation binding. The separate unwired `reserve_delivery` experiment
 adds a claim-bound delivery action, recipient, channel, provider, message digest,
 idempotency key, grant ID and connection/grant revisions. These caller-supplied
 identifiers are not an authorization check, the key is not globally enforced,
-and the message must be retained by a future host. The v2 binding does not infer
-missing authority identifiers from older v1 records. `settle` deliberately rejects all tool settlement,
+and the message must be retained by a future host. The v3 action records whether
+it was reserved as managed or synthetic; managed actions require their matching
+preflight record, and v1/v2 actions require explicit reconciliation rather than
+inferred authority. A mutable marker cannot stop an old or direct writer from
+rewriting both fields; mixed-writer fencing remains necessary. `settle` deliberately rejects all tool settlement,
 including one that cites an actually delivered outbox ID. The evaluation-only
 synthetic settlement uses forgeable fixture tables, not product authority or
 provider evidence. Neither path establishes a real delivery. The read-only

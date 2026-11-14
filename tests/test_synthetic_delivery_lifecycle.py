@@ -45,6 +45,7 @@ def add_managed_preflight(f):
     with sqlite3.connect(f[0]) as conn:
         task = json.loads(conn.execute("SELECT task_state_json FROM v2_task_checkpoints WHERE task_id='task'").fetchone()[0])
         action = task['metadata']['single_loop_delivery_action']
+        action['authority_mode'] = 'managed'
         binding = DeliveryBinding(**{key: action[key] for key in DeliveryBinding.__dataclass_fields__})
         task['metadata']['single_loop_managed_preflight'] = {
             'schema_version': 1, 'actor': 'alice', 'task_id': 'task', 'action_id': binding.action_id,
@@ -83,6 +84,24 @@ def test_fixture_effect_cannot_settle_managed_action(setup):
     assert ExperimentalCheckpointStore(f[2]).load('task', 'alice', expected_version=f[5]).state.inflight == 'action'
     with sqlite3.connect(f[0]) as conn:
         assert conn.execute('SELECT count(*) FROM fixture_delivery_effects').fetchone()[0] == 1
+
+
+def test_stripped_managed_preflight_cannot_use_fixture_dispatch_or_settlement(setup):
+    f = setup
+    seed_authority(f)
+    identity = stage(f)
+    dispatch(f, identity)
+    # Simulate a managed action whose separate preflight was lost. The action's
+    # mode must prevent fixture evidence from being treated as its authority.
+    with sqlite3.connect(f[0]) as conn:
+        task = json.loads(conn.execute("SELECT task_state_json FROM v2_task_checkpoints WHERE task_id='task'").fetchone()[0])
+        task['metadata']['single_loop_delivery_action']['authority_mode'] = 'managed'
+        conn.execute("UPDATE v2_task_checkpoints SET task_state_json=? WHERE task_id='task'", (json.dumps(task),))
+    with pytest.raises(ClaimFenceUnavailable):
+        dispatch(f, identity)
+    with pytest.raises(ClaimFenceUnavailable):
+        settle(f)
+    assert ExperimentalCheckpointStore(f[2]).load('task', 'alice', expected_version=f[5]).state.inflight == 'action'
 
 
 def test_staged_fixture_dispatch_and_authorized_settlement_survive_restart(setup):

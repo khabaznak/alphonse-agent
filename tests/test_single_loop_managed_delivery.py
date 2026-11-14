@@ -67,9 +67,35 @@ def test_real_resolver_pins_scoped_preflight_with_reservation(managed, monkeypat
     assert recorded['required_scopes'] == ['scope.send'] and recorded['project_id'] is None
     assert recorded['grant_id'] == 'grant-1' and recorded['connection_revision'] == 2
     assert saved.state.inflight == recorded['action_id'] == metadata[ACTION_KEY]['action_id']
+    assert metadata[ACTION_KEY]['authority_mode'] == 'managed'
     assert 'fixture-secret' not in json.dumps(metadata)
     ref = bindings.integrations.get('synthetic').credential_ref
     assert ref and ref not in json.dumps(metadata)
+
+
+def test_lost_managed_preflight_never_becomes_synthetic_recovery(managed):
+    from alphonse.agent_v2.core.intelligence.v3.single_loop_recovery_inspection import inspect_recovery
+    setup, _, session, _ = managed
+    saved = invoke(managed)
+    with setup[2]._connect() as conn:
+        raw = json.loads(conn.execute("SELECT task_state_json FROM v2_task_checkpoints WHERE task_id='task'").fetchone()[0])
+        raw['metadata'].pop(MANAGED_PREFLIGHT_KEY)
+        conn.execute("UPDATE v2_task_checkpoints SET task_state_json=? WHERE task_id='task'", (json.dumps(raw),))
+    assert inspect_recovery(setup[3], session, task_id='task', expected_version=saved.version).status == 'unavailable'
+    assert setup[3].load('task', 'alice', expected_version=saved.version).state.inflight == 'action'
+
+
+def test_v2_managed_action_stays_pending_for_explicit_reconciliation(managed):
+    from alphonse.agent_v2.core.intelligence.v3.single_loop_recovery_inspection import inspect_recovery
+    setup, _, session, _ = managed
+    saved = invoke(managed)
+    with setup[2]._connect() as conn:
+        raw = json.loads(conn.execute("SELECT task_state_json FROM v2_task_checkpoints WHERE task_id='task'").fetchone()[0])
+        raw['metadata'][ACTION_KEY]['schema_version'] = 2
+        raw['metadata'][ACTION_KEY].pop('authority_mode')
+        conn.execute("UPDATE v2_task_checkpoints SET task_state_json=? WHERE task_id='task'", (json.dumps(raw),))
+    assert inspect_recovery(setup[3], session, task_id='task', expected_version=saved.version).status == 'unavailable'
+    assert setup[3].load('task', 'alice', expected_version=saved.version).state.inflight == 'action'
 
 
 @pytest.mark.parametrize('change', ['grant', 'binding', 'choice', 'user', 'connection'])
@@ -105,6 +131,35 @@ def test_denied_or_mismatched_scope_never_reserves(managed, changes):
     with pytest.raises((ValueError, PermissionError)):
         invoke(managed, **changes)
     assert ACTION_KEY not in managed[0][2].load_task_checkpoint('task').metadata
+
+
+def test_read_authority_cannot_be_bound_to_delivery(managed):
+    setup, bindings, session, _ = managed
+    # Construct a disposable account where the real resolver would accept read.
+    # A read capability must not be reinterpreted as permission for delivery.
+    with bindings.integrations._connect() as conn:
+        conn.execute("UPDATE v2_integrations SET connection_json=json_set(connection_json, '$.capabilities', json('[\"read\"]')) WHERE integration_id='synthetic'")
+        conn.execute("UPDATE v2_account_grants SET definition=json_set(definition, '$.operations', json('[\"read\"]')) WHERE grant_id='grant-1'")
+        conn.execute("UPDATE v2_skill_bindings SET requirements=json_set(requirements, '$.capabilities', json('[\"read\"]')) WHERE binding_id='binding-one'")
+    assert bindings.resolve_account(session, skill_id='skill:fixture', name='messages', operation='read',
+        resources=['channel'], recipient_user_ids=['alice']).operation == 'read'
+    with pytest.raises(PermissionError, match='operation_unsupported'):
+        invoke(managed, operation='read')
+    task = setup[2].load_task_checkpoint('task')
+    assert ACTION_KEY not in task.metadata and MANAGED_PREFLIGHT_KEY not in task.metadata
+    assert not setup[3].load('task', 'alice', expected_version=setup[5]).state.inflight
+
+
+def test_stored_read_preflight_is_not_a_delivery_binding(managed):
+    from alphonse.agent_v2.core.intelligence.v3.single_loop_recovery_inspection import inspect_recovery
+    setup, _, session, _ = managed
+    saved = invoke(managed)
+    with setup[2]._connect() as conn:
+        raw = json.loads(conn.execute("SELECT task_state_json FROM v2_task_checkpoints WHERE task_id='task'").fetchone()[0])
+        raw['metadata'][MANAGED_PREFLIGHT_KEY]['operation'] = 'read'
+        conn.execute("UPDATE v2_task_checkpoints SET task_state_json=? WHERE task_id='task'", (json.dumps(raw),))
+    assert inspect_recovery(setup[3], session, task_id='task', expected_version=saved.version).status == 'unavailable'
+    assert setup[3].load('task', 'alice', expected_version=saved.version).state.inflight == 'action'
 
 
 def test_revocation_writer_cannot_race_locked_reservation(managed, monkeypatch):

@@ -130,6 +130,7 @@ def test_superseded_daemon_skips_snapshot_and_queue_disposition(tmp_path, monkey
     queue.enqueue(CoreMessage(datetime.now(timezone.utc), 'synthetic', 'alice',
                               metadata={'automation_execution_id': 'synthetic-event'}), message_id='msg')
     runtime = build_runtime_host(messages=queue, processor=Processor())
+    runtime.core.conversation_store = None
     daemon = V2Daemon(runtime)
     monkeypatch.setattr(daemon, '_run_retention_if_due', lambda: None)
     monkeypatch.setattr(daemon, '_reconcile_unconfirmed_scheduled_deliveries', lambda: None)
@@ -138,6 +139,8 @@ def test_superseded_daemon_skips_snapshot_and_queue_disposition(tmp_path, monkey
     monkeypatch.setattr(runtime.visible_state, 'snapshot', lambda: pytest.fail('stale snapshot read'))
     monkeypatch.setattr(queue, 'ack', lambda *args, **kwargs: pytest.fail('stale acknowledgement'))
     monkeypatch.setattr(queue, 'retry', lambda *args, **kwargs: pytest.fail('stale retry'))
+    # Do not consult the default household memory path for a disposable actor.
+    monkeypatch.setattr(runtime.core.memory, 'start_task', lambda *args, **kwargs: '')
     monkeypatch.setattr(runtime.core.memory, 'finish_task', lambda *args, **kwargs: pytest.fail('stale memory finish'))
 
     result = daemon.run_once()

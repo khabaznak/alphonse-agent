@@ -103,6 +103,25 @@ def test_v1_action_is_not_adopted_or_reconciled_by_guessing(setup):
     assert store.load('task', 'alice', expected_version=saved.version).state.inflight == binding.action_id
 
 
+def test_v3_action_without_claim_binding_remains_unresolved(setup):
+    import json
+    from alphonse.agent_v2.accounts import AccountSession
+    from alphonse.agent_v2.core.intelligence.v3.single_loop_recovery_inspection import inspect_delivery_binding, inspect_recovery
+
+    _, _, questions, store, claim, _, now, binding = setup
+    saved = reserve(setup)
+    with questions._connect() as conn:
+        raw = json.loads(conn.execute("SELECT task_state_json FROM v2_task_checkpoints WHERE task_id='task'").fetchone()[0])
+        action = raw['metadata'][ACTION_KEY]
+        action['schema_version'] = 3
+        action.pop('claim_digest')
+        conn.execute("UPDATE v2_task_checkpoints SET task_state_json=? WHERE task_id='task'", (json.dumps(raw),))
+    assert inspect_recovery(store, AccountSession('alice'), task_id='task', expected_version=saved.version).status == 'unavailable'
+    assert inspect_delivery_binding(store, AccountSession('alice'), claim, task_id='task',
+                                    expected_version=saved.version, expected=binding, clock=lambda: now).status == 'unavailable'
+    assert store.load('task', 'alice', expected_version=saved.version).state.inflight == binding.action_id
+
+
 def test_message_digest_preserves_exact_unicode_bytes(setup):
     _, _, _, _, _, _, _, binding = setup
     text = 'café'
@@ -162,6 +181,20 @@ def test_claim_for_different_message_is_not_bound_to_task(setup):
     other = ClaimReceipt('different-message', claim.user_id, claim.lease_owner, claim.claim_generation)
     with pytest.raises(ClaimSuperseded):
         reserve(setup, claim=other)
+    assert ACTION_KEY not in questions.load_task_checkpoint('task').metadata
+
+
+def test_orphaned_claim_bound_model_marker_blocks_delivery_reservation(setup):
+    import json
+    _, _, questions, store, _, version, _, _ = setup
+    with questions._connect() as conn:
+        raw = json.loads(conn.execute("SELECT task_state_json FROM v2_task_checkpoints WHERE task_id='task'").fetchone()[0])
+        raw['metadata']['single_loop_model_claim'] = {'malformed': True}
+        conn.execute("UPDATE v2_task_checkpoints SET task_state_json=? WHERE task_id='task'", (json.dumps(raw),))
+    with pytest.raises(ValueError, match='already_bound_or_inflight'):
+        reserve(setup)
+    restored = store.load('task', 'alice', expected_version=version)
+    assert not restored.state.inflight
     assert ACTION_KEY not in questions.load_task_checkpoint('task').metadata
 
 
@@ -269,6 +302,11 @@ def test_recovery_inspection_rejects_old_claim_after_same_owner_reclaim(setup):
                                       expected_version=saved.version, expected=binding, clock=lambda: now)
     assert result.status == 'unavailable'
     assert replacement.claim_generation != claim.claim_generation
+    # A live replacement acquisition also has no authority to adopt an action
+    # reserved by the old generation without an explicit recovery handoff.
+    replacement_result = inspect_delivery_binding(store, AccountSession('alice'), replacement, task_id='task',
+                                                  expected_version=saved.version, expected=binding, clock=lambda: now)
+    assert replacement_result.status == 'unavailable'
     assert store.load('task', 'alice', expected_version=saved.version).state.inflight == binding.action_id
 
 

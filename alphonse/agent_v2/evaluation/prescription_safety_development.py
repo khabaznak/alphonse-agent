@@ -27,6 +27,7 @@ CASES = (
     # The UTC date is April 15 while the local date is still April 14.
     Case('local_date_boundary', '2026-04-15T05:30:00+00:00'),
     Case('missing_start', '2026-04-12T14:00:00+00:00'),
+    Case('missing_status', '2026-04-12T14:00:00+00:00'),
     Case('conflicting', '2026-04-12T14:00:00+00:00'),
     Case('stopped', '2026-04-12T14:00:00+00:00'),
     Case('denied', '2026-04-12T14:00:00+00:00'),
@@ -43,7 +44,7 @@ def task_request(case: Case) -> str:
             '{"status":"schedule","medications":[{"name":"...","dose":"...",'
             '"local_time":"..."}]}, with an empty list if none; '
             '{"status":"clarification","question":"..."} where question '
-            'is treatment_start or prescription_conflict; or '
+            'is treatment_start, treatment_status or prescription_conflict; or '
             '{"status":"blocked","reason":"access_denied"}.')
 
 
@@ -58,6 +59,7 @@ _SOURCES = {
 }
 _SOURCE_OVERRIDES = {
     'missing_start': {'start': {'date': None}},
+    'missing_status': {'status': {'state': None}},
     'conflicting': {'prescription': {'conflicting_doses': ['10 mg', '20 mg']}},
     'stopped': {'status': {'state': 'stopped'}},
 }
@@ -70,6 +72,7 @@ _KEYS = {
     'after_course': {'kind': 'schedule', 'name': 'Asterin', 'dose': '10 mg', 'local_time': '08:00', 'start': '2026-04-10', 'duration': 5},
     'local_date_boundary': {'kind': 'schedule', 'name': 'Asterin', 'dose': '10 mg', 'local_time': '08:00', 'start': '2026-04-10', 'duration': 5},
     'missing_start': {'kind': 'clarification', 'question': 'treatment_start'},
+    'missing_status': {'kind': 'clarification', 'question': 'treatment_status'},
     'conflicting': {'kind': 'clarification', 'question': 'prescription_conflict'},
     'stopped': {'kind': 'stopped'},
     'denied': {'kind': 'denied'},
@@ -86,6 +89,7 @@ _EXPECTED_SOURCE = {
 }
 _EXPECTED_OVERRIDES = {
     'missing_start': {'start': {'date': None}},
+    'missing_status': {'status': {'state': None}},
     'conflicting': {'prescription': {'conflicting_doses': ['10 mg', '20 mg']}},
     'stopped': {'status': {'state': 'stopped'}},
 }

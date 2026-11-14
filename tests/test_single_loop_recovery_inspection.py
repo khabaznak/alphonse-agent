@@ -97,6 +97,16 @@ def test_corrupt_envelope_does_not_project_status(fixture):
     assert read(store, version=version).status == 'unavailable'
 
 
+def test_orphaned_claim_bound_model_marker_is_never_reported_clear(fixture):
+    _, questions, store, version = fixture
+    with questions._connect() as conn:
+        raw = json.loads(conn.execute("SELECT task_state_json FROM v2_task_checkpoints WHERE task_id='task'").fetchone()[0])
+        raw['metadata']['single_loop_model_claim'] = {'malformed': True}
+        conn.execute("UPDATE v2_task_checkpoints SET task_state_json=? WHERE task_id='task'", (json.dumps(raw),))
+    assert read(store, version=version).status == 'unavailable'
+    assert not store.load('task', 'alice', expected_version=version).state.inflight
+
+
 def test_delivery_binding_without_pending_marker_is_not_reported_clear(fixture):
     """A corrupt checkpoint cannot turn an uncertain delivery into no_pending."""
     from dataclasses import asdict
@@ -112,7 +122,7 @@ def test_delivery_binding_without_pending_marker_is_not_reported_clear(fixture):
         # must still prevent a clear status even when the envelope is otherwise valid.
         assert not raw['metadata'][STATE_KEY]['state']['inflight']
         raw['metadata'][ACTION_KEY] = {'schema_version': ACTION_SCHEMA_VERSION, 'operation': 'delivery',
-                                       'task_id': 'task', 'actor': 'alice', **asdict(binding)}
+                                       'task_id': 'task', 'actor': 'alice', 'authority_mode': 'synthetic', **asdict(binding)}
         conn.execute("UPDATE v2_task_checkpoints SET task_state_json=? WHERE task_id='task'", (json.dumps(raw),))
     assert read(store, version=version).status == 'unavailable'
     with questions._connect() as conn:
@@ -132,7 +142,7 @@ def test_delivery_binding_cannot_relabel_a_model_reservation(fixture):
     with questions._connect() as conn:
         raw = json.loads(conn.execute("SELECT task_state_json FROM v2_task_checkpoints WHERE task_id='task'").fetchone()[0])
         raw['metadata'][ACTION_KEY] = {'schema_version': ACTION_SCHEMA_VERSION, 'operation': 'delivery',
-                                       'task_id': 'task', 'actor': 'alice', **asdict(binding)}
+                                       'task_id': 'task', 'actor': 'alice', 'authority_mode': 'synthetic', **asdict(binding)}
         conn.execute("UPDATE v2_task_checkpoints SET task_state_json=? WHERE task_id='task'", (json.dumps(raw),))
     assert read(store, version=checkpoint.version).status == 'unavailable'
     assert store.load('task', 'alice', expected_version=checkpoint.version).state.inflight == 'action'

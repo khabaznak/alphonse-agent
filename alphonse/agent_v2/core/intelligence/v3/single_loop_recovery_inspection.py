@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from datetime import datetime
 import os
+import re
 import sqlite3
 from typing import Callable
 
@@ -17,7 +18,7 @@ from alphonse.agent_v2.core.messages.claim_fence import (
     ClaimFenceUnavailable, ClaimReceipt, ClaimSuperseded, _time, fenced_claim_transaction,
 )
 from .single_loop_checkpoint import CheckpointConflict, ExperimentalCheckpointStore
-from .single_loop_delivery_reservation import ACTION_KEY, ACTION_SCHEMA_VERSION, DeliveryBinding
+from .single_loop_delivery_reservation import ACTION_KEY, ACTION_SCHEMA_VERSION, DeliveryBinding, delivery_claim_matches
 
 
 @dataclass(frozen=True)
@@ -53,6 +54,10 @@ def inspect_recovery(store: ExperimentalCheckpointStore, session: AccountSession
             raw = store._validate_identity(row, task_id, actor, expected_version,
                                            allow_cancelled=row['status'] == 'cancelled')
             state, budget = store._decode(raw, task_id, actor)
+            # This inspector cannot validate a claim-bound model marker and
+            # must not present an orphaned or unsupported one as clear.
+            if 'single_loop_model_claim' in raw['metadata']:
+                return unavailable
             from .single_loop_managed_delivery import MANAGED_PREFLIGHT_KEY, managed_record_matches
             # A standalone delivery action is not evidence that its effect was
             # reconciled. Malformed or mismatched action state must not be
@@ -61,9 +66,11 @@ def inspect_recovery(store: ExperimentalCheckpointStore, session: AccountSession
             if ACTION_KEY in raw['metadata']:
                 record = raw['metadata'][ACTION_KEY]
                 keys = set(DeliveryBinding.__dataclass_fields__)
-                if (not isinstance(record, dict) or set(record) != keys | {'schema_version', 'operation', 'task_id', 'actor'}
+                if (not isinstance(record, dict) or set(record) != keys | {'schema_version', 'operation', 'task_id', 'actor', 'authority_mode', 'claim_digest'}
                         or type(record.get('schema_version')) is not int
                         or record['schema_version'] != ACTION_SCHEMA_VERSION
+                        or not isinstance(record['claim_digest'], str)
+                        or re.fullmatch(r'[0-9a-f]{64}', record['claim_digest']) is None
                         or record['operation'] != 'delivery' or record['task_id'] != task_id
                         or record['actor'] != actor):
                     return unavailable
@@ -72,8 +79,10 @@ def inspect_recovery(store: ExperimentalCheckpointStore, session: AccountSession
                 if (state.inflight != binding.action_id or not isinstance(reservation, dict)
                         or reservation.get('kind') != 'tool' or reservation.get('status') != 'reserved'):
                     return unavailable
-                if MANAGED_PREFLIGHT_KEY in raw['metadata'] and not managed_record_matches(
-                        raw, task_id=task_id, actor=actor, binding=binding):
+                if (record['authority_mode'] not in {'synthetic', 'managed'}
+                        or (record['authority_mode'] == 'managed') != (MANAGED_PREFLIGHT_KEY in raw['metadata'])
+                        or (record['authority_mode'] == 'managed' and not managed_record_matches(
+                            raw, task_id=task_id, actor=actor, binding=binding))):
                     return unavailable
             elif MANAGED_PREFLIGHT_KEY in raw['metadata']:
                 return unavailable
@@ -118,13 +127,23 @@ def inspect_delivery_binding(store: ExperimentalCheckpointStore, session: Accoun
                 row = store._row(conn, task_id)
                 raw = store._validate_identity(row, task_id, actor, expected_version)
                 state, budget = store._decode(raw, task_id, actor)
+                if 'single_loop_model_claim' in raw['metadata']:
+                    return unavailable
                 from .single_loop_managed_delivery import MANAGED_PREFLIGHT_KEY, managed_record_matches
-                if MANAGED_PREFLIGHT_KEY in raw['metadata'] and not managed_record_matches(
-                        raw, task_id=task_id, actor=actor, binding=expected):
+                record = raw['metadata'].get(ACTION_KEY)
+                if not isinstance(record, dict):
+                    return unavailable
+                mode = record.get('authority_mode')
+                if (mode not in {'synthetic', 'managed'}
+                        or (mode == 'managed') != (MANAGED_PREFLIGHT_KEY in raw['metadata'])
+                        or (mode == 'managed' and not managed_record_matches(
+                            raw, task_id=task_id, actor=actor, binding=expected))):
+                    return unavailable
+                if not delivery_claim_matches(record, claim):
                     return unavailable
                 expected_record = {'schema_version': ACTION_SCHEMA_VERSION, 'operation': 'delivery',
-                                   'task_id': task_id, 'actor': actor, **asdict(expected)}
-                record = raw['metadata'].get(ACTION_KEY)
+                                   'task_id': task_id, 'actor': actor, 'authority_mode': mode, **asdict(expected)}
+                expected_record['claim_digest'] = record['claim_digest']
                 pending = budget.to_dict()['reservations'].get(state.inflight)
                 if (raw.get('message_id') != claim.message_id
                         or not isinstance(record, dict) or type(record.get('schema_version')) is not int
@@ -187,13 +206,16 @@ def inspect_managed_delivery_authority(store: ExperimentalCheckpointStore, sessi
             row = store._row(conn, task_id)
             raw = store._validate_identity(row, task_id, actor, expected_version)
             state, budget = store._decode(raw, task_id, actor)
+            if 'single_loop_model_claim' in raw['metadata']:
+                raise ClaimFenceUnavailable('managed_recovery_unavailable')
             record = raw['metadata'].get(ACTION_KEY)
             keys = set(DeliveryBinding.__dataclass_fields__)
             if (raw.get('message_id') != claim.message_id or not isinstance(record, dict)
-                    or set(record) != keys | {'schema_version', 'operation', 'task_id', 'actor'}
+                    or set(record) != keys | {'schema_version', 'operation', 'task_id', 'actor', 'authority_mode', 'claim_digest'}
                     or type(record.get('schema_version')) is not int or record['schema_version'] != ACTION_SCHEMA_VERSION
                     or record.get('operation') != 'delivery' or record.get('task_id') != task_id
-                    or record.get('actor') != actor):
+                    or record.get('actor') != actor or record.get('authority_mode') != 'managed'
+                    or not delivery_claim_matches(record, claim)):
                 raise ClaimFenceUnavailable('managed_recovery_unavailable')
             binding = DeliveryBinding(**{key: record[key] for key in keys})
             pending = budget.to_dict()['reservations'].get(state.inflight)

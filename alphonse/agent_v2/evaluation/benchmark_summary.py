@@ -52,18 +52,35 @@ def summarize(schedule: list[dict[str, str]], attempts: list[dict[str, Any]]) ->
     for identity, scheduled in schedule_by_id.items():
         case_id, arm = scheduled['case_id'], scheduled['arm']
         result = arms.setdefault(arm, {'scheduled': 0, 'pass': 0, 'fail': 0, 'unknown': 0,
-                                       'missing': 0, 'attempts': []})
+                                       'missing': 0, 'cases': {}, 'attempts': []})
+        case_result = result['cases'].setdefault(
+            case_id, {'scheduled': 0, 'pass': 0, 'fail': 0, 'unknown': 0, 'missing': 0})
         result['scheduled'] += 1
+        case_result['scheduled'] += 1
         row = indexed.get(identity)
         if row is None:
             result['missing'] += 1
             result['unknown'] += 1
+            case_result['missing'] += 1
+            case_result['unknown'] += 1
             result['attempts'].append({'attempt_id': identity, 'case_id': case_id, 'state': 'not_started',
                                        'grade': 'unknown', 'elapsed_ms': None})
         else:
             result[row['grade']] += 1
+            case_result[row['grade']] += 1
             result['attempts'].append({k: row[k] for k in ('attempt_id', 'case_id', 'state', 'grade', 'elapsed_ms')})
-    return {'arms': arms, 'qualification': 'unassessed',
+    all_cases = {row['case_id'] for row in schedule_by_id.values()}
+    unbalanced = {}
+    if len(arms) > 1:
+        for case_id in sorted(all_cases):
+            counts = {arm: result['cases'].get(case_id, {}).get('scheduled', 0)
+                      for arm, result in arms.items()}
+            if len(set(counts.values())) > 1:
+                unbalanced[case_id] = counts
+    balance = ('unassessed' if len(arms) < 2 else 'unbalanced' if unbalanced else 'balanced')
+    return {'arms': arms, 'case_schedule_balance': {'status': balance, 'unbalanced_cases': unbalanced},
+            'qualification': 'unassessed',
             'limitations': ['Grades and provenance are caller-supplied and require independent audit.',
                             'Unknown and missing attempts are not passes.',
+                            'Equal case counts alone do not establish fair or paired comparisons.',
                             'Elapsed time alone does not establish useful response, delivery, or cost.']}

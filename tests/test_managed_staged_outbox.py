@@ -43,6 +43,20 @@ def test_current_managed_authority_stages_only_inert_row(ready):
     assert 'fixture-secret' not in row[2]
 
 
+def test_read_operation_cannot_stage_managed_delivery(ready):
+    import json
+    base, _, _, saved, _ = ready
+    with sqlite3.connect(base[2].db_path) as conn:
+        raw = json.loads(conn.execute("SELECT task_state_json FROM v2_task_checkpoints WHERE task_id='task'").fetchone()[0])
+        raw['metadata']['single_loop_managed_preflight']['operation'] = 'read'
+        conn.execute("UPDATE v2_task_checkpoints SET task_state_json=? WHERE task_id='task'", (json.dumps(raw),))
+    with pytest.raises(ClaimFenceUnavailable):
+        stage(ready)
+    with sqlite3.connect(base[2].db_path) as conn:
+        assert conn.execute('SELECT count(*) FROM v2_outbox').fetchone()[0] == 0
+    assert base[3].load('task', 'alice', expected_version=saved.version).state.inflight == 'action'
+
+
 def test_generic_entrypoints_cannot_bypass_managed_authority(ready):
     base, bindings, session, saved, outbox = ready
     action = base[2].load_task_checkpoint('task').metadata['single_loop_delivery_action']
@@ -58,6 +72,28 @@ def test_generic_entrypoints_cannot_bypass_managed_authority(ready):
         restage_experimental_response_after_restart(base[2].db_path, base[4], **args)
     with sqlite3.connect(base[2].db_path) as conn:
         assert conn.execute('SELECT status FROM v2_outbox WHERE outbox_message_id=?', (identity,)).fetchone()[0] == 'staged'
+
+
+def test_removed_managed_preflight_cannot_fall_back_to_synthetic_staging(ready):
+    """Missing managed metadata cannot change the action's authority mode."""
+    import json
+    base, _, _, saved, outbox = ready
+    with sqlite3.connect(base[2].db_path) as conn:
+        raw = conn.execute("SELECT task_state_json FROM v2_task_checkpoints WHERE task_id='task'").fetchone()[0]
+        task = json.loads(raw)
+        action = task['metadata']['single_loop_delivery_action']
+        assert action['authority_mode'] == 'managed'
+        del task['metadata']['single_loop_managed_preflight']
+        conn.execute("UPDATE v2_task_checkpoints SET task_state_json=? WHERE task_id='task'", (json.dumps(task),))
+    args = dict(checkpoints=base[3], task_id='task', actor='alice', expected_version=saved.version,
+                integration_id=action['integration_id'], provider_key=action['provider_key'],
+                channel_target=action['channel_target'], message='synthetic message',
+                idempotency_key=action['idempotency_key'], clock=lambda: base[6])
+    with pytest.raises(ClaimFenceUnavailable, match='managed_stage_authority_required'):
+        stage_experimental_response(outbox, base[4], **args)
+    with sqlite3.connect(base[2].db_path) as conn:
+        assert conn.execute('SELECT count(*) FROM v2_outbox').fetchone()[0] == 0
+    assert base[3].load('task', 'alice', expected_version=saved.version).state.inflight == 'action'
 
 
 def test_managed_restart_requires_existing_row_and_current_access(ready):

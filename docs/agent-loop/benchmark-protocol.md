@@ -40,3 +40,9 @@ isolation, hardware and setup and avoid attributing them solely to the loop.
 grades are caller-supplied and it cannot verify oracle independence, provenance,
 delivery, provider spending, or the suitability of the benchmark. Retain the
 underlying receipts and evaluator evidence for review.
+
+The summary reports outcome and missing counts for each case within each arm,
+and flags cases whose scheduled repetition counts differ across arms. A single
+arm has unassessed balance. Matching counts alone do not establish paired,
+equivalent environments or a fair comparison; unavailable and interrupted
+attempts remain unknown even when schedules are balanced.

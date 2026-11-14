@@ -22,6 +22,9 @@ from .single_loop_checkpoint import Checkpoint, ExperimentalCheckpointStore
 from .single_loop_delivery_reservation import DeliveryBinding, _reserve_delivery
 
 MANAGED_PREFLIGHT_KEY = 'single_loop_managed_preflight'
+# This experimental first slice supports only the explicit send capability.
+# Other provider operations need their own reviewed effect and authority mapping.
+MANAGED_DELIVERY_OPERATION = 'send'
 _RECORD_KEYS = {'schema_version', 'actor', 'task_id', 'action_id', 'skill_id', 'role', 'binding_id',
                 'binding_revision', 'required_scopes', 'required_executables', 'operation', 'resources',
                 'project_id', 'recipient_user_ids', 'connection_id', 'provider_key', 'channel_target',
@@ -32,12 +35,15 @@ def managed_record_matches(raw: dict, *, task_id: str, actor: str, binding: Deli
     """Check stored preflight shape and action identity, never current authority."""
     record = raw.get('metadata', {}).get(MANAGED_PREFLIGHT_KEY)
     try:
-        if (not isinstance(record, dict) or set(record) != _RECORD_KEYS
+        action = raw.get('metadata', {}).get('single_loop_delivery_action')
+        if (not isinstance(action, dict) or action.get('authority_mode') != 'managed'
+                or not isinstance(record, dict) or set(record) != _RECORD_KEYS
                 or type(record['schema_version']) is not int or record['schema_version'] != 1
                 or any(type(record[key]) is not int or record[key] < 1
                        for key in ('binding_revision', 'grant_revision', 'connection_revision'))
                 or any(not isinstance(record[key], str) or not record[key].strip()
                        for key in ('skill_id', 'role', 'binding_id', 'operation'))
+                or record['operation'] != MANAGED_DELIVERY_OPERATION
                 or (record['project_id'] is not None and
                     (not isinstance(record['project_id'], str) or not record['project_id'].strip()))
                 or (record['project_id'] or '') != str(raw.get('project_id') or '')
@@ -163,6 +169,8 @@ def reserve_managed_delivery(store: ExperimentalCheckpointStore, claim: ClaimRec
             or (project_id is not None and (not isinstance(project_id, str) or not project_id.strip()))):
         raise ValueError('delivery_managed_arguments_invalid')
     actor = session.actor_user_id
+    if operation != MANAGED_DELIVERY_OPERATION:
+        raise PermissionError('delivery_managed_operation_unsupported')
     if not isinstance(actor, str) or not actor.strip() or actor != claim.user_id or actor != binding.recipient_user_id:
         raise PermissionError('delivery_managed_authority_unavailable')
     normalized_resources = _strings(resources)

@@ -9,13 +9,16 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from datetime import datetime
+import json
 import sqlite3
 from typing import Callable
+from uuid import NAMESPACE_URL, uuid5
 
 from alphonse.agent_v2.core.intelligence.v3.single_loop_checkpoint import ExperimentalCheckpointStore
-from alphonse.agent_v2.core.intelligence.v3.single_loop_delivery_reservation import ACTION_KEY, ACTION_SCHEMA_VERSION, DeliveryBinding
+from alphonse.agent_v2.core.intelligence.v3.single_loop_delivery_reservation import ACTION_KEY, ACTION_SCHEMA_VERSION, DeliveryBinding, delivery_claim_matches
 from alphonse.agent_v2.core.intelligence.v3.single_loop_managed_delivery import MANAGED_PREFLIGHT_KEY
 from alphonse.agent_v2.core.messages.claim_fence import ClaimFenceUnavailable, ClaimReceipt, fenced_claim_transaction
+from alphonse.agent_v2.core.io.experimental_staged_outbox import _validate_dispatch_schema
 
 
 def settle_fixture_delivery(store: ExperimentalCheckpointStore, claim: ClaimReceipt, *,
@@ -52,13 +55,27 @@ def settle_fixture_delivery(store: ExperimentalCheckpointStore, claim: ClaimRece
                 keys = {'action_id', 'integration_id', 'provider_key', 'channel_target', 'recipient_user_id',
                         'message_digest', 'idempotency_key', 'grant_id', 'grant_revision', 'connection_revision'}
                 if (raw.get('message_id') != claim.message_id or not isinstance(record, dict)
-                        or set(record) != keys | {'schema_version', 'operation', 'task_id', 'actor'}
+                        or set(record) != keys | {'schema_version', 'operation', 'task_id', 'actor', 'authority_mode', 'claim_digest'}
                         or type(record['schema_version']) is not int or record['schema_version'] != ACTION_SCHEMA_VERSION
-                        or record['operation'] != 'delivery' or record['task_id'] != task_id or record['actor'] != actor):
+                        or record['operation'] != 'delivery' or record['task_id'] != task_id or record['actor'] != actor
+                        or record['authority_mode'] != 'synthetic' or not delivery_claim_matches(record, claim)):
                     raise ClaimFenceUnavailable('fixture_settlement_unavailable')
                 binding = DeliveryBinding(**{key: record[key] for key in keys})
                 pending = budget.to_dict()['reservations'].get(state.inflight)
                 if state.inflight != binding.action_id or not pending or pending['kind'] != 'tool' or pending['status'] != 'reserved':
+                    raise ClaimFenceUnavailable('fixture_settlement_unavailable')
+                # A fixture effect alone is not evidence that this acquisition
+                # recorded a dispatch attempt. The immutable marker is created
+                # in a separate earlier transaction, before fixture dispatch.
+                _validate_dispatch_schema(conn)
+                staged_id = str(uuid5(NAMESPACE_URL, 'alphonse-experimental-stage:' +
+                                      json.dumps([task_id, binding.idempotency_key], ensure_ascii=True,
+                                                 separators=(',', ':'))))
+                marker = conn.execute('''SELECT task_id,actor,action_id,claim_digest,status
+                    FROM main.experimental_staged_dispatch_attempts WHERE outbox_message_id=?''',
+                    (staged_id,)).fetchone()
+                if marker is None or tuple(marker) != (task_id, actor, binding.action_id,
+                                                       record['claim_digest'], 'started'):
                     raise ClaimFenceUnavailable('fixture_settlement_unavailable')
                 # These two rows are fixture-owned, not model or caller input.
                 grants = conn.execute('''SELECT actor,recipient,integration,provider,channel,grant_id,revision,connection_revision,active

@@ -11,7 +11,7 @@ from alphonse.agent_v2.core.intelligence.v3.single_loop_candidate import Candida
 from alphonse.agent_v2.core.intelligence.v3.single_loop_checkpoint import ENGINE, CheckpointConflict, ExperimentalCheckpointStore
 from alphonse.agent_v2.core.intelligence.v3.task_budget import BudgetLimits, BudgetExhausted, TaskBudget
 from alphonse.agent_v2.core.messages.claim_fence import ClaimFenceUnavailable, ClaimSuperseded
-from alphonse.agent_v2.core.messages.experimental_claim_checkpoint import reserve_model_under_claim
+from alphonse.agent_v2.core.messages.experimental_claim_checkpoint import reserve_model_under_claim, settle_model_under_claim
 from alphonse.agent_v2.core.messages.sqlite_queue import SQLiteMessageQueue
 from alphonse.agent_v2.core.questions import SQLiteQuestionStore
 from alphonse.agent_v2.users import V2UserStore
@@ -135,3 +135,100 @@ def test_rejected_budget_clock_observation_is_fenced_and_persisted(setup):
     restored = store.load('task', 'alice', expected_version=version + 1)
     assert not restored.state.inflight
     assert restored.budget.last_observed_at_ms == int((now + timedelta(milliseconds=2)).timestamp() * 1000)
+
+
+def settle(f, version, **kwargs):
+    _, _, _, store, claim, _, now = f
+    return settle_model_under_claim(store, kwargs.pop('claim', claim), task_id='task',
+        actor=kwargs.pop('actor', 'alice'), expected_version=version, reservation_id='model-1',
+        outcome=kwargs.pop('outcome', 'success'), input_tokens=kwargs.pop('input_tokens', 25),
+        output_tokens=kwargs.pop('output_tokens', 10), clock=kwargs.pop('clock', lambda: now), **kwargs)
+
+
+def test_exact_acquisition_settles_and_generic_writer_cannot_bypass(setup):
+    _, _, questions, store, claim, _, _ = setup
+    reserved = reserve(setup)
+    with pytest.raises(CheckpointConflict, match='fenced_settlement_required'):
+        store.settle('task', 'alice', expected_version=reserved.version, reservation_id='model-1', outcome='success')
+    metadata = questions.load_task_checkpoint('task').metadata
+    assert claim.claim_generation not in str(metadata)
+    settled = settle(setup, reserved.version)
+    assert not settled.state.inflight
+    assert settled.budget.to_dict()['reservations']['model-1']['outcome'] == 'success'
+    assert 'single_loop_model_claim' not in questions.load_task_checkpoint('task').metadata
+
+
+def test_same_owner_new_generation_cannot_settle_old_reservation(setup):
+    queue, _, _, store, old, _, _ = setup
+    reserved = reserve(setup)
+    simulate_old_writer_requeue(queue, 'message')
+    newer = queue.claim_next().claim_receipt
+    assert newer.lease_owner == old.lease_owner and newer.claim_generation != old.claim_generation
+    with pytest.raises(ClaimSuperseded):
+        settle(setup, reserved.version)
+    with pytest.raises(CheckpointConflict, match='binding_unavailable'):
+        settle(setup, reserved.version, claim=newer)
+    assert store.load('task', 'alice', expected_version=reserved.version).state.inflight == 'model-1'
+
+
+def test_settlement_preserves_marker_on_expiry_cancellation_and_invalid_usage(setup):
+    _, _, questions, store, _, _, now = setup
+    reserved = reserve(setup)
+    moments = iter((now, now + timedelta(days=1)))
+    with pytest.raises(ClaimSuperseded):
+        settle(setup, reserved.version, clock=lambda: next(moments))
+    with pytest.raises(ValueError):
+        settle(setup, reserved.version, input_tokens=True)
+    assert questions.mark_task_checkpoint_terminal('task', status='cancelled')
+    with pytest.raises(CheckpointConflict):
+        settle(setup, reserved.version)
+    assert store.inspect_cancelled('task', 'alice', expected_version=reserved.version)['inflight'] == 'model-1'
+
+
+def test_settlement_keeps_unknown_usage_and_blocks_future_model_reservation(setup):
+    _, _, _, store, _, _, _ = setup
+    reserved = reserve(setup)
+    settled = settle(setup, reserved.version, input_tokens=None)
+    assert settled.budget.usage()['unknown_usage'] == ['model-1']
+    with pytest.raises(CheckpointConflict, match='usage_unresolved'):
+        reserve(setup, version=settled.version, reservation_id='model-2')
+
+
+def test_settlement_rolls_back_if_trigger_changes_checkpoint(setup):
+    _, _, questions, store, _, _, _ = setup
+    reserved = reserve(setup)
+    with questions._connect() as conn:
+        conn.execute("""CREATE TRIGGER corrupt_model_settlement AFTER UPDATE ON v2_task_checkpoints
+            BEGIN UPDATE v2_task_checkpoints SET task_state_json=json_set(NEW.task_state_json, '$.goal', 'changed')
+            WHERE task_id=NEW.task_id; END""")
+    with pytest.raises(ClaimFenceUnavailable, match='changed'):
+        settle(setup, reserved.version)
+    restored = store.load('task', 'alice', expected_version=reserved.version)
+    assert restored.state.inflight == 'model-1'
+    assert restored.budget.usage()['in_flight'] == ['model-1']
+
+
+def test_orphaned_claim_binding_blocks_legacy_initialization_and_reservation(setup):
+    _, _, questions, store, _, version, now = setup
+    with questions._connect() as conn:
+        raw = conn.execute("SELECT task_state_json FROM v2_task_checkpoints WHERE task_id='task'").fetchone()[0]
+        import json
+        data = json.loads(raw)
+        data['metadata']['single_loop_model_claim'] = {'corrupt': True}
+        conn.execute("UPDATE v2_task_checkpoints SET task_state_json=? WHERE task_id='task'", (json.dumps(data),))
+    amounts = {'actions': 0, 'model_calls': 1, 'input_tokens': 100, 'output_tokens': 50}
+    with pytest.raises(CheckpointConflict, match='binding_unresolved'):
+        store.reserve('task', 'alice', expected_version=version, reservation_id='new', kind='model',
+                      amounts=amounts, now_ms=int(now.timestamp() * 1000))
+    with pytest.raises(CheckpointConflict, match='fenced_settlement_required'):
+        store.settle('task', 'alice', expected_version=version, reservation_id='new', outcome='success')
+    # Even a missing envelope must not let initialization adopt the orphan.
+    with questions._connect() as conn:
+        del data['metadata']['single_loop_checkpoint']
+        conn.execute("UPDATE v2_task_checkpoints SET task_state_json=? WHERE task_id='task'", (json.dumps(data),))
+    total = dict(actions=2, model_calls=2, input_tokens=500, output_tokens=200)
+    final = dict(actions=0, model_calls=0, input_tokens=0, output_tokens=0)
+    with pytest.raises(CheckpointConflict, match='binding_unresolved'):
+        store.initialize('task', 'alice', expected_version=version,
+            state=CandidateState('task', 'alice', 'goal'),
+            budget=TaskBudget(BudgetLimits(total, final, 10000, 0), started_at_ms=int(now.timestamp() * 1000)))

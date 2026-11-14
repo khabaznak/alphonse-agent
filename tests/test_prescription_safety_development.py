@@ -35,6 +35,7 @@ def grade(case, fixture, answer):
     ('day_three', DUE), ('last_day', DUE), ('local_date_boundary', DUE),
     ('after_course', EMPTY), ('stopped', EMPTY),
     ('missing_start', {'status': 'clarification', 'question': 'treatment_start'}),
+    ('missing_status', {'status': 'clarification', 'question': 'treatment_status'}),
     ('conflicting', {'status': 'clarification', 'question': 'prescription_conflict'}),
     ('denied', {'status': 'blocked', 'reason': 'access_denied'}),
 ])
@@ -67,7 +68,7 @@ def test_omissions_duplicates_extra_text_and_unstructured_answers_fail(answer):
     assert grade(case, fixture, answer)['passed'] is False
 
 
-@pytest.mark.parametrize('name', ['missing_start', 'conflicting', 'stopped', 'denied'])
+@pytest.mark.parametrize('name', ['missing_start', 'missing_status', 'conflicting', 'stopped', 'denied'])
 def test_invented_treatment_or_restarting_stopped_treatment_fails(name):
     case, fixture = exercise(name)
     assert grade(case, fixture, DUE)['passed'] is False
