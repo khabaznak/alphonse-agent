@@ -16,6 +16,44 @@ SEARCH_MEMORY_TOOL_NAME = "search_memory"
 READ_MEMORY_SOURCE_TOOL_ID = "native.read_memory_source"
 
 
+def complete_conversation_search(actor: str, tool_id: str, arguments: dict[str, Any], payload: dict[str, Any]) -> bool:
+    """Recognize a complete direct-owner search page, not an absence proof.
+
+    The native tool must have run under the authenticated actor. This checks
+    the response envelope only; it does not fence changes or establish that
+    historical search results are current, exhaustive in meaning, or authorized
+    for later publication. Partial/truncated results need a richer host.
+    """
+    query = arguments.get('query')
+    if (not isinstance(actor, str) or not actor.strip() or tool_id != SEARCH_MEMORY_TOOL_ID
+            or arguments.get('source_types') != ['conversation']
+            or not isinstance(query, str) or not query.strip()
+            or type(arguments.get('offset', 0)) is not int or arguments.get('offset', 0) != 0
+            or type(payload.get('schema_version')) is not int or payload.get('schema_version') != 2
+            or payload.get('query') != query.strip() or payload.get('status') not in ('found', 'empty')
+            or payload.get('coverage') != {'conversation': 'complete'} or payload.get('backend') != 'sqlite_fts5'
+            or payload.get('next_offset') is not None or payload.get('truncated') is not False):
+        return False
+    results = payload.get('results')
+    if (not isinstance(results, list) or type(payload.get('total_matches')) is not int
+            or payload['total_matches'] != len(results)
+            or (payload['status'] == 'found') != bool(results)):
+        return False
+    for item in results:
+        if not isinstance(item, dict):
+            return False
+        source_id = item.get('source_id')
+        source = item.get('source')
+        access = source.get('access') if isinstance(source, dict) else None
+        if (not isinstance(source_id, str) or not source_id.startswith('conversation:')
+                or item.get('source_type') != 'conversation' or not isinstance(source, dict)
+                or source.get('source_id') != source_id or source.get('kind') != 'conversation'
+                or not isinstance(access, dict) or access.get('owner_user_id') != actor
+                or item.get('truncated') is not False):
+            return False
+    return True
+
+
 def complete_conversation_read(actor: str, tool_id: str, arguments: dict[str, Any], payload: dict[str, Any]) -> bool:
     """Recognize a complete direct-owner conversation read, not current authority.
 

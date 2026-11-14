@@ -8,8 +8,8 @@ from importlib import import_module
 from alphonse.agent_v2.core.core import CoreLoopContext
 from alphonse.agent_v2.core.core import CoreMessage
 from alphonse.agent_v2.core.core import LoopStepStatus
-from alphonse.agent_v2.core.intelligence.pdca.nodes import do_node
-from alphonse.agent_v2.core.intelligence.pdca.processor import PDCAIntelligenceProcessor
+from alphonse.agent_v2.evaluation.legacy_pdca.nodes import do_node
+from alphonse.agent_v2.evaluation.legacy_pdca.processor import PDCAIntelligenceProcessor
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
 from alphonse.agent_v2.core.questions import SQLiteQuestionStore
@@ -128,7 +128,7 @@ def test_multiple_pending_questions_are_ambiguous_without_direct_reference() -> 
 
 def test_pdca_processor_returns_parked_status_for_waiting_question(monkeypatch) -> None:
     acceptance_planning = import_module("alphonse.agent_v2.core.intelligence.acceptance_planning")
-    plan_module = import_module("alphonse.agent_v2.core.intelligence.pdca.nodes.plan_node")
+    plan_module = import_module("alphonse.agent_v2.evaluation.legacy_pdca.nodes.plan_node")
 
     monkeypatch.setattr(acceptance_planning, "_call_acceptance_criteria_llm", lambda prompt: "1.- [ ] Confirmation received")
     monkeypatch.setattr(
@@ -167,7 +167,7 @@ def test_core_parked_result_leaves_loop_available(monkeypatch) -> None:
     from alphonse.agent_v2.interfaces.tui import InMemoryInternalState, NullMemory, NullPromptLoader
 
     acceptance_planning = import_module("alphonse.agent_v2.core.intelligence.acceptance_planning")
-    plan_module = import_module("alphonse.agent_v2.core.intelligence.pdca.nodes.plan_node")
+    plan_module = import_module("alphonse.agent_v2.evaluation.legacy_pdca.nodes.plan_node")
     monkeypatch.setattr(acceptance_planning, "_call_acceptance_criteria_llm", lambda prompt: "1.- [ ] Confirmation received")
     monkeypatch.setattr(
         plan_module,

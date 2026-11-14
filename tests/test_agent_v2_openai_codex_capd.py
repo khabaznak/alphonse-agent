@@ -11,8 +11,8 @@ from alphonse.agent_v2.core.inference import InferenceRouter
 from alphonse.agent_v2.core.inference import ModelProfile
 from alphonse.agent_v2.core.inference import OpenAICodexProvider
 from alphonse.agent_v2.core.inference import OpenAICodexProviderConfig
-from alphonse.agent_v2.core.intelligence.pdca.nodes.check_node import check_node
-from alphonse.agent_v2.core.intelligence.pdca.nodes.plan_node import plan_node
+from alphonse.agent_v2.evaluation.legacy_pdca.nodes.check_node import check_node
+from alphonse.agent_v2.evaluation.legacy_pdca.nodes.plan_node import plan_node
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
 

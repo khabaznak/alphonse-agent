@@ -7,7 +7,7 @@ from alphonse.agent_v2.core.core import ImprovementPhase
 from alphonse.agent_v2.core.core import ProcessingResult
 from alphonse.agent_v2.core.core import ProcessingStatus
 from alphonse.agent_v2.core.core import StateSnapshot
-from alphonse.agent_v2.core.intelligence.pdca.graph import run_pdca_once
+from alphonse.agent_v2.evaluation.legacy_pdca.graph import run_pdca_once
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 
 

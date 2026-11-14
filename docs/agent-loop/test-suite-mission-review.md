@@ -786,6 +786,86 @@ tests/test_coding_skill_runtime.py tests/test_coding_skill_service.py` —
 **20 passed in 0.38 seconds**. No live account, container or household data was
 used.
 
+### Household users and deletion recovery: two files
+
+On 14 November, individually reviewed **25 functions / 25 cases** in
+`test_agent_v2_users.py` (13) and `test_user_deletion_recovery_order.py` (12).
+These exercise user, project, filesystem and daemon infrastructure shared by
+the current bridge; they do not demonstrate that the candidate loop integrates
+with these lifecycle operations. All use disposable records and paths.
+
+| User function suffix | Disposition and behavior |
+| --- | --- |
+| `user_timezone_persists_when_store_is_reopened` | Retain: timezone survives database reopening. |
+| `timezone_can_be_configured_per_user_with_global_fallback` | Retain: distinct user override and fallback. |
+| `automation_preferred_channel_copy_setting_defaults_off_and_persists` | Retain: default and persisted preference; no dispatch is exercised. |
+| `onboarding_creates_uuid_admin_profile_and_context` | Retain: initial administrator identity, profile and state. |
+| `workspace_root_is_required_state_and_migrates_user_data_idempotently` | Retain: workspace changes preserve profile and daily data across repeated migration; it checks a copy remains, not every crash point. |
+| `workspace_migration_moves_managed_projects_and_keeps_imported_roots` | Retain: managed content moves while an imported external root stays in place. |
+| `v2_address_mapping_resolves_without_v1_identity` | Retain: distinct inbound and outbound channel-to-user mappings. |
+| `user_aliases_are_unique_and_limited_to_two` | Retain: normalization, ownership conflict and limit. |
+| `non_admin_profile_projects_and_membership_are_isolated` | Retain: owner privacy, shared visibility and member write denial. |
+| `onboarding_migrates_legacy_local_projects` | Retain: daemon transfers legacy project ownership during onboarding. |
+| `hard_delete_removes_user_profile_projects_and_addresses` | Retain: daemon removes a user, owned project and profile. Despite its name, the test does not independently inspect the address table after deletion. |
+| `daemon_approval_binds_request_and_allows_its_private_chat` | Retain: accepted access request updates the matching integration channel allowlist. |
+| `hard_delete_requires_exact_confirmation_and_never_deletes_admin` | Retain: deletion of an admin is rejected. Despite its name, it does not try a member with incorrect confirmation; its broad `ValueError` does not distinguish reasons. |
+
+| Deletion-recovery function suffix | Disposition and behavior |
+| --- | --- |
+| `project_cleanup_failure_preserves_owner_rows_for_retry` | Retain: failed project filesystem removal leaves project/user rows and file, then retry completes. |
+| `profile_cleanup_failure_keeps_user_and_addresses_for_retry` | Retain: profile failure retains the user and address, followed by retry. |
+| `project_symlink_escape_is_rejected_before_rows_or_external_data_change` | Retain: replacement project symlink cannot cause external deletion or row removal. |
+| `profile_symlink_is_rejected_before_user_row_removal` | Retain: profile symlink protects external data and user row. |
+| `interrupted_project_cleanup_keeps_rows_for_idempotent_retry` | Retain: interruption after project removal keeps rows and allows retry. |
+| `project_record_inside_another_profile_does_not_delete_other_users_data` | Retain: invalid cross-owner project root is rejected without destroying either owner's data. |
+| `deletion_order_works_when_user_and_project_stores_share_database` | Retain: shared-database deletion ordering and filesystem removal. |
+| `interrupted_profile_cleanup_keeps_user_row_for_idempotent_retry` | Retain: interrupted profile removal retains user row and supports retry. |
+| `parent_symlink_swap_during_project_removal_never_deletes_external_data` | Retain: parent replacement during removal does not follow the outside path. |
+| `missing_inner_entry_does_not_mark_project_cleanup_complete` | Retain: an interrupted inner filesystem removal cannot be mistaken for completed cleanup. |
+| `missing_users_root_is_not_treated_as_successful_profile_cleanup` | Retain: unavailable root retains the user and existing moved profile. |
+| `platform_without_safe_fd_removal_fails_closed` | Retain: unsupported contained removal preserves project and user. |
+
+No case or assertion was removed in this pass: superficially similar cleanup
+tests exercise different failure points and retained records. Validation:
+both files **25 passed in 0.55 seconds**, with a temporary pytest plugin
+redirecting the default legacy users root and skill/config paths to disposable
+storage. Explicitly configured fixture roots were preserved; this setup does
+not verify the real default-root configuration. No live household data or model
+was used, and this focused run was not the full suite.
+
+### Inbound channel and communication routing: two files
+
+On 14 November, individually reviewed **15 original functions / 15 cases** in
+`test_agent_v2_communication_channel.py` (10) and
+`test_agent_v2_communication_router.py` (5). These exercise shared messaging
+with disposable queues and stores, not live provider delivery or a qualified
+simpler-loop conversation.
+
+| Channel function suffix | Disposition and behavior |
+| --- | --- |
+| `queue_message_requires_project_provenance` | Retain: queues the prompt and user with a project argument. Despite its name, the assertions do not inspect stored project provenance or verify rejection when absent. |
+| `queue_message_accepts_unassociated_conversation_message` | Retain: ordinary conversation may have no project. |
+| `queue_message_generates_timezone_aware_local_timestamp` | Retain: generated timestamp is timezone aware. |
+| `queue_message_preserves_explicit_timestamp` | Retain: caller-provided timestamp survives queueing. |
+| `selector_dequeues_by_user_project_id_and_tag` | Retain: combined selector chooses the correct queued message. |
+| `queue_message_preserves_correlation_id_for_selector_lookup` | Retain: correlation ID both selects and survives in message. |
+| `slash_command_detected_only_at_prompt_start` | Retain: command fields, channel defaults and literal mid-sentence/indented text. It also asserts the exact legacy command metadata covered by the removed case below. |
+| `queue_message_accepts_explicit_channel_metadata` | Retain: provider, address, reply and thread metadata survive. |
+| `legacy_slash_command_metadata_shape_is_still_available` | Remove: its only three metadata assertions duplicate the retained slash-command test with the same command and inputs. No asserted behavior is lost; the focused rerun validates the remaining coverage. |
+| `blank_prompt_or_user_raises_value_error` | Retain: independently rejects blank prompt and user. |
+
+| Communication-router function suffix | Disposition and behavior |
+| --- | --- |
+| `deliver_to_user_uses_recipient_address_and_relays_explicit_reply` | Retain: queued recipient address, labeled content and correlated inbound relay. Provider delivery is simulated by marking the thread delivered. |
+| `scheduled_communication_retries_reuse_outbox_and_thread` | Retain: repeated scheduled request reuses one message, records recipient and occurrence, and separate subgoal gets another message; delivery is simulated. |
+| `plain_reply_requires_exactly_one_open_thread_and_unknown_recipient_is_safe` | Retain: unknown recipient and a reply with one open thread. Despite its name, it does not try two open threads. |
+| `recipient_resolution_supports_nickname_unaccented_name_and_rejects_ambiguity` | Retain: exact nickname, name normalization and ambiguous prefix. |
+| `inbound_router_consumes_linked_reply_before_queueing_capd_work` | Retain: correlated reply is handled without starting new queued work. |
+
+The duplicate case removal leaves **14 cases**, all passing in 0.11 seconds.
+Validation used both files and the same disposable default-root, skills and
+config isolation described above; it is not a full-suite run.
+
 ## Mission coverage and next review passes
 
 Keep behavior that protects real household outcomes while the relevant feature

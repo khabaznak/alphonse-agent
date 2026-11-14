@@ -74,7 +74,7 @@ def test_steering_amendment_adds_without_changing_existing_definition() -> None:
 def test_interactive_completion_requires_prepared_response(v2_decisions) -> None:
     task = TaskState(check_verdict="wip", acceptance_criteria_md="1.- [x] Medicine identified")
 
-    from alphonse.agent_v2.core.intelligence.pdca.nodes.act_node import act_node
+    from alphonse.agent_v2.evaluation.legacy_pdca.nodes.act_node import act_node
 
     from alphonse.agent_v2.core.core import CoreLoopContext
     from alphonse.agent_v2.core.messages import InMemoryMessageQueue

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from alphonse.agent_v2.core.intelligence.pdca.nodes.act_node import act_node
+from alphonse.agent_v2.evaluation.legacy_pdca.nodes.act_node import act_node
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 
 

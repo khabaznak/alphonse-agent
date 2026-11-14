@@ -8,10 +8,10 @@ from langgraph.graph import END
 from langgraph.graph import StateGraph
 
 from alphonse.agent_v2.core.core import CoreLoopContext
-from alphonse.agent_v2.core.intelligence.pdca.nodes.act_node import act_node
-from alphonse.agent_v2.core.intelligence.pdca.nodes.check_node import check_node
-from alphonse.agent_v2.core.intelligence.pdca.nodes.do_node import do_node
-from alphonse.agent_v2.core.intelligence.pdca.nodes.plan_node import plan_node
+from alphonse.agent_v2.evaluation.legacy_pdca.nodes.act_node import act_node
+from alphonse.agent_v2.evaluation.legacy_pdca.nodes.check_node import check_node
+from alphonse.agent_v2.evaluation.legacy_pdca.nodes.do_node import do_node
+from alphonse.agent_v2.evaluation.legacy_pdca.nodes.plan_node import plan_node
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 
 

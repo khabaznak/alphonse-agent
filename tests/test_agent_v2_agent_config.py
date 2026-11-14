@@ -12,9 +12,9 @@ from alphonse.agent_v2.agent_config import packaged_agent_config_dir
 from alphonse.agent_v2.core.intelligence import TaskState
 from alphonse.agent_v2.core.core import CoreLoopContext
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
-from alphonse.agent_v2.core.intelligence.pdca.nodes.plan_node import plan_node
+from alphonse.agent_v2.evaluation.legacy_pdca.nodes.plan_node import plan_node
 from alphonse.agent_v2.core.intelligence.acceptance_planning import _render_acceptance_criteria_prompt
-from alphonse.agent_v2.core.intelligence.pdca.nodes.plan_node import _render_tool_call_plan_prompt
+from alphonse.agent_v2.evaluation.legacy_pdca.nodes.plan_node import _render_tool_call_plan_prompt
 
 
 def test_agent_config_store_seeds_defaults_and_persists_edits(tmp_path) -> None:

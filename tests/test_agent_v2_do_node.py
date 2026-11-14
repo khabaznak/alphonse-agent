@@ -6,7 +6,7 @@ from typing import Any
 from alphonse.agent_v2.core.core import CoreLoopContext
 from alphonse.agent_v2.core.core import ToolDescriptor
 from alphonse.agent_v2.core.core import ToolKind
-from alphonse.agent_v2.core.intelligence.pdca.nodes import do_node
+from alphonse.agent_v2.evaluation.legacy_pdca.nodes import do_node
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
 
@@ -112,7 +112,7 @@ def test_silent_successful_bash_requires_model_authored_response_before_completi
 
     assert task.metadata["pending_silent_bash_confirmation"]["tool_call_id"] == "bash-call"
 
-    from alphonse.agent_v2.core.intelligence.pdca.nodes import act_node
+    from alphonse.agent_v2.evaluation.legacy_pdca.nodes import act_node
     context.system_one = v2_decisions()
     act_node(task, context=context)
     assert task.metadata["act_route"] == "plan"

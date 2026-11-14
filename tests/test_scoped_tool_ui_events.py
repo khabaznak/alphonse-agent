@@ -92,7 +92,7 @@ def test_v3_reveal_event_is_scoped_and_missing_actor_is_not_broadcast():
 
 
 def test_v2_direct_tool_events_are_scoped_and_execution_still_succeeds():
-    from alphonse.agent_v2.core.intelligence.pdca.nodes import do_node
+    from alphonse.agent_v2.evaluation.legacy_pdca.nodes import do_node
     context, events = setup()
     for actor in ('alice', 'bob', ''):
         task = TaskState(task_id=actor or 'anonymous', user=actor)
@@ -110,7 +110,7 @@ def test_v2_direct_tool_events_are_scoped_and_execution_still_succeeds():
 
 
 def test_v2_program_events_are_scoped_and_execution_still_succeeds():
-    from alphonse.agent_v2.core.intelligence.pdca.nodes import do_node
+    from alphonse.agent_v2.evaluation.legacy_pdca.nodes import do_node
     context, events = setup()
     context.program_runner = SimpleNamespace(run=lambda **kwargs: {
         'status': 'success', 'program_result': 'private-program-result', 'tool_calls': []})
@@ -184,9 +184,9 @@ def test_real_agui_scopes_tool_results_and_drops_unowned_sensitive_events():
 
 
 def test_anonymous_v2_and_v3_processors_do_not_publish_task(monkeypatch):
-    from alphonse.agent_v2.core.intelligence.pdca.processor import PDCAIntelligenceProcessor
+    from alphonse.agent_v2.evaluation.legacy_pdca.processor import PDCAIntelligenceProcessor
     from alphonse.agent_v2.core.intelligence.v3.processor import HierarchicalCAPDProcessor
-    import alphonse.agent_v2.core.intelligence.pdca.processor as pdca_processor
+    import alphonse.agent_v2.evaluation.legacy_pdca.processor as pdca_processor
     context, events = setup()
     anonymous = TaskState(task_id='anonymous', goal='private-anonymous-goal')
     # Drive the real V2 processor's parked-event and terminal-emission branches

@@ -11,12 +11,12 @@ from alphonse.agent_v2.core.core import ProcessingStatus
 from alphonse.agent_v2.core.core import StateSnapshot
 from alphonse.agent_v2.core.core import ToolDescriptor
 from alphonse.agent_v2.core.core import ToolKind
-from alphonse.agent_v2.core.intelligence.pdca import PDCAIntelligenceProcessor
+from alphonse.agent_v2.evaluation.legacy_pdca import PDCAIntelligenceProcessor
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
 from alphonse.agent_v2.core.state import reset_state
 
-plan_node_module = import_module("alphonse.agent_v2.core.intelligence.pdca.nodes.plan_node")
+plan_node_module = import_module("alphonse.agent_v2.evaluation.legacy_pdca.nodes.plan_node")
 
 
 def test_pdca_processor_reports_unavailable_acceptance_planning() -> None:

@@ -56,6 +56,25 @@ for normal household conversations and the production release gates remain open.
 
 ### Reference and source-variant exercise — 14 November
 
+#### Identity follow-up
+
+Added evaluation-only guidance that finding one record does not establish
+its identity, and to resolve the reference from evidence or express uncertainty.
+The same four public development variants were attempted once each. Agreement
+matched the answer and designated source criterion, but also read optional
+status. Superseded and resolution matched their answer keys but missed the
+conversation record designated by the fixture. The missing-record case read
+both designated sources and ended waiting for the user rather than producing
+the expected JSON unknown; the question text, usefulness and delivery were not
+retained or assessed, so this is not evidence that it asked a useful question.
+
+Categorical answer-shape diagnostics were added without storing model text.
+The plan and all attempts are in
+`evidence/gym-cycle-2026-11-13/selective-identity-v3-*`. These are repeated
+tuned development cases, not held-out or causal evidence. The source criterion
+is conservative; bearer audit does not establish the reader or when an answer
+formed, and provider token usage and actual delivery were unassessed.
+
 #### Neutral source-catalog follow-up
 
 The chooser already received the available source names, but the original

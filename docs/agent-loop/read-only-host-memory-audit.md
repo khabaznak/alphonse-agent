@@ -20,6 +20,18 @@ revocation during I/O, fence UI/memory events, or make publication safe. The
 experiment does not register a household host or use household data. Those
 boundaries still require the controls below before owner use.
 
+The disposable candidate can now discover a conversation source using the
+actual `native.search_memory` operation, then read the discovered source with
+`native.read_memory_source`, instead of requiring a preknown source ID. The
+search validator accepts only a complete, non-truncated direct-owner
+conversation result page; another actor's source, pagination, a partial result
+or an unavailable backend cannot be promoted as a complete page. A successful
+search is still historical evidence, not proof that no relevant record exists
+or that a later answer is current. The end-to-end component test uses a
+scripted chooser, disposable SQLite, the actual registry and invocation, and
+separately checks that another owner's synthetic record is not exposed. It is
+not a daemon path, an authenticated household host, or delivery verification.
+
 `native.search_memory` and `native.read_memory_source` are plausible first
 operations because they support multi-source conversation tasks and advertise
 read-only descriptors. Their behavior still needs a production host contract

@@ -10,14 +10,14 @@ from alphonse.agent_v2.core.inference import InferencePurpose
 from alphonse.agent_v2.core.inference import InferenceRouter
 from alphonse.agent_v2.core.inference import ModelProfile
 from alphonse.agent_v2.core.inference import StubInferenceProvider
-from alphonse.agent_v2.core.intelligence.pdca.nodes import plan_node
+from alphonse.agent_v2.evaluation.legacy_pdca.nodes import plan_node
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
 from alphonse.agent_v2.core.tools.registry.native import BASH_TOOL_ID
 from alphonse.agent_v2.core.tools.registry.native import BASH_TOOL_NAME
 from alphonse.agent_v2.core.tools.registry.native import build_native_tool_registry
 
-plan_node_module = import_module("alphonse.agent_v2.core.intelligence.pdca.nodes.plan_node")
+plan_node_module = import_module("alphonse.agent_v2.evaluation.legacy_pdca.nodes.plan_node")
 
 
 def test_plan_node_renders_tool_call_prompt_with_available_tools() -> None:

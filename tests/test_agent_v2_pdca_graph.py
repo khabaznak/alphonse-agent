@@ -2,16 +2,16 @@ from __future__ import annotations
 
 from typing import Any
 
-from alphonse.agent_v2.core.intelligence.pdca import ACT_NODE
-from alphonse.agent_v2.core.intelligence.pdca import CHECK_NODE
-from alphonse.agent_v2.core.intelligence.pdca import DO_NODE
-from alphonse.agent_v2.core.intelligence.pdca import PLAN_NODE
-from alphonse.agent_v2.core.intelligence.pdca import build_pdca_graph
-from alphonse.agent_v2.core.intelligence.pdca import run_pdca_once
-from alphonse.agent_v2.core.intelligence.pdca.graph import _route_after_act
-from alphonse.agent_v2.core.intelligence.pdca.nodes import act_node
-from alphonse.agent_v2.core.intelligence.pdca.nodes import check_node
-from alphonse.agent_v2.core.intelligence.pdca.nodes import plan_node
+from alphonse.agent_v2.evaluation.legacy_pdca import ACT_NODE
+from alphonse.agent_v2.evaluation.legacy_pdca import CHECK_NODE
+from alphonse.agent_v2.evaluation.legacy_pdca import DO_NODE
+from alphonse.agent_v2.evaluation.legacy_pdca import PLAN_NODE
+from alphonse.agent_v2.evaluation.legacy_pdca import build_pdca_graph
+from alphonse.agent_v2.evaluation.legacy_pdca import run_pdca_once
+from alphonse.agent_v2.evaluation.legacy_pdca.graph import _route_after_act
+from alphonse.agent_v2.evaluation.legacy_pdca.nodes import act_node
+from alphonse.agent_v2.evaluation.legacy_pdca.nodes import check_node
+from alphonse.agent_v2.evaluation.legacy_pdca.nodes import plan_node
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.core import CoreLoopContext
 from alphonse.agent_v2.core.core import ToolDescriptor
@@ -182,7 +182,7 @@ def test_act_route_after_wip_incomplete_criteria_can_continue_to_plan(v2_decisio
 def _plan_node_module():
     from importlib import import_module
 
-    return import_module("alphonse.agent_v2.core.intelligence.pdca.nodes.plan_node")
+    return import_module("alphonse.agent_v2.evaluation.legacy_pdca.nodes.plan_node")
 
 
 

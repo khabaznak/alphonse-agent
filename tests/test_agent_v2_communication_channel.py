@@ -122,17 +122,6 @@ def test_queue_message_accepts_explicit_channel_metadata() -> None:
     }
 
 
-def test_legacy_slash_command_metadata_shape_is_still_available() -> None:
-    channel = CommunicationChannel(InMemoryMessageQueue())
-    command = channel.queue_message(prompt="/project new", user="alex", project_id="home").message
-
-    assert {key: command.metadata[key] for key in ("is_command", "command", "command_args")} == {
-        "is_command": True,
-        "command": "project",
-        "command_args": "new",
-    }
-
-
 def test_blank_prompt_or_user_raises_value_error() -> None:
     channel = CommunicationChannel(InMemoryMessageQueue())
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from alphonse.agent_v2.core.core import CoreLoopContext
-from alphonse.agent_v2.core.intelligence.pdca.nodes.check_node import check_node
+from alphonse.agent_v2.evaluation.legacy_pdca.nodes.check_node import check_node
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.messages import CommunicationChannel, InMemoryMessageQueue
 from alphonse.agent_v2.system_one import SystemOneReviewResult, SystemOneUnavailableError

@@ -13,7 +13,7 @@ critical fixes until the replacement is qualified. The `agent_v2` package and
 | Saved and queued work | `TaskState.from_dict` and `from_message` interpret absent/blank engine stamps as V2; the router rejects V2 and unknown engines. V3 checkpoint loading and question/scheduled handoff occur in `core/core.py` and `core/questions.py`. | Define visible, explicit recovery for old tasks and uncertain effects; do not erase history or silently replay work in another engine. Test queued, resumed, scheduled and malformed states end to end. |
 | Questions, delivery, scheduling | `core/questions.py`, `core/io/`, `services/scheduled_worker.py`, `services/event_worker.py`, and `daemon.py` own shared persistence, dispatch and delivery state; V3 has loop-specific resumption and scheduled-delivery metadata. | Separate shared lifecycle from V3 assumptions; preserve question identity, actor and actual delivery receipts. Prepared or queued is not delivered. |
 | Fencing and recovery | `core/messages/supersession_inspection.py` and `supersession_hold.py` contain experimental machinery; `CoreLoop` refuses runtime claim-fencing mode. #216 remains open. | Complete end-to-end stale-worker fencing, uncertain-effect reconciliation and publication/queue ownership before rollout; do not infer safety from the experimental components. |
-| Loop code and shared capabilities | `core/intelligence/pdca/` remains for replay; the unused V2 `basic.py` placeholder has been removed. V3 is under `core/intelligence/v3/`, alongside experimental candidate code. Tools, skills, actor authorization, memory, storage and integrations are shared infrastructure. | Classify dependencies before deleting anything; preserve bindings, privacy, household data and recovery state. |
+| Loop code and shared capabilities | V2 PDCA has moved from `core/intelligence/pdca/` to `evaluation/legacy_pdca/` for historical replay; the unused V2 `basic.py` placeholder has been removed. V3 is under `core/intelligence/v3/`, alongside experimental candidate code. Tools, skills, actor authorization, memory, storage and integrations are shared infrastructure. | Classify dependencies before deleting anything; preserve bindings, privacy, household data and recovery state. |
 | Evaluations and evidence | `evaluation/` includes historical V2/V3 and candidate adapters; `docs/v3-hierarchical-capd/` retains exploratory results. | Keep historical evidence labeled and failures intact. Scripted fixtures do not establish autonomous performance or real delivery. |
 
 The V2 retirement tests in `tests/test_agent_v3_engine_rollout.py` exercise
@@ -66,3 +66,14 @@ and only for its V2 arm. A fresh interpreter importing `TaskState` does not load
 the PDCA package. This removes three public package-level Python imports; callers
 of those aliases must migrate. The internal legacy PDCA module and historical
 V2/V3 replay remain for now. This does not retire V3.
+
+## Move the V2 loop out of the active core — 14 November
+
+The retained PDCA implementation now lives in `evaluation/legacy_pdca/`, and
+the historical replay adapter and its tests import it there. No active runtime
+path imports the old implementation. The former
+`alphonse.agent_v2.core.intelligence.pdca` Python import paths are removed;
+external callers using them must migrate or pin an earlier version. Historical
+replay is still executable, and recorded evidence is unchanged. This is a
+packaging and namespace transition, not final deletion of replay or retirement
+of the active V3 bridge; pending task-state recovery remains a separate task.

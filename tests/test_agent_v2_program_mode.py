@@ -4,7 +4,7 @@ import json
 from typing import Any
 
 from alphonse.agent_v2.core.core import CoreLoopContext, ToolDescriptor, ToolKind
-from alphonse.agent_v2.core.intelligence.pdca.nodes import do_node, plan_node
+from alphonse.agent_v2.evaluation.legacy_pdca.nodes import do_node, plan_node
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
 from alphonse.agent_v2.core.programs import ProgramRunner
@@ -14,7 +14,7 @@ from alphonse.agent_v2.core.tools.invocation import ToolInvocationService
 def test_plan_node_accepts_python_program_execution(monkeypatch) -> None:
     import importlib
 
-    module = importlib.import_module("alphonse.agent_v2.core.intelligence.pdca.nodes.plan_node")
+    module = importlib.import_module("alphonse.agent_v2.evaluation.legacy_pdca.nodes.plan_node")
     monkeypatch.setattr(
         module,
         "_call_tool_planning_llm",
@@ -61,7 +61,7 @@ def test_programmatic_parallel_call_rejects_non_read_only_tool() -> None:
 def test_plan_node_rejects_program_mode_when_docker_runner_is_unavailable(monkeypatch) -> None:
     import importlib
 
-    module = importlib.import_module("alphonse.agent_v2.core.intelligence.pdca.nodes.plan_node")
+    module = importlib.import_module("alphonse.agent_v2.evaluation.legacy_pdca.nodes.plan_node")
     monkeypatch.setattr(module, "_call_tool_planning_llm", lambda _prompt: _program_value())
     task = TaskState(goal="Compare", acceptance_criteria_md="1.- [ ] Compared")
     plan_node(task, context=CoreLoopContext(messages=InMemoryMessageQueue(), tools=_Registry(), program_runner=_UnavailableRunner()))
@@ -72,7 +72,7 @@ def test_plan_node_rejects_program_mode_when_docker_runner_is_unavailable(monkey
 def test_planner_receives_program_availability_and_tool_parallel_eligibility(monkeypatch) -> None:
     import importlib
 
-    module = importlib.import_module("alphonse.agent_v2.core.intelligence.pdca.nodes.plan_node")
+    module = importlib.import_module("alphonse.agent_v2.evaluation.legacy_pdca.nodes.plan_node")
     captured = {}
 
     def plan(prompt):

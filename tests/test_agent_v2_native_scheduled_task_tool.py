@@ -8,9 +8,9 @@ import pytest
 
 from alphonse.agent_v2.core.core import CoreLoopContext
 from alphonse.agent_v2.core.core import ToolExecutionContext
-from alphonse.agent_v2.core.intelligence.pdca.nodes import do_node
-from alphonse.agent_v2.core.intelligence.pdca.nodes.plan_node import _render_tool_call_plan_prompt
-from alphonse.agent_v2.core.intelligence.pdca.nodes.plan_node import plan_node
+from alphonse.agent_v2.evaluation.legacy_pdca.nodes import do_node
+from alphonse.agent_v2.evaluation.legacy_pdca.nodes.plan_node import _render_tool_call_plan_prompt
+from alphonse.agent_v2.evaluation.legacy_pdca.nodes.plan_node import plan_node
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.inference import InferencePurpose
 from alphonse.agent_v2.core.inference import InferenceRouter

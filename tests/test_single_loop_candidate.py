@@ -112,6 +112,69 @@ def test_observation_validator_error_fails_closed(fixture):
     assert not result.evidence_sources
 
 
+def test_candidate_discovers_then_reads_owner_conversation(tmp_path, fixture):
+    import re
+    from alphonse.agent_v2.conversations import SQLiteConversationStore
+    from alphonse.agent_v2.core.tools.registry.native.memory import (
+        build_read_memory_source_tool_definition, build_search_memory_tool_definition,
+        complete_conversation_read, complete_conversation_search,
+    )
+    conversations = SQLiteConversationStore(tmp_path / 'conversations.sqlite')
+    source = conversations.record(owner_user_id='fixture-user', role='user',
+        content='Synthetic pharmacy Cedar', source='test', source_message_id='one')
+    conversations.record(owner_user_id='someone-else', role='user',
+        content='Synthetic pharmacy private', source='test', source_message_id='two')
+    fixture.host.context.conversation_store = conversations
+    fixture.registry.register(build_search_memory_tool_definition())
+    fixture.registry.register(build_read_memory_source_tool_definition())
+    seen = []
+    def choose(projection, _):
+        seen.append(projection)
+        if len(seen) == 1:
+            return {'kind': 'tool', 'tool_id': 'native.search_memory',
+                    'arguments': {'query': 'pharmacy', 'source_types': ['conversation']},
+                    'usage': {'input_tokens': 100, 'output_tokens': 20}}
+        if len(seen) == 2:
+            found = re.search(r'conversation:[0-9a-f-]{36}', projection)
+            assert found and 'Synthetic pharmacy private' not in projection
+            return {'kind': 'tool', 'tool_id': 'native.read_memory_source',
+                    'arguments': {'source_id': found.group(), 'neighbors': 0},
+                    'usage': {'input_tokens': 100, 'output_tokens': 20}}
+        return {'kind': 'answer', 'text': 'Synthetic pharmacy Cedar',
+                'usage': {'input_tokens': 100, 'output_tokens': 20}}
+    def validate(actor, tool_id, args, payload):
+        if tool_id == 'native.search_memory':
+            return complete_conversation_search(actor, tool_id, args, payload)
+        return complete_conversation_read(actor, tool_id, args, payload)
+    budgets = SQLiteTaskBudgetStore(str(tmp_path / 'discovery-budget.db'))
+    budgets.create('task', TaskBudget(BudgetLimits(vector(3, 6, 24000, 1000),
+        vector(0, 1, 100, 50), 100000, 1000), started_at_ms=0))
+    host = replace(fixture.host, choose=choose, validate_observation=validate, budgets=budgets,
+        input_reservation=6000, projection_budget=8000,
+        authorize_read=lambda actor, tool, args: actor == 'fixture-user' and tool in {
+            'native.search_memory', 'native.read_memory_source'},
+        verify_response=lambda actor, text, refs: len(refs) == 2 and text == 'Synthetic pharmacy Cedar')
+    result = run_candidate(fixture.state, host)
+    assert result.status == 'completed', result.blocker
+    assert 'conversation:' + source.event_id in seen[1]
+    assert 'Synthetic pharmacy Cedar' in seen[2]
+
+
+def test_conversation_search_rejects_partial_or_other_owner():
+    from alphonse.agent_v2.core.tools.registry.native.memory import complete_conversation_search
+    args = {'query': 'pharmacy', 'source_types': ['conversation']}
+    base = {'schema_version': 2, 'query': 'pharmacy', 'status': 'empty', 'coverage': {'conversation': 'complete'},
+            'backend': 'sqlite_fts5', 'next_offset': None, 'truncated': False, 'total_matches': 0, 'results': []}
+    assert complete_conversation_search('owner', 'native.search_memory', args, base)
+    assert not complete_conversation_search('owner', 'native.search_memory', args, {**base, 'status': 'partial'})
+    assert not complete_conversation_search('owner', 'native.search_memory', args, {**base, 'next_offset': 1})
+    other = {'source_id': 'conversation:other', 'source_type': 'conversation', 'truncated': False,
+             'source': {'source_id': 'conversation:other', 'kind': 'conversation',
+                        'access': {'owner_user_id': 'other'}}}
+    assert not complete_conversation_search('owner', 'native.search_memory', args,
+        {**base, 'status': 'found', 'total_matches': 1, 'results': [other]})
+
+
 def test_no_fabricated_completion_without_grounding(fixture):
     host = replace(fixture.host, choose=lambda _, cap: {'kind': 'answer', 'text': '42',
                    'usage': {'input_tokens': 10, 'output_tokens': 10}}, verify_response=lambda *args: False)
