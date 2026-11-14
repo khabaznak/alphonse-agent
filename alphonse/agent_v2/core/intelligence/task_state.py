@@ -1,4 +1,4 @@
-"""Markdown-first task state for the future v2 PDCA intelligence graph."""
+"""Shared task state for conversations, persistence, and historical replay."""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ _TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
 
 @dataclass
 class TaskState:
-    """Markdown container carried through the future PDCA processor."""
+    """Durable task context shared by the runtime and historical replay."""
 
     task_id: str | None = None
     message_id: str | None = None

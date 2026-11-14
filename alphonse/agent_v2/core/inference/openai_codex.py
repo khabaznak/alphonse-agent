@@ -98,14 +98,43 @@ class OpenAICodexProvider:
         if not shutil.which(cli_bin):
             raise ValueError("openai_codex_cli_missing")
 
-        command = [cli_bin, "exec", "--skip-git-repo-check"]
-        if self.config.ephemeral:
+        # The owner selected subscription-backed execution for the candidate.
+        # Keep this boundary scoped to simple-loop usage so the existing V3
+        # provider behavior is unaffected. An allowlist avoids forwarding API
+        # keys or arbitrary provider overrides to either CLI subprocess.
+        env = None
+        options: list[str] = []
+        if collect_usage:
+            env = {key: os.environ[key] for key in ("HOME", "USER", "LOGNAME", "TMPDIR", "LANG", "LC_ALL", "PATH", "CODEX_HOME")
+                   if key in os.environ}
+            if not env.get("HOME") or not env.get("PATH"):
+                raise ValueError("openai_codex_subscription_auth_unverified")
+            options = ["-c", 'model_provider="openai"', "-c", 'cli_auth_credentials_store="auto"']
+        command = [cli_bin, *options, "exec", "--skip-git-repo-check"]
+        if collect_usage:
+            command.extend(["--ignore-user-config", "--ephemeral", "--sandbox", "read-only"])
+        if self.config.ephemeral and not collect_usage:
             command.append("--ephemeral")
         if model:
             command.extend(["--model", model])
 
         try:
             with tempfile.TemporaryDirectory(prefix="alphonse-codex-") as workdir:
+                if collect_usage:
+                    if request.cancel_checker is not None and request.cancel_checker():
+                        raise ValueError("inference_cancelled")
+                    try:
+                        auth = subprocess.run([cli_bin, *options, "login", "status"], cwd=workdir,
+                            env=env, capture_output=True, text=True, timeout=10, check=False)
+                    except (OSError, subprocess.TimeoutExpired):
+                        raise ValueError("openai_codex_subscription_auth_unverified") from None
+                    # Discard other diagnostics: they may include credentials.
+                    lines = (str(auth.stdout or "") + "\n" + str(auth.stderr or "")).splitlines()
+                    login_lines = [line.strip() for line in lines if line.strip().lower().startswith("logged in")]
+                    if auth.returncode != 0 or login_lines != ["Logged in using ChatGPT"]:
+                        raise ValueError("openai_codex_subscription_auth_unverified")
+                    if request.cancel_checker is not None and request.cancel_checker():
+                        raise ValueError("inference_cancelled")
                 output_path = Path(workdir) / "last-message.txt"
                 if collect_usage:
                     command.extend(["--json", "--output-last-message", str(output_path)])
@@ -123,10 +152,9 @@ class OpenAICodexProvider:
                 if request.images:
                     command.append("-")  # Explicit stdin prompt after variadic --image.
                 if request.cancel_checker is None:
-                    completed = subprocess.run(
-                        command, input=prompt, capture_output=True, text=True,
-                        timeout=self.config.timeout_seconds, cwd=workdir, check=False,
-                    )
+                    args = {"env": env} if env is not None else {}
+                    completed = subprocess.run(command, input=prompt, capture_output=True, text=True,
+                        timeout=self.config.timeout_seconds, cwd=workdir, check=False, **args)
                 else:
                     completed = _run_interruptible(
                         command,
@@ -134,6 +162,7 @@ class OpenAICodexProvider:
                         timeout_seconds=self.config.timeout_seconds,
                         cwd=workdir,
                         cancel_checker=request.cancel_checker,
+                        **({"env": env} if env is not None else {}),
                     )
                 # Read the file while the private temporary directory exists.
                 # Never include raw event text in the result or errors.
@@ -296,7 +325,7 @@ def _model_for_request(request: InferenceRequest) -> str | None:
 
 def _run_interruptible(
     command: list[str], *, prompt: str, timeout_seconds: float | None, cwd: str,
-    cancel_checker: Any = None,
+    cancel_checker: Any = None, env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     # A finite file gives Codex the complete prompt and an unambiguous EOF before
     # the cancellation loop starts. Repeated timed communicate(input=...) calls
@@ -305,6 +334,7 @@ def _run_interruptible(
     with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as prompt_stream:
         prompt_stream.write(prompt)
         prompt_stream.seek(0)
+        extra = {"env": env} if env is not None else {}
         process = subprocess.Popen(
             command,
             stdin=prompt_stream,
@@ -313,6 +343,7 @@ def _run_interruptible(
             text=True,
             cwd=cwd,
             start_new_session=True,
+            **extra,
         )
         started = time.monotonic()
         while True:

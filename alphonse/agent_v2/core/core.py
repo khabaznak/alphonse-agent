@@ -38,7 +38,7 @@ if TYPE_CHECKING:
 
 
 class ImprovementPhase(str, Enum):
-    """PDCA-inspired phases used by the intelligence processor."""
+    """Progress phases reported by intelligence processors."""
 
     PLAN = "plan"
     DO = "do"
@@ -467,7 +467,7 @@ def _progress_tool_label(tool_id: str) -> str:
 
 
 class IntelligenceProcessor(Protocol):
-    """PDCA-inspired processor boundary for the core loop."""
+    """Processor boundary used by the core loop."""
 
     def process(self, task: TaskState, context: CoreLoopContext) -> ProcessingResult:
         """Process one task state and return the resulting processing status."""

@@ -56,6 +56,21 @@ for normal household conversations and the production release gates remain open.
 
 ### Reference and source-variant exercise — 14 November
 
+#### Identity with conflicting records
+
+Two synthetic cases contain the same conflicting prescription and verification
+records but different current-item references in conversation. One needs a
+known answer and the other a truthful unknown. In one prespecified
+subscription-backed attempt each, the candidate read all three designated
+sources and returned the expected answer; both attempts also read the index
+(four reads, six model calls each; 30.44 and 30.89 seconds). No answer key or
+required-read list was given to the candidate. The plan and receipts are
+`evidence/gym-cycle-2026-11-13/selective-identity-conflict-v1-*`.
+
+These two public development cases are not held-out reliability or causal
+evidence. Bearer access does not prove the reader or when an answer was formed;
+question utility, actual delivery and provider token use remain unassessed.
+
 #### Resolved versus unresolved conflict
 
 Two new synthetic cases present identical conversation and conflicting

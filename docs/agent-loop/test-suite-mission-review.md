@@ -1139,6 +1139,84 @@ alphonse_audit_isolation_step5 tests/test_secure_credentials.py
 tests/test_agent_v2_telemetry.py` — **25 passed in 0.32 seconds**. This was
 not a full-suite run.
 
+### Web, media and attachment storage: three files
+
+On 14 November, individually reviewed **19 test functions / 19 cases** in
+`test_agent_v2_web_tools.py` (6), `test_agent_v2_media_tools.py` (10) and
+`test_agent_v2_assets.py` (3). All exercise current product components with
+synthetic inputs, not end-to-end evidence that the candidate loop can use them.
+
+| Test function | Decision and distinct behavior |
+| --- | --- |
+| `test_settings_defaults_validation_and_persistence` | Retain disabled default, missing search URL and normalized persisted URL. |
+| `test_registry_hides_disabled_web_tools` | Retain disabled discovery and enabled registry IDs. |
+| `test_search_normalizes_results` | Retain search-result snippet and count normalization. |
+| `test_fetch_blocks_private_destinations` | Retain loopback destination refusal. |
+| `test_fetch_extracts_public_html` | Retain mocked HTML title extraction and character truncation. |
+| `test_fetch_revalidates_redirect` | Retain public-to-loopback redirect refusal. |
+| `test_media_settings_save_invalidates_readiness_and_persists` | Retain invalidation after configuration change and persisted model. |
+| `test_media_settings_unchanged_save_preserves_verification` | Retain unchanged save preserving readiness and preview. |
+| `test_media_settings_validate_backend_configuration` | Retain invalid TTS precision and invalid kind refusal. |
+| `test_daemon_media_tools_require_admin_and_verification_updates_state` | Retain daemon admin gate and mocked verification state. |
+| `test_recorded_stt_verification_marks_ready_and_keeps_transcript` | Retain recording metadata passed to a fake and successful preview. |
+| `test_recorded_stt_verification_failure_does_not_mark_ready` | Retain failed transcription and visible diagnostic. |
+| `test_recorded_stt_verification_validates_audio_and_removes_temporary_file` | Retain synthetic audio cleanup and empty/type/duration refusals. |
+| `test_media_tools_are_not_capd_registered` | Retain native registry absence of four attachment tools. |
+| `test_media_tool_contracts_exist_but_are_disabled_until_attachment_phase` | Retain disabled TTS/STT tool contracts. |
+| `test_attachment_manifest_is_task_visible_without_local_path` | Retain task prompt includes useful attachment metadata without private path. |
+| `test_asset_is_durable_private_and_deletable` | Retain synthetic content, non-owner vs admin access and file removal. |
+| `test_asset_rejects_unsupported_and_oversize` | Retain distinct type and size rejection. |
+| `test_assets_are_written_to_the_owner_profile_and_legacy_assets_migrate` | Retain owner path and legacy migration/removal of old file. |
+
+No deletion was justified: the tests target different consumer-visible
+behaviors or privacy boundaries. Mocked HTTP tests do not establish full SSRF
+protection, DNS-race resistance, external search quality or real network
+success; the TTS/STT verification stubs do not prove actual local model
+readiness. Registry tests do not establish that the new loop discovers and
+uses these tools. The historical CSV remains a collection snapshot, not
+individual review verdicts.
+
+Validation: `PYTHONPATH=/private/tmp:. .venv/bin/python -m pytest -q -p
+alphonse_audit_isolation_step5 tests/test_agent_v2_web_tools.py
+tests/test_agent_v2_media_tools.py tests/test_agent_v2_assets.py` — **19 passed
+in 0.24 seconds**. Temporary user, skill and configuration roots were isolated;
+web requests and model verification were mocked, with no household resources.
+
+### Candidate task budget accounting: one file
+
+On 14 November, individually reviewed **15 functions / 15 cases** in
+`test_task_budget_foundation.py`, using disposable state and temporary SQLite,
+with no provider calls. The candidate uses these budget primitives, but these
+isolated checks do not establish daemon ownership, billed cost limits or
+normal conversation integration.
+
+| Test function | Decision and distinct behavior |
+| --- | --- |
+| `test_restart_with_reserved_call_does_not_refund_or_allow_same_id` | Retain JSON-restored pending charge, duplicate ID, unresolved work and later settlement. |
+| `test_failure_timeout_and_retries_are_individual_attempts` | Retain retry counts, final lane reserve and no work after final begins. |
+| `test_unknown_usage_charges_reservation_and_blocks_all_models_including_final` | Retain partial usage accounting and unresolved work/final-lane refusal. |
+| `test_overrun_is_accounted_and_cannot_be_hidden_by_reservation` | Retain actual token overrun charged and final reserve denial. |
+| `test_actions_count_on_mixed_success_failure_and_cancel_and_reservation_survives_restart` | Retain mixed tool outcomes, JSON roundtrip and cancellation refusal. |
+| `test_elapsed_includes_wait_and_downtime_and_protects_final_window` | Retain work/final window boundaries and backward clock rejection. |
+| `test_only_known_undispatched_reservation_may_be_released` | Retain released reservation refund and rejection of later settlement. |
+| `test_invalid_and_future_snapshots_are_rejected` | Retain future schema, invalid limits and invalid model reservation refusals. |
+| `test_file_store_compare_and_swap_prevents_two_workers_spending_same_budget` | Retain two-store stale-revision refusal and persisted unknown usage. |
+| `test_store_requires_atomic_step_before_next_transition` | Retain rejection of two in-memory transitions as one persisted write. |
+| `test_unknown_usage_reconciles_only_with_explicit_later_observation` | Retain exact missing-counter reconciliation and preserved timeout outcome. |
+| `test_inflight_prior_model_blocks_final_until_usage_is_reconciled` | Retain in-flight and unknown usage blocking final until reconciliation. |
+| `test_deadline_rejection_is_persisted_and_clock_rollback_cannot_reopen_work` | Retain persisted rejected deadline, rollback denial and available final window. |
+| `test_total_deadline_latch_blocks_final_after_restart` | Retain total deadline latch and rollback rejection. |
+| `test_rejection_for_non_time_limit_persists_clock_before_restart` | Retain persistence of timestamp on a non-time rejection before reopening the store. |
+
+No removal was supported: similar budget checks use different lanes, input
+states or persistence boundaries. Some names overstate evidence: the first
+test restores a JSON snapshot, not a restarted process; the total-deadline test
+reuses its store object, rather than reopening it; the undispatched-release
+test does not attempt to release an already dispatched reservation. These
+tests do not by themselves prove the behaviors implied by those names.
+Validation: `.venv/bin/python -m pytest -q tests/test_task_budget_foundation.py`
+with isolated default storage — **15 passed in 0.13 seconds**.
+
 ## Mission coverage and next review passes
 
 Keep behavior that protects real household outcomes while the relevant feature

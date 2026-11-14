@@ -90,6 +90,8 @@ def test_codex_usage_settles_durable_budget_for_multi_step_candidate(tmp_path, m
         {'kind': 'answer', 'tool_id': None, 'arguments': None, 'text': 'observed'},
     ])
     def run(command, **_kwargs):
+        if command[-2:] == ['login', 'status']:
+            return SimpleNamespace(returncode=0, stderr='', stdout='Logged in using ChatGPT')
         Path(command[command.index('--output-last-message') + 1]).write_text(json.dumps(next(decisions)))
         return SimpleNamespace(returncode=0, stderr='', stdout=json.dumps(
             {'type': 'turn.completed', 'usage': {'input_tokens': 200, 'output_tokens': 20}}))

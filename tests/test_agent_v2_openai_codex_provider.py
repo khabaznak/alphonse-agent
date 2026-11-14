@@ -101,8 +101,14 @@ def test_codex_provider_json_parses_fenced_json(monkeypatch: pytest.MonkeyPatch)
 
 def test_simple_loop_provider_returns_cli_reported_usage_without_raw_trace(monkeypatch):
     private_marker = 'synthetic-sensitive-source'
+    seen = []
     def fake_run(command, **kwargs):
+        seen.append((command, kwargs))
+        assert 'OPENAI_API_KEY' not in kwargs['env']
+        if command[-2:] == ['login', 'status']:
+            return SimpleNamespace(returncode=0, stdout='Logged in using ChatGPT', stderr='')
         assert '--json' in command
+        assert '--ignore-user-config' in command and '--sandbox' in command
         Path(command[command.index('--output-last-message') + 1]).write_text('{"kind":"answer"}')
         trace = '\n'.join(json.dumps(event) for event in [
             {'type': 'item.completed', 'item': {'type': 'agent_message', 'text': private_marker}},
@@ -112,11 +118,49 @@ def test_simple_loop_provider_returns_cli_reported_usage_without_raw_trace(monke
         return SimpleNamespace(returncode=0, stdout=trace, stderr='')
     monkeypatch.setattr('alphonse.agent_v2.core.inference.openai_codex.shutil.which', lambda _: '/bin/codex')
     monkeypatch.setattr('alphonse.agent_v2.core.inference.openai_codex.subprocess.run', fake_run)
+    monkeypatch.setenv('OPENAI_API_KEY', 'synthetic-key-never-forwarded')
     result = OpenAICodexProvider().generate_json(InferenceRequest(
         prompt='fixture', purpose=InferencePurpose.SIMPLE_LOOP_ACTION))
     assert result.json_value == {'kind': 'answer'}
     assert result.usage == {'input_tokens': 100, 'output_tokens': 15}
     assert private_marker not in repr(result)
+    assert len(seen) == 2 and seen[0][1]['env'] == seen[1][1]['env']
+
+
+@pytest.mark.parametrize('login', ['Logged in using an API key', '', 'Logged in using ChatGPT\nLogged in using an API key'])
+def test_simple_loop_requires_unambiguous_chatgpt_login_without_dispatch(monkeypatch, login):
+    calls = []
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        assert 'OPENAI_API_KEY' not in kwargs['env']
+        return SimpleNamespace(returncode=0, stdout=login, stderr='')
+    monkeypatch.setenv('OPENAI_API_KEY', 'synthetic-key-never-forwarded')
+    monkeypatch.setattr('alphonse.agent_v2.core.inference.openai_codex.shutil.which', lambda _: '/bin/codex')
+    monkeypatch.setattr('alphonse.agent_v2.core.inference.openai_codex.subprocess.run', fake_run)
+    with pytest.raises(ValueError, match='subscription_auth_unverified'):
+        OpenAICodexProvider().generate_json(InferenceRequest(prompt='fixture', purpose=InferencePurpose.SIMPLE_LOOP_ACTION))
+    assert len(calls) == 1 and calls[0][-2:] == ['login', 'status']
+
+
+def test_simple_loop_interruptible_dispatch_uses_same_scrubbed_environment(monkeypatch):
+    seen = {}
+    def login(command, **kwargs):
+        seen['auth_env'] = kwargs['env']
+        return SimpleNamespace(returncode=0, stdout='Logged in using ChatGPT', stderr='')
+    def interruptible(command, **kwargs):
+        seen['dispatch_env'] = kwargs['env']
+        Path(command[command.index('--output-last-message') + 1]).write_text('{"kind":"answer"}')
+        return SimpleNamespace(returncode=0, stderr='', stdout=json.dumps(
+            {'type': 'turn.completed', 'usage': {'input_tokens': 5, 'output_tokens': 1}}))
+    monkeypatch.setenv('OPENAI_API_KEY', 'synthetic-key-never-forwarded')
+    monkeypatch.setattr('alphonse.agent_v2.core.inference.openai_codex.shutil.which', lambda _: '/bin/codex')
+    monkeypatch.setattr('alphonse.agent_v2.core.inference.openai_codex.subprocess.run', login)
+    monkeypatch.setattr('alphonse.agent_v2.core.inference.openai_codex._run_interruptible', interruptible)
+    result = OpenAICodexProvider().generate_json(InferenceRequest(
+        prompt='fixture', purpose=InferencePurpose.SIMPLE_LOOP_ACTION, cancel_checker=lambda: False))
+    assert seen['auth_env'] == seen['dispatch_env']
+    assert 'OPENAI_API_KEY' not in seen['dispatch_env']
+    assert result.usage == {'input_tokens': 5, 'output_tokens': 1}
 
 
 @pytest.mark.parametrize('events', [

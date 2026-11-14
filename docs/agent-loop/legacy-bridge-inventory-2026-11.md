@@ -92,3 +92,12 @@ For commit `91643e88`, a wheel built from a clean `git archive` contained the
 legacy processor and all five moved templates. A disposable target installation
 loaded the replay planner and rendered its template from the installed wheel;
 this verifies packaging for that path, not full installed runtime qualification.
+
+Some remaining names containing `pdca` are persisted or active shared
+contracts, not references to the removed V2 processor. In particular,
+`routing_disposition="pdca_task"` is consumed by the current queue and V3, and
+scheduled-task `delivery_mode="pdca"` still selects deferred agent work.
+Their labels can be migrated later only with compatibility for persisted tasks;
+deleting or renaming the values alone would disrupt the active bridge. Shared
+task-state and processor docstrings no longer describe that state as a future
+V2 graph.

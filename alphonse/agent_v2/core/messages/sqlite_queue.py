@@ -601,7 +601,7 @@ class SQLiteMessageQueue:
         return str(row["status"] or "") if row is not None else ""
 
     def turns_ahead(self, message_id: str) -> int:
-        """Count independently runnable PDCA tasks ahead of a queued message."""
+        """Count independently runnable tasks ahead of a queued message."""
         with self._connect() as conn:
             target = conn.execute(
                 "SELECT sequence FROM v2_inbound_messages WHERE message_id=?",

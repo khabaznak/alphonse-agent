@@ -39,10 +39,28 @@ reported by the CLI. The receipt is
 raw CLI output. The unexpectedly large reported input count for a tiny prompt
 also shows that visible prompt size is not a reliable substitute for the
 provider's count. This establishes that the parser works for one actual CLI
-event stream, not the complete normal-provider path: the probe deliberately
-scrubbed credentials and ignored user config, the normal provider does not do
-the same auth preflight, counter semantics and costs remain unverified, and no
-pre-dispatch hard cap or real user delivery was tested.
+event stream, not the complete normal-provider path. The configured provider's
+simple-loop transport now also scrubs ambient API credentials, checks CLI login
+status for ChatGPT, forces the OpenAI provider, and uses an ephemeral read-only
+invocation with user configuration ignored. The login command cannot apply the
+same ignore-user-config option as execution, and an authentication change
+between preflight and dispatch remains possible. The new configured-provider
+path also has the synthetic live probe described below. Counter semantics and costs remain unverified, and
+no pre-dispatch hard cap or real user delivery was tested. V3 transport behavior
+is unchanged.
+
+The configured provider's `simple_loop_action` path now also performs a
+ChatGPT-login preflight with a scrubbed environment before a read-only,
+ephemeral CLI invocation; V3 and the evaluation subclass retain their existing
+transports. A synthetic configured-provider probe returned the expected JSON
+and CLI-reported usage. The first receipt,
+`configured-provider-subscription-v1.jsonl`, predates a final environment
+allowlist change; a second receipt, `configured-provider-subscription-v2.jsonl`,
+matches the final source hash and reports 14,744 input / 15 output tokens. This
+is one synthetic run, not a guarantee that authentication stays unchanged after
+preflight, that login and execution configuration are perfectly equivalent,
+or that the provider enforces a pre-dispatch token cap. No real household data
+or delivery was used.
 
 The next integration step is a disposable daemon/SQLite-queue exercise of the
 configured inference router, one actor-authorized read operation, and the real
