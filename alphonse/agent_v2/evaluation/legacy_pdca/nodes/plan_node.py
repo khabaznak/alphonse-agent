@@ -23,7 +23,7 @@ from alphonse.agent_v2.core.tools.registry import ToolExposurePolicy
 if TYPE_CHECKING:
     from alphonse.agent_v2.core.core import CoreLoopContext
 
-_TEMPLATE_DIR = Path(__file__).resolve().parents[3] / "core" / "intelligence" / "templates"
+_TEMPLATE_DIR = Path(__file__).resolve().parents[1] / "templates"
 
 
 def plan_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskState:

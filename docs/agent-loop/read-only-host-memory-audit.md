@@ -32,6 +32,17 @@ scripted chooser, disposable SQLite, the actual registry and invocation, and
 separately checks that another owner's synthetic record is not exposed. It is
 not a daemon path, an authenticated household host, or delivery verification.
 
+The disposable candidate's observation validator can additionally re-run the
+actual owner-scoped search or read against the same tool context and compare
+the complete returned payload before recording it as evidence. This detects a
+deleted source or changed search results between invocation and validation;
+tests exercise both cases and reject a mismatched actor. The check performs a
+second read without repeating invocation UI/memory events. It is point-in-time:
+a change immediately after revalidation remains possible. It is not an
+authenticated host, a transaction across inference and publication, proof of
+semantic accuracy, or a claim/delivery fence. The normal household runtime is
+not wired to this callback.
+
 `native.search_memory` and `native.read_memory_source` are plausible first
 operations because they support multi-source conversation tasks and advertise
 read-only descriptors. Their behavior still needs a production host contract

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from typing import Any
 
 from alphonse.agent_v2.core.memory.contracts import ContextItem, SourceReference, AccessScope, RecallResult, conversation_item
@@ -81,6 +82,46 @@ def complete_conversation_read(actor: str, tool_id: str, arguments: dict[str, An
         and isinstance(content, str) and item.get('start_char') == 0
         and type(item.get('end_char')) is int and item['end_char'] == len(content)
         and type(item.get('total_chars')) is int and item['total_chars'] == len(content))
+
+
+def revalidate_conversation_observation(
+    actor: str, tool_id: str, arguments: dict[str, Any], payload: dict[str, Any], *, context: ToolExecutionContext,
+) -> bool:
+    """Re-read an owner-scoped observation before promoting it to evidence.
+
+    This is a point-in-time check, not authentication, an atomic revocation
+    fence, semantic verification, or authorization to publish. Re-running the
+    native operation directly avoids repeating invocation UI/memory events.
+    """
+    try:
+        if (not isinstance(context, ToolExecutionContext)
+                or not isinstance(actor, str) or not actor.strip()
+                or getattr(context.task, 'user', None) != actor
+                or not isinstance(arguments, dict) or not isinstance(payload, dict)):
+            return False
+        cancelled = context.cancellation_checker
+        if cancelled is not None and (not callable(cancelled) or cancelled() is not False):
+            return False
+        if tool_id == SEARCH_MEMORY_TOOL_ID:
+            if not complete_conversation_search(actor, tool_id, arguments, payload):
+                return False
+            current = execute_search_memory(arguments, context=context)
+            valid = complete_conversation_search(actor, tool_id, arguments, current)
+        elif tool_id == READ_MEMORY_SOURCE_TOOL_ID:
+            if not complete_conversation_read(actor, tool_id, arguments, payload):
+                return False
+            current = execute_read_memory_source(arguments, context=context)
+            valid = complete_conversation_read(actor, tool_id, arguments, current)
+        else:
+            return False
+        if cancelled is not None and cancelled() is not False:
+            return False
+        # JSON comparison is type-sensitive (unlike True == 1), rejects NaNs,
+        # and covers all returned content, including neighboring messages.
+        return bool(valid and json.dumps(payload, sort_keys=True, allow_nan=False)
+                    == json.dumps(current, sort_keys=True, allow_nan=False))
+    except Exception:
+        return False
 
 
 def _identity(context):

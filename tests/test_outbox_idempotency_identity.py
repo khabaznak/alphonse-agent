@@ -8,8 +8,10 @@ from alphonse.agent_v2.core.io.channels import ChannelAddress
 from alphonse.agent_v2.core.io.outbox import SQLiteOutboundStore
 
 
-@pytest.mark.parametrize('transaction', [False, True])
-@pytest.mark.parametrize('change', ['audience', 'destination', 'message', 'task', 'kind', 'metadata'])
+@pytest.mark.parametrize(('transaction', 'change'), [
+    (False, 'audience'), (False, 'destination'), (False, 'message'),
+    (False, 'task'), (False, 'kind'), (False, 'metadata'), (True, 'metadata'),
+])
 def test_idempotency_rejects_different_operation_without_mutation(tmp_path, transaction, change):
     store = SQLiteOutboundStore(tmp_path / 'outbox.sqlite')
     address = ChannelAddress('desktop', 'desktop', 'alice-private', alphonse_user_id='alice')

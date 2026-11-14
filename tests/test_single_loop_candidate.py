@@ -117,7 +117,7 @@ def test_candidate_discovers_then_reads_owner_conversation(tmp_path, fixture):
     from alphonse.agent_v2.conversations import SQLiteConversationStore
     from alphonse.agent_v2.core.tools.registry.native.memory import (
         build_read_memory_source_tool_definition, build_search_memory_tool_definition,
-        complete_conversation_read, complete_conversation_search,
+        revalidate_conversation_observation,
     )
     conversations = SQLiteConversationStore(tmp_path / 'conversations.sqlite')
     source = conversations.record(owner_user_id='fixture-user', role='user',
@@ -143,9 +143,8 @@ def test_candidate_discovers_then_reads_owner_conversation(tmp_path, fixture):
         return {'kind': 'answer', 'text': 'Synthetic pharmacy Cedar',
                 'usage': {'input_tokens': 100, 'output_tokens': 20}}
     def validate(actor, tool_id, args, payload):
-        if tool_id == 'native.search_memory':
-            return complete_conversation_search(actor, tool_id, args, payload)
-        return complete_conversation_read(actor, tool_id, args, payload)
+        return revalidate_conversation_observation(actor, tool_id, args, payload,
+            context=fixture.host.context.tool_execution_context(fixture.host.task))
     budgets = SQLiteTaskBudgetStore(str(tmp_path / 'discovery-budget.db'))
     budgets.create('task', TaskBudget(BudgetLimits(vector(3, 6, 24000, 1000),
         vector(0, 1, 100, 50), 100000, 1000), started_at_ms=0))
@@ -158,6 +157,55 @@ def test_candidate_discovers_then_reads_owner_conversation(tmp_path, fixture):
     assert result.status == 'completed', result.blocker
     assert 'conversation:' + source.event_id in seen[1]
     assert 'Synthetic pharmacy Cedar' in seen[2]
+
+
+def test_candidate_rejects_conversation_deleted_after_read(tmp_path, fixture):
+    from alphonse.agent_v2.conversations import SQLiteConversationStore
+    from alphonse.agent_v2.core.tools.registry.native.memory import (
+        build_read_memory_source_tool_definition, revalidate_conversation_observation,
+    )
+    conversations = SQLiteConversationStore(tmp_path / 'conversations.sqlite')
+    event = conversations.record(owner_user_id='fixture-user', role='user', content='Synthetic private note',
+                                 source='test', source_message_id='synthetic-note')
+    source_id = 'conversation:' + event.event_id
+    fixture.host.context.conversation_store = conversations
+    fixture.registry.register(build_read_memory_source_tool_definition())
+    def validate(actor, tool_id, args, payload):
+        assert conversations.delete(event_id=event.event_id, owner_user_id=actor)
+        return revalidate_conversation_observation(actor, tool_id, args, payload,
+            context=fixture.host.context.tool_execution_context(fixture.host.task))
+    host = replace(fixture.host, validate_observation=validate,
+        choose=lambda *_: {'kind': 'tool', 'tool_id': 'native.read_memory_source',
+                           'arguments': {'source_id': source_id, 'neighbors': 0},
+                           'usage': {'input_tokens': 100, 'output_tokens': 20}})
+    result = run_candidate(fixture.state, host)
+    assert (result.status, result.blocker) == ('blocked', 'candidate_observation_incomplete')
+    assert result.evidence_sources == []
+
+
+def test_revalidation_rejects_changed_search_and_wrong_actor(tmp_path, fixture):
+    from alphonse.agent_v2.conversations import SQLiteConversationStore
+    from alphonse.agent_v2.core.tools.registry.native.memory import (
+        execute_search_memory, revalidate_conversation_observation,
+    )
+    conversations = SQLiteConversationStore(tmp_path / 'conversations.sqlite')
+    conversations.record(owner_user_id='fixture-user', role='user', content='Synthetic pharmacy A',
+                         source='test', source_message_id='one')
+    fixture.host.context.conversation_store = conversations
+    context = fixture.host.context.tool_execution_context(fixture.host.task)
+    arguments = {'query': 'pharmacy', 'source_types': ['conversation']}
+    payload = execute_search_memory(arguments, context=context)
+    assert revalidate_conversation_observation('fixture-user', 'native.search_memory', arguments, payload,
+                                               context=context)
+    assert not revalidate_conversation_observation('other', 'native.search_memory', arguments, payload,
+                                                   context=context)
+    checks = iter([False, True])
+    assert not revalidate_conversation_observation('fixture-user', 'native.search_memory', arguments, payload,
+                                                   context=replace(context, cancellation_checker=lambda: next(checks)))
+    conversations.record(owner_user_id='fixture-user', role='user', content='Synthetic pharmacy B',
+                         source='test', source_message_id='two')
+    assert not revalidate_conversation_observation('fixture-user', 'native.search_memory', arguments, payload,
+                                                   context=context)
 
 
 def test_conversation_search_rejects_partial_or_other_owner():

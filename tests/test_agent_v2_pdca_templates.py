@@ -9,10 +9,11 @@ from alphonse.agent_v2.core.intelligence.task_state import TaskState
 
 
 TEMPLATE_DIR = Path("alphonse/agent_v2/core/intelligence/templates")
+LEGACY_TEMPLATE_DIR = Path("alphonse/agent_v2/evaluation/legacy_pdca/templates")
 
 
 def test_pdca_prompt_templates_render_expected_sections() -> None:
-    env = Environment(loader=FileSystemLoader(TEMPLATE_DIR))
+    env = Environment(loader=FileSystemLoader(LEGACY_TEMPLATE_DIR))
 
     for template_name in ("check_prompt.j2", "plan_prompt.j2", "act_prompt.j2"):
         rendered = env.get_template(template_name).render(
@@ -62,7 +63,7 @@ def test_acceptance_criteria_prompt_template_renders_expected_sections() -> None
 
 
 def test_tool_call_plan_prompt_template_renders_expected_sections() -> None:
-    env = Environment(loader=FileSystemLoader(TEMPLATE_DIR))
+    env = Environment(loader=FileSystemLoader(LEGACY_TEMPLATE_DIR))
 
     rendered = env.get_template("tool_call_plan_prompt.j2").render(
         acceptance_criteria_md="1.- [ ] File exists",
@@ -132,7 +133,7 @@ def test_task_state_describes_desktop_project_file_attachments() -> None:
 
 
 def test_criteria_review_prompt_template_renders_expected_sections() -> None:
-    env = Environment(loader=FileSystemLoader(TEMPLATE_DIR))
+    env = Environment(loader=FileSystemLoader(LEGACY_TEMPLATE_DIR))
 
     rendered = env.get_template("criteria_review_prompt.j2").render(
         acceptance_contract_json='{"criteria":[{"id":"ac-1","statement":"File exists","status":"pending"}]}',
@@ -156,7 +157,7 @@ def test_criteria_review_prompt_template_renders_expected_sections() -> None:
 
 
 def test_pdca_prompt_templates_have_stub_defaults() -> None:
-    env = Environment(loader=FileSystemLoader(TEMPLATE_DIR))
+    env = Environment(loader=FileSystemLoader(LEGACY_TEMPLATE_DIR))
 
     rendered = env.get_template("check_prompt.j2").render()
 

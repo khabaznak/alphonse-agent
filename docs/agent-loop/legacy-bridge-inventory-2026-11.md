@@ -77,3 +77,9 @@ external callers using them must migrate or pin an earlier version. Historical
 replay is still executable, and recorded evidence is unchanged. This is a
 packaging and namespace transition, not final deletion of replay or retirement
 of the active V3 bridge; pending task-state recovery remains a separate task.
+
+The old PDCA planning, check, act and criteria-review templates also now live
+with the historical evaluation package. Its planner resolves its own template
+directory, and package-data configuration includes those files. The active
+shared acceptance and task-state templates remain in place. Focused template,
+planner and replay tests pass; this move does not itself retire replay.

@@ -866,6 +866,50 @@ The duplicate case removal leaves **14 cases**, all passing in 0.11 seconds.
 Validation used both files and the same disposable default-root, skills and
 config isolation described above; it is not a full-suite run.
 
+### Outbox idempotency and schema migration: two files
+
+On 14 November, individually inspected **22 original test functions / 49
+collected cases** in `test_outbox_idempotency_identity.py` (9 functions) and
+`test_outbox_status_migration_safety.py` (13). They use synthetic data and
+disposable SQLite stores. These guard the existing delivery and data-preservation
+boundaries; they do not establish candidate-loop delivery, externally verified
+receipts, or end-to-end stale-claim fencing.
+
+| Test function in `test_outbox_idempotency_identity.py` | Decision |
+| --- | --- |
+| `idempotency_rejects_different_operation_without_mutation` | Consolidate the 12-case field/connection cross-product to 7: keep each of the six different changed fields and a supplied-connection metadata conflict. Both connection branches call the same `_validate_idempotent_result`; the retained transactional case exercises its distinct branch and the specialized metadata comparison. The five dropped pairings no longer independently test every field through the supplied-connection branch; a future branch-specific comparison would need additional coverage. |
+| `repeated_identical_operation_returns_existing_delivery_state` | Retain existing delivered status and provider receipt for an identical retry. |
+| `unrelated_constraint_failure_does_not_return_a_phantom_message` | Retain unrelated SQLite uniqueness failure and no fabricated row. |
+| `in_memory_retry_ignores_temporary_table_shadow` | Retain idempotent retry lookup with an in-memory shadow table. |
+| `in_memory_consumers_ignore_temporary_table_shadow` | Retain read, claim and delivery settlement against the real table despite forged shadow content. |
+| `shared_connection_reclaim_ignores_temporary_table_shadow` | Retain shared-connection lease reclamation against the real table. |
+| `reclaim_rejects_connection_from_other_outbox` | Retain file-database connection mismatch refusal. |
+| `reclaim_requires_own_persistent_in_memory_connection` | Retain in-memory connection identity and correct empty reclaim. |
+| `regenerated_ack_conflict_keeps_one_message_and_continues_task` | Retain current V3 bridge acknowledgement retry conflict and no false completion; fake inference/judgment is not delivery evidence. |
+
+| Test function in `test_outbox_status_migration_safety.py` | Decision |
+| --- | --- |
+| `unknown_state_is_not_migrated_or_dispatched` | Retain unknown stored state refusal for both status-constraint variants; this exercises initialization and preserved state, not an actual external dispatch attempt. |
+| `supported_legacy_states_and_required_indexes_survive_migration` | Retain supported legacy rows and required indexes. |
+| `existing_unconfirmed_outcome_remains_unconfirmed` | Retain uncertainty rather than turning an uncertain send into pending work. |
+| `future_status_schema_is_rejected_even_when_no_future_rows_exist` | Retain future schema refusal even with currently familiar rows. |
+| `migration_failure_rolls_back_ddl_data_and_indexes` | Retain transaction rollback following injected post-rebuild failure. |
+| `preflight_and_migration_hold_one_write_lock` | Retain concurrent writer exclusion while preflight and migration run. |
+| `unrecognized_legacy_schema_objects_are_not_dropped` | Retain distinct index, trigger, dependent view/table, generated-column and constraint/schema extensions; no individual equivalence established. |
+| `oldest_recorded_status_schema_and_missing_columns_upgrade` | Retain the oldest recorded sparse schema upgrade and delivered result. |
+| `unsupported_sparse_legacy_store_is_not_altered_before_refusal` | Retain sparse unsupported store rollback, journal mode and error privacy. |
+| `existing_store_without_status_is_rejected_without_mutation` | Retain missing required status column refusal. |
+| `check_text_in_comment_or_literal_is_not_a_constraint` | Retain comment, SQL literal and identifier spoof cases with distinct parsing forms. |
+| `schema_preflight_closes_file_connection_on_failure` | Retain file connection cleanup when schema preflight fails. |
+| `successful_schema_init_keeps_shared_connection_settings` | Retain SQLite connection configuration and migration-table checks. |
+
+The reduction removes **five collected cases**, not functions, and records the
+branch-specific coverage deliberately lost above. Validation:
+`.venv/bin/python -m pytest -q tests/test_outbox_idempotency_identity.py
+tests/test_outbox_status_migration_safety.py` — **44 passed in 0.29 seconds**.
+No provider, model, actual message delivery or household data was used. This was
+not a full-suite run.
+
 ## Mission coverage and next review passes
 
 Keep behavior that protects real household outcomes while the relevant feature
