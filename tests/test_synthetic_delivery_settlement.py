@@ -1,5 +1,6 @@
 """Synthetic fixture-only settlement, never a real provider or authorization."""
 from datetime import timedelta
+from unsafe_reclaim_fixture import simulate_old_writer_requeue
 import sqlite3
 
 import pytest
@@ -126,7 +127,8 @@ def test_reclaim_and_clock_expiry_rollback_settlement(setup):
     with pytest.raises(ClaimSuperseded):
         settle(setup, pending.version, clock=lambda: next(moments))
     assert store.load('task', 'alice', expected_version=pending.version).state.inflight == binding.action_id
-    assert queue.reclaim_expired(now=now + timedelta(days=1)) == 1
+    assert queue.reclaim_expired(now=now + timedelta(days=1)) == 0
+    simulate_old_writer_requeue(queue, 'message')
     assert queue.claim_next().claim_receipt.claim_generation != claim.claim_generation
     with pytest.raises(ClaimSuperseded):
         settle(setup, pending.version)

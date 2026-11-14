@@ -409,38 +409,16 @@ class SQLiteMessageQueue:
             return cursor.rowcount == 1
 
     def ack_fenced(self, receipt: Any, *, outcome: str = "completed", clock: Any = None) -> bool:
-        """Experimental same-database ack; not yet wired to the daemon."""
-        from .claim_fence import ClaimReceipt, ClaimSuperseded, ClaimFenceUnavailable, _read_claim, _time
+        """Refuse acknowledgement until terminal effects are durably fenced.
+
+        A current receipt proves queue ownership only. It does not prove that
+        the actor-bound task reached the requested terminal state, that its
+        effects were reconciled, or that the response was delivered. Preserve
+        the claim for a future receipt-bound disposition instead of deleting it.
+        """
         if outcome not in {"completed", "cancelled", "processing"}:
             raise ValueError("invalid_queue_outcome")
-        if not self.experimental_claim_fencing or not isinstance(receipt, ClaimReceipt):
-            return False
-        clock = clock or _now
-        try:
-            with self._connect() as conn:
-                conn.execute("BEGIN IMMEDIATE")
-                start = _time(clock())
-                expiry = _read_claim(conn, receipt, start)
-                # A handoff is not a terminal result. Its current legacy row
-                # does not establish a receipt-bound continuation or effect
-                # reconciliation, so acknowledgement must not erase it.
-                if conn.execute("SELECT 1 FROM main.v2_scheduled_handoffs WHERE message_id=?",
-                                (receipt.message_id,)).fetchone() is not None:
-                    return False
-                holds = _exclude_supersession_holds(conn)
-                cursor = conn.execute(f"""DELETE FROM v2_inbound_messages WHERE message_id=? AND user_id=?
-                    AND status='processing' AND lease_owner=? AND claim_generation=? {holds}""",
-                    (receipt.message_id, receipt.user_id, receipt.lease_owner, receipt.claim_generation))
-                if cursor.rowcount:
-                    conn.execute("DELETE FROM v2_scheduled_handoffs WHERE message_id=?", (receipt.message_id,))
-                    conn.execute("UPDATE v2_inbound_receipts SET status=?,updated_at=? WHERE message_id=?",
-                                 (outcome, _now_iso(), receipt.message_id))
-                    end = _time(clock())
-                    if end < start or end >= expiry:
-                        raise ClaimSuperseded("claim_expired_or_clock_reversed")
-                return cursor.rowcount == 1
-        except (ClaimSuperseded, ClaimFenceUnavailable):
-            return False
+        return False
 
     def release_scheduled_handoff_fenced(self, receipt: Any, *, clock: Any = None) -> bool:
         """Refuse release until receipt-bound handoff staging is implemented.
@@ -454,53 +432,22 @@ class SQLiteMessageQueue:
 
     def renew_claim_fenced(self, receipt: Any, *, lease_seconds: int,
                            is_cancelled: Any, clock: Any = None) -> bool:
-        """Renew one exact live experimental lease; no heartbeat is started.
+        """Refuse renewal until checkpoint and durable clock fencing exist.
 
-        The caller must supply a nonblocking cancellation check bound to the
-        active task and stop renewing before relinquishing ownership. Its
-        correctness and the scheduler lifecycle are not established here.
+        A queue receipt and caller-supplied cancellation callback alone cannot
+        establish that the task is still current. Nor can a pair of wall-clock
+        samples detect a regression across separate renewals or process restart.
+        Leave the claim unchanged for explicit recovery instead of reviving a
+        stale worker. This does not affect legacy queue behavior.
         """
-        from .claim_fence import ClaimReceipt, ClaimSuperseded, ClaimFenceUnavailable, _read_claim, _time
+        from .claim_fence import ClaimReceipt
         if not self.experimental_claim_fencing or not isinstance(receipt, ClaimReceipt):
             return False
         if type(lease_seconds) is not int or not 1 <= lease_seconds <= 3600 or not callable(is_cancelled):
             raise ValueError("claim_renewal_arguments_invalid")
-        clock = clock or _now
-        if not callable(clock):
+        if clock is not None and not callable(clock):
             raise ValueError("claim_renewal_arguments_invalid")
-
-        def ensure_not_cancelled() -> None:
-            try:
-                allowed = is_cancelled() is False
-            except Exception:
-                allowed = False
-            if not allowed:
-                raise ClaimSuperseded("claim_cancelled_or_unavailable")
-
-        try:
-            ensure_not_cancelled()
-            with self._connect() as conn:
-                conn.execute("BEGIN IMMEDIATE")
-                ensure_not_cancelled()
-                start = _time(clock())
-                expiry = _read_claim(conn, receipt, start)
-                renewed_expiry = max(expiry, start + timedelta(seconds=lease_seconds))
-                holds = _exclude_supersession_holds(conn)
-                cursor = conn.execute(f"""UPDATE v2_inbound_messages SET lease_expires_at=?
-                    WHERE message_id=? AND user_id=? AND status='processing'
-                    AND lease_owner=? AND claim_generation=? {holds}""",
-                    (renewed_expiry.isoformat(), receipt.message_id, receipt.user_id,
-                     receipt.lease_owner, receipt.claim_generation))
-                if cursor.rowcount != 1:
-                    return False
-                ensure_not_cancelled()
-                end = _time(clock())
-                if end < start or end >= expiry:
-                    raise ClaimSuperseded("claim_expired_or_clock_reversed")
-                _read_claim(conn, receipt, end)
-                return True
-        except (ClaimSuperseded, ClaimFenceUnavailable):
-            return False
+        return False
 
     def finish_event(self, message_id: str, outcome: str) -> None:
         if outcome not in {"completed", "cancelled", "failed"}:
@@ -588,6 +535,12 @@ class SQLiteMessageQueue:
         return self.retry(message_id, next_attempt_at=_now())
 
     def reclaim_expired(self, *, now: datetime | None = None, exclude_owner: str = "") -> int:
+        # Expiry proves lost ownership, not that an in-flight effect did not
+        # happen. Until receipt-bound reconciliation exists, requeueing a
+        # fenced claim can silently repeat a mutation or delivery. Keep it in
+        # processing for explicit recovery. Legacy queue behavior is unchanged.
+        if self.experimental_claim_fencing:
+            return 0
         timestamp = (now or _now()).isoformat()
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")

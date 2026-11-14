@@ -257,17 +257,17 @@ def test_real_opt_in_queue_hold_survives_restart_and_does_not_block_other_reclai
         install_hold_schema(conn)
         assert park_superseded(conn, claimed.claim_receipt, task_id='task', actor='alice',
             engine='hierarchical_v3', observed_version=version, clock=lambda: now).status == 'held'
-    # Other claims can expire and be reclaimed without touching the held row.
+    # Expiry does not replay either held or unheld fenced claims.
     queue.enqueue(CoreMessage(timestamp=now, prompt='other', user='alice'), message_id='other')
     other = queue.claim_next(lease_owner='worker', lease_seconds=60)
     assert other.message_id == 'other'
     reopened = SQLiteMessageQueue(path, lease_owner='worker', experimental_claim_fencing=True)
-    assert reopened.reclaim_expired(now=now + timedelta(days=1)) == 1
+    assert reopened.reclaim_expired(now=now + timedelta(days=1)) == 0
     assert reopened.ack_fenced(claimed.claim_receipt) is False
     assert reopened.ack('message', lease_owner='worker') is False
     assert reopened.retry('message', lease_owner='worker') is False
     with sqlite3.connect(path) as conn:
         assert conn.execute("SELECT status FROM v2_inbound_messages WHERE message_id='message'").fetchone()[0] == 'processing'
-        assert conn.execute("SELECT status FROM v2_inbound_messages WHERE message_id='other'").fetchone()[0] == 'pending'
+        assert conn.execute("SELECT status FROM v2_inbound_messages WHERE message_id='other'").fetchone()[0] == 'processing'
         assert conn.execute('SELECT count(*) FROM v2_supersession_holds').fetchone()[0] == 1
     assert questions.load_task_checkpoint('task').metadata['effect_state'] == 'unknown'

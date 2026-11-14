@@ -10,6 +10,7 @@ from alphonse.agent_v2.core.messages.claim_fence import ClaimSuperseded, fenced_
 from alphonse.agent_v2.core.messages.sqlite_queue import SQLiteMessageQueue
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.questions import SQLiteQuestionStore
+from unsafe_reclaim_fixture import simulate_old_writer_requeue
 
 
 def test_existing_outbox_can_share_claim_transaction_and_roll_back_on_expiry(tmp_path):
@@ -34,8 +35,9 @@ def test_existing_outbox_can_share_claim_transaction_and_roll_back_on_expiry(tmp
             outbox.enqueue(address=address, message='synthetic', task_id='task', connection=conn)
     assert len(outbox.list_pending()) == 1
     # Fenced insertion alone is not fenced dispatch: current consumers can
-    # claim the pending row even after its inbound claim has been reclaimed.
-    assert queue.reclaim_expired(now=now + timedelta(days=1)) == 1
+    # claim the pending row even after an old writer requeues the claim.
+    assert queue.reclaim_expired(now=now + timedelta(days=1)) == 0
+    simulate_old_writer_requeue(queue, 'message')
     assert outbox.claim_next().message == 'synthetic'
 
 

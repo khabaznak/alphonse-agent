@@ -2,6 +2,7 @@
 from datetime import datetime, timedelta, timezone
 from dataclasses import asdict, replace
 from copy import deepcopy
+from unsafe_reclaim_fixture import simulate_old_writer_requeue
 
 import pytest
 
@@ -53,15 +54,20 @@ def test_same_owner_reclaim_rotates_generation_and_legacy_ack_retry_cannot_steal
     queue = SQLiteMessageQueue(path, lease_owner='worker', experimental_claim_fencing=True)
     queue.enqueue(message(), message_id='m')
     old = queue.claim_next(lease_seconds=1).claim_receipt
-    assert queue.reclaim_expired(now=datetime.now(timezone.utc) + timedelta(seconds=2)) == 1
+    assert queue.reclaim_expired(now=datetime.now(timezone.utc) + timedelta(seconds=2)) == 0
+    simulate_old_writer_requeue(queue, 'm')
     newer = queue.claim_next().claim_receipt
     assert old.claim_generation != newer.claim_generation
     legacy = SQLiteMessageQueue(path, lease_owner='worker')
     assert not legacy.ack('m') and not legacy.retry('m')
     assert not queue.ack_fenced(old)
     assert not queue.ack_fenced(replace(newer, user_id='bob'))
-    assert queue.ack_fenced(newer)
+    # A live generation alone cannot establish task completion or effects.
     assert not queue.ack_fenced(newer)
+    assert not queue.ack_fenced(newer)
+    with queue._connect() as conn:
+        row = conn.execute("SELECT status,claim_generation FROM v2_inbound_messages WHERE message_id='m'").fetchone()
+        assert tuple(row) == ('processing', newer.claim_generation)
 
 
 @pytest.mark.parametrize('wait_outbox_id', ['', 'unconfirmed-delivery'])
@@ -100,24 +106,20 @@ def test_expired_or_wrong_actor_receipt_cannot_ack_or_release(tmp_path):
     assert not queue.release_scheduled_handoff_fenced(receipt)
 
 
-@pytest.mark.parametrize('end', ['expired', 'clock_rollback'])
-def test_fenced_ack_rolls_back_if_lease_lapses_before_commit(tmp_path, end):
+@pytest.mark.parametrize('outcome', ['completed', 'cancelled', 'processing'])
+def test_fenced_ack_refuses_all_unverified_outcomes(tmp_path, outcome):
     path = tmp_path / 'queue.sqlite'
     queue = SQLiteMessageQueue(path, lease_owner='worker', experimental_claim_fencing=True)
     queue.enqueue(message(), message_id='m')
     receipt = queue.claim_next().claim_receipt
-    with queue._connect() as conn:
-        expiry = datetime.fromisoformat(conn.execute("SELECT lease_expires_at FROM v2_inbound_messages WHERE message_id='m'").fetchone()[0])
-    start = expiry - timedelta(seconds=30)
-    times = iter((start, expiry if end == 'expired' else start - timedelta(seconds=1)))
-    result = queue.ack_fenced(receipt, clock=lambda: next(times))
+    result = queue.ack_fenced(receipt, outcome=outcome, clock=lambda: pytest.fail('must not enter ack'))
     assert not result
     with queue._connect() as conn:
         row = conn.execute("SELECT status,claim_generation FROM v2_inbound_messages WHERE message_id='m'").fetchone()
         assert tuple(row) == ('processing', receipt.claim_generation)
 
 
-def test_legacy_reclaim_does_not_touch_expired_fenced_row(tmp_path):
+def test_reclaim_does_not_replay_expired_fenced_row(tmp_path):
     path = tmp_path / 'queue.sqlite'
     queue = SQLiteMessageQueue(path, lease_owner='worker', experimental_claim_fencing=True)
     queue.enqueue(message(), message_id='m')
@@ -125,7 +127,8 @@ def test_legacy_reclaim_does_not_touch_expired_fenced_row(tmp_path):
     legacy = SQLiteMessageQueue(path, lease_owner='worker')
     future = datetime.now(timezone.utc) + timedelta(seconds=2)
     assert legacy.reclaim_expired(now=future) == 0
-    assert queue.reclaim_expired(now=future) == 1
+    assert queue.reclaim_expired(now=future) == 0
+    assert queue.status_for('m') == 'processing'
     assert not queue.ack_fenced(receipt)
 
 
@@ -146,7 +149,8 @@ def test_reused_generation_fails_closed_before_reacquisition(tmp_path, monkeypat
     queue = SQLiteMessageQueue(path, lease_owner='worker', experimental_claim_fencing=True)
     queue.enqueue(message(), message_id='m')
     first = queue.claim_next(lease_seconds=1).claim_receipt
-    assert queue.reclaim_expired(now=datetime.now(timezone.utc) + timedelta(seconds=2)) == 1
+    assert queue.reclaim_expired(now=datetime.now(timezone.utc) + timedelta(seconds=2)) == 0
+    simulate_old_writer_requeue(queue, 'm')
     monkeypatch.setattr('alphonse.agent_v2.core.messages.claim_fence.new_claim_generation', lambda: first.claim_generation)
     with pytest.raises(ValueError, match='generation_reused'):
         queue.claim_next()
@@ -167,17 +171,17 @@ def test_fenced_event_claims_remain_unavailable_without_receipt_generation(tmp_p
     assert queue.status_for('event:fixture') == 'pending'
 
 
-def test_renewal_preserves_generation_and_extends_live_lease(tmp_path):
+def test_renewal_refuses_live_lease_without_checkpoint_clock_protocol(tmp_path):
     queue = SQLiteMessageQueue(tmp_path / 'queue.sqlite', lease_owner='worker', experimental_claim_fencing=True)
     queue.enqueue(message(), message_id='m')
     claim = queue.claim_next(lease_seconds=10).claim_receipt
     with queue._connect() as conn:
         before = datetime.fromisoformat(conn.execute("SELECT lease_expires_at FROM v2_inbound_messages WHERE message_id='m'").fetchone()[0])
     now = before - timedelta(seconds=5)
-    assert queue.renew_claim_fenced(claim, lease_seconds=60, is_cancelled=lambda: False, clock=lambda: now)
+    assert not queue.renew_claim_fenced(claim, lease_seconds=60, is_cancelled=lambda: False, clock=lambda: now)
     with queue._connect() as conn:
         row = conn.execute("SELECT lease_expires_at,claim_generation FROM v2_inbound_messages WHERE message_id='m'").fetchone()
-    assert datetime.fromisoformat(row['lease_expires_at']) == now + timedelta(seconds=60)
+    assert datetime.fromisoformat(row['lease_expires_at']) == before
     assert row['claim_generation'] == claim.claim_generation
 
 
@@ -197,23 +201,15 @@ def test_renewal_rejects_wrong_identity_and_invalid_contract(tmp_path):
     assert not legacy.renew_claim_fenced(claim, lease_seconds=60, is_cancelled=lambda: False)
 
 
-@pytest.mark.parametrize('case', ['expired', 'clock_rollback', 'cancel_before', 'cancel_after', 'check_error'])
-def test_renewal_rejection_preserves_original_lease(tmp_path, case):
+def test_unavailable_renewal_never_invokes_callbacks_or_mutates_claim(tmp_path):
     queue = SQLiteMessageQueue(tmp_path / 'queue.sqlite', lease_owner='worker', experimental_claim_fencing=True)
     queue.enqueue(message(), message_id='m')
     claim = queue.claim_next(lease_seconds=10).claim_receipt
     with queue._connect() as conn:
         expiry = datetime.fromisoformat(conn.execute("SELECT lease_expires_at FROM v2_inbound_messages WHERE message_id='m'").fetchone()[0])
-    start = expiry - timedelta(seconds=5)
-    end = expiry if case == 'expired' else start - timedelta(seconds=1) if case == 'clock_rollback' else start
-    times = iter((start, end))
-    checks = []
-    def cancelled():
-        checks.append(True)
-        if case == 'check_error':
-            raise RuntimeError('must not leak')
-        return case == 'cancel_before' or (case == 'cancel_after' and len(checks) == 3)
-    assert not queue.renew_claim_fenced(claim, lease_seconds=60, is_cancelled=cancelled, clock=lambda: next(times))
+    def forbidden():
+        pytest.fail('unavailable renewal must not inspect callbacks')
+    assert not queue.renew_claim_fenced(claim, lease_seconds=60, is_cancelled=forbidden, clock=forbidden)
     with queue._connect() as conn:
         row = conn.execute("SELECT status,lease_expires_at,claim_generation FROM v2_inbound_messages WHERE message_id='m'").fetchone()
     assert row['status'] == 'processing' and datetime.fromisoformat(row['lease_expires_at']) == expiry
@@ -226,39 +222,29 @@ def test_reclaim_before_renewal_never_revives_old_claim(tmp_path):
     claim = queue.claim_next(lease_seconds=10).claim_receipt
     with queue._connect() as conn:
         expiry = datetime.fromisoformat(conn.execute("SELECT lease_expires_at FROM v2_inbound_messages WHERE message_id='m'").fetchone()[0])
-    assert queue.reclaim_expired(now=expiry + timedelta(seconds=1)) == 1
+    assert queue.reclaim_expired(now=expiry + timedelta(seconds=1)) == 0
+    simulate_old_writer_requeue(queue, 'm')
     assert not queue.renew_claim_fenced(claim, lease_seconds=60, is_cancelled=lambda: False,
                                         clock=lambda: expiry - timedelta(seconds=1))
     assert queue.status_for('m') == 'pending'
 
 
-def test_renewal_wins_same_owner_reclaim_only_if_current_lease_valid(tmp_path):
+def test_renewal_and_auto_reclaim_leave_claim_unchanged(tmp_path):
     from concurrent.futures import ThreadPoolExecutor
-    from threading import Event
     queue = SQLiteMessageQueue(tmp_path / 'queue.sqlite', lease_owner='worker', experimental_claim_fencing=True)
     queue.enqueue(message(), message_id='m')
     claim = queue.claim_next(lease_seconds=10).claim_receipt
     with queue._connect() as conn:
         expiry = datetime.fromisoformat(conn.execute("SELECT lease_expires_at FROM v2_inbound_messages WHERE message_id='m'").fetchone()[0])
-    renewal_locked, reclaim_attempted = Event(), Event()
-    checks = []
-    def cancelled():
-        checks.append(True)
-        if len(checks) == 2:
-            renewal_locked.set()
-            assert reclaim_attempted.wait(timeout=5)
-        return False
-    def reclaim():
-        assert renewal_locked.wait(timeout=5)
-        reclaim_attempted.set()
-        return queue.reclaim_expired(now=expiry + timedelta(seconds=1))
     with ThreadPoolExecutor(max_workers=2) as pool:
         renewing = pool.submit(queue.renew_claim_fenced, claim, lease_seconds=120,
-                               is_cancelled=cancelled, clock=lambda: expiry - timedelta(seconds=5))
-        reclaiming = pool.submit(reclaim)
-        assert renewing.result(timeout=10)
+                               is_cancelled=lambda: False, clock=lambda: expiry - timedelta(seconds=5))
+        reclaiming = pool.submit(queue.reclaim_expired, now=expiry + timedelta(seconds=1))
+        assert not renewing.result(timeout=10)
         assert reclaiming.result(timeout=10) == 0
     assert queue.status_for('m') == 'processing'
+    with queue._connect() as conn:
+        assert datetime.fromisoformat(conn.execute("SELECT lease_expires_at FROM v2_inbound_messages WHERE message_id='m'").fetchone()[0]) == expiry
 
 
 def test_renewal_cannot_touch_held_message(tmp_path):
@@ -344,7 +330,7 @@ def test_claim_mode_race_allows_only_one_protocol_to_acquire(tmp_path):
         assert conn.execute("SELECT COUNT(*) FROM v2_inbound_messages WHERE status='processing'").fetchone()[0] == 1
 
 
-def test_claim_mode_diagnostic_exposes_no_task_data_and_recovers_after_ack(tmp_path):
+def test_claim_mode_diagnostic_exposes_no_task_data_and_fails_closed_without_disposition(tmp_path):
     path = tmp_path / 'queue.sqlite'
     legacy = SQLiteMessageQueue(path, lease_owner='legacy-worker')
     fenced = SQLiteMessageQueue(path, lease_owner='fenced-worker', experimental_claim_fencing=True)
@@ -353,8 +339,8 @@ def test_claim_mode_diagnostic_exposes_no_task_data_and_recovers_after_ack(tmp_p
     claim = fenced.claim_next()
     assert legacy.claim_mode_blocked() is True
     assert fenced.claim_mode_blocked() is False
-    assert fenced.ack_fenced(claim.claim_receipt)
-    assert legacy.claim_mode_blocked() is False
+    assert not fenced.ack_fenced(claim.claim_receipt)
+    assert legacy.claim_mode_blocked() is True
 
 
 def test_claim_mode_diagnostic_does_not_hide_storage_error(tmp_path):

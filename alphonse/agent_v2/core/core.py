@@ -62,6 +62,7 @@ class ProcessingStatus(str, Enum):
     WAITING = "waiting"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    SUPERSEDED = "superseded"
 
 
 class LoopStepStatus(str, Enum):
@@ -76,6 +77,7 @@ class LoopStepStatus(str, Enum):
     WAITING = "waiting"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    SUPERSEDED = "superseded"
 
 
 @dataclass(frozen=True)
@@ -795,6 +797,14 @@ class AlphonseCore:
             from alphonse.agent_v2.core.memory.transcript import conversation_transcript
             task.conversation_history_md = conversation_transcript(task, self.conversation_store)
             result = self.intelligence.process(task, context)
+            if result.status == ProcessingStatus.SUPERSEDED:
+                # Do not publish the processor's stale snapshot or error, finish
+                # memory, acknowledge consumed messages, or change local state:
+                # the global FSM has no generation to prove that it still
+                # belongs to this worker. The host must reconcile before reuse.
+                state_after = State.snapshot()
+                return LoopStepResult(status=LoopStepStatus.SUPERSEDED,
+                                      state_before=state_before, state_after=state_after)
             finish_memory = getattr(self.memory, "finish_task", None)
             if callable(finish_memory) and result.status != ProcessingStatus.YIELDED:
                 serialized_task = result.snapshot.metadata.get("task_state") if isinstance(result.snapshot.metadata, dict) else None
@@ -840,7 +850,7 @@ class AlphonseCore:
                 return
             result = self.step()
             steps += 1
-            if result.status in {LoopStepStatus.EMPTY, LoopStepStatus.BUSY}:
+            if result.status in {LoopStepStatus.EMPTY, LoopStepStatus.BUSY, LoopStepStatus.SUPERSEDED}:
                 sleep(idle_sleep_seconds)
 
     def request_stop(self) -> None:

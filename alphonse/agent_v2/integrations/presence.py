@@ -146,6 +146,17 @@ class PresenceProjector:
             self._last_heartbeat.pop(current.key, None)
             self._current.set(None)
 
+    def discard(self) -> None:
+        """Drop local presence without publishing a stale terminal update."""
+        with self._lock:
+            current = self._current.get()
+            if current is None:
+                return
+            if self._active.get(current.key) is current:
+                self._active.pop(current.key, None)
+                self._last_heartbeat.pop(current.key, None)
+            self._current.set(None)
+
     def heartbeat(self, *, now: float | None = None) -> None:
         current_time = monotonic() if now is None else float(now)
         with self._lock:

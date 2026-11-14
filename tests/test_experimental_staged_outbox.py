@@ -4,6 +4,8 @@ from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 import sqlite3
+import subprocess
+import sys
 
 import pytest
 
@@ -15,6 +17,7 @@ from alphonse.agent_v2.core.intelligence.v3.single_loop_delivery_reservation imp
 from alphonse.agent_v2.core.intelligence.v3.task_budget import BudgetLimits, TaskBudget
 from alphonse.agent_v2.core.io.experimental_staged_outbox import (
     install_experimental_staging, rollback_empty_experimental_staging, stage_experimental_response,
+    restage_experimental_response_after_restart,
 )
 from alphonse.agent_v2.core.io.channels import ChannelAddress
 from alphonse.agent_v2.core.io.outbox import SQLiteOutboundStore
@@ -174,6 +177,119 @@ def test_restage_after_lost_commit_response_returns_same_inert_record(setup):
     assert outbox.claim_next() is None
 
 
+def test_explicit_restart_restages_without_opening_normal_outbox(setup):
+    path, _, _, outbox, claim, version, now = setup
+    identity = stage(setup)
+    with pytest.raises(ValueError, match='outbox_status_unsupported|outbox_status_schema_unsupported'):
+        SQLiteOutboundStore(path)
+    # A fresh interpreter has no retained pre-install outbox object. The token
+    # and content below are synthetic fixture data, never household values.
+    code = '''
+import sys
+from datetime import datetime
+from alphonse.agent_v2.core.messages.claim_fence import ClaimReceipt
+from alphonse.agent_v2.core.questions import SQLiteQuestionStore
+from alphonse.agent_v2.core.intelligence.v3.single_loop_checkpoint import ExperimentalCheckpointStore
+from alphonse.agent_v2.core.io.experimental_staged_outbox import restage_experimental_response_after_restart
+path, message_id, user, owner, generation, version, now = sys.argv[1:]
+claim = ClaimReceipt(message_id, user, owner, generation)
+print(restage_experimental_response_after_restart(path, claim,
+    checkpoints=ExperimentalCheckpointStore(SQLiteQuestionStore(path)),
+    task_id='task', actor='alice', expected_version=int(version), integration_id='desktop',
+    provider_key='desktop', channel_target='alice', message='synthetic private',
+    idempotency_key='key', clock=lambda: datetime.fromisoformat(now)))
+'''
+    result = subprocess.run([sys.executable, '-c', code, str(path), claim.message_id, claim.user_id,
+                             claim.lease_owner, claim.claim_generation, str(version), now.isoformat()],
+                            capture_output=True, text=True, check=True, timeout=15)
+    assert result.stdout.strip() == identity
+    with sqlite3.connect(path) as conn:
+        assert conn.execute('SELECT status, count(*) FROM v2_outbox').fetchone() == ('staged', 1)
+    assert outbox.claim_next() is None
+
+
+def test_restart_cannot_create_a_missing_staged_row(setup):
+    path, _, questions, _, claim, version, now = setup
+    with pytest.raises(ClaimFenceUnavailable, match='reconciliation_required'):
+        restage_experimental_response_after_restart(path, claim,
+            checkpoints=ExperimentalCheckpointStore(questions), task_id='task', actor='alice',
+            expected_version=version, integration_id='desktop', provider_key='desktop',
+            channel_target='alice', message='synthetic private', idempotency_key='key', clock=lambda: now)
+    with sqlite3.connect(path) as conn:
+        assert conn.execute('SELECT count(*) FROM v2_outbox').fetchone()[0] == 0
+    # The normal first-staging path remains available under its own checks.
+    assert stage(setup)
+
+
+@pytest.mark.parametrize('restart', [False, True])
+def test_staging_rejects_checkpoint_store_for_another_database(setup, tmp_path, restart):
+    path, _, _, outbox, claim, version, now = setup
+    if restart:
+        identity = stage(setup)
+    other = ExperimentalCheckpointStore(SQLiteQuestionStore(tmp_path / 'different.sqlite'))
+    common = dict(checkpoints=other, task_id='task', actor='alice', expected_version=version,
+                  integration_id='desktop', provider_key='desktop', channel_target='alice',
+                  message='synthetic private', idempotency_key='key', clock=lambda: now)
+    with pytest.raises(ClaimFenceUnavailable, match='checkpoint_store_mismatch'):
+        if restart:
+            restage_experimental_response_after_restart(path, claim, **common)
+        else:
+            stage_experimental_response(outbox, claim, **common)
+    with sqlite3.connect(path) as conn:
+        rows = conn.execute('SELECT outbox_message_id,status FROM v2_outbox').fetchall()
+    assert rows == ([(identity, 'staged')] if restart else [])
+
+
+def test_staging_accepts_checkpoint_store_alias_to_same_database(setup, tmp_path):
+    path, _, _, _, _, _, _ = setup
+    alias = tmp_path / 'same-database.sqlite'
+    alias.symlink_to(path)
+    store = ExperimentalCheckpointStore(SQLiteQuestionStore(alias))
+    identity = stage(setup, checkpoints=store)
+    with sqlite3.connect(path) as conn:
+        assert conn.execute('SELECT outbox_message_id,status FROM v2_outbox').fetchall() == [(identity, 'staged')]
+
+
+@pytest.mark.parametrize('failure', ['expired', 'inactive', 'guard', 'binding', 'actor', 'version', 'cancelled'])
+def test_restart_restaging_fails_closed_and_preserves_staged_row(setup, failure):
+    path, _, questions, _, claim, version, now = setup
+    identity = stage(setup)
+    with sqlite3.connect(path) as conn:
+        if failure == 'inactive':
+            conn.execute("UPDATE v2_users SET is_active=0 WHERE user_id='alice'")
+        if failure == 'guard':
+            conn.execute('DROP TRIGGER experimental_staged_outbox_update')
+        if failure == 'cancelled':
+            conn.execute("UPDATE v2_task_checkpoints SET status='cancelled' WHERE task_id='task'")
+        before = conn.execute('SELECT * FROM v2_outbox WHERE outbox_message_id=?', (identity,)).fetchone()
+    moments = iter((now, now + timedelta(days=1)))
+    kwargs = dict(task_id='task', actor='alice', expected_version=version, integration_id='desktop',
+        provider_key='desktop', channel_target='alice', message='synthetic private', idempotency_key='key',
+        clock=(lambda: next(moments)) if failure == 'expired' else (lambda: now),
+        checkpoints=ExperimentalCheckpointStore(questions))
+    if failure == 'binding':
+        kwargs['message'] = 'changed'
+    if failure == 'actor':
+        kwargs['actor'] = 'bob'
+    if failure == 'version':
+        kwargs['expected_version'] += 1
+    with pytest.raises((ClaimFenceUnavailable, ClaimSuperseded)):
+        restage_experimental_response_after_restart(path, claim, **kwargs)
+    with sqlite3.connect(path) as conn:
+        assert conn.execute('SELECT * FROM v2_outbox WHERE outbox_message_id=?', (identity,)).fetchone() == before
+
+
+def test_restart_path_must_already_exist_and_never_creates_database(setup, tmp_path):
+    _, _, questions, _, claim, version, now = setup
+    missing = tmp_path / 'missing.sqlite'
+    with pytest.raises(FileNotFoundError):
+        restage_experimental_response_after_restart(missing, claim,
+            checkpoints=ExperimentalCheckpointStore(questions), task_id='task', actor='alice',
+            expected_version=version, integration_id='desktop', provider_key='desktop',
+            channel_target='alice', message='synthetic private', idempotency_key='key', clock=lambda: now)
+    assert not missing.exists()
+
+
 def test_concurrent_staging_produces_one_inert_record(setup):
     path, _, _, _, _, _, _ = setup
     with ThreadPoolExecutor(max_workers=2) as pool:
@@ -290,6 +406,40 @@ def test_staging_rejects_tampered_reservation(setup, part):
         conn.execute("UPDATE v2_task_checkpoints SET task_state_json=? WHERE task_id='task'", (json.dumps(raw),))
     with pytest.raises((ValueError, ClaimFenceUnavailable)):
         stage(setup)
+    with sqlite3.connect(path) as conn:
+        assert conn.execute('SELECT count(*) FROM v2_outbox').fetchone()[0] == 0
+
+
+@pytest.mark.parametrize('change', ['valid', 'actor', 'action', 'project', 'resources', 'revision', 'extra'])
+def test_staging_checks_managed_preflight_shape(setup, change):
+    path, _, questions, _, _, _, _ = setup
+    with questions._connect() as conn:
+        raw = json.loads(conn.execute("SELECT task_state_json FROM v2_task_checkpoints WHERE task_id='task'").fetchone()[0])
+        action = raw['metadata']['single_loop_delivery_action']
+        preflight = {'schema_version': 1, 'actor': 'alice', 'task_id': 'task', 'action_id': action['action_id'],
+            'skill_id': 'skill', 'role': 'mail', 'binding_id': 'binding', 'binding_revision': 1,
+            'required_scopes': [], 'required_executables': [], 'operation': 'send', 'resources': ['alice'],
+            'project_id': None, 'recipient_user_ids': ['alice'], 'connection_id': action['integration_id'],
+            'provider_key': action['provider_key'], 'channel_target': action['channel_target'],
+            'message_digest': action['message_digest'], 'idempotency_key': action['idempotency_key'],
+            'grant_id': action['grant_id'], 'grant_revision': action['grant_revision'],
+            'connection_revision': action['connection_revision']}
+        if change == 'actor': preflight['actor'] = 'bob'
+        if change == 'action': preflight['action_id'] = 'other'
+        if change == 'project': preflight['project_id'] = 'other'
+        if change == 'resources': preflight['resources'] = ['other']
+        if change == 'revision': preflight['grant_revision'] = True
+        if change == 'extra': preflight['unexpected'] = 'value'
+        raw['metadata']['single_loop_managed_preflight'] = preflight
+        conn.execute("UPDATE v2_task_checkpoints SET task_state_json=? WHERE task_id='task'", (json.dumps(raw),))
+    if change == 'valid':
+        # Shape alone is not current authority; the generic synthetic path
+        # cannot stage a managed action.
+        with pytest.raises(ClaimFenceUnavailable, match='managed_stage_authority_required'):
+            stage(setup)
+    else:
+        with pytest.raises(ClaimFenceUnavailable, match='binding_unavailable'):
+            stage(setup)
     with sqlite3.connect(path) as conn:
         assert conn.execute('SELECT count(*) FROM v2_outbox').fetchone()[0] == 0
 

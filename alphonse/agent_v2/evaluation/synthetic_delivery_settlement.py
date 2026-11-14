@@ -14,6 +14,7 @@ from typing import Callable
 
 from alphonse.agent_v2.core.intelligence.v3.single_loop_checkpoint import ExperimentalCheckpointStore
 from alphonse.agent_v2.core.intelligence.v3.single_loop_delivery_reservation import ACTION_KEY, ACTION_SCHEMA_VERSION, DeliveryBinding
+from alphonse.agent_v2.core.intelligence.v3.single_loop_managed_delivery import MANAGED_PREFLIGHT_KEY
 from alphonse.agent_v2.core.messages.claim_fence import ClaimFenceUnavailable, ClaimReceipt, fenced_claim_transaction
 
 
@@ -42,6 +43,10 @@ def settle_fixture_delivery(store: ExperimentalCheckpointStore, claim: ClaimRece
                     raise ClaimFenceUnavailable('fixture_settlement_unavailable')
                 row = store._row(conn, task_id)
                 raw = store._validate_identity(row, task_id, actor, expected_version)
+                # A fixture effect and grant cannot prove the current authority
+                # of a managed action, even if their values happen to match.
+                if MANAGED_PREFLIGHT_KEY in raw['metadata']:
+                    raise ClaimFenceUnavailable('fixture_settlement_managed_unsupported')
                 state, budget = store._decode(raw, task_id, actor)
                 record = raw['metadata'].get(ACTION_KEY)
                 keys = {'action_id', 'integration_id', 'provider_key', 'channel_target', 'recipient_user_id',

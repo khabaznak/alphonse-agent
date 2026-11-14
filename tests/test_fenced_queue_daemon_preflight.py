@@ -7,6 +7,7 @@ from threading import Event, Thread
 import pytest
 
 from alphonse.agent_v2.core.core import CoreMessage, LoopStepStatus
+from alphonse.agent_v2.core.core import ProcessingResult, ProcessingStatus, StateSnapshot
 from alphonse.agent_v2.core.messages import SQLiteMessageQueue
 from alphonse.agent_v2.daemon import V2Daemon
 from alphonse.agent_v2.runtime import build_runtime_host
@@ -115,6 +116,56 @@ def test_fenced_queue_start_fails_before_lock_or_startup_effects(tmp_path, monke
     with queue._connect() as conn:
         row = conn.execute("SELECT status,claim_generation FROM v2_inbound_messages WHERE message_id='msg'").fetchone()
     assert tuple(row) == ("pending", "")
+
+
+def test_superseded_daemon_skips_snapshot_and_queue_disposition(tmp_path, monkeypatch):
+    from alphonse.agent_v2.core.state import reset_state
+    reset_state()
+    class Processor:
+        def process(self, task, context):
+            return ProcessingResult(snapshot=StateSnapshot(current_work='stale private work'),
+                                    status=ProcessingStatus.SUPERSEDED, error='private error')
+
+    queue = SQLiteMessageQueue(tmp_path / 'queue.sqlite3', lease_owner='worker')
+    queue.enqueue(CoreMessage(datetime.now(timezone.utc), 'synthetic', 'alice',
+                              metadata={'automation_execution_id': 'synthetic-event'}), message_id='msg')
+    runtime = build_runtime_host(messages=queue, processor=Processor())
+    daemon = V2Daemon(runtime)
+    monkeypatch.setattr(daemon, '_run_retention_if_due', lambda: None)
+    monkeypatch.setattr(daemon, '_reconcile_unconfirmed_scheduled_deliveries', lambda: None)
+    monkeypatch.setattr(daemon.event_store, 'execution_lifecycle', lambda *args: None)
+    monkeypatch.setattr(daemon.event_dispatcher, 'reconcile', lambda *args: pytest.fail('stale event reconciliation'))
+    monkeypatch.setattr(runtime.visible_state, 'snapshot', lambda: pytest.fail('stale snapshot read'))
+    monkeypatch.setattr(queue, 'ack', lambda *args, **kwargs: pytest.fail('stale acknowledgement'))
+    monkeypatch.setattr(queue, 'retry', lambda *args, **kwargs: pytest.fail('stale retry'))
+    monkeypatch.setattr(runtime.core.memory, 'finish_task', lambda *args, **kwargs: pytest.fail('stale memory finish'))
+
+    result = daemon.run_once()
+    assert result.status is LoopStepStatus.SUPERSEDED
+    assert result.queued_message_id is None and result.error is None
+    assert queue.status_for('msg') == 'processing'
+
+
+def test_superseded_tui_does_not_read_snapshot_or_drain_outbox(monkeypatch):
+    from types import SimpleNamespace
+    from alphonse.agent_v2.core.core import LoopStepResult
+    from alphonse.agent_v2.core.state import State, reset_state
+    from alphonse.agent_v2.integrations.presence import PresenceProjector
+    from alphonse.agent_v2.interfaces import tui
+
+    reset_state()
+    state = State.snapshot()
+    step = LoopStepResult(status=LoopStepStatus.SUPERSEDED, state_before=state, state_after=state)
+    runtime = SimpleNamespace(
+        queue=SimpleNamespace(peek=lambda: None),
+        presence_projector=PresenceProjector(),
+        core=SimpleNamespace(step=lambda: step),
+        visible_state=SimpleNamespace(snapshot=lambda: pytest.fail('stale snapshot read')),
+    )
+    monkeypatch.setattr(tui, '_drain_tui_outbox', lambda *_: pytest.fail('stale outbox drain'))
+    result = tui.process_tui_queue_once(runtime)
+    assert result.step_status is LoopStepStatus.SUPERSEDED
+    assert result.response == '' and result.queued_message_id is None
 
 
 def test_unadvertised_receipt_diagnostic_daemon_prework_precedes_core_refusal(tmp_path, monkeypatch):

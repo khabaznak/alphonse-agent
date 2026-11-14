@@ -2525,6 +2525,12 @@ class V2Daemon:
             self.event_store.execution_lifecycle(event_execution_id, "processing")
         with self.runtime.presence_projector.processing(queued):
             step = self.runtime.core.step()
+            if step.status == LoopStepStatus.SUPERSEDED:
+                # The processing context otherwise emits a failure on exit.
+                # No snapshot, queue disposition, event or notification may be
+                # published from this superseded run.
+                self.runtime.presence_projector.discard()
+                return step
             if step.status in {
                 LoopStepStatus.PROCESSED,
                 LoopStepStatus.YIELDED,

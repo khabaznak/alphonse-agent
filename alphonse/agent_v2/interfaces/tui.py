@@ -138,7 +138,7 @@ class TuiProcessorCoordinator:
                 if result.step_status == LoopStepStatus.EMPTY:
                     break
                 results.append(result)
-                if result.step_status in {LoopStepStatus.BUSY, LoopStepStatus.STOPPED}:
+                if result.step_status in {LoopStepStatus.BUSY, LoopStepStatus.STOPPED, LoopStepStatus.SUPERSEDED}:
                     break
         finally:
             with self._lock:
@@ -526,6 +526,9 @@ def process_tui_queue_once(runtime: TuiRuntime) -> TuiProcessingResult:
     queued = runtime.queue.peek()
     with runtime.presence_projector.processing(queued):
         step = runtime.core.step()
+        if step.status == LoopStepStatus.SUPERSEDED:
+            runtime.presence_projector.discard()
+            return TuiProcessingResult(response="", event="step=superseded", step_status=step.status)
         if step.status in {
             LoopStepStatus.PROCESSED,
             LoopStepStatus.PARKED,
@@ -2564,6 +2567,10 @@ def _build_textual_app_class() -> type[Any]:
                 if result.response:
                     chat.write(Text.assemble(("Alphonse", "bold green"), f": {result.response}"))
             self._refresh_status()
+            if any(result.step_status is LoopStepStatus.SUPERSEDED for result in results):
+                # The local FSM is intentionally held until reconciliation.
+                # Starting another worker here would just spin on BUSY.
+                return
             if self.runtime.queue.size(MessageSelector(user=self.runtime.user)) > 0:
                 self._start_processor_if_needed()
 

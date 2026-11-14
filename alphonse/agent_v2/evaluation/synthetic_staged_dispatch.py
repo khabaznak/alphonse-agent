@@ -15,6 +15,7 @@ from uuid import NAMESPACE_URL, uuid5
 
 from alphonse.agent_v2.core.intelligence.v3.single_loop_checkpoint import ExperimentalCheckpointStore
 from alphonse.agent_v2.core.intelligence.v3.single_loop_delivery_reservation import ACTION_KEY, ACTION_SCHEMA_VERSION, DeliveryBinding
+from alphonse.agent_v2.core.intelligence.v3.single_loop_managed_delivery import MANAGED_PREFLIGHT_KEY
 from alphonse.agent_v2.core.io.checkpoint_claim_fence import experimental_checkpoint_claim_transaction
 from alphonse.agent_v2.core.io.experimental_staged_outbox import _validate_guards
 from alphonse.agent_v2.core.io.outbox import SQLiteOutboundStore
@@ -46,6 +47,11 @@ def dispatch_fixture_staged(store: SQLiteOutboundStore, checkpoints: Experimenta
                     raise ClaimFenceUnavailable('fixture_dispatch_unavailable')
                 row = checkpoints._row(conn, task_id)
                 raw = checkpoints._validate_identity(row, task_id, actor, expected_version)
+                # Fixture grants cannot authenticate or authorize an action that
+                # carries a real managed preflight. Never let a synthetic grant
+                # substitute for the managed account's current authority.
+                if MANAGED_PREFLIGHT_KEY in raw['metadata']:
+                    raise ClaimFenceUnavailable('fixture_dispatch_managed_unsupported')
                 state, budget = checkpoints._decode(raw, task_id, actor)
                 action = raw['metadata'].get(ACTION_KEY)
                 keys = {'action_id', 'integration_id', 'provider_key', 'channel_target', 'recipient_user_id',

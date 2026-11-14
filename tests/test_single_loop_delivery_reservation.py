@@ -1,5 +1,6 @@
 """Isolated reservation tests; no actual authorization or delivery occurs."""
 from dataclasses import replace
+from unsafe_reclaim_fixture import simulate_old_writer_requeue
 from datetime import datetime, timedelta, timezone
 import hashlib
 
@@ -137,7 +138,8 @@ def test_mismatched_owner_checkpoint_or_invalid_binding_never_reserves(setup):
 
 def test_same_owner_reclaim_invalidates_prior_generation(setup):
     queue, _, questions, _, old_claim, _, now, _ = setup
-    assert queue.reclaim_expired(now=now + timedelta(days=1)) == 1
+    assert queue.reclaim_expired(now=now + timedelta(days=1)) == 0
+    simulate_old_writer_requeue(queue, 'message')
     replacement = queue.claim_next(lease_seconds=60).claim_receipt
     assert replacement.lease_owner == old_claim.lease_owner
     assert replacement.claim_generation != old_claim.claim_generation
@@ -260,7 +262,8 @@ def test_recovery_inspection_rejects_old_claim_after_same_owner_reclaim(setup):
 
     queue, _, _, store, claim, _, now, binding = setup
     saved = reserve(setup)
-    assert queue.reclaim_expired(now=now + timedelta(days=1)) == 1
+    assert queue.reclaim_expired(now=now + timedelta(days=1)) == 0
+    simulate_old_writer_requeue(queue, 'message')
     replacement = queue.claim_next(lease_seconds=60).claim_receipt
     result = inspect_delivery_binding(store, AccountSession('alice'), claim, task_id='task',
                                       expected_version=saved.version, expected=binding, clock=lambda: now)

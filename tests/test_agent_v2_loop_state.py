@@ -55,6 +55,48 @@ def test_available_state_consumes_message_and_returns_available_on_completion() 
     assert queue.size() == 0
 
 
+def test_superseded_processor_does_not_publish_snapshot_finish_memory_or_ack(monkeypatch) -> None:
+    class SupersededProcessor:
+        def process(self, task, context):
+            assert context.consume_message(MessageSelector(user='gaby')) is not None
+            return ProcessingResult(snapshot=StateSnapshot(current_work='stale secret', metadata={'response': 'stale'}),
+                                    status=ProcessingStatus.SUPERSEDED, error='private stale error')
+
+    class Memory:
+        finished = []
+        def start_task(self, task):
+            return ''
+        def finish_task(self, task):
+            self.finished.append(task)
+
+    core, queue, _ = _core(SupersededProcessor())
+    core.memory = Memory()
+    acknowledged = []
+    monkeypatch.setattr(queue, 'ack', lambda *args, **kwargs: acknowledged.append(args), raising=False)
+    queue.enqueue(_message('main'))
+    queue.enqueue(_message('steering', user='gaby'))
+    result = core.step()
+    assert result.status is LoopStepStatus.SUPERSEDED
+    assert result.queued_message_id is None and result.error is None
+    assert result.state_after.key == WORKING
+    assert core.state.value is None
+    assert not core.memory.finished and not acknowledged
+
+
+def test_superseded_worker_does_not_change_newer_local_state() -> None:
+    class Processor:
+        def process(self, task, context):
+            State.set(core.fsm.current_state_for_key(WAITING))
+            return ProcessingResult(snapshot=StateSnapshot(current_work='stale'), status=ProcessingStatus.SUPERSEDED)
+
+    core, queue, _ = _core(Processor())
+    queue.enqueue(_message('main'))
+    result = core.step()
+    assert result.status is LoopStepStatus.SUPERSEDED
+    assert result.state_after.key == WAITING and State.snapshot().key == WAITING
+    assert core.state.value is None
+
+
 def test_concurrent_steps_do_not_claim_a_second_message_before_state_transition(monkeypatch) -> None:
     core, queue, processor = _core(_Processor(ProcessingStatus.COMPLETED))
     queue.enqueue(_message("first"))

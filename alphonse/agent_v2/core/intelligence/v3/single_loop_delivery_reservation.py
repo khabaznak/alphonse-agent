@@ -61,10 +61,21 @@ def reserve_delivery(store: ExperimentalCheckpointStore, claim: ClaimReceipt, *,
     must also retain durable authorized inputs before any dispatch. This prototype
     never clears or reconciles the resulting marker and must not be used to dispatch.
     """
+    return _reserve_delivery(store, claim, task_id=task_id, actor=actor, expected_version=expected_version,
+                             binding=binding, message=message, now_ms=now_ms, clock=clock)
+
+
+def _reserve_delivery(store: ExperimentalCheckpointStore, claim: ClaimReceipt, *, task_id: str,
+                      actor: str, expected_version: int, binding: DeliveryBinding, message: str,
+                      now_ms: int, clock: Callable[[], datetime], managed_preflight=None) -> Checkpoint:
     if (not isinstance(store, ExperimentalCheckpointStore) or not isinstance(claim, ClaimReceipt)
             or not isinstance(binding, DeliveryBinding) or not callable(clock)
             or not isinstance(message, str) or not message or len(message.encode('utf-8')) > 12000):
         raise ValueError('delivery_reservation_arguments_invalid')
+    if managed_preflight is not None:
+        from .single_loop_managed_delivery import _ManagedPreflight
+        if type(managed_preflight) is not _ManagedPreflight:
+            raise ValueError('delivery_managed_preflight_invalid')
     # Hash exactly the UTF-8 bytes supplied for the intended message. Do not
     # normalize whitespace or Unicode: an independent verifier must compare the
     # precise operation input, not an agent-supplied assertion about its digest.
@@ -86,7 +97,12 @@ def reserve_delivery(store: ExperimentalCheckpointStore, claim: ClaimReceipt, *,
             if raw.get('message_id') != claim.message_id or raw.get('status') != 'running':
                 raise ClaimFenceUnavailable('delivery_reservation_unavailable')
             state, budget = store._decode(raw, task_id, actor)
-            if state.inflight or ACTION_KEY in raw['metadata']:
+            if managed_preflight is not None:
+                # Managed preflight is generated internally by the separate
+                # experimental entry point; it never authorizes dispatch.
+                managed_preflight.check_locked(conn, actor=actor, task_id=task_id, raw=raw, binding=binding)
+            if (state.inflight or ACTION_KEY in raw['metadata']
+                    or 'single_loop_managed_preflight' in raw['metadata']):
                 raise CheckpointConflict('delivery_action_already_bound_or_inflight')
             if budget.usage()['unknown_usage']:
                 raise CheckpointConflict('single_loop_model_usage_unresolved')
@@ -106,6 +122,8 @@ def reserve_delivery(store: ExperimentalCheckpointStore, claim: ClaimReceipt, *,
                 state.inflight = binding.action_id
                 raw['metadata'][ACTION_KEY] = {'schema_version': ACTION_SCHEMA_VERSION, 'operation': 'delivery',
                                                'task_id': task_id, 'actor': actor, **asdict(binding)}
+                if managed_preflight is not None:
+                    raw['metadata']['single_loop_managed_preflight'] = managed_preflight.record
                 result = store._write(conn, row, raw, state, budget)
     if rejected is not None:
         raise rejected
