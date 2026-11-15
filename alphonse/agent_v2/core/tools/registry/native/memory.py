@@ -19,13 +19,15 @@ OWNER_CONVERSATION_MAX_CHARS = 36000
 
 
 def complete_conversation_search(actor: str, tool_id: str, arguments: dict[str, Any], payload: dict[str, Any], *,
-                                 allow_excerpt_truncation: bool = False) -> bool:
-    """Recognize a complete direct-owner search page, not an absence proof.
+                                 allow_excerpt_truncation: bool = False,
+                                 allow_search_overflow: bool = False) -> bool:
+    """Recognize an owner search page under the caller's coverage policy.
 
     The native tool must have run under the authenticated actor. This checks
     the response envelope only; it does not fence changes or establish that
     historical search results are current, exhaustive in meaning, or authorized
-    for later publication. Partial/truncated results need a richer host.
+    for later publication. The opt-in overflow flag is only for a host that
+    withholds incomplete result content and requests a narrower search.
     """
     query = arguments.get('query')
     if (not isinstance(actor, str) or not actor.strip() or tool_id != SEARCH_MEMORY_TOOL_ID
@@ -35,13 +37,20 @@ def complete_conversation_search(actor: str, tool_id: str, arguments: dict[str, 
             or type(payload.get('schema_version')) is not int or payload.get('schema_version') != 2
             or payload.get('query') != query.strip() or payload.get('status') not in ('found', 'empty')
             or payload.get('coverage') != {'conversation': 'complete'} or payload.get('backend') != 'sqlite_fts5'
-            or payload.get('next_offset') is not None or type(payload.get('truncated')) is not bool
+            or type(payload.get('truncated')) is not bool
             or (payload['truncated'] and not allow_excerpt_truncation)):
         return False
     results = payload.get('results')
     if (not isinstance(results, list) or type(payload.get('total_matches')) is not int
-            or payload['total_matches'] != len(results)
             or (payload['status'] == 'found') != bool(results)):
+        return False
+    next_offset = payload.get('next_offset')
+    if next_offset is None:
+        if payload['total_matches'] != len(results):
+            return False
+    elif (not allow_search_overflow or type(next_offset) is not int
+          or next_offset != len(results) or next_offset < 1
+          or payload['total_matches'] <= next_offset or payload['truncated'] is not True):
         return False
     for item in results:
         if not isinstance(item, dict):
@@ -58,7 +67,7 @@ def complete_conversation_search(actor: str, tool_id: str, arguments: dict[str, 
             return False
     # A complete result page can still contain deliberately shortened source
     # excerpts. Never confuse those with a missing/paginated result page.
-    return payload['truncated'] == any(item['truncated'] for item in results)
+    return payload['truncated'] == (next_offset is not None or any(item['truncated'] for item in results))
 
 
 def complete_conversation_read(actor: str, tool_id: str, arguments: dict[str, Any], payload: dict[str, Any], *,
@@ -129,6 +138,7 @@ def complete_conversation_read(actor: str, tool_id: str, arguments: dict[str, An
 def revalidate_conversation_observation(
     actor: str, tool_id: str, arguments: dict[str, Any], payload: dict[str, Any], *, context: ToolExecutionContext,
     allow_excerpt_truncation: bool = False, allow_read_chunks: bool = False,
+    allow_search_overflow: bool = False,
 ) -> bool:
     """Re-read an owner-scoped observation before promoting it to evidence.
 
@@ -147,11 +157,13 @@ def revalidate_conversation_observation(
             return False
         if tool_id == SEARCH_MEMORY_TOOL_ID:
             if not complete_conversation_search(actor, tool_id, arguments, payload,
-                                                allow_excerpt_truncation=allow_excerpt_truncation):
+                                                allow_excerpt_truncation=allow_excerpt_truncation,
+                                                allow_search_overflow=allow_search_overflow):
                 return False
             current = execute_search_memory(arguments, context=context)
             valid = complete_conversation_search(actor, tool_id, arguments, current,
-                                                  allow_excerpt_truncation=allow_excerpt_truncation)
+                                                  allow_excerpt_truncation=allow_excerpt_truncation,
+                                                  allow_search_overflow=allow_search_overflow)
         elif tool_id == READ_MEMORY_SOURCE_TOOL_ID:
             if not complete_conversation_read(actor, tool_id, arguments, payload, allow_chunks=allow_read_chunks):
                 return False

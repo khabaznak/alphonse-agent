@@ -196,7 +196,8 @@ class OwnerReadConversationProcessor:
                         and valid_clock_observation(actor_id, args, payload, context=execution_context))
             return (actor_id == actor and self._authorized(task, context) and isinstance(args, dict)
                     and revalidate_conversation_observation(actor_id, tool_id, args, payload,
-                        context=execution_context, allow_excerpt_truncation=True, allow_read_chunks=True))
+                        context=execution_context, allow_excerpt_truncation=True, allow_read_chunks=True,
+                        allow_search_overflow=True))
 
         def access(actor_id: str, ref: str) -> bool:
             if actor_id != actor or not self._authorized(task, context):
@@ -231,6 +232,12 @@ class OwnerReadConversationProcessor:
                         'source': payload['items'][0]['source'],
                         'content': ''.join(page['items'][0]['content'] for _, _, page in pages),
                         'historical_only': True}, ensure_ascii=False, sort_keys=True)
+                if tool_id == SEARCH_MEMORY_TOOL_ID and payload.get('next_offset') is not None:
+                    # This is feedback about a search operation, not a partial
+                    # body of evidence. Do not expose source IDs or previews.
+                    return json.dumps({'query': payload['query'], 'status': 'too_many_matches',
+                        'notice': 'The result list is incomplete. Narrow the query and search again; '
+                                  'no results from this search have been exposed.'}, ensure_ascii=False)
                 if tool_id == SEARCH_MEMORY_TOOL_ID and payload.get('truncated') is True:
                     # A shortened preview can hide a later correction. Keep
                     # complete previews and identifying metadata for source
@@ -275,13 +282,18 @@ class OwnerReadConversationProcessor:
             sequences = conversation_read_sequences(actor, observations)
             reads = {source_id for source_id, pages in sequences.items()
                      if pages and pages[-1][2]['next_offset'] is None}
+            overflow_pending = False
             for tool, _, payload in observations.values():
+                if tool == SEARCH_MEMORY_TOOL_ID:
+                    overflow_pending = payload.get('next_offset') is not None
+                    if overflow_pending:
+                        continue
                 if tool == SEARCH_MEMORY_TOOL_ID and payload.get('truncated') is True:
                     shortened = {item['source_id'] for item in payload['results'] if item['truncated'] is True}
                     has_complete_result = any(item['truncated'] is False for item in payload['results'])
                     if not has_complete_result and not reads.intersection(shortened):
                         return False
-            return True
+            return not overflow_pending
 
         host = CandidateHost(task, context, self.budgets, lambda snapshot: self.save_checkpoint(task, snapshot),
             chooser, access, load, allowed, lambda *_: '', provenance, self.now_ms,

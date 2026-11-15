@@ -24,7 +24,7 @@ def test_owner_search_default_is_bounded_and_never_accepts_partial_page(tmp_path
     owner = users.onboard(display_name='Synthetic owner', users_root=tmp_path / 'users')
     store = SQLiteConversationStore(tmp_path / 'conversation.db')
     for i in range(count):
-        store.record(owner_user_id=owner.user_id, role='user', content=f'Apples note {i}',
+        store.record(owner_user_id=owner.user_id, role='user', content=f'Apples note {i}' + (' unique' if i == 30 else ''),
                      source='test', source_message_id=str(i))
     registry = InMemoryToolRegistry()
     registry.register(build_search_memory_tool_definition())
@@ -60,4 +60,56 @@ def test_owner_search_default_is_bounded_and_never_accepts_partial_page(tmp_path
         assert len(provider.requests) == 2
         assert all(f'Apples note {i}' in provider.requests[1].prompt for i in range(count))
     else:
-        assert len(provider.requests) == 1
+        assert len(provider.requests) == 2
+        assert 'too_many_matches' in provider.requests[1].prompt
+        assert 'Apples note' not in provider.requests[1].prompt
+
+
+@pytest.mark.parametrize('reverse', [False, True])
+def test_owner_can_narrow_an_overflowing_search_without_seeing_partial_results(tmp_path, reverse):
+    users = V2UserStore(':memory:')
+    owner = users.onboard(display_name='Synthetic owner', users_root=tmp_path / 'users')
+    store = SQLiteConversationStore(tmp_path / 'conversation.db')
+    for i in range(31):
+        store.record(owner_user_id=owner.user_id, role='user', content=f'Apples note {i}' + (' unique' if i == 30 else ''),
+                     source='test', source_message_id=str(i))
+    registry = InMemoryToolRegistry()
+    registry.register(build_search_memory_tool_definition())
+    registry.register(build_read_memory_source_tool_definition())
+
+    class Provider:
+        supports_image_input = False
+        def __init__(self):
+            self.requests = []
+        def generate_json(self, request):
+            self.requests.append(request)
+            if len(self.requests) <= 2:
+                query = ('unique' if reverse else 'apples') if len(self.requests) == 1 else ('apples' if reverse else 'unique')
+                action = {'kind': 'tool', 'tool_id': 'native.search_memory',
+                          'arguments': {'query': query, 'source_types': ['conversation']}, 'text': None}
+            else:
+                action = {'kind': 'answer', 'tool_id': None, 'arguments': None, 'text': 'Synthetic answer.'}
+            return InferenceResult(json_value=action, raw_response=json.dumps(action),
+                                   usage={'input_tokens': 100, 'output_tokens': 20})
+
+    provider = Provider()
+    task = TaskState(task_id='message', message_id='message', user=owner.user_id, goal='Find apples.',
+                     intelligence_engine='single_loop_experimental', intelligence_schema_version=1)
+    context = CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry,
+        inference=InferenceRouter(provider=provider, default_profile=ModelProfile('test', 'fixture', 'offline')),
+        conversation_store=store, cancellation_checker=lambda: False)
+    processor = OwnerReadConversationProcessor(users=users, budgets=SQLiteTaskBudgetStore(str(tmp_path / 'budget.db')),
+        authorize_claim=lambda *_: True, save_checkpoint=lambda *_: None, now_ms=lambda: 100)
+    result = processor.process(task, context)
+    assert len(provider.requests) == 3
+    if reverse:
+        # A complete older search cannot clear the later overflow.
+        assert result.status == ProcessingStatus.FAILED
+        assert result.error == 'candidate_answer_unsupported'
+        assert 'too_many_matches' in provider.requests[2].prompt
+    else:
+        assert result.status == ProcessingStatus.WAITING, result.error
+        assert 'too_many_matches' in provider.requests[1].prompt
+        assert 'Apples note' not in provider.requests[1].prompt
+        assert 'conversation:' not in provider.requests[1].prompt
+        assert 'Apples note 30' in provider.requests[2].prompt

@@ -106,7 +106,7 @@ def restore_owner_read_observations(checkpoint: OwnerAtomicCheckpoint, context: 
                             if tool == OWNER_CLOCK_TOOL_ID else
                             revalidate_conversation_observation(state.actor, tool, args, observation,
                                                                context=execution, allow_excerpt_truncation=True,
-                                                               allow_read_chunks=True))):
+                                                               allow_read_chunks=True, allow_search_overflow=True))):
                 raise OwnerRecoveryUnavailable('owner_recovery_unavailable')
             recheck()
             reconstructed[ref] = {'actor': state.actor, 'tool_id': tool, 'arguments': args, 'observation': observation}

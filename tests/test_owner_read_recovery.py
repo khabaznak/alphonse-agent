@@ -84,6 +84,67 @@ def test_recovery_reads_actor_bound_durable_source_and_returns_checkpoint(setup)
     assert 'observation_sha256' in stored
 
 
+def test_recovery_revalidates_search_overflow_and_rejects_changed_results(setup):
+    atomic, _, ctx, conversations, owner = setup
+    for i in range(31):
+        conversations.record(owner_user_id=owner.user_id, role='user', content=f'Synthetic apples {i}',
+                             source='test', source_message_id=f'overflow-{i}')
+    saved = settled_read(setup)
+    recovered, bindings = restore_owner_read_observations(atomic, ctx, expected_version=saved.version)
+    assert recovered.state.evidence_sources == ['owner-read:one']
+    assert bindings['owner-read:one']['observation']['next_offset'] is not None
+    conversations.record(owner_user_id=owner.user_id, role='user', content='More synthetic apples.',
+                         source='test', source_message_id='changed-overflow')
+    with pytest.raises(OwnerRecoveryUnavailable):
+        restore_owner_read_observations(atomic, ctx, expected_version=saved.version)
+
+
+def test_recovered_newer_search_overflow_is_not_cleared_by_older_complete_search(setup, tmp_path):
+    atomic, initial, ctx, conversations, owner = setup
+    conversations.record(owner_user_id=owner.user_id, role='user', content='Unique synthetic record.',
+                         source='test', source_message_id='unique')
+    for i in range(31):
+        conversations.record(owner_user_id=owner.user_id, role='user', content=f'Synthetic apples {i}',
+                             source='test', source_message_id=f'overflow-order-{i}')
+    current = initial
+    for i, query in enumerate(('unique', 'apples')):
+        args = {'query': query, 'source_types': ['conversation'], 'limit': 30}
+        decision = {'kind': 'tool', 'tool_id': SEARCH_MEMORY_TOOL_ID, 'arguments': args}
+        model = atomic.reserve(expected_version=current.version, reservation_id=f'model-{i}', kind='model',
+            amounts=dict(actions=0, model_calls=1, input_tokens=100, output_tokens=20), now_ms=initial.budget.started_at_ms)
+        selected = atomic.settle_model(expected_version=model.version, reservation_id=f'model-{i}', outcome='success',
+            input_tokens=10, output_tokens=10, decision=decision, projection_fingerprint='a' * 64)
+        pending = atomic.reserve(expected_version=selected.version, reservation_id=f'read-{i}', kind='tool',
+            amounts=dict(actions=1, model_calls=0, input_tokens=0, output_tokens=0), now_ms=initial.budget.started_at_ms,
+            tool_id=SEARCH_MEMORY_TOOL_ID, arguments=args, selected_decision=decision, projection_fingerprint='a' * 64)
+        observation = execute_search_memory(args, context=ctx.tool_execution_context(atomic.task))
+        assert (observation['next_offset'] is not None) == (i == 1)
+        current = atomic.settle_read(expected_version=pending.version, reservation_id=f'read-{i}',
+            tool_id=SEARCH_MEMORY_TOOL_ID, arguments=args, evidence_ref=f'owner-read:{i}', observation=observation)
+    recovered, _ = restore_owner_read_observations(atomic, ctx, expected_version=current.version)
+    assert recovered.state.evidence_sources == ['owner-read:0', 'owner-read:1']
+    atomic.task._checkpoint_version = current.version
+
+    class Provider:
+        supports_image_input = False
+        def generate_json(self, request):
+            assert 'too_many_matches' in request.prompt
+            decision = {'kind': 'answer', 'tool_id': None, 'arguments': None, 'text': 'Synthetic answer.'}
+            return InferenceResult(json_value=decision, raw_response=json.dumps(decision),
+                                   usage={'input_tokens': 10, 'output_tokens': 10})
+    ctx.inference = InferenceRouter(provider=Provider(), default_profile=ModelProfile('test', 'fixture', 'offline'))
+    ctx.tools = InMemoryToolRegistry()
+    ctx.tools.register(build_search_memory_tool_definition())
+    ctx.tools.register(build_read_memory_source_tool_definition())
+    processor = OwnerReadConversationProcessor(users=V2UserStore(atomic.queue.db_path),
+        budgets=SQLiteTaskBudgetStore(str(tmp_path / 'unused.sqlite')), authorize_claim=authorize_trusted_owner_claim,
+        save_checkpoint=lambda *_: None, atomic_checkpoints=atomic.store,
+        now_ms=lambda: initial.budget.started_at_ms)
+    result = processor.process(atomic.task, ctx)
+    assert result.status == ProcessingStatus.FAILED
+    assert result.error == 'candidate_answer_unsupported'
+
+
 def test_recovery_reconstructs_partial_page_without_persisting_content(setup):
     atomic, initial, ctx, conversations, owner = setup
     event = conversations.record(owner_user_id=owner.user_id, role='user',

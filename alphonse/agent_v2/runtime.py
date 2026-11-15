@@ -22,7 +22,6 @@ from alphonse.agent_v2.core.core import ToolDescriptor
 from alphonse.agent_v2.core.core import ToolRegistry
 from alphonse.agent_v2.core.inference import InferenceRouter
 from alphonse.agent_v2.core.intelligence.engine_router import EngineRoutingProcessor
-from alphonse.agent_v2.core.intelligence.v3 import HierarchicalCAPDProcessor
 from alphonse.agent_v2.intelligence_engine_settings import SQLiteIntelligenceEngineSettingsStore
 from alphonse.agent_v2.core.io import IntegrationIdentity
 from alphonse.agent_v2.core.io import SQLiteOutboundStore
@@ -211,6 +210,7 @@ def build_runtime_host(
     )
     visible_state = InMemoryInternalState()
     if processor is None and not experimental_owner_read:
+        from alphonse.agent_v2.core.intelligence.v3 import HierarchicalCAPDProcessor
         processor = EngineRoutingProcessor(v3=HierarchicalCAPDProcessor())
     web_tools_settings_store = web_tools_settings_store or SQLiteWebToolsSettingsStore()
     code_mode_settings_store = code_mode_settings_store or SQLiteCodeModeSettingsStore()

@@ -1,51 +1,40 @@
-"""Hierarchical CAPD contracts and engine components."""
+"""V3 bridge exports, loaded only when the corresponding component is used.
 
-from alphonse.agent_v2.core.intelligence.v3.contracts import CompletionCondition
-from alphonse.agent_v2.core.intelligence.v3.contracts import FailurePolicy
-from alphonse.agent_v2.core.intelligence.v3.contracts import MutationScope
-from alphonse.agent_v2.core.intelligence.v3.contracts import PhaseEvidence
-from alphonse.agent_v2.core.intelligence.v3.contracts import PhaseOutcome
-from alphonse.agent_v2.core.intelligence.v3.contracts import PhasePlan
-from alphonse.agent_v2.core.intelligence.v3.contracts import PhaseStatus
-from alphonse.agent_v2.core.intelligence.v3.contracts import PhaseSubgoal
-from alphonse.agent_v2.core.intelligence.v3.contracts import SideEffectClass
-from alphonse.agent_v2.core.intelligence.v3.contracts import TacticalAction
-from alphonse.agent_v2.core.intelligence.v3.contracts import TacticalState
-from alphonse.agent_v2.core.intelligence.v3.contracts import new_tactical_state
-from alphonse.agent_v2.core.intelligence.v3.executor import PhaseExecutor
-from alphonse.agent_v2.core.intelligence.v3.revealing import Capability
-from alphonse.agent_v2.core.intelligence.v3.revealing import ToolRevealDecision
-from alphonse.agent_v2.core.intelligence.v3.revealing import ToolRevealPolicy
-from alphonse.agent_v2.core.intelligence.v3.revealing import ToolRevealResult
-from alphonse.agent_v2.core.intelligence.v3.outer import PhaseReview
-from alphonse.agent_v2.core.intelligence.v3.outer import PhaseReviewStatus
-from alphonse.agent_v2.core.intelligence.v3.outer import StrategicAction
-from alphonse.agent_v2.core.intelligence.v3.outer import StrategicDecision
-from alphonse.agent_v2.core.intelligence.v3.outer import V3OuterController
-from alphonse.agent_v2.core.intelligence.v3.processor import HierarchicalCAPDProcessor
+The owner-only candidate currently shares this package with V3. Importing it
+must not implicitly load the old processor, planner, and executor. The exports
+remain available to the bridge and its callers during the migration.
+"""
 
-__all__ = [
-    "CompletionCondition",
-    "FailurePolicy",
-    "MutationScope",
-    "PhaseEvidence",
-    "PhaseOutcome",
-    "PhasePlan",
-    "PhaseStatus",
-    "PhaseSubgoal",
-    "SideEffectClass",
-    "TacticalAction",
-    "TacticalState",
-    "new_tactical_state",
-    "PhaseExecutor",
-    "Capability",
-    "ToolRevealDecision",
-    "ToolRevealPolicy",
-    "ToolRevealResult",
-    "PhaseReview",
-    "PhaseReviewStatus",
-    "StrategicAction",
-    "StrategicDecision",
-    "V3OuterController",
-    "HierarchicalCAPDProcessor",
-]
+from importlib import import_module
+
+_EXPORTS = {
+    **{name: 'contracts' for name in (
+        'CompletionCondition', 'FailurePolicy', 'MutationScope', 'PhaseEvidence',
+        'PhaseOutcome', 'PhasePlan', 'PhaseStatus', 'PhaseSubgoal',
+        'SideEffectClass', 'TacticalAction', 'TacticalState', 'new_tactical_state',
+    )},
+    'PhaseExecutor': 'executor',
+    **{name: 'revealing' for name in (
+        'Capability', 'ToolRevealDecision', 'ToolRevealPolicy', 'ToolRevealResult',
+    )},
+    **{name: 'outer' for name in (
+        'PhaseReview', 'PhaseReviewStatus', 'StrategicAction', 'StrategicDecision',
+        'V3OuterController',
+    )},
+    'HierarchicalCAPDProcessor': 'processor',
+}
+
+__all__ = list(_EXPORTS)
+
+
+def __getattr__(name: str):
+    module_name = _EXPORTS.get(name)
+    if module_name is None:
+        raise AttributeError(f'module {__name__!r} has no attribute {name!r}')
+    value = getattr(import_module(f'.{module_name}', __name__), name)
+    globals()[name] = value
+    return value
+
+
+def __dir__():
+    return sorted(set(globals()) | set(__all__))

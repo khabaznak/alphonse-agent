@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { LegacyNotificationReview, legacyArchiveConfirmation } from "./LegacyNotificationReview";
+import { LegacyNotificationReview, LegacyNotificationRow, legacyArchiveConfirmation } from "./LegacyNotificationReview";
 import { archiveLegacyNotification, listLegacyNotifications, type LegacyNotification } from "./legacyNotifications";
 import { legacyNotificationReviewMessage, type OwnerRequest } from "./ownerConversation";
 
@@ -46,5 +46,18 @@ describe("legacy notification review", () => {
     expect(confirmation).toContain("will not resend");
     expect(confirmation).toContain("previous delivery remains unknown");
     expect(confirmation).not.toContain("will not be delivered");
+  });
+  it("distinguishes similar opaque records in review and confirmation without showing their contents", () => {
+    const opaque: LegacyNotification = {...item, kind: "response", message: "", review_restriction: "opaque_response"};
+    const second = {...opaque, outbox_message_id: "message-2", created_at: "2026-01-02"};
+    const html = renderToStaticMarkup(<><LegacyNotificationRow item={opaque} busy={false} onArchive={() => {}} />
+      <LegacyNotificationRow item={second} busy={false} onArchive={() => {}} /></>);
+    expect(html).toContain("Reference: message-1");
+    expect(html).toContain("Reference: message-2");
+    expect(html).toContain("Recorded: 2026-01-01");
+    expect(html).toContain("Recorded: 2026-01-02");
+    expect(html).not.toContain(item.message);
+    expect(legacyArchiveConfirmation(second)).toContain("Reference: message-2");
+    expect(legacyArchiveConfirmation(second)).toContain("Recorded: 2026-01-02");
   });
 });
