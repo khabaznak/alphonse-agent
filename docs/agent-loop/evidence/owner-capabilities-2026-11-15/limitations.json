@@ -1,0 +1,8 @@
+{
+  "recorded_after_runs": true,
+  "runner_copy_sha256": "09e9489cb186058a9c87498fb735b87865e58624bda01c8bcf0a51ded3280758",
+  "runner_copy_note": "The copied runner was prepared before both attempts; its hash was recorded only afterwards, so the receipts do not independently establish its pre-run hash.",
+  "missing_runtime_fingerprints": ["alphonse/agent_v2/core/intelligence/simple_loop/owner_clock.py", "alphonse/agent_v2/core/intelligence/simple_loop/owner_atomic_checkpoint.py"],
+  "privacy_check": "The runner checked fixture sentinels against captured model prompts and stored the resulting boolean, but did not preserve the prompt text. The boolean cannot be independently rescored from the receipts.",
+  "scope": "Fixture acknowledgement and persisted conversation turns are not a real Desktop UI, external delivery, human receipt, skill activation, or a broad reliability measurement."
+}

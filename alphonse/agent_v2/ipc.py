@@ -387,6 +387,10 @@ class V2DaemonServer:
                     result = self._owner_recovery_list(connection, request)
                 elif isinstance(request, dict) and request.get('method') == 'experimental_owner_questions':
                     result = self._owner_questions(connection, request)
+                elif isinstance(request, dict) and request.get('method') in {
+                        'owner_reminder_create', 'owner_reminder_take', 'owner_reminder_ack',
+                        'owner_reminder_list', 'owner_reminder_cancel', 'owner_reminder_resolve', 'owner_reminder_lookup'}:
+                    result = self._owner_reminders(connection, request)
                 elif isinstance(request, dict) and request.get('method') in {'legacy_notification_list', 'legacy_notification_archive'}:
                     result = self._legacy_notification_review(connection, request)
                 else:
@@ -407,6 +411,47 @@ class V2DaemonServer:
                 encoded = (json.dumps({"version": PROTOCOL_VERSION, "request_id": _request_id(request),
                     "ok": False, "error": "daemon_response_unavailable"}) + "\n").encode("utf-8")
             connection.sendall(encoded)
+
+    def _owner_reminders(self, connection, request):
+        """Restrict reminder mutation and pickup to the trusted local owner."""
+        if not self.experimental_owner_ingress or getattr(self.daemon, 'experimental_owner_only', False) is not True:
+            raise PermissionError('owner_reminder_unavailable')
+        if request.get('version') != PROTOCOL_VERSION:
+            raise ValueError('daemon_protocol_version_unsupported')
+        method, params = request.get('method'), request.get('params')
+        expected = {'owner_reminder_create': {'message', 'due_at', 'request_id'},
+                    'owner_reminder_take': set(), 'owner_reminder_ack': {'id', 'token'},
+                    'owner_reminder_list': set(),
+                    'owner_reminder_cancel': {'id'}, 'owner_reminder_resolve': {'id'},
+                    'owner_reminder_lookup': {'request_id'}}[method]
+        if not isinstance(params, dict) or set(params) != expected:
+            raise ValueError('owner_reminder_payload_denied')
+        self._local_peer_uid(connection)
+        users = self.daemon.runtime.user_store
+        owner = users.admin_user()
+        if owner is None or owner.is_active is not True or owner.role not in ('admin', 'owner') or not users.is_admin(owner.user_id):
+            raise PermissionError('owner_reminder_unavailable')
+        from alphonse.agent_v2.core.messages.sqlite_queue import SQLiteMessageQueue
+        queue = self.daemon.runtime.queue
+        if (type(queue) is not SQLiteMessageQueue or queue.experimental_claim_fencing is not True
+                or not users.db_path or users.db_path == ':memory:'
+                or os.path.realpath(str(users.db_path)) != os.path.realpath(str(queue.db_path))):
+            raise PermissionError('owner_reminder_unavailable')
+        from alphonse.agent_v2.owner_desktop_reminders import OwnerDesktopReminders
+        reminders = OwnerDesktopReminders(str(users.db_path))
+        if method == 'owner_reminder_create':
+            return reminders.create(owner.user_id, params['message'], params['due_at'], params['request_id'])
+        if method == 'owner_reminder_take':
+            return reminders.take_due(owner.user_id)
+        if method == 'owner_reminder_list':
+            return {'reminders': reminders.list_open(owner.user_id)}
+        if method == 'owner_reminder_cancel':
+            return reminders.cancel(owner.user_id, params['id'])
+        if method == 'owner_reminder_resolve':
+            return reminders.resolve_unconfirmed(owner.user_id, params['id'])
+        if method == 'owner_reminder_lookup':
+            return reminders.lookup(owner.user_id, params['request_id'])
+        return reminders.acknowledge(owner.user_id, params['id'], params['token'])
 
     def _owner_ingress(self, connection, request):
         if not self.experimental_owner_ingress:
@@ -444,7 +489,7 @@ class V2DaemonServer:
         self._local_peer_uid(connection)
         users = self.daemon.runtime.user_store
         owner = users.admin_user()
-        if (owner is None or owner.is_active is not True or owner.role != 'admin'
+        if (owner is None or owner.is_active is not True or owner.role not in ('admin', 'owner')
                 or not users.is_admin(owner.user_id)):
             raise PermissionError('legacy_notification_owner_unavailable')
         outbox = self.daemon.runtime.outbox

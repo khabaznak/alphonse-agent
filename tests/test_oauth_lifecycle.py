@@ -98,6 +98,33 @@ def expire(f):
     f.store.install_credentials('one', token, expected_generation=record.credential_generation)
 
 
+def test_no_refresh_token_access_refuses_expired_credentials_without_mutation(f):
+    connect(f)
+    args = authorization(f)
+    assert f.service.token_without_refresh(f.owner, authorization=args) == 'disposable-access'
+    expire(f)
+    before = dict(f.backend.data)
+    before_revision = revision(f)
+    with pytest.raises(OAuthError, match='oauth_refresh_required'):
+        f.service.token_without_refresh(f.owner, authorization=args)
+    assert f.service.clients['google'].refresh_count == 0
+    assert f.backend.data == before and revision(f) == before_revision
+
+
+@pytest.mark.parametrize('change', [
+    {'expires_at': float('nan')}, {'expires_at': float('inf')},
+    {'expires_at': 'not-a-time'}, {'access_token': ''}, {'access_token': None},
+])
+def test_no_refresh_token_access_rejects_malformed_credentials(f, monkeypatch, change):
+    connect(f)
+    args = authorization(f)
+    original = f.service._read
+    monkeypatch.setattr(f.service, '_read', lambda record: {**original(record), **change})
+    with pytest.raises(OAuthError, match='oauth_refresh_required'):
+        f.service.token_without_refresh(f.owner, authorization=args)
+    assert f.service.clients['google'].refresh_count == 0
+
+
 @pytest.mark.parametrize('provider', ['google', 'microsoft'])
 def test_connect_minimal_scopes_and_secret_free_health(f, provider):
     health = connect(f, provider)

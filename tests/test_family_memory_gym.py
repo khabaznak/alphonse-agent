@@ -12,7 +12,7 @@ from alphonse.agent_v2.core.intelligence.simple_loop.task_budget import SQLiteTa
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
 from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry
 from alphonse.agent_v2.core.tools.registry.native.memory import build_read_memory_source_tool_definition, build_search_memory_tool_definition
-from alphonse.agent_v2.evaluation.family_memory_gym import PROMPT, SOURCES, score
+from alphonse.agent_v2.evaluation.family_memory_gym import PROMPT, SOURCES, score, score_relevance
 from alphonse.agent_v2.users import V2UserStore
 
 
@@ -70,3 +70,15 @@ def test_family_memory_oracle_rejects_missing_sources_or_invented_claims():
     assert checks['mentions_people'] and checks['mentions_pet']
     assert not checks['reads_relevant_sources'] and not checks['does_not_invent_child']
     assert not score('Mira, Theo, dog Pepper, projector.', {'people', 'pet', 'unrelated'})['omits_unrelated_source']
+
+
+def test_contrast_oracle_changes_what_counts_as_relevant_for_each_question():
+    family = 'Mira and Theo live together with their dog Pepper.'
+    repair = 'The projector needs a new cable.'
+    pet = 'The family dog is Pepper.'
+    assert all(score_relevance('family', family).values())
+    assert not all(score_relevance('family', family + ' ' + repair).values())
+    assert all(score_relevance('repair', repair).values())
+    assert not all(score_relevance('repair', 'The projector was fixed and the cable was replaced.').values())
+    assert all(score_relevance('pet', pet).values())
+    assert not all(score_relevance('pet', pet + ' ' + repair).values())

@@ -143,3 +143,25 @@ def test_owner_origin_verified_by_real_candidate_against_claim_and_payload(tmp_p
     with queue._connect() as conn:
         conn.execute('DELETE FROM v2_trusted_owner_ingress WHERE message_id=?', (message_id,))
     assert not queue.verify_trusted_local_owner_claim(claim, task)
+
+
+def test_only_active_canonical_owner_or_admin_can_create_owner_ingress(tmp_path):
+    database = tmp_path / 'canonical.sqlite'
+    users = V2UserStore(database)
+    owner = users.onboard(display_name='Fixture owner', users_root=tmp_path / 'users')
+    users.update_user(owner.user_id, role='owner')
+    other = users.create_user(display_name='Other owner', role='owner')
+    queue = SQLiteMessageQueue(database, experimental_claim_fencing=True)
+    message_id = queue.enqueue_trusted_local_owner(prompt='fixture', peer_uid=os.getuid())
+    acquired = queue.claim_next()
+    from alphonse.agent_v2.core.intelligence.task_state import TaskState
+    task = TaskState.from_message(acquired.message, message_id=message_id)
+    task.task_id = message_id
+    assert task.user == owner.user_id
+    assert queue.verify_trusted_local_owner_claim(acquired.claim_receipt, task)
+    # A different active user with the owner role is not the canonical owner.
+    assert not queue.verify_trusted_local_owner_claim(acquired.claim_receipt, replace(task, user=other.user_id))
+    users.update_user(owner.user_id, is_active=False)
+    assert not queue.verify_trusted_local_owner_claim(acquired.claim_receipt, task)
+    with pytest.raises(PermissionError, match='owner_ingress_admin_unavailable'):
+        queue.enqueue_trusted_local_owner(prompt='second', peer_uid=os.getuid())

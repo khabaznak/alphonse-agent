@@ -1,0 +1,7 @@
+{
+ "purpose": "Retry each of the three preregistered synthetic contrast cases with normal local provider access after all three sandboxed attempts failed before a recorded result with candidate_model_unavailable.",
+ "provider": "Codex CLI ChatGPT subscription; no paid API",
+ "cases": ["family", "repair", "pet"],
+ "attempts": "One attempt per case with no adaptive prompt edits; preserve sandbox failures and all retry outcomes.",
+ "limits": "Provider invocation was attempted in the sandbox; zero successful results recorded does not establish whether a request was sent. Fixture only; no household data, delivery, external effects, daemon claim, restart, or Desktop."
+}

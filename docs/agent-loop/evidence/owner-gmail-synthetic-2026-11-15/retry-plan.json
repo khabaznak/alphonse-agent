@@ -1,0 +1,6 @@
+{
+  "purpose": "One preplanned retry of owner-gmail-unread-worker-v1 on the now-stable source after owner_gmail.py changed during the original attempt.",
+  "scope": "Same synthetic fixture, fake account and fake Gmail transport; existing Codex CLI ChatGPT subscription model only. Preserve the original attempt and its changed-source limitation.",
+  "oracle": "Use the original plan's unchanged count, as-of, private-sentinel, one fake Gmail call, offline recovery and fixture acknowledgement checks.",
+  "limits": "One tuned synthetic in-process worker attempt, not real mailbox, paid API, Desktop GUI, real delivery or human receipt."
+}

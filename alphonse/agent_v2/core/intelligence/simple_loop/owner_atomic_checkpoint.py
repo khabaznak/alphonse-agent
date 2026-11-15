@@ -64,7 +64,7 @@ def verify_finalized_owner_ack(queue: SQLiteMessageQueue, message_id: str, token
             row = conn.execute("""SELECT o.owner_id,o.peer_uid,c.task_state_json,c.owner_id AS checkpoint_owner
                 FROM v2_trusted_owner_ingress o
                 JOIN v2_user_settings s ON s.key='admin_user_id' AND s.value=o.owner_id
-                JOIN v2_users u ON u.user_id=o.owner_id AND u.role='admin' AND u.is_active=1
+                JOIN v2_users u ON u.user_id=o.owner_id AND u.role IN ('admin','owner') AND u.is_active=1
                 JOIN v2_task_checkpoints c ON c.task_id=o.message_id AND c.owner_id=o.owner_id
                 WHERE o.message_id=? AND NOT EXISTS
                     (SELECT 1 FROM v2_inbound_messages q WHERE q.message_id=o.message_id)""", (message_id,)).fetchone()
@@ -239,6 +239,12 @@ class OwnerAtomicCheckpoint:
                     or not isinstance(observations, dict) or set(observations) != set(state.evidence_sources)
                     or selected.get('evidence_bindings_sha256') != _decision_digest(observations)):
                 raise CheckpointConflict('owner_desktop_pickup_unavailable')
+            from .owner_gmail import OWNER_GMAIL_TOOL_ID, valid_owner_gmail_locked
+            for binding in observations.values():
+                if (binding.get('tool_id') == OWNER_GMAIL_TOOL_ID
+                        and (state.status != 'completed' or not valid_owner_gmail_locked(conn, self.task.user,
+                                binding.get('gmail_observation'), context=context))):
+                    raise CheckpointConflict('owner_gmail_authority_unavailable')
             metadata['owner_read_desktop_pickup_started'] = {
                 'schema_version': 1, 'claim_digest': _claim_digest(self.receipt),
                 'answer_sha256': selected['answer_sha256'], 'channel': 'desktop',
@@ -486,6 +492,9 @@ class OwnerAtomicCheckpoint:
             from .owner_clock import OWNER_CLOCK_TOOL_ID
             if tool_id == OWNER_CLOCK_TOOL_ID:
                 observations[evidence_ref]['clock_observation'] = deepcopy(observation)
+            from .owner_gmail import OWNER_GMAIL_TOOL_ID
+            if tool_id == OWNER_GMAIL_TOOL_ID:
+                observations[evidence_ref]['gmail_observation'] = deepcopy(observation)
             state.evidence_sources.append(evidence_ref)
             state.inflight = ''
             del raw['metadata']['owner_read_pending_action']

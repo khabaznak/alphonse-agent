@@ -68,13 +68,24 @@ def make_request(*, projection: str, catalog: list[dict[str, Any]], cancellation
         'already listed tool, and do not claim an observation that was not supplied.\n\n'
     )
     tool_ids = {item.get('tool_id') for item in catalog if isinstance(item, dict)}
+    if 'native.owner_schedules' in tool_ids:
+        instructions += (
+            'The schedule tool lists records only; it cannot create, change, execute or send a reminder. '
+            'Earlier scheduled work is paused. New one-time Desktop reminders can be created explicitly '
+            'in Desktop and appear only while the Desktop conversation is open. Do not promise a reminder or action '
+            'unless the host has actually confirmed it.\n\n')
     if {'native.search_memory', 'native.read_memory_source'} <= tool_ids:
         instructions += (
             'For questions about past conversations, use search to discover candidate sources. '
             'A complete preview may provide the needed evidence; if it is shortened or missing '
             'material context, read the relevant source before answering. Select sources that '
-            'establish facts requested by the user; '
-            'exclude incidental details that do not help answer the question. If no relevant '
+            'establish facts requested by the user. A shared search term alone does not make '
+            'every matching detail responsive: focus on the subject and the type of information '
+            'the user asked for. For a broad question about a person or group, prioritize who '
+            'they are, relationships and enduring context; leave out incidental tasks or events '
+            'unless they are requested or materially explain that context. When the user asks '
+            'about a specific task or event, include the details that answer that question. '
+            'Keep the answer concise and do not fill it with loosely associated facts. If no relevant '
             'source is available, say what is unknown.\n\n')
     if source_progress is not None:
         source_progress = validate_source_progress(source_progress)

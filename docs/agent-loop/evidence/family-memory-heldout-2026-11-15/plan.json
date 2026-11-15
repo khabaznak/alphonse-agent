@@ -1,0 +1,7 @@
+{
+  "design": "Held-out synthetic contrast fixture with new names, a different animal and an unrelated household appliance event. One run each of members and appliance questions, fixed before either run. Same general policy as prior development contrast; no tuning after results.",
+  "fixture": "tests/fixtures/family_memory/heldout-v1.json",
+  "provider": "Codex CLI ChatGPT subscription; gpt-6-luna",
+  "scoring": "Fixed case-specific literal answer checks and exact full required source text present in the final model prompt; explicit native source-read calls reported as a separate strict metric. Fixture oracle fields are never presented to the chooser.",
+  "limits": "Two in-process synthetic examples, one attempt per case. Full text in the prompt does not establish model attention. Literal checks are narrow, not general semantic verification. No household data, paid API, external effects, daemon claim, restart, Desktop or delivery."
+}

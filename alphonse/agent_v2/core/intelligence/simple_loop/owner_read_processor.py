@@ -19,6 +19,7 @@ from alphonse.agent_v2.core.tools.registry.native.memory import (
     READ_MEMORY_SOURCE_TOOL_ID, SEARCH_MEMORY_TOOL_ID, revalidate_conversation_observation,
     conversation_read_sequences, conversation_search_sequences,
 )
+from alphonse.agent_v2.core.tools.registry.native.skill_catalog import SKILL_CATALOG_TOOL_ID, validate_skill_catalog_observation
 from alphonse.agent_v2.users import V2UserStore
 from alphonse.agent_v2.core.messages.sqlite_queue import SQLiteMessageQueue
 from .router_candidate_chooser import RouterCandidateChooser
@@ -28,6 +29,8 @@ from .single_loop_checkpoint import ExperimentalCheckpointStore
 from .owner_atomic_checkpoint import OwnerAtomicCheckpoint
 from .owner_read_recovery import restore_owner_read_observations
 from .owner_clock import OWNER_CLOCK_TOOL_ID, valid_clock_observation
+from .owner_gmail import OWNER_GMAIL_TOOL_ID, valid_owner_gmail
+from .owner_schedules import OWNER_SCHEDULES_TOOL_ID, valid_schedules_observation
 from datetime import datetime, timezone
 
 
@@ -74,7 +77,7 @@ class OwnerReadConversationProcessor:
     def _authorized(self, task: TaskState, context: CoreLoopContext) -> bool:
         try:
             user = self.users.get_user(str(task.user or ''))
-            return bool(user is not None and user.is_active is True and user.role == 'admin'
+            return bool(user is not None and user.is_active is True and user.role in ('admin', 'owner')
                         and self.users.is_admin(user.user_id)
                         and user.user_id == task.user and self.authorize_claim(task, context) is True
                         and context.is_cancelled() is False)
@@ -111,6 +114,17 @@ class OwnerReadConversationProcessor:
             clock_descriptor = context.tools.get(OWNER_CLOCK_TOOL_ID)
             if clock_descriptor is not None and clock_descriptor.read_only is True:
                 descriptors += (clock_descriptor,)
+            schedule_descriptor = context.tools.get(OWNER_SCHEDULES_TOOL_ID)
+            if schedule_descriptor is not None and schedule_descriptor.read_only is True and context.schedule_store is not None:
+                descriptors += (schedule_descriptor,)
+            skill_descriptor = context.tools.get(SKILL_CATALOG_TOOL_ID)
+            if (skill_descriptor is not None and skill_descriptor.read_only is True
+                    and context.skill_store is not None and context.artifact_resources is not None):
+                descriptors += (skill_descriptor,)
+            gmail_descriptor = context.tools.get(OWNER_GMAIL_TOOL_ID)
+            if (gmail_descriptor is not None and gmail_descriptor.read_only is True
+                    and context.owner_gmail_service is not None):
+                descriptors += (gmail_descriptor,)
             base_chooser = RouterCandidateChooser(router=context.inference, task=task, tools=descriptors,
                 max_input_tokens=65536, cancellation_checker=context.is_cancelled)
             def chooser(projection: str, max_output_tokens: int) -> dict:
@@ -170,6 +184,13 @@ class OwnerReadConversationProcessor:
                 return False
             if tool_id == OWNER_CLOCK_TOOL_ID:
                 return args == {} and atomic is not None
+            if tool_id == OWNER_SCHEDULES_TOOL_ID:
+                return args == {} and atomic is not None and context.schedule_store is not None
+            if tool_id == SKILL_CATALOG_TOOL_ID:
+                return args == {} and atomic is not None and context.skill_store is not None and context.artifact_resources is not None
+            if tool_id == OWNER_GMAIL_TOOL_ID:
+                return (args == {} and atomic is not None and context.owner_gmail_service is not None
+                        and not any(tool == OWNER_GMAIL_TOOL_ID for tool, _, _ in observations.values()))
             if tool_id == SEARCH_MEMORY_TOOL_ID:
                 if args.get('source_types') != ['conversation'] or type(args.get('offset', 0)) is not int:
                     return False
@@ -211,6 +232,15 @@ class OwnerReadConversationProcessor:
             if tool_id == OWNER_CLOCK_TOOL_ID:
                 return (actor_id == actor and self._authorized(task, context)
                         and valid_clock_observation(actor_id, args, payload, context=execution_context))
+            if tool_id == OWNER_SCHEDULES_TOOL_ID:
+                return (actor_id == actor and self._authorized(task, context)
+                        and valid_schedules_observation(actor_id, args, payload, context=execution_context))
+            if tool_id == SKILL_CATALOG_TOOL_ID:
+                return (actor_id == actor and self._authorized(task, context)
+                        and validate_skill_catalog_observation(actor_id, tool_id, args, payload, context=execution_context))
+            if tool_id == OWNER_GMAIL_TOOL_ID:
+                return (actor_id == actor and self._authorized(task, context)
+                        and valid_owner_gmail(actor_id, args, payload, context=execution_context))
             return (actor_id == actor and self._authorized(task, context) and isinstance(args, dict)
                     and revalidate_conversation_observation(actor_id, tool_id, args, payload,
                         context=execution_context, allow_excerpt_truncation=True, allow_read_chunks=True,
@@ -233,6 +263,10 @@ class OwnerReadConversationProcessor:
                 raise ValueError('owner_read_evidence_unavailable')
             if ref != 'goal':
                 tool_id, _, payload = observations[ref]
+                if tool_id == OWNER_GMAIL_TOOL_ID:
+                    # The model needs the count and as-of time, not grant IDs.
+                    return json.dumps({key: payload[key] for key in ('status', 'provider', 'label_id',
+                                      'unit', 'count', 'observed_at')}, ensure_ascii=False)
                 if tool_id == READ_MEMORY_SOURCE_TOOL_ID:
                     pages = conversation_read_sequences(actor, observations)[payload['items'][0]['source_id']]
                     # Never project an incomplete prefix as if it were the
@@ -319,6 +353,8 @@ class OwnerReadConversationProcessor:
                      if pages and pages[-1][2]['next_offset'] is None}
             overflow_pending = bool(search_groups and search_groups[-1][-1][2]['next_offset'] is not None)
             for tool, _, payload in observations.values():
+                if tool == OWNER_SCHEDULES_TOOL_ID and payload.get('status') != 'complete':
+                    return False
                 if tool == SEARCH_MEMORY_TOOL_ID and payload.get('next_offset') is not None:
                     continue
                 if tool == SEARCH_MEMORY_TOOL_ID and payload.get('truncated') is True:
@@ -343,6 +379,10 @@ class OwnerReadConversationProcessor:
                                     status=ProcessingStatus.CANCELLED, error='owner_read_cancelled')
         if result.status not in {'completed', 'waiting_user'}:
             return self._failure(task, result.blocker or 'owner_read_blocked')
+        if result.status == 'waiting_user' and any(tool == OWNER_GMAIL_TOOL_ID for tool, _, _ in observations.values()):
+            # A clarification is not a count answer. Do not replace its text
+            # with the deterministic count while retaining a question kind.
+            return self._failure(task, 'owner_gmail_question_unavailable')
         # The same claim-bound pickup can deliver an answer or a clarification.
         # A clarification is an ordinary recorded turn: correlated task resume
         # is not yet implemented, so a later message starts a separate task.

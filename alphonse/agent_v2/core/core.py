@@ -208,6 +208,8 @@ class ToolExecutionContext:
     cancellation_checker: Callable[[], bool] | None = None
     skill_bindings: Any | None = None
     browser_workflow_service: Any | None = None
+    claim_receipt: Any | None = None
+    owner_gmail_service: Any | None = None
 
     def record_memory_event(self, task: TaskState, heading: str, content: Any) -> None:
         """Record an event through the task's configured memory adapter."""
@@ -241,6 +243,7 @@ class CoreLoopContext:
     cancellation_checker: Callable[[], bool] | None = None
     telemetry_sink: Callable[[dict[str, Any]], None] | None = None
     system_one: Any | None = None
+    owner_gmail_service: Any | None = None
     skill_store: Any | None = None
     artifact_resources: Any | None = None
     skill_bindings: Any | None = None
@@ -315,6 +318,8 @@ class CoreLoopContext:
             cancellation_checker=self.cancellation_checker,
             skill_bindings=self.skill_bindings,
             browser_workflow_service=self.browser_workflow_service,
+            claim_receipt=self.claim_receipt,
+            owner_gmail_service=self.owner_gmail_service,
         )
 
     def is_cancelled(self) -> bool:

@@ -26,6 +26,7 @@ import { legacyNotificationReviewMessage, OwnerConversation, ownerUnavailableMes
 import { abandonOwnerRequest, listOwnerRecovery, type OwnerRecoveryItem } from "./ownerRecovery";
 import { OwnerRecovery } from "./OwnerRecoveryPanel";
 import { LegacyNotificationReview } from "./LegacyNotificationReview";
+import { OwnerReminders } from "./OwnerReminders";
 import { LegacyMigrationPreview } from "./LegacyMigrationPreview";
 import { OwnerQuestionSelector } from "./OwnerQuestionSelector";
 import { listOwnerQuestions, type OwnerQuestion } from "./ownerQuestions";
@@ -825,6 +826,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
               <div className="composer-bottom"><details ref={commandMenuRef} className="composer-command-menu"><summary aria-label="Conversation commands" title="Conversation commands"><Plus aria-hidden="true" /></summary><div><p>{prompt.trim() ? "Keep or send your draft before choosing a command." : "Choose a command to prepare in the composer."}</p>{DESKTOP_COMMANDS.map(command => <button key={command} type="button" disabled={Boolean(prompt.trim())} onClick={() => { setPrompt(command); if (commandMenuRef.current) commandMenuRef.current.open = false; textareaRef.current?.focus(); }}>{command}</button>)}</div></details><span className="composer-context">{composerProject ? <>Project: {composerProject.name} <button type="button" onClick={() => setComposerProject(null)} aria-label="Remove project from next message">×</button></> : "Everyday assistant"}</span><button className="send" type="submit" aria-label="Send" title="Send message"><ArrowUp aria-hidden="true" /></button></div>
           </form>
           <p className="composer-hint">Your conversation with Alphonse · {enterToSend ? "Enter to send · Shift+Enter for a new line" : "Use Send to send your message"}</p>
+          <OwnerReminders key={user} request={daemonRequest} active={isAdmin && connected && workspace === "conversation"} ownerId={user} />
           {isAdmin && !ownerWorkerReady && <p className="composer-hint" role="status">{ownerUnavailableMessage(ownerBlockingReason)}</p>}
           {isAdmin && ownerOnly && pausedLegacyRequests === null && <p className="composer-hint" role="status">Earlier queued requests could not be checked.</p>}
           {isAdmin && ownerOnly && pausedLegacyRequests !== null && pausedLegacyRequests > 0 && <p className="composer-hint" role="status">{pausedLegacyRequests} earlier {pausedLegacyRequests === 1 ? "request is" : "requests are"} paused while the simpler conversation service is running.</p>}

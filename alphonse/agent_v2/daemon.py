@@ -224,6 +224,10 @@ class V2Daemon:
         if self.source_acquisition is not None:
             self.source_acquisition.findings = self.findings
         self.runtime.integration_management.oauth_factory = self.optional_accounts
+        if self.experimental_owner_only and self.runtime.owner_gmail_service is None:
+            from alphonse.agent_v2.core.intelligence.simple_loop.owner_gmail import OwnerGmailService
+            self.runtime.owner_gmail_service = OwnerGmailService(
+                self.runtime.integration_management.accounts, self.optional_accounts)
         self.runtime.integration_management.dispatcher = self.project_check_dispatcher
         self.runtime.integration_management.findings = self.findings
         self.project_check_worker = (
@@ -334,6 +338,8 @@ class V2Daemon:
                 context = CoreLoopContext(messages=queue, claim_receipt=acquired.claim_receipt,
                     tools=self.runtime.core.tools, inference=self.runtime.core.inference,
                     conversation_store=self.runtime.conversation_store,
+                    owner_gmail_service=self.runtime.owner_gmail_service,
+                    schedule_store=self.runtime.schedule_store,
                     skill_store=self.runtime.core.skill_store,
                     artifact_resources=self.runtime.core.artifact_resources,
                     skill_bindings=self.runtime.core.skill_bindings,
@@ -427,7 +433,7 @@ class V2Daemon:
                 conn.execute('BEGIN')
                 admin = conn.execute("""SELECT u.user_id FROM v2_users u JOIN v2_user_settings s
                     ON s.key='admin_user_id' AND s.value=u.user_id
-                    WHERE u.role='admin' AND u.is_active=1""").fetchone()
+                    WHERE u.role IN ('admin','owner') AND u.is_active=1""").fetchone()
                 if admin is None:
                     return []
                 actor = str(admin['user_id'])
@@ -516,6 +522,8 @@ class V2Daemon:
                 context = CoreLoopContext(messages=queue, claim_receipt=queued.claim_receipt,
                     tools=self.runtime.core.tools, inference=self.runtime.core.inference,
                     conversation_store=self.runtime.conversation_store,
+                    owner_gmail_service=self.runtime.owner_gmail_service,
+                    schedule_store=self.runtime.schedule_store,
                     skill_store=self.runtime.core.skill_store,
                     artifact_resources=self.runtime.core.artifact_resources,
                     skill_bindings=self.runtime.core.skill_bindings,
@@ -535,7 +543,7 @@ class V2Daemon:
             with self.runtime.queue._connect() as conn:
                 identity = conn.execute("""SELECT 1 FROM v2_trusted_owner_ingress o
                     JOIN v2_user_settings s ON s.key='admin_user_id' AND s.value=o.owner_id
-                    JOIN v2_users u ON u.user_id=o.owner_id AND u.role='admin' AND u.is_active=1
+                    JOIN v2_users u ON u.user_id=o.owner_id AND u.role IN ('admin','owner') AND u.is_active=1
                     WHERE o.message_id=? AND o.peer_uid=?""", (message_id, os.getuid())).fetchone()
                 if identity is None:
                     return 'unavailable'
@@ -543,7 +551,7 @@ class V2Daemon:
                 if exists and conn.execute("""SELECT 1 FROM v2_owner_abandoned a
                     JOIN v2_trusted_owner_ingress o ON o.message_id=a.message_id AND o.owner_id=a.owner_id
                     JOIN v2_user_settings s ON s.key='admin_user_id' AND s.value=a.owner_id
-                    JOIN v2_users u ON u.user_id=a.owner_id AND u.role='admin' AND u.is_active=1
+                    JOIN v2_users u ON u.user_id=a.owner_id AND u.role IN ('admin','owner') AND u.is_active=1
                     WHERE a.message_id=? AND o.peer_uid=?""", (message_id, os.getuid())).fetchone():
                     return 'abandoned'
         except Exception:
@@ -604,7 +612,7 @@ class V2Daemon:
                 rows = conn.execute("""SELECT q.message_id,q.prompt,q.status,q.lease_expires_at,c.task_state_json
                     FROM v2_inbound_messages q JOIN v2_trusted_owner_ingress o ON o.message_id=q.message_id
                     JOIN v2_user_settings s ON s.key='admin_user_id' AND s.value=q.user_id
-                    JOIN v2_users u ON u.user_id=q.user_id AND u.role='admin' AND u.is_active=1
+                    JOIN v2_users u ON u.user_id=q.user_id AND u.role IN ('admin','owner') AND u.is_active=1
                     LEFT JOIN v2_task_checkpoints c ON c.task_id=q.message_id AND c.owner_id=q.user_id
                     WHERE o.owner_id=q.user_id AND o.peer_uid=? AND q.status IN ('pending','processing')
                     ORDER BY q.sequence DESC LIMIT 50""", (os.getuid(),)).fetchall()
@@ -650,7 +658,7 @@ class V2Daemon:
         try:
             self._stop.clear()
             admin = self.runtime.user_store.admin_user()
-            if (admin is not None and admin.is_active is True and admin.role == 'admin'
+            if (admin is not None and admin.is_active is True and admin.role in ('admin', 'owner')
                     and self.runtime.user_store.is_admin(admin.user_id)):
                 # Migrate only untouched, owner-bound identity notifications;
                 # ambiguous or previously attempted TUI records stay untouched.

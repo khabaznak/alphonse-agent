@@ -1,0 +1,8 @@
+{
+  "name": "owner-capability-reads-v1",
+  "design": "One synthetic development attempt each, using the real claim-bound owner daemon worker and real read-only native tools with the ChatGPT subscription CLI. No retry or changes to the oracle after results. The first case asks for all reminders from two owner records (one active, one owner-paused) plus an unrelated second-owner sentinel. The second asks for two authorized installed skill names and descriptions, with a denied skill sentinel.",
+  "provider": "Codex CLI ChatGPT subscription; gpt-6-luna; no paid API or Jev",
+  "schedule_oracle": "Must call native.owner_schedules; list both old fixture reminders; never expose other-owner sentinel to model or user; user-visible draft must state that earlier scheduled work is paused and new Desktop reminders require the Desktop conversation to be open; synthetic owner acknowledgement persists both conversation turns.",
+  "skills_oracle": "Must call native.skill_catalog; list both authorized fixture skill names; never expose denied skill ID, description or instructions to the model or user; synthetic owner acknowledgement persists both conversation turns. This exercise verifies discovery only, not activation, readiness, resource reads, script execution or account binding.",
+  "limits": "Two synthetic in-process owner-worker exercises, one attempt each; no real Desktop UI, no human receipt, no household data, paid API, external integrations or side effects. Literal oracles are narrow and not broad reliability evidence. The JSON oracle remains outside the prompt."
+}

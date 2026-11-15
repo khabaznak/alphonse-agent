@@ -1,0 +1,23 @@
+{
+  "fixture": "family-memory-heldout-v1",
+  "synthetic": true,
+  "sources": {
+    "people": "Household members: Lena and Idris share a home.",
+    "pet": "Household pets: their cat Juniper is nine years old.",
+    "event": "Household activity: the kitchen blender needs a replacement lid."
+  },
+  "cases": {
+    "members": {
+      "question": "What do you remember about the people and pets in our household?",
+      "required_terms": ["lena", "idris", "cat", "juniper"],
+      "forbidden_terms": ["blender", "replacement lid"],
+      "required_sources": ["people", "pet"]
+    },
+    "appliance": {
+      "question": "What do you remember about the household blender?",
+      "required_terms": ["blender", "lid"],
+      "forbidden_terms": [],
+      "required_sources": ["event"]
+    }
+  }
+}

@@ -42,10 +42,12 @@ def test_new_unknown_sender_notices_go_to_owner_desktop(tmp_path):
     assert {item.metadata['provider_key'] for item in deliveries} == {'telegram', 'discord'}
 
 
-def test_only_canonical_owners_untouched_identity_notices_move(tmp_path):
+@pytest.mark.parametrize('role', ['admin', 'owner'])
+def test_only_canonical_owners_untouched_identity_notices_move(tmp_path, role):
     db = tmp_path / 'household.db'
     users = V2UserStore(db)
     owner = users.onboard(display_name='Synthetic owner', users_root=tmp_path / 'users')
+    users.update_user(owner.user_id, role=role)
     member = users.create_user(display_name='Synthetic member')
     store = SQLiteOutboundStore(db)
 
@@ -95,10 +97,12 @@ def test_missing_or_inactive_authority_cannot_move_notices(tmp_path):
     assert store.get(notice.outbox_message_id).integration_id == 'tui'
 
 
-def test_legacy_summary_exposes_only_counts_to_active_admin(tmp_path):
+@pytest.mark.parametrize('role', ['admin', 'owner'])
+def test_legacy_summary_exposes_only_counts_to_active_admin(tmp_path, role):
     db = tmp_path / 'household.db'
     users = V2UserStore(db)
     owner = users.onboard(display_name='Synthetic owner', users_root=tmp_path / 'users')
+    users.update_user(owner.user_id, role=role)
     member = users.create_user(display_name='Synthetic member')
     store = SQLiteOutboundStore(db)
     def message(audience, target):
@@ -122,10 +126,12 @@ def test_legacy_summary_exposes_only_counts_to_active_admin(tmp_path):
     assert store.legacy_tui_unresolved_summary(owner.user_id) is None
 
 
-def test_owner_can_review_and_archive_without_resend_or_false_delivery(tmp_path):
+@pytest.mark.parametrize('role', ['admin', 'owner'])
+def test_owner_can_review_and_archive_without_resend_or_false_delivery(tmp_path, role):
     db = tmp_path / 'household.db'
     users = V2UserStore(db)
     owner = users.onboard(display_name='Synthetic owner', users_root=tmp_path / 'users')
+    users.update_user(owner.user_id, role=role)
     member = users.create_user(display_name='Synthetic member')
     store = SQLiteOutboundStore(db)
     def message(who, *, status='pending'):

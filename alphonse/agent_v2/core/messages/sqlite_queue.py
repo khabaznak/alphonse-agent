@@ -119,7 +119,7 @@ class SQLiteMessageQueue:
                 raise RuntimeError('owner_worker_claim_mode_conflict')
             admin = conn.execute("""SELECT u.user_id FROM v2_users u JOIN v2_user_settings s
                 ON s.key='admin_user_id' AND s.value=u.user_id
-                WHERE u.role='admin' AND u.is_active=1""").fetchone()
+                WHERE u.role IN ('admin','owner') AND u.is_active=1""").fetchone()
             if admin is None:
                 raise PermissionError('owner_ingress_admin_unavailable')
             actor = str(admin['user_id'])
@@ -170,7 +170,7 @@ class SQLiteMessageQueue:
                 q.correlation_id,q.memory_session_id,q.metadata_json,o.owner_id,o.peer_uid,o.payload_sha256
                 FROM v2_inbound_messages q JOIN v2_trusted_owner_ingress o ON o.message_id=q.message_id
                 JOIN v2_user_settings s ON s.key='admin_user_id' AND s.value=q.user_id
-                JOIN v2_users u ON u.user_id=q.user_id AND u.role='admin' AND u.is_active=1
+                JOIN v2_users u ON u.user_id=q.user_id AND u.role IN ('admin','owner') AND u.is_active=1
                 WHERE q.message_id=?""", (receipt.message_id,)).fetchone()
             if row is None or row['owner_id'] != receipt.user_id or row['peer_uid'] != os.getuid():
                 raise ClaimFenceUnavailable('owner_claim_authorization_unavailable')
@@ -229,14 +229,14 @@ class SQLiteMessageQueue:
             prior = conn.execute("""SELECT a.delivery_status FROM v2_owner_abandoned a
                 JOIN v2_trusted_owner_ingress o ON o.message_id=a.message_id AND o.owner_id=a.owner_id
                 JOIN v2_user_settings s ON s.key='admin_user_id' AND s.value=a.owner_id
-                JOIN v2_users u ON u.user_id=a.owner_id AND u.role='admin' AND u.is_active=1
+                JOIN v2_users u ON u.user_id=a.owner_id AND u.role IN ('admin','owner') AND u.is_active=1
                 WHERE a.message_id=? AND o.peer_uid=?""", (message_id, os.getuid())).fetchone()
             if prior is not None:
                 return {'status': 'abandoned', 'delivery_status': prior['delivery_status']}
             row = conn.execute("""SELECT q.*,o.owner_id,o.peer_uid,o.payload_sha256
                 FROM v2_inbound_messages q JOIN v2_trusted_owner_ingress o ON o.message_id=q.message_id
                 JOIN v2_user_settings s ON s.key='admin_user_id' AND s.value=q.user_id
-                JOIN v2_users u ON u.user_id=q.user_id AND u.role='admin' AND u.is_active=1
+                JOIN v2_users u ON u.user_id=q.user_id AND u.role IN ('admin','owner') AND u.is_active=1
                 WHERE q.message_id=?""", (message_id,)).fetchone()
             if row is None or row['owner_id'] != row['user_id'] or row['peer_uid'] != os.getuid():
                 raise ValueError('owner_abandon_unavailable')

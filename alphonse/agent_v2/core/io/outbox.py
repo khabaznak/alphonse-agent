@@ -125,7 +125,7 @@ def _require_legacy_tui_admin(conn: sqlite3.Connection, owner: str) -> None:
         raise ValueError('legacy_tui_recovery_unavailable')
     row = conn.execute("""SELECT u.user_id FROM main.v2_users u
         JOIN main.v2_user_settings s ON s.key='admin_user_id' AND s.value=u.user_id
-        WHERE u.user_id=? AND u.role='admin' AND u.is_active=1""", (owner,)).fetchone()
+        WHERE u.user_id=? AND u.role IN ('admin','owner') AND u.is_active=1""", (owner,)).fetchone()
     if row is None:
         raise ValueError('legacy_tui_recovery_unavailable')
 
@@ -212,7 +212,7 @@ class SQLiteOutboundStore:
                 conn.execute('BEGIN IMMEDIATE')
                 admin = conn.execute("""SELECT u.user_id FROM main.v2_users u
                     JOIN main.v2_user_settings s ON s.key='admin_user_id' AND s.value=u.user_id
-                    WHERE u.user_id=? AND u.role='admin' AND u.is_active=1""", (owner,)).fetchone()
+                    WHERE u.user_id=? AND u.role IN ('admin','owner') AND u.is_active=1""", (owner,)).fetchone()
                 if admin is None:
                     return 0
                 rows = conn.execute("""SELECT * FROM main.v2_outbox
@@ -254,7 +254,7 @@ class SQLiteOutboundStore:
                 conn.execute('BEGIN IMMEDIATE')
                 admin = conn.execute("""SELECT u.user_id FROM main.v2_users u
                     JOIN main.v2_user_settings s ON s.key='admin_user_id' AND s.value=u.user_id
-                    WHERE u.user_id=? AND u.role='admin' AND u.is_active=1""", (owner,)).fetchone()
+                    WHERE u.user_id=? AND u.role IN ('admin','owner') AND u.is_active=1""", (owner,)).fetchone()
                 if admin is None:
                     return None
                 row = conn.execute("""SELECT

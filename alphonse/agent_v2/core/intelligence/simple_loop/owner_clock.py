@@ -53,6 +53,18 @@ def build_owner_clock_tool_definition():
 
 
 def display_response(response, bindings):
+    from .owner_schedules import OWNER_SCHEDULES_TOOL_ID
+    from .owner_gmail import OWNER_GMAIL_TOOL_ID
+    if any(binding.get('tool_id') == OWNER_SCHEDULES_TOOL_ID for binding in bindings.values()):
+        response += '\n\nEarlier scheduled work is paused. New Desktop reminders appear only while the Desktop conversation is open.'
+    gmail = [binding['gmail_observation'] for binding in bindings.values()
+             if binding.get('tool_id') == OWNER_GMAIL_TOOL_ID]
+    if gmail:
+        # A model draft can contradict a provider count. For this narrow slice,
+        # deliver only the verified observation and explicitly limit its scope.
+        item = gmail[-1]
+        return (f"Gmail INBOX unread messages: {item['count']} (as of {item['observed_at']}). "
+                'This response covers the inbox count only.')
     clocks = [binding['clock_observation'] for binding in bindings.values()
               if binding.get('tool_id') == OWNER_CLOCK_TOOL_ID]
     if not clocks:

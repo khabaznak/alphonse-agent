@@ -19,7 +19,7 @@ from alphonse.agent_v2.runtime import build_runtime_host
 from alphonse.agent_v2.users import V2UserStore
 
 
-def run_worker(tmp_path, monkeypatch, *, use_clock=True, zone='America/Mexico_City', invalid_zone=False):
+def run_worker(tmp_path, monkeypatch, *, use_clock=True, zone='America/Mexico_City', invalid_zone=False, owner_role='admin'):
     class Provider:
         supports_image_input = False
         calls = 0
@@ -34,6 +34,8 @@ def run_worker(tmp_path, monkeypatch, *, use_clock=True, zone='America/Mexico_Ci
     path = tmp_path / 'fixture.sqlite'
     users = V2UserStore(path)
     owner = users.onboard(display_name='Fixture owner', users_root=tmp_path / 'users')
+    if owner_role != 'admin':
+        owner = users.update_user(owner.user_id, role=owner_role)
     users.set_timezone(zone, owner.user_id)
     queue = SQLiteMessageQueue(path, experimental_claim_fencing=True)
     conversation = SQLiteConversationStore(path)
@@ -135,5 +137,21 @@ def test_clock_evidence_survives_ready_handoff_restore(tmp_path, monkeypatch):
         draft = daemon.take_owner_desktop_draft(message_id)
         assert 'Host clock observed as of:' in draft['message']
         assert 'America/Mexico_City' in draft['message']
+    finally:
+        daemon.stop()
+
+
+def test_canonical_active_owner_role_can_complete_and_acknowledge(tmp_path, monkeypatch):
+    from pathlib import Path
+    monkeypatch.setattr(Path, 'home', classmethod(lambda cls: tmp_path))
+    monkeypatch.setenv('ALPHONSE_V2_DB_PATH', str(tmp_path / 'owner.sqlite'))
+    daemon, message_id, status, _, owner, conversation = run_worker(tmp_path, monkeypatch, owner_role='owner')
+    try:
+        assert status == 'ready'
+        assert owner.role == 'owner'
+        draft = daemon.take_owner_desktop_draft(message_id)
+        daemon.acknowledge_owner_desktop_draft(message_id, draft['acknowledgement_token'])
+        daemon.acknowledge_owner_desktop_draft(message_id, draft['acknowledgement_token'])
+        assert conversation.list(owner_user_id=owner.user_id)[-1].content == draft['message']
     finally:
         daemon.stop()

@@ -413,6 +413,29 @@ class OAuthService:
             self.accounts.authorize(session, **authorization)
             return token['access_token']
 
+    def token_without_refresh(self, session: AccountSession, *, authorization: dict):
+        """Use a currently valid token without any refresh or credential mutation.
+
+        Intended for read-only paths that cannot reconcile a credential refresh.
+        Expired or near-expiry tokens require a separately authorized refresh.
+        """
+        record, _ = self.accounts.authorize(session, **authorization)
+        if record.provider_key not in self.clients:
+            raise OAuthError('oauth_provider_unconfigured')
+        with self._lease(record.integration_id):
+            record, _ = self.accounts.authorize(session, **authorization)
+            token = self._read(record)
+            import math
+            try:
+                expires_at = float(token.get('expires_at', 0))
+            except (TypeError, ValueError):
+                raise OAuthError('oauth_refresh_required') from None
+            if (not math.isfinite(expires_at) or expires_at <= time.time() + 60
+                    or not isinstance(token.get('access_token'), str) or not token['access_token'].strip()):
+                raise OAuthError('oauth_refresh_required')
+            self.accounts.authorize(session, **authorization)
+            return token['access_token']
+
     def _require_reconnect(self, record):
         current = self.store.get(record.integration_id)
         if current and current.connection == record.connection:

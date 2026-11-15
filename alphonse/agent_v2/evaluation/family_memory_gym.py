@@ -13,6 +13,39 @@ SOURCES = {
     'unrelated': 'Family movie night: the projector needs a new cable.',
 }
 
+# The same records answer different questions differently. This contrast checks
+# that avoiding an incidental repair in a family summary does not suppress it
+# when that repair is the thing the user actually asks about. These are
+# development fixtures, not a held-out sample or a general relevance metric.
+CONTRAST_CASES = {
+    'family': PROMPT,
+    'repair': 'What do you remember about the projector and its repair?',
+    'pet': 'What do you remember about the family dog?',
+}
+
+
+def score_relevance(case: str, answer: str) -> dict[str, bool]:
+    """Score synthetic answers for this specific question, without model labels."""
+    text = answer.casefold()
+    if case == 'family':
+        return {
+            'people': 'mira' in text and 'theo' in text,
+            'pet': 'pepper' in text and 'dog' in text,
+            'no_incidental_repair': 'projector' not in text and 'cable' not in text,
+            'no_invented_children': 'child' not in text,
+        }
+    if case == 'repair':
+        return {
+            'repair': 'projector' in text and 'cable' in text,
+            'no_invented_completion': not any(x in text for x in ('was replaced', 'has been replaced', 'is fixed', 'was fixed')),
+        }
+    if case == 'pet':
+        return {
+            'pet': 'pepper' in text and 'dog' in text,
+            'no_incidental_repair': 'projector' not in text and 'cable' not in text,
+        }
+    raise ValueError('unknown_family_memory_case')
+
 
 def score(answer: str, read_source_keys: set[str]) -> dict[str, bool]:
     """Score content and sources separately; never infer model quality from wiring."""
