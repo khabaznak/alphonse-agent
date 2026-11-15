@@ -2,6 +2,12 @@ import { useState } from "react";
 import type { OwnerRequest } from "./ownerConversation";
 import { archiveLegacyNotification, listLegacyNotifications, type LegacyNotification } from "./legacyNotifications";
 
+export function legacyArchiveConfirmation(item: LegacyNotification): string {
+  return item.review_restriction === "opaque_response"
+    ? "This response's contents cannot be shown here and may be important. Archive it without resending? The record will be kept. Alphonse will not resend it; any previous delivery remains unknown."
+    : "Archive this notification without sending it? This does not tell us whether it was previously delivered.";
+}
+
 /** Explicit local-owner review; the server rechecks identity and state. */
 export function LegacyNotificationReview({ request, onChanged }: { request: OwnerRequest; onChanged: () => void }) {
   const [items, setItems] = useState<LegacyNotification[] | null>(null);
@@ -22,7 +28,7 @@ export function LegacyNotificationReview({ request, onChanged }: { request: Owne
   }
 
   async function archive(item: LegacyNotification) {
-    if (!item.can_archive || !window.confirm("Archive this notification without sending it? This does not tell us whether it was previously delivered.")) return;
+    if (!item.can_archive || !window.confirm(legacyArchiveConfirmation(item))) return;
     setBusy(true);
     try {
       await archiveLegacyNotification(request, item);
@@ -38,9 +44,9 @@ export function LegacyNotificationReview({ request, onChanged }: { request: Owne
     <button type="button" disabled={busy} onClick={() => void refresh()}>Review earlier notifications</button>
     {notice && <p role="status">{notice}</p>}
     {items?.map((item) => <article key={item.outbox_message_id}>
-      {item.review_restriction ? <p>This linked or protected item needs separate recovery. Its contents are not shown here.</p> : <p>{item.message}</p>}
+      {item.review_restriction === "opaque_response" ? <p>This response's contents are hidden because their current source access cannot be verified. They may be important. The record will be kept if you choose to archive it without sending.</p> : item.review_restriction ? <p>This linked or protected item needs separate recovery. Its contents are not shown here.</p> : <p>{item.message}</p>}
       <p>Type: {item.kind}. Recorded status: {item.status}. Previous delivery: {item.delivery_certainty === "not_attempted" ? "no attempt recorded" : "unknown"}. Attempts: {item.attempt_count}.</p>
-      {!item.review_restriction && <button type="button" disabled={busy || !item.can_archive} onClick={() => void archive(item)}>Archive without sending</button>}
+      {item.review_restriction !== "linked_or_protected" && <button type="button" disabled={busy || !item.can_archive} onClick={() => void archive(item)}>Archive without sending</button>}
     </article>)}
   </section>;
 }

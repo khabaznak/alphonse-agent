@@ -22,7 +22,6 @@ from alphonse.agent_v2.core.intelligence.v3.outer import PhaseReviewStatus
 from alphonse.agent_v2.core.intelligence.v3.outer import StrategicAction
 from alphonse.agent_v2.core.intelligence.v3.outer import StrategicDecision
 from alphonse.agent_v2.core.intelligence.v3.outer import V3OuterController
-from alphonse.agent_v2.core.intelligence.v3.processor import EngineRoutingProcessor
 from alphonse.agent_v2.core.intelligence.v3.processor import HierarchicalCAPDProcessor
 
 __all__ = [
@@ -48,6 +47,5 @@ __all__ = [
     "StrategicAction",
     "StrategicDecision",
     "V3OuterController",
-    "EngineRoutingProcessor",
     "HierarchicalCAPDProcessor",
 ]

@@ -94,9 +94,10 @@ def resolve_owner_question(conn: Any, owner: str, message_id: str) -> tuple[str,
             (f'inbound:{message_id}', f'outbound:owner:{message_id}')).fetchall()
         entries = {entry['source_message_id']: entry for entry in rows}
         incoming, outgoing = entries[f'inbound:{message_id}'], entries[f'outbound:owner:{message_id}']
+        from .owner_clock import display_response
         if (len(rows) != 2 or incoming['owner_user_id'] != owner or outgoing['owner_user_id'] != owner
                 or incoming['role'] != 'user' or outgoing['role'] != 'assistant'
-                or incoming['content'] != raw['goal'] or outgoing['content'] != state.response
+                or incoming['content'] != raw['goal'] or outgoing['content'] != display_response(state.response, observations)
                 or incoming['sequence'] >= outgoing['sequence']):
             raise ValueError('owner_question_context_unavailable')
         content = [incoming['content'], outgoing['content']]

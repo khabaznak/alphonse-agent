@@ -310,7 +310,7 @@ class SQLiteMessageQueue:
                     action = metadata.get('owner_read_pending_action')
                     if action is not None and (not isinstance(action, dict) or action.get('kind') not in {'model', 'tool'}
                             or (action.get('kind') == 'tool' and action.get('tool_id') not in {
-                                'native.search_memory', 'native.read_memory_source'})):
+                                'native.search_memory', 'native.read_memory_source', 'native.owner_clock'})):
                         raise ValueError
                     if bool(action) != bool(state.inflight) or (action and action.get('reservation_id') != state.inflight):
                         raise ValueError

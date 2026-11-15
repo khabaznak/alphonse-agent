@@ -414,3 +414,13 @@ def test_selected_tool_arguments_are_bound_to_model_decision(setup):
         atomic.reserve(**tool_args, arguments={'source_id': 'conversation:other'})
     result = atomic.reserve(**tool_args, arguments=decision['arguments'])
     assert result.state.inflight == 'read'
+
+
+def test_lost_inflight_clock_can_be_explicitly_abandoned(setup):
+    _, _, _, queue, _, task, _, atomic = setup
+    start = atomic.initialize(CandidateState(task.task_id, task.user, 'goal'), make_budget())
+    reserve_selected_tool(atomic, start, 'native.owner_clock', {})
+    with queue._connect() as conn:
+        conn.execute("UPDATE v2_inbound_messages SET lease_expires_at='2000-01-01T00:00:00+00:00' WHERE message_id=?", (task.message_id,))
+    assert queue.abandon_trusted_owner_message(task.message_id) == {
+        'status': 'abandoned', 'delivery_status': 'no_pickup_recorded'}

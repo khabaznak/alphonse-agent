@@ -11,7 +11,7 @@ from alphonse.agent_v2.core.inference.models import InferencePurpose, InferenceR
 from alphonse.agent_v2.core.inference.router import InferenceRouter
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.intelligence.v3.owner_read_processor import OwnerReadConversationProcessor, authorize_trusted_owner_claim
-from alphonse.agent_v2.core.intelligence.v3.processor import EngineRoutingProcessor
+from alphonse.agent_v2.core.intelligence.engine_router import EngineRoutingProcessor
 from alphonse.agent_v2.core.intelligence.v3.task_budget import SQLiteTaskBudgetStore
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
 from alphonse.agent_v2.core.messages.sqlite_queue import SQLiteMessageQueue

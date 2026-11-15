@@ -3,7 +3,7 @@ import type { OwnerRequest } from "./ownerConversation";
 export type LegacyNotification = {
   outbox_message_id: string; kind: string; status: string; message: string;
   created_at: string; attempt_count: number; delivery_certainty: "not_attempted" | "unknown";
-  review_token: string; can_archive: boolean; review_restriction?: "" | "linked_or_protected" | null;
+  review_token: string; can_archive: boolean; review_restriction?: "" | "opaque_response" | "linked_or_protected" | null;
 };
 
 export async function listLegacyNotifications(request: OwnerRequest): Promise<LegacyNotification[]> {
@@ -18,7 +18,8 @@ export async function listLegacyNotifications(request: OwnerRequest): Promise<Le
       && (row.delivery_certainty === "not_attempted" || row.delivery_certainty === "unknown")
       && typeof row.review_token === "string" && /^[0-9a-f]{64}$/.test(row.review_token)
       && typeof row.can_archive === "boolean"
-      && (row.review_restriction === undefined || row.review_restriction === null || row.review_restriction === "" || row.review_restriction === "linked_or_protected")
+      && (row.review_restriction === undefined || row.review_restriction === null || row.review_restriction === "" || row.review_restriction === "opaque_response" || row.review_restriction === "linked_or_protected")
+      && (row.review_restriction !== "opaque_response" || (row.kind === "response" && row.message === ""))
       && (row.review_restriction !== "linked_or_protected" || (row.can_archive === false && row.message === ""));
   })) throw new Error("legacy notification review unavailable");
   return result.items as LegacyNotification[];

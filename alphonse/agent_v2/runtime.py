@@ -21,7 +21,8 @@ from alphonse.agent_v2.core.core import StateSnapshot
 from alphonse.agent_v2.core.core import ToolDescriptor
 from alphonse.agent_v2.core.core import ToolRegistry
 from alphonse.agent_v2.core.inference import InferenceRouter
-from alphonse.agent_v2.core.intelligence.v3 import EngineRoutingProcessor, HierarchicalCAPDProcessor
+from alphonse.agent_v2.core.intelligence.engine_router import EngineRoutingProcessor
+from alphonse.agent_v2.core.intelligence.v3 import HierarchicalCAPDProcessor
 from alphonse.agent_v2.intelligence_engine_settings import SQLiteIntelligenceEngineSettingsStore
 from alphonse.agent_v2.core.io import IntegrationIdentity
 from alphonse.agent_v2.core.io import SQLiteOutboundStore
@@ -209,7 +210,8 @@ def build_runtime_host(
         intelligence_engine_provider=lambda project_id: intelligence_engine_settings_store.get().engine_for(project_id),
     )
     visible_state = InMemoryInternalState()
-    processor = processor or EngineRoutingProcessor(v3=HierarchicalCAPDProcessor())
+    if processor is None and not experimental_owner_read:
+        processor = EngineRoutingProcessor(v3=HierarchicalCAPDProcessor())
     web_tools_settings_store = web_tools_settings_store or SQLiteWebToolsSettingsStore()
     code_mode_settings_store = code_mode_settings_store or SQLiteCodeModeSettingsStore()
     media_tools_settings_store = media_tools_settings_store or SQLiteMediaToolsSettingsStore()
@@ -230,6 +232,10 @@ def build_runtime_host(
     question_store = question_store or SQLiteQuestionStore()
     outbox = outbox or SQLiteOutboundStore()
     if experimental_owner_read:
+        from alphonse.agent_v2.core.intelligence.v3.owner_clock import OWNER_CLOCK_TOOL_ID, build_owner_clock_tool_definition
+        if tools.get(OWNER_CLOCK_TOOL_ID) is not None:
+            raise ValueError('owner_clock_tool_conflict')
+        tools.register(build_owner_clock_tool_definition())
         # Registration is an explicit dependency-injection hook, not a daemon
         # enable switch. The worker still refuses fenced processing until the
         # entire acquisition and delivery path is integrated.
@@ -261,7 +267,10 @@ def build_runtime_host(
             atomic_checkpoints=ExperimentalCheckpointStore(question_store),
             selected_draft_sink=owner_selected_draft_sink,
         )
-        processor = EngineRoutingProcessor(v3=HierarchicalCAPDProcessor(), owner_read_candidate=candidate)
+        # The exclusive owner worker must not register or instantiate the old
+        # V3 loop. V3-stamped work stays queued for the normal bridge; an
+        # accidental dispatch in this mode fails as an unregistered engine.
+        processor = EngineRoutingProcessor(v3=None, owner_read_candidate=candidate)
     project_store = project_store or ProjectStore()
     artifact_store.capture_legacy_roots(project_store)
     artifact_resources = ArtifactResources(artifact_store, skill_store, project_store, repository_root=user_store.artifacts_root, is_admin=user_store.is_admin)
@@ -511,6 +520,10 @@ def refresh_runtime_media_tools(runtime: V2RuntimeHost) -> None:
 def refresh_runtime_artifacts(runtime: V2RuntimeHost) -> None:
     """Refresh native management tools after artifact catalog or skill changes."""
     registry = build_native_tool_registry(runtime.web_tools_settings_store.get(), runtime.asset_store, runtime.media_tools_settings_store.get(), runtime.artifact_store, lambda: refresh_runtime_artifacts(runtime), runtime.user_store, runtime.skill_store, management_runtime=runtime, coding_skill_service=runtime.coding_skill_service)
+    # Preserve the opt-in owner's native capability across catalog refreshes.
+    if isinstance(runtime.processor, EngineRoutingProcessor) and runtime.processor.owner_read_candidate is not None:
+        from alphonse.agent_v2.core.intelligence.v3.owner_clock import build_owner_clock_tool_definition
+        registry.register(build_owner_clock_tool_definition())
     # Artifact programs are not members of the executable tool registry.
     runtime.core.tools = registry
 

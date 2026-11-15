@@ -90,8 +90,12 @@ def verify_finalized_owner_ack(queue: SQLiteMessageQueue, message_id: str, token
             rows = conn.execute("""SELECT role,content,owner_user_id,source_message_id FROM v2_conversation_events
                 WHERE source_message_id IN (?,?)""", (f'inbound:{message_id}', f'outbound:owner:{message_id}')).fetchall()
             entries = {item['source_message_id']: (item['role'], item['content'], item['owner_user_id']) for item in rows}
+            observations = metadata['owner_read_observations']
+            if not isinstance(observations, dict) or selected.get('evidence_bindings_sha256') != _decision_digest(observations):
+                return False
+            from .owner_clock import display_response
             return entries == {f'inbound:{message_id}': ('user', raw['goal'], row['owner_id']),
-                               f'outbound:owner:{message_id}': ('assistant', state.response, row['owner_id'])}
+                               f'outbound:owner:{message_id}': ('assistant', display_response(state.response, observations), row['owner_id'])}
     except Exception:
         return False
 
@@ -243,7 +247,8 @@ class OwnerAtomicCheckpoint:
             }
             metadata.pop('owner_read_ready_handoff', None)
             result = self.store._write(conn, row, raw, state, budget)
-            response = {'message_id': self.task.message_id, 'message': state.response,
+            from .owner_clock import display_response
+            response = {'message_id': self.task.message_id, 'message': display_response(state.response, observations),
                         'kind': selected['kind'],
                         'delivery_status': 'started_unconfirmed', 'acknowledgement_token': acknowledgement_token}
         self.version = result.version
@@ -305,15 +310,18 @@ class OwnerAtomicCheckpoint:
                     or not hmac.compare_digest(marker['acknowledgement_sha256'], token_digest)
                     or not isinstance(selected, dict) or marker.get('answer_sha256') != selected.get('answer_sha256')
                     or selected.get('kind') != ('answer' if state.status == 'completed' else 'question')
-                    or marker.get('answer_sha256') != hashlib.sha256(state.response.encode('utf-8')).hexdigest()):
+                    or marker.get('answer_sha256') != hashlib.sha256(state.response.encode('utf-8')).hexdigest()
+                    or not isinstance(raw['metadata'].get('owner_read_observations'), dict)
+                    or selected.get('evidence_bindings_sha256') != _decision_digest(raw['metadata']['owner_read_observations'])):
                 raise CheckpointConflict('owner_desktop_ack_unavailable')
             if marker['status'] == 'client_acknowledged':
                 return
             incoming = conversation.record(owner_user_id=self.task.user, role='user',
                 content=self.task.goal, source='desktop', source_message_id=f'inbound:{self.task.message_id}',
                 connection=conn)
+            from .owner_clock import display_response
             outgoing = conversation.record(owner_user_id=self.task.user, role='assistant',
-                content=state.response, source='desktop', source_message_id=f'outbound:owner:{self.task.message_id}',
+                content=display_response(state.response, raw['metadata']['owner_read_observations']), source='desktop', source_message_id=f'outbound:owner:{self.task.message_id}',
                 connection=conn)
             if incoming is None or outgoing is None:
                 raise CheckpointConflict('owner_desktop_history_unavailable')
@@ -475,6 +483,9 @@ class OwnerAtomicCheckpoint:
             observations[evidence_ref] = {'actor': state.actor, 'tool_id': tool_id,
                                           'arguments': deepcopy(arguments),
                                           'observation_sha256': observation_digest(observation)}
+            from .owner_clock import OWNER_CLOCK_TOOL_ID
+            if tool_id == OWNER_CLOCK_TOOL_ID:
+                observations[evidence_ref]['clock_observation'] = deepcopy(observation)
             state.evidence_sources.append(evidence_ref)
             state.inflight = ''
             del raw['metadata']['owner_read_pending_action']

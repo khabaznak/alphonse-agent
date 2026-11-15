@@ -27,6 +27,7 @@ from .task_budget import BudgetLimits, SQLiteTaskBudgetStore, TaskBudget
 from .single_loop_checkpoint import ExperimentalCheckpointStore
 from .owner_atomic_checkpoint import OwnerAtomicCheckpoint
 from .owner_read_recovery import restore_owner_read_observations
+from .owner_clock import OWNER_CLOCK_TOOL_ID, valid_clock_observation
 from datetime import datetime, timezone
 
 
@@ -100,14 +101,29 @@ class OwnerReadConversationProcessor:
                 'type': 'array', 'items': {'type': 'string', 'enum': ['conversation']},
                 'minItems': 1, 'maxItems': 1,
             }
+            search_schema['properties']['limit']['default'] = 30
             search_schema['required'] = list(dict.fromkeys([*search_schema.get('required', []), 'source_types']))
             descriptors = (
                 replace(descriptors[0], argument_schema=search_schema,
-                        description='Search the owner’s prior conversation messages. Results are historical, not proof of current state.'),
+                        description='Search the owner’s prior conversation messages. The default limit is 30 results; if more match, narrow the query. Results are historical, not proof of current state.'),
                 replace(descriptors[1], description='Read an owner conversation source ID returned by search. For a partial source, use the returned next_offset and read sequentially, preferably with max_chars 12000; content is available after all pages are checked. Sources above 36000 characters are unavailable. Historical messages may be outdated.'),
             )
-            chooser = RouterCandidateChooser(router=context.inference, task=task, tools=descriptors,
+            clock_descriptor = context.tools.get(OWNER_CLOCK_TOOL_ID)
+            if clock_descriptor is not None and clock_descriptor.read_only is True:
+                descriptors += (clock_descriptor,)
+            base_chooser = RouterCandidateChooser(router=context.inference, task=task, tools=descriptors,
                 max_input_tokens=65536, cancellation_checker=context.is_cancelled)
+            def chooser(projection: str, max_output_tokens: int) -> dict:
+                decision = base_chooser(projection, max_output_tokens)
+                # Owner search requires a complete page before it becomes
+                # evidence. Use the native maximum when the model omits a
+                # limit so nine to thirty hits do not fail at the smaller
+                # native default. Record this exact argument in the checkpoint.
+                if decision.get('kind') == 'tool' and decision.get('tool_id') == SEARCH_MEMORY_TOOL_ID:
+                    args = decision.get('arguments')
+                    if isinstance(args, dict) and 'limit' not in args:
+                        args['limit'] = 30
+                return decision
             vector = lambda a, m, i, o: {'actions': a, 'model_calls': m, 'input_tokens': i, 'output_tokens': o}
             budget = TaskBudget(BudgetLimits(vector(5, 8, 524288, 131072),
                 vector(0, 1, 65536, 16384), 120000, 5000), started_at_ms=self.now_ms())
@@ -152,6 +168,8 @@ class OwnerReadConversationProcessor:
         def allowed(actor_id: str, tool_id: str, args: dict[str, Any]) -> bool:
             if actor_id != actor or not self._authorized(task, context) or not isinstance(args, dict):
                 return False
+            if tool_id == OWNER_CLOCK_TOOL_ID:
+                return args == {} and atomic is not None
             if tool_id == SEARCH_MEMORY_TOOL_ID:
                 return args.get('source_types') == ['conversation'] and args.get('offset', 0) == 0
             if (tool_id != READ_MEMORY_SOURCE_TOOL_ID or not isinstance(args.get('source_id'), str)
@@ -173,6 +191,9 @@ class OwnerReadConversationProcessor:
                 return False
 
         def valid(actor_id: str, tool_id: str, args: dict[str, Any], payload: dict[str, Any]) -> bool:
+            if tool_id == OWNER_CLOCK_TOOL_ID:
+                return (actor_id == actor and self._authorized(task, context)
+                        and valid_clock_observation(actor_id, args, payload, context=execution_context))
             return (actor_id == actor and self._authorized(task, context) and isinstance(args, dict)
                     and revalidate_conversation_observation(actor_id, tool_id, args, payload,
                         context=execution_context, allow_excerpt_truncation=True, allow_read_chunks=True))

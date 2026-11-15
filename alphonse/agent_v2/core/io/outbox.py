@@ -166,6 +166,19 @@ def _legacy_tui_unlinked_safe_row(row: sqlite3.Row, metadata: Any) -> bool:
     return row['message'] == expected
 
 
+def _legacy_tui_opaque_response(row: sqlite3.Row, metadata: Any) -> bool:
+    """Identify unlinked terminal responses for an explicit no-resend choice.
+
+    This does not establish content authorization or previous delivery. Never
+    expose the message based on this classification; the owner may only elect
+    to stop attempting the specific, unchanged item while keeping the record.
+    """
+    return (row['kind'] == 'response' and row['provider_key'] == 'tui'
+            and isinstance(metadata, dict) and not metadata
+            and not any(row[key] for key in ('correlation_id', 'task_id', 'question_id',
+                                             'project_id', 'reply_to_provider_message_id')))
+
+
 class SQLiteOutboundStore:
     """SQLite-backed outbound queue for v2 integration delivery."""
 
@@ -275,7 +288,8 @@ class SQLiteOutboundStore:
                     except (TypeError, ValueError):
                         metadata = None
                     safe = _legacy_tui_unlinked_safe_row(row, metadata)
-                    can_archive = bool(safe and row['status'] != 'claimed'
+                    opaque = _legacy_tui_opaque_response(row, metadata)
+                    can_archive = bool((safe or opaque) and row['status'] != 'claimed'
                         and not row['lease_owner'] and not row['lease_expires_at'])
                     never_attempted = (row['status'] == 'pending' and row['attempt_count'] == 0
                         and not row['claimed_at'] and not row['delivered_at'] and not row['provider_message_id']
@@ -283,7 +297,8 @@ class SQLiteOutboundStore:
                         and not row['lease_owner'] and not row['lease_expires_at'])
                     result.append({'outbox_message_id': row['outbox_message_id'], 'kind': row['kind'],
                         'status': row['status'], 'message': row['message'] if safe else '',
-                        'review_restriction': '' if safe else 'linked_or_protected', 'created_at': row['created_at'],
+                        'review_restriction': '' if safe else 'opaque_response' if opaque else 'linked_or_protected',
+                        'created_at': row['created_at'],
                         'attempt_count': row['attempt_count'],
                         'delivery_certainty': 'not_attempted' if never_attempted else 'unknown',
                         'review_token': _legacy_tui_review_token(row), 'can_archive': can_archive})
@@ -309,7 +324,8 @@ class SQLiteOutboundStore:
                         or not hmac.compare_digest(_legacy_tui_review_token(row), review_token)):
                     raise ValueError('legacy_tui_recovery_unavailable')
                 metadata = json.loads(row['metadata_json'])
-                if not _legacy_tui_unlinked_safe_row(row, metadata):
+                if not (_legacy_tui_unlinked_safe_row(row, metadata)
+                        or _legacy_tui_opaque_response(row, metadata)):
                     raise ValueError('legacy_tui_recovery_unavailable')
                 never_attempted = (row['status'] == 'pending' and row['attempt_count'] == 0
                     and not row['claimed_at'] and not row['delivered_at'] and not row['provider_message_id']

@@ -14,6 +14,7 @@ from alphonse.agent_v2.core.tools.registry.native.memory import (
     execute_search_memory, execute_read_memory_source, conversation_read_sequences,
 )
 from .owner_atomic_checkpoint import OwnerAtomicCheckpoint, observation_digest
+from .owner_clock import OWNER_CLOCK_TOOL_ID, valid_clock_observation
 
 
 class OwnerRecoveryUnavailable(Exception):
@@ -70,14 +71,22 @@ def restore_owner_read_observations(checkpoint: OwnerAtomicCheckpoint, context: 
         reconstructed = {}
         for ref in state.evidence_sources:
             item = bindings[ref]
-            if not isinstance(item, dict) or set(item) != {'actor', 'tool_id', 'arguments', 'observation_sha256'}:
+            keys = {'actor', 'tool_id', 'arguments', 'observation_sha256'}
+            if isinstance(item, dict) and item.get('tool_id') == OWNER_CLOCK_TOOL_ID:
+                keys.add('clock_observation')
+            if not isinstance(item, dict) or set(item) != keys:
                 raise OwnerRecoveryUnavailable('owner_recovery_unavailable')
             args = item['arguments']
             tool = item['tool_id']
             if (item['actor'] != state.actor or not isinstance(args, dict)
                     or not isinstance(item['observation_sha256'], str)):
                 raise OwnerRecoveryUnavailable('owner_recovery_unavailable')
-            if tool == SEARCH_MEMORY_TOOL_ID:
+            if tool == OWNER_CLOCK_TOOL_ID:
+                recheck()
+                observation = item['clock_observation']
+                if not valid_clock_observation(state.actor, args, observation, context=execution):
+                    raise OwnerRecoveryUnavailable('owner_recovery_unavailable')
+            elif tool == SEARCH_MEMORY_TOOL_ID:
                 if args.get('source_types') != ['conversation'] or args.get('offset', 0) != 0:
                     raise OwnerRecoveryUnavailable('owner_recovery_unavailable')
                 recheck()
@@ -93,9 +102,11 @@ def restore_owner_read_observations(checkpoint: OwnerAtomicCheckpoint, context: 
             # separately instead of continuing after a mid-read revocation.
             recheck()
             if (not hmac.compare_digest(observation_digest(observation), item['observation_sha256'])
-                    or not revalidate_conversation_observation(state.actor, tool, args, observation,
+                    or not (valid_clock_observation(state.actor, args, observation, context=execution)
+                            if tool == OWNER_CLOCK_TOOL_ID else
+                            revalidate_conversation_observation(state.actor, tool, args, observation,
                                                                context=execution, allow_excerpt_truncation=True,
-                                                               allow_read_chunks=True)):
+                                                               allow_read_chunks=True))):
                 raise OwnerRecoveryUnavailable('owner_recovery_unavailable')
             recheck()
             reconstructed[ref] = {'actor': state.actor, 'tool_id': tool, 'arguments': args, 'observation': observation}

@@ -6,7 +6,7 @@ import pytest
 
 from alphonse.agent_v2.core.core import AlphonseCore, CoreMessage, LoopStepStatus, ProcessingResult, ProcessingStatus, StateSnapshot
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
-from alphonse.agent_v2.core.intelligence.v3.processor import EngineRoutingProcessor
+from alphonse.agent_v2.core.intelligence.engine_router import EngineRoutingProcessor
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
 from alphonse.agent_v2.core.questions import SQLiteQuestionStore
 from alphonse.agent_v2.core.state import reset_state

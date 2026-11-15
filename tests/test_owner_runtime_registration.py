@@ -19,7 +19,10 @@ from alphonse.agent_v2.runtime import build_runtime_host
 from alphonse.agent_v2.users import V2UserStore
 
 
-def test_explicit_registration_uses_same_store_and_preserves_worker_refusal(tmp_path):
+def test_explicit_registration_uses_same_store_and_preserves_worker_refusal(tmp_path, monkeypatch):
+    def forbid_v3():
+        pytest.fail('owner-only runtime must not construct the V3 loop')
+    monkeypatch.setattr('alphonse.agent_v2.runtime.HierarchicalCAPDProcessor', forbid_v3)
     path = tmp_path / 'owner.sqlite'
     users = V2UserStore(path)
     queue = SQLiteMessageQueue(path, experimental_claim_fencing=True)
@@ -30,6 +33,9 @@ def test_explicit_registration_uses_same_store_and_preserves_worker_refusal(tmp_
         coding_skill_service=object(), experimental_owner_read=True, owner_selected_draft_sink=callback)
     candidate = runtime.processor.owner_read_candidate
     assert isinstance(candidate, OwnerReadConversationProcessor)
+    assert runtime.processor.v3 is None
+    with pytest.raises(ValueError, match='intelligence_engine_unregistered'):
+        runtime.processor.processor_for(TaskState(intelligence_engine='hierarchical_v3', intelligence_schema_version=3))
     assert candidate.atomic_checkpoints.store is questions
     assert candidate.selected_draft_sink is callback
     result = runtime.core.step()

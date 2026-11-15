@@ -678,7 +678,7 @@ class AlphonseCore:
         # read its checkpoint; the default router keeps refusing this stamp.
         registered_candidate = False
         if queued_engine == "single_loop_experimental":
-            from alphonse.agent_v2.core.intelligence.v3.processor import EngineRoutingProcessor
+            from alphonse.agent_v2.core.intelligence.engine_router import EngineRoutingProcessor
             if isinstance(self.intelligence, EngineRoutingProcessor):
                 probe = TaskState.from_message(queued.message, message_id=queued.message_id)
                 # Check registration independently of untrusted schema; the
@@ -857,7 +857,7 @@ class AlphonseCore:
             # Validate the normal router's engine/schema before loading task
             # memory or conversation history, including unknown engines and
             # mismatched schemas. The router checks again at actual dispatch.
-            from alphonse.agent_v2.core.intelligence.v3.processor import EngineRoutingProcessor
+            from alphonse.agent_v2.core.intelligence.engine_router import EngineRoutingProcessor
             if isinstance(self.intelligence, EngineRoutingProcessor):
                 self.intelligence.processor_for(task)
             start_memory = getattr(self.memory, "start_task", None)

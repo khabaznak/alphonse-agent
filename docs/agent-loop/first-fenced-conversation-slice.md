@@ -26,11 +26,16 @@ Expired or uncertain work needs explicit recovery; malformed or unknown effects 
 remain blocked. Model and source I/O cannot be atomically fenced by SQLite,
 and client acknowledgment does not prove a person read the answer. Conversation
 sources up to 36,000 characters can be assembled from contiguous revalidated
-pages; each page consumes a tool action. A synthetic subscription-backed
+pages; each page consumes a tool action. An on-demand owner clock reads the host
+clock in the configured timezone, binds the observation to the task and appends
+an as-of notice to delivered and recorded text; it does not verify the model's
+free-form time claim or host clock accuracy. A synthetic subscription-backed
 clarification cycle and a 15,105-character multi-page case passed in the
-disposable owner worker. See `evidence/owner-clarification-2026-11-14.jsonl`
-and `evidence/owner-multipage-2026-11-14.jsonl`; the latter also preserves an
-invalid initial fixture. These are development evidence, not qualification;
+disposable owner worker. One synthetic time question chose the clock and agreed
+with its observation. See `evidence/owner-clarification-2026-11-14.jsonl`,
+`evidence/owner-multipage-2026-11-14.jsonl` and
+`evidence/owner-clock-2026-11-14.jsonl`; the multi-page evidence also preserves
+an invalid initial fixture. These are development evidence, not qualification;
 no household data or existing daemon restart was used.
 Actual deployment and broader retirement remain open.
 

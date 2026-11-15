@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { LegacyNotificationReview } from "./LegacyNotificationReview";
+import { LegacyNotificationReview, legacyArchiveConfirmation } from "./LegacyNotificationReview";
 import { archiveLegacyNotification, listLegacyNotifications, type LegacyNotification } from "./legacyNotifications";
 import { legacyNotificationReviewMessage, type OwnerRequest } from "./ownerConversation";
 
@@ -35,5 +35,16 @@ describe("legacy notification review", () => {
     await expect(listLegacyNotifications((async () => ({items: [{...item, review_restriction: "linked_or_protected", can_archive: false}]})) as OwnerRequest)).rejects.toThrow();
     const restricted = {...item, message: "", review_restriction: "linked_or_protected", can_archive: false};
     expect(await listLegacyNotifications((async () => ({items: [restricted]})) as OwnerRequest)).toEqual([restricted]);
+  });
+  it("allows an opaque owner response only with its contents hidden", async () => {
+    const opaque = {...item, kind: "response", message: "", review_restriction: "opaque_response"};
+    expect(await listLegacyNotifications((async () => ({items: [opaque]})) as OwnerRequest)).toEqual([opaque]);
+    await expect(listLegacyNotifications((async () => ({items: [{...opaque, message: "private"}]})) as OwnerRequest)).rejects.toThrow();
+    await expect(listLegacyNotifications((async () => ({items: [{...opaque, kind: "finding"}]})) as OwnerRequest)).rejects.toThrow();
+    const confirmation = legacyArchiveConfirmation(opaque as LegacyNotification);
+    expect(confirmation).toContain("contents cannot be shown");
+    expect(confirmation).toContain("will not resend");
+    expect(confirmation).toContain("previous delivery remains unknown");
+    expect(confirmation).not.toContain("will not be delivered");
   });
 });

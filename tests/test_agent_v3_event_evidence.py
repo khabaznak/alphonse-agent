@@ -107,7 +107,8 @@ def test_synthetic_sensor_runs_through_selected_engine_and_reaches_all_decisions
     from alphonse.agent_v2.daemon import V2Daemon
     from alphonse.agent_v2.runtime import build_runtime_host
     from alphonse.agent_v2.core.inference import InferencePurpose, InferenceRouter, ModelProfile, StubInferenceProvider
-    from alphonse.agent_v2.core.intelligence.v3 import EngineRoutingProcessor, HierarchicalCAPDProcessor
+    from alphonse.agent_v2.core.intelligence.engine_router import EngineRoutingProcessor
+    from alphonse.agent_v2.core.intelligence.v3 import HierarchicalCAPDProcessor
     from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry
     from alphonse.agent_v2.core.tools.registry.native.respond import build_respond_tool_definition
     from test_agent_v3_engine_rollout import _TestJev

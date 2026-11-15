@@ -207,7 +207,6 @@ def test_protected_finding_scheduled_and_question_rows_are_redacted_and_unmodifi
         ('response', {'occurrence_key': 'scheduled'}, {}),
         ('question', {}, {'question_id': 'q1'}),
         ('response', {}, {'task_id': 'task1'}),
-        ('response', {}, {}),
         ('identity_resolution', {'provider_key':'telegram','integration_id':'fixture',
           'provider_user_id':'x','channel_target':'y','reason':'z'}, {}),
     ]:
@@ -221,6 +220,59 @@ def test_protected_finding_scheduled_and_question_rows_are_redacted_and_unmodifi
         with pytest.raises(ValueError, match='legacy_tui_recovery_unavailable'):
             store.archive_legacy_tui_owner_item(owner.user_id, row['outbox_message_id'], row['review_token'])
     assert all(store.get(item.outbox_message_id).integration_id == 'tui' for item in protected)
+
+
+def test_owner_may_archive_unlinked_opaque_response_without_exposing_or_resending(tmp_path):
+    db = tmp_path / 'household.db'
+    users = V2UserStore(db)
+    owner = users.onboard(display_name='Synthetic owner', users_root=tmp_path / 'users')
+    store = SQLiteOutboundStore(db)
+    item = store.enqueue(address=ChannelAddress('tui', 'tui', owner.user_id, alphonse_user_id=owner.user_id),
+        message='Synthetic private text', kind='response', audience_user_id=owner.user_id)
+    row = store.list_legacy_tui_owner_items(owner.user_id)[0]
+    assert row['review_restriction'] == 'opaque_response' and row['message'] == ''
+    assert row['can_archive'] is True and row['delivery_certainty'] == 'not_attempted'
+    result = store.archive_legacy_tui_owner_item(owner.user_id, item.outbox_message_id, row['review_token'])
+    assert result == {'status': 'archived_without_resending', 'delivery_certainty': 'not_attempted'}
+    saved = store.get(item.outbox_message_id)
+    assert saved.message == 'Synthetic private text' and saved.integration_id == 'retired_tui'
+    assert saved.metadata['legacy_tui_retirement']['action'] == 'owner_archived_without_resending'
+    assert store.claim_next(OutboundSelector(integration_id='retired_tui')) is None
+
+
+def test_opaque_response_rechecks_claim_and_source_metadata_before_archival(tmp_path):
+    db = tmp_path / 'household.db'
+    users = V2UserStore(db)
+    owner = users.onboard(display_name='Synthetic owner', users_root=tmp_path / 'users')
+    store = SQLiteOutboundStore(db)
+    item = store.enqueue(address=ChannelAddress('tui', 'tui', owner.user_id, alphonse_user_id=owner.user_id),
+        message='Synthetic private text', kind='response', audience_user_id=owner.user_id)
+    before = store.list_legacy_tui_owner_items(owner.user_id)[0]
+    with store._connect() as conn:
+        conn.execute("UPDATE v2_outbox SET metadata_json=? WHERE outbox_message_id=?", ('{\"finding_id\":\"private\"}', item.outbox_message_id))
+    with pytest.raises(ValueError, match='legacy_tui_recovery_unavailable'):
+        store.archive_legacy_tui_owner_item(owner.user_id, item.outbox_message_id, before['review_token'])
+    protected = store.list_legacy_tui_owner_items(owner.user_id)[0]
+    assert protected['message'] == '' and not protected['can_archive']
+    assert protected['review_restriction'] == 'linked_or_protected'
+
+
+def test_opaque_response_rejects_other_owner_and_active_claim(tmp_path):
+    db = tmp_path / 'household.db'
+    users = V2UserStore(db)
+    owner = users.onboard(display_name='Synthetic owner', users_root=tmp_path / 'users')
+    member = users.create_user(display_name='Synthetic member')
+    store = SQLiteOutboundStore(db)
+    item = store.enqueue(address=ChannelAddress('tui', 'tui', owner.user_id, alphonse_user_id=owner.user_id),
+        message='Synthetic private text', kind='response', audience_user_id=owner.user_id)
+    before = store.list_legacy_tui_owner_items(owner.user_id)[0]
+    with pytest.raises(ValueError, match='legacy_tui_recovery_unavailable'):
+        store.archive_legacy_tui_owner_item(member.user_id, item.outbox_message_id, before['review_token'])
+    with store._connect() as conn:
+        conn.execute("UPDATE v2_outbox SET status='claimed',lease_owner='fixture' WHERE outbox_message_id=?", (item.outbox_message_id,))
+    with pytest.raises(ValueError, match='legacy_tui_recovery_unavailable'):
+        store.archive_legacy_tui_owner_item(owner.user_id, item.outbox_message_id, before['review_token'])
+    assert store.get(item.outbox_message_id).integration_id == 'tui'
 
 
 def test_failed_unresolved_and_archived_legacy_rows_survive_operational_pruning(tmp_path):
