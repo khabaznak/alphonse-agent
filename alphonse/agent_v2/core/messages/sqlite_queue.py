@@ -126,7 +126,7 @@ class SQLiteMessageQueue:
             metadata_fields = {'intelligence_engine': 'single_loop_experimental',
                 'intelligence_schema_version': 1, 'routing_disposition': 'pdca_task'}
             if reply_to_message_id is not None:
-                from alphonse.agent_v2.core.intelligence.v3.owner_clarification import bind_owner_question
+                from alphonse.agent_v2.core.intelligence.simple_loop.owner_clarification import bind_owner_question
                 metadata_fields['owner_clarification'] = bind_owner_question(conn, actor, reply_to_message_id)
             metadata = json.dumps(metadata_fields, sort_keys=True)
             payload = [message_id, timestamp, prompt.strip(), actor, '', '', '', '', metadata]
@@ -276,7 +276,7 @@ class SQLiteMessageQueue:
                     from alphonse.agent_v2.core.messages.claim_fence import ClaimReceipt
                     from alphonse.agent_v2.core.messages.experimental_claim_checkpoint import _claim_digest
                     from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_candidate import CandidateState
-                    from alphonse.agent_v2.core.intelligence.v3.single_loop_checkpoint import STATE_KEY, ExperimentalCheckpointStore
+                    from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_checkpoint import STATE_KEY, ExperimentalCheckpointStore
                     from alphonse.agent_v2.core.intelligence.simple_loop.task_budget import TaskBudget
                     raw = ExperimentalCheckpointStore._validate_identity(checkpoint, message_id, row['user_id'], checkpoint['version'])
                     metadata = raw['metadata']

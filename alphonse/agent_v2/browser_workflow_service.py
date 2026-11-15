@@ -11,7 +11,7 @@ from typing import Any, Callable
 from datetime import datetime, timezone
 
 from alphonse.agent_v2.browser_private_data import BrowserPrivateData
-from alphonse.agent_v2.core.intelligence.v3 import browser_workflow as workflow
+from alphonse.agent_v2.core.intelligence import browser_workflow as workflow
 
 
 def browser_grant_check(store: Any, actor_active: Callable[[str], bool]) -> Callable[[str, str], str | None]:
@@ -43,31 +43,13 @@ class BrowserWorkflowService:
         self._lock = RLock()
 
     def _check(self, task: Any, *, mutation: bool) -> str:
-        try:
-            grant = self.authorized(task.user, task.task_id) if task.user and task.task_id else None
-        except Exception:
-            grant = None
-        if (not self.enabled or not task.user or not task.task_id or task.status != "running"
-                or task.intelligence_engine != "hierarchical_v3" or self.cancelled()
-                or not isinstance(grant, str) or not grant):
-            if task.user and task.task_id:
-                self._sessions.pop((task.user, task.task_id), None)
-                self.private_data.clear_task(actor=task.user, task=task.task_id)
-            raise workflow.BrowserWorkflowError("browser_workflow_access_denied")
-        tactical = task.hierarchical_state
-        phase = tactical.get("phase") if isinstance(tactical, dict) else None
-        if not isinstance(phase, dict) or tactical.get("status") != "running" or tactical.get("cancellation_pending"):
-            raise workflow.BrowserWorkflowError("browser_workflow_phase_denied")
-        subgoal = next((s for s in phase.get("subgoals", []) if isinstance(s, dict)
-                        and s.get("subgoal_id") == tactical.get("active_subgoal_id")), None)
-        if (not subgoal or "browser" not in subgoal.get("allowed_capabilities", [])
-                or (mutation and ("external_irreversible" not in subgoal.get("allowed_side_effects", [])
-                    or (phase.get("mutation_scope") or {}).get("allow_external_effects") is not True))):
-            raise workflow.BrowserWorkflowError("browser_workflow_phase_denied")
-        phase_id = phase.get("phase_id")
-        if not workflow._id(phase_id):
-            raise workflow.BrowserWorkflowError("browser_workflow_phase_denied")
-        return phase_id
+        # Browser execution belonged to the retired V3 workflow. Preserve the
+        # shared privacy and grant machinery, but do not activate it until a
+        # simple-loop integration supplies equivalent authorization and recovery.
+        if task.user and task.task_id:
+            self._sessions.pop((task.user, task.task_id), None)
+            self.private_data.clear_task(actor=task.user, task=task.task_id)
+        raise workflow.BrowserWorkflowError("browser_workflow_access_denied")
 
     def begin(self, task: Any) -> None:
         with self._lock:

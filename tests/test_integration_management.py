@@ -124,28 +124,6 @@ def test_grant_and_explicit_role_selection(management):
         f.management.request(AccountSession('other'), 'bind_grant', dict(grant_id='school-grant', skill_id='skill:fixture'))
 
 
-def test_native_uses_task_identity_and_cancellation(management):
-    f = management
-    tool = build_integration_manage_tool_definition(f.runtime)
-    context = SimpleNamespace(task=SimpleNamespace(user='child', task_id='test-task', status='running'), cancellation_checker=lambda: False)
-    result = tool.callable({'action': 'review', 'values': {'definition': f.definition}}, context=context)
-    assert f.management._reviews[result['review_id']]['channel'] == 'task:test-task'
-    context.cancellation_checker = lambda: True
-    with pytest.raises(PermissionError, match='cancelled'):
-        tool.callable({'action': 'apply_review', 'values': {'review_id': result['review_id'], 'activate': True}}, context=context)
-    with pytest.raises(PermissionError):
-        tool.callable({'action': 'catalog', 'values': {}}, context=None)
-    context.cancellation_checker = lambda: False
-    from alphonse.agent_v2.core.intelligence.v3.act_evidence import observation
-    arguments = {'action': 'apply_review', 'values': {'review_id': result['review_id'], 'activate': True}}
-    stored = tool.callable(arguments, context=context)
-    entry = {'evidence_ref': 'check:created', 'status': 'success', 'tool_id': tool.descriptor.tool_id,
-             'arguments': arguments, 'result': stored}
-    receipt = observation(entry, ['ac-1'])['effect_receipt']
-    assert receipt == {'source': 'integration_management_commit',
-                       'target': {'kind': 'project_check', 'id': stored['policy_id']}}
-    assert f.checks.get(AccountSession('child'), stored['policy_id'])['status'] == 'active'
-    assert 'effect_receipt' not in observation({**entry, 'result': {**stored, 'status': 'paused'}}, ['ac-1'])
 
 
 def test_legacy_dispatch_cannot_claim_authenticated_management(management):

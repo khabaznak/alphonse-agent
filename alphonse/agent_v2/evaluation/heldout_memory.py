@@ -6,7 +6,7 @@ import json
 import math
 from statistics import median
 
-from .paired_memory import FIXTURES
+from .boundary_corpus import FIXTURES
 from .paired_oracles import covers
 
 CATEGORIES = {'current_evidence', 'explicit_recall', 'implicit_recall', 'english',

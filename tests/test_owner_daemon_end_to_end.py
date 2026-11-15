@@ -17,22 +17,10 @@ from alphonse.agent_v2.core.io.outbox import SQLiteOutboundStore
 from alphonse.agent_v2.core.questions import SQLiteQuestionStore
 from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry
 from alphonse.agent_v2.core.tools.registry.native.memory import build_read_memory_source_tool_definition, build_search_memory_tool_definition
-from alphonse.agent_v2.daemon import V2Daemon, _owner_only_requested, _owner_public_failure_code
+from alphonse.agent_v2.daemon import V2Daemon, _owner_public_failure_code
 from alphonse.agent_v2.ipc import V2DaemonClient, V2DaemonServer
 from alphonse.agent_v2.runtime import build_runtime_host
 from alphonse.agent_v2.users import V2UserStore
-
-
-def test_owner_startup_requires_explicit_valid_opt_in(monkeypatch):
-    monkeypatch.delenv('ALPHONSE_OWNER_ONLY_SIMPLE_LOOP', raising=False)
-    assert not _owner_only_requested()
-    monkeypatch.setenv('ALPHONSE_OWNER_ONLY_SIMPLE_LOOP', '0')
-    assert not _owner_only_requested()
-    monkeypatch.setenv('ALPHONSE_OWNER_ONLY_SIMPLE_LOOP', '1')
-    assert _owner_only_requested()
-    monkeypatch.setenv('ALPHONSE_OWNER_ONLY_SIMPLE_LOOP', 'true')
-    with pytest.raises(ValueError, match='owner_only_startup_configuration_invalid'):
-        _owner_only_requested()
 
 
 def test_owner_failure_codes_are_allowlisted_and_do_not_disclose_errors():
@@ -43,10 +31,13 @@ def test_owner_failure_codes_are_allowlisted_and_do_not_disclose_errors():
     assert _owner_public_failure_code('candidate_deadline_exceeded', cancelled=True) == 'cancel_requested'
 
 
-@pytest.mark.parametrize('opt_in', [False, True])
-def test_daemon_main_composes_selected_runtime_without_starting_workers(monkeypatch, tmp_path, opt_in):
+@pytest.mark.parametrize('old_flag', [None, '0', '1'])
+def test_daemon_main_always_selects_simple_loop(monkeypatch, tmp_path, old_flag):
     from alphonse.agent_v2 import daemon as module
-    monkeypatch.setenv('ALPHONSE_OWNER_ONLY_SIMPLE_LOOP', '1' if opt_in else '0')
+    if old_flag is None:
+        monkeypatch.delenv('ALPHONSE_OWNER_ONLY_SIMPLE_LOOP', raising=False)
+    else:
+        monkeypatch.setenv('ALPHONSE_OWNER_ONLY_SIMPLE_LOOP', old_flag)
     monkeypatch.setattr(module, '_claim_single_instance_lock', lambda _: object())
     monkeypatch.setattr(module, 'migrate_legacy_databases', lambda: {})
     monkeypatch.setattr(module, 'default_database_path', lambda: tmp_path / 'fixture.sqlite')
@@ -84,10 +75,10 @@ def test_daemon_main_composes_selected_runtime_without_starting_workers(monkeypa
     monkeypatch.setattr(module, 'V2Daemon', Daemon)
     module.main()
     assert captured['ran']
-    assert captured['daemon']['experimental_owner_only'] is opt_in
-    assert captured['runtime']['experimental_owner_read'] is opt_in
-    assert captured['runtime']['messages'][0] == ('owner' if opt_in else 'legacy')
-    assert callable(captured['runtime']['owner_selected_draft_sink']) is opt_in
+    assert captured['daemon']['experimental_owner_only'] is True
+    assert captured['runtime']['experimental_owner_read'] is True
+    assert captured['runtime']['messages'][0] == 'owner'
+    assert callable(captured['runtime']['owner_selected_draft_sink'])
 
 
 @pytest.mark.parametrize('mode', ['answer', 'question', 'question_context_changed', 'cancel', 'abandon', 'unknown_effect', 'unknown_outbox', 'bad_schema', 'bad_status'])
@@ -167,6 +158,9 @@ def test_explicit_owner_worker_routes_to_socket_and_saves_history(tmp_path, monk
         daemon.ipc = V2DaemonServer(daemon, os.path.join(socket_dir, 'p.sock'))
         daemon.start()
         try:
+            # The replacement owner-only runtime does not execute scheduled
+            # work yet; starting it must not start the generic scheduler.
+            assert daemon.scheduler._thread is None
             client = V2DaemonClient(daemon.ipc.socket_path)
             assert client.request('experimental_owner_status')['processing_ready'] is True
             with monkeypatch.context() as patch:
@@ -197,7 +191,9 @@ def test_explicit_owner_worker_routes_to_socket_and_saves_history(tmp_path, monk
                     prompt='Legacy pending work', user=owner.user_id), message_id='legacy-conflict')
                 assert legacy.claim_next() is not None
                 legacy.enqueue(CoreMessage(timestamp=datetime.now(timezone.utc),
-                    prompt='Legacy queued work', user=owner.user_id), message_id='legacy-queued')
+                    prompt='Legacy queued work', user=owner.user_id,
+                    metadata={'intelligence_engine': 'hierarchical_v3', 'intelligence_schema_version': 3}),
+                    message_id='legacy-queued')
                 assert client.request('experimental_owner_status') == {
                     'owner_only': True, 'processing_ready': False,
                     'blocking_reason': 'legacy_claim_conflict', 'paused_legacy_requests': 2}
@@ -310,7 +306,7 @@ def test_explicit_owner_worker_routes_to_socket_and_saves_history(tmp_path, monk
             if is_question:
                 assert client.request('experimental_owner_questions')['questions'] == [
                     {'message_id': message_id, 'question': 'Which apples?'}]
-                from alphonse.agent_v2.core.intelligence.v3.owner_clarification import bind_owner_question
+                from alphonse.agent_v2.core.intelligence.simple_loop.owner_clarification import bind_owner_question
                 with queue._connect() as conn, pytest.raises(ValueError, match='owner_question_context_unavailable'):
                     bind_owner_question(conn, 'different-owner', message_id)
                 with queue._connect() as conn:
@@ -369,12 +365,12 @@ def test_explicit_owner_worker_routes_to_socket_and_saves_history(tmp_path, monk
                                acknowledgement_token=reply['acknowledgement_token'])
             assert not SQLiteMessageQueue(path).claim_mode_blocked()
             if mode == 'answer':
-                # Owner mode leaves the earlier V3 request untouched. Once
-                # the owner answer is finalized, the previous queue mode can
-                # acquire that same request without silently migrating it.
+                # Owner mode leaves the earlier V3-stamped request untouched;
+                # a disposable legacy reader can inspect its preserved stamp.
                 restored = legacy.claim_next()
                 assert restored.message_id == 'legacy-queued'
                 assert restored.message.prompt == 'Legacy queued work'
+                assert restored.message.metadata['intelligence_engine'] == 'hierarchical_v3'
                 assert legacy.ack('legacy-queued')
             users.update_user(owner.user_id, is_active=False)
             assert client.request('experimental_owner_status', message_id=message_id)['status'] == 'unavailable'

@@ -82,29 +82,6 @@ def test_nonpublic_dns_is_rejected_before_connect(monkeypatch):
         bash_verification._http_json('http://example.test/receipt')
 
 
-def test_act_rejects_stale_or_wrong_identity_receipts():
-    from alphonse.agent_v2.core.intelligence.v3.act_evidence import observation
-    proof = {'status': 'verified', 'source': 'bash_independent_readback',
-             'target': {'kind': 'workspace_text', 'id': 'a' * 64}, 'resource': {'path': 'notes.txt'}, 'observed': 'value',
-             'changed': True, 'actor_user_id': 'owner', 'task_id': 'task',
-             'observed_at': datetime.now(timezone.utc).isoformat()}
-    entry = {'evidence_ref': 'tactical-action:write', 'status': 'success', 'tool_id': 'native.bash',
-             'invocation': {'call_id': 'write', 'task_understanding': {'input_digest': 'current'}},
-             'arguments': {'command': 'opaque', 'verification': {'source': 'workspace_text', 'path': 'notes.txt', 'expected': 'value', 'require_change': True}},
-             'result': {'exit_code': 0, 'stdout': '', 'stderr': '', 'verification': proof}}
-    def row():
-        return observation(entry, ['criterion'], task_id='task', actor_user_id='owner', input_digest='current')
-    assert row()['effect_status'] == 'verified_persisted_effect'
-    for field, bad in [('actor_user_id', 'other'), ('task_id', 'other'), ('observed_at', (datetime.now(timezone.utc) - timedelta(minutes=6)).isoformat())]:
-        good = proof[field]
-        proof[field] = bad
-        assert row()['effect_status'] != 'verified_persisted_effect'
-        proof[field] = good
-    proof['resource'] = {'path': 'unrelated.txt'}
-    assert row()['effect_status'] != 'verified_persisted_effect'
-    proof['resource'] = {'path': 'notes.txt'}
-    entry['invocation']['task_understanding']['input_digest'] = 'stale'
-    assert row()['effect_status'] != 'verified_persisted_effect'
 
 
 def test_unavailable_post_write_readback_is_failed_not_retried(tmp_path, monkeypatch):

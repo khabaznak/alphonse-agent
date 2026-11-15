@@ -22,7 +22,7 @@ import { onAction } from "@tauri-apps/plugin-notification";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { daemonRequest, ensureDaemon, playAlertSound, showInFinder, stopDaemon } from "./api";
-import { assertLegacyConversationAvailable, legacyNotificationReviewMessage, OwnerConversation, ownerUnavailableMessage, type OwnerCapability } from "./ownerConversation";
+import { legacyNotificationReviewMessage, OwnerConversation, ownerUnavailableMessage, type OwnerCapability } from "./ownerConversation";
 import { abandonOwnerRequest, listOwnerRecovery, type OwnerRecoveryItem } from "./ownerRecovery";
 import { OwnerRecovery } from "./OwnerRecoveryPanel";
 import { LegacyNotificationReview } from "./LegacyNotificationReview";
@@ -40,7 +40,7 @@ import { desktopDiagnosticBehavior, type DesktopDiagnosticMode } from "./diagnos
 import { createDesktopNotifier, DESKTOP_NOTIFICATION_PREFERENCES_KEY, notificationForCompletion, notificationForQuestion, readDesktopNotificationPreferences, type DesktopNotificationPreferences } from "./desktopNotifications";
 import { readDismissedScheduledSurfaces, rememberDismissedScheduledSurface, withoutDismissedSurfaces, withoutSurface } from "./dismissedSurfaces";
 import { avatarState, avatarStateLabel, capdActivityLabel, canOpenSettingsSection, isCurrentDesktopAdmin, type Workspace, SETTINGS_SECTIONS } from "./layoutState";
-import { reconcileQuestionSurfaces, reuseQuestions, withoutTaskProgressSurfaces } from "./pollState";
+import { pollForKnownUser, reconcileQuestionSurfaces, reuseQuestions, withoutTaskProgressSurfaces } from "./pollState";
 import { appendQueueSample, type QueueSample } from "./queueHistory";
 import { appendPdcaActivity, type PdcaSample } from "./pdcaHistory";
 import type { ActivityEvent, AgentDocument, ChatMessage, CodeModeSettings, InferenceSettings, MediaToolsSettings, MemorySettings, Project, Question, SystemOneSettings, WebToolsSettings } from "./types";
@@ -146,10 +146,6 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const [workTaskForView, setWorkTaskForView] = useState("");
   const [modal, setModal] = useState<Modal>(null);
   const [user, setUser] = useState("");
-  // Explicit, owner-only opt-in; the server must independently report a
-  // connected worker before the option can be selected or messages sent.
-  const [ownerConversationEnabled, setOwnerConversationEnabled] = useState(() =>
-    window.localStorage.getItem("alphonse.desktop.experimentalOwnerConversation") === "true");
   const [ownerWorkerReady, setOwnerWorkerReady] = useState(false);
   const [ownerOnly, setOwnerOnly] = useState(false);
   const [ownerBlockingReason, setOwnerBlockingReason] = useState<string | null>(null);
@@ -166,8 +162,8 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const ownerRecoveryGeneration = useRef(0);
   const ownerQuestionGeneration = useRef(0);
   const ownerConversation = useMemo(() =>
-    isAdmin && ownerConversationEnabled ? new OwnerConversation(daemonRequest) : null,
-    [isAdmin, ownerConversationEnabled, user]);
+    isAdmin ? new OwnerConversation(daemonRequest) : null,
+    [isAdmin, user]);
   const ownerConversationNotice = useRef("");
   useEffect(() => {
     if (!isAdmin) { setOwnerWorkerReady(false); setOwnerOnly(false); setOwnerBlockingReason(null); setPausedLegacyRequests(null); return; }
@@ -186,14 +182,6 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
     const interval = window.setInterval(check, 10000);
     return () => { active = false; window.clearInterval(interval); };
   }, [isAdmin]);
-  const changeOwnerConversation = (enabled: boolean) => {
-    if (ownerConversationBusy || (enabled && !ownerWorkerReady)) return;
-    window.localStorage.setItem("alphonse.desktop.experimentalOwnerConversation", String(enabled));
-    ownerConversationNotice.current = "";
-    setOwnerClarificationNotice("");
-    setOwnerReplyTarget("");
-    setOwnerConversationEnabled(enabled);
-  };
   const refreshOwnerRecovery = useCallback(async () => {
     const generation = ++ownerRecoveryGeneration.current;
     try {
@@ -221,7 +209,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
     setOwnerQuestions([]);
     setOwnerQuestionScope("");
     setOwnerReplyTarget("");
-    if (!isAdmin || !ownerConversationEnabled) {
+    if (!isAdmin) {
       ++ownerRecoveryGeneration.current;
       ++ownerQuestionGeneration.current;
       setOwnerRecoveryItems([]);
@@ -231,7 +219,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
     void refreshOwnerQuestions();
     const interval = window.setInterval(() => { void refreshOwnerRecovery(); void refreshOwnerQuestions(); }, 10000);
     return () => { ++ownerRecoveryGeneration.current; ++ownerQuestionGeneration.current; window.clearInterval(interval); };
-  }, [isAdmin, ownerConversationEnabled, refreshOwnerRecovery, refreshOwnerQuestions, user]);
+  }, [isAdmin, refreshOwnerRecovery, refreshOwnerQuestions, user]);
   const stopOwnerRequest = async (messageId: string) => {
     if (ownerRecoveryStopping) return;
     setOwnerRecoveryStopping(messageId);
@@ -342,8 +330,14 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   }, [clientId, conversationDay, user]);
 
   const poll = useCallback(async () => {
+    // Startup resolves the real owner asynchronously. Polling with an empty
+    // actor falls back to the historical "local" ID at the IPC boundary,
+    // which the daemon correctly refuses for an onboarded household. Wait
+    // for current_user rather than falsely reporting a disconnected daemon.
     try {
-      const { response, daemonChanged, stale } = await pollTransport();
+      const outcome = await pollForKnownUser(user, pollTransport);
+      if (!outcome) return;
+      const { response, daemonChanged, stale } = outcome;
       if (stale) return;
       if (!diagnosticBehavior.commitsPollResponses) return;
       if (daemonChanged) {
@@ -698,32 +692,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
         await poll();
         return;
       }
-      assertLegacyConversationAvailable(ownerOnly);
-      const queued = await daemonRequest<{ message_id: string; project_id: string; created_at: string; conversation_sequence: number }>("queue_message", {
-        prompt: messagePrompt,
-        user,
-        project_id: composerProject?.id || "",
-        integration_id: "desktop",
-        provider_key: "tui",
-        channel_target: user,
-        metadata: composerProject ? { desktop_project_request: true } : {},
-      });
-      setPrompt("");
-      setComposerProject(null);
-      const today = localDay(timezone);
-      conversationDayRef.current = today;
-      setConversationDay(today);
-      appendMessage({
-        id: queued.message_id,
-        role: "user",
-        content: messagePrompt,
-        created_at: queued.created_at,
-        project_id: queued.project_id,
-        sequence: queued.conversation_sequence,
-      });
-      await daemonRequest("desktop_mark_conversation_seen", { user, local_date: today });
-      setActivity("doing");
-      await poll();
+      throw new Error("Conversation is available to the local owner only.");
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : "Message could not be queued";
       if (ownerConversation) {
@@ -856,17 +825,15 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
               <div className="composer-bottom"><details ref={commandMenuRef} className="composer-command-menu"><summary aria-label="Conversation commands" title="Conversation commands"><Plus aria-hidden="true" /></summary><div><p>{prompt.trim() ? "Keep or send your draft before choosing a command." : "Choose a command to prepare in the composer."}</p>{DESKTOP_COMMANDS.map(command => <button key={command} type="button" disabled={Boolean(prompt.trim())} onClick={() => { setPrompt(command); if (commandMenuRef.current) commandMenuRef.current.open = false; textareaRef.current?.focus(); }}>{command}</button>)}</div></details><span className="composer-context">{composerProject ? <>Project: {composerProject.name} <button type="button" onClick={() => setComposerProject(null)} aria-label="Remove project from next message">×</button></> : "Everyday assistant"}</span><button className="send" type="submit" aria-label="Send" title="Send message"><ArrowUp aria-hidden="true" /></button></div>
           </form>
           <p className="composer-hint">Your conversation with Alphonse · {enterToSend ? "Enter to send · Shift+Enter for a new line" : "Use Send to send your message"}</p>
-          {isAdmin && (ownerOnly || ownerConversationEnabled) && <label className="composer-hint"><input type="checkbox" checked={ownerConversationEnabled} disabled={ownerConversationBusy || (!ownerWorkerReady && !ownerConversationEnabled)} onChange={(event) => changeOwnerConversation(event.target.checked)} /> Try the simpler conversation loop for your own messages</label>}
-          {isAdmin && ownerOnly && !ownerConversationEnabled && ownerWorkerReady && <p className="composer-hint">Turn this on to send messages while the owner-only service is running.</p>}
-          {isAdmin && (ownerOnly || ownerConversationEnabled) && !ownerWorkerReady && <p className="composer-hint" role="status">{ownerUnavailableMessage(ownerBlockingReason)}</p>}
+          {isAdmin && !ownerWorkerReady && <p className="composer-hint" role="status">{ownerUnavailableMessage(ownerBlockingReason)}</p>}
           {isAdmin && ownerOnly && pausedLegacyRequests === null && <p className="composer-hint" role="status">Earlier queued requests could not be checked.</p>}
           {isAdmin && ownerOnly && pausedLegacyRequests !== null && pausedLegacyRequests > 0 && <p className="composer-hint" role="status">{pausedLegacyRequests} earlier {pausedLegacyRequests === 1 ? "request is" : "requests are"} paused while the simpler conversation service is running.</p>}
           {isAdmin && legacyNotificationNotice && <><p className="composer-hint" role="status">{legacyNotificationNotice}</p><LegacyNotificationReview key={user} request={daemonRequest} onChanged={() => void poll()} /></>}
-          {isAdmin && ownerConversationEnabled && <p className="composer-hint">Each message starts a separate request. Choose a question below to include it as context for a reply.</p>}
-          {isAdmin && ownerConversationEnabled && ownerQuestionScope === user && <OwnerQuestionSelector questions={ownerQuestions} selectedId={ownerReplyTarget} disabled={ownerConversationBusy} onSelect={setOwnerReplyTarget} />}
-          {isAdmin && ownerConversationEnabled && <OwnerRecovery items={ownerRecoveryItems} stopping={ownerRecoveryStopping} onStop={(id) => void stopOwnerRequest(id)} onShow={(id) => void showOwnerAnswer(id)} />}
-          {isAdmin && ownerConversationEnabled && ownerRecoveryNotice && <p className="composer-hint" role="status">{ownerRecoveryNotice}</p>}
-          {isAdmin && ownerConversationEnabled && ownerClarificationNotice && <p className="composer-hint" role="status">{ownerClarificationNotice}</p>}
+          {isAdmin && <p className="composer-hint">Each message starts a separate request. Choose a question below to include it as context for a reply.</p>}
+          {isAdmin && ownerQuestionScope === user && <OwnerQuestionSelector questions={ownerQuestions} selectedId={ownerReplyTarget} disabled={ownerConversationBusy} onSelect={setOwnerReplyTarget} />}
+          {isAdmin && <OwnerRecovery items={ownerRecoveryItems} stopping={ownerRecoveryStopping} onStop={(id) => void stopOwnerRequest(id)} onShow={(id) => void showOwnerAnswer(id)} />}
+          {isAdmin && ownerRecoveryNotice && <p className="composer-hint" role="status">{ownerRecoveryNotice}</p>}
+          {isAdmin && ownerClarificationNotice && <p className="composer-hint" role="status">{ownerClarificationNotice}</p>}
         </section>
         </section></section>
         {visited.has("projects") && <section className="workspace-panel" tabIndex={-1} aria-label="Projects and tasks workspace" hidden={workspace !== "projects"}><ProjectsWorkspace active={workspace === "projects"} user={user} initialTaskId={workTaskForView} initialProjectId={projectForView.id} selectionRequest={projectForView.request} onAgenda={(id) => { setScheduledTaskForView(id); navigate("agenda"); }} onConversation={(day) => { if (day) setConversationDay(day); navigate("conversation"); }} onDelegate={(project) => { setComposerProject({ id: project.project_id, name: project.name }); setConversationDay(localDay(timezone)); navigate("conversation"); window.setTimeout(() => textareaRef.current?.focus(), 0); }} onQuestions={() => navigate("attention")} onClose={() => navigate("conversation")} /></section>}

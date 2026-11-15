@@ -210,8 +210,10 @@ def build_runtime_host(
     )
     visible_state = InMemoryInternalState()
     if processor is None and not experimental_owner_read:
-        from alphonse.agent_v2.core.intelligence.v3 import HierarchicalCAPDProcessor
-        processor = EngineRoutingProcessor(v3=HierarchicalCAPDProcessor())
+        # An embedded host must register a processor explicitly. The daemon
+        # installs the claim-bound owner worker below; legacy stamps never
+        # silently run as new simple-loop work.
+        processor = EngineRoutingProcessor()
     web_tools_settings_store = web_tools_settings_store or SQLiteWebToolsSettingsStore()
     code_mode_settings_store = code_mode_settings_store or SQLiteCodeModeSettingsStore()
     media_tools_settings_store = media_tools_settings_store or SQLiteMediaToolsSettingsStore()
@@ -232,7 +234,7 @@ def build_runtime_host(
     question_store = question_store or SQLiteQuestionStore()
     outbox = outbox or SQLiteOutboundStore()
     if experimental_owner_read:
-        from alphonse.agent_v2.core.intelligence.v3.owner_clock import OWNER_CLOCK_TOOL_ID, build_owner_clock_tool_definition
+        from alphonse.agent_v2.core.intelligence.simple_loop.owner_clock import OWNER_CLOCK_TOOL_ID, build_owner_clock_tool_definition
         if tools.get(OWNER_CLOCK_TOOL_ID) is not None:
             raise ValueError('owner_clock_tool_conflict')
         tools.register(build_owner_clock_tool_definition())
@@ -240,10 +242,10 @@ def build_runtime_host(
         # enable switch. The worker still refuses fenced processing until the
         # entire acquisition and delivery path is integrated.
         from alphonse.agent_v2.core.messages.sqlite_queue import SQLiteMessageQueue
-        from alphonse.agent_v2.core.intelligence.v3.owner_read_processor import (
+        from alphonse.agent_v2.core.intelligence.simple_loop.owner_read_processor import (
             OwnerReadConversationProcessor, authorize_trusted_owner_claim,
         )
-        from alphonse.agent_v2.core.intelligence.v3.single_loop_checkpoint import ExperimentalCheckpointStore
+        from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_checkpoint import ExperimentalCheckpointStore
         from alphonse.agent_v2.core.intelligence.simple_loop.task_budget import SQLiteTaskBudgetStore
         try:
             if (type(queue) is not SQLiteMessageQueue or queue.experimental_claim_fencing is not True
@@ -270,7 +272,7 @@ def build_runtime_host(
         # The exclusive owner worker must not register or instantiate the old
         # V3 loop. V3-stamped work stays queued for the normal bridge; an
         # accidental dispatch in this mode fails as an unregistered engine.
-        processor = EngineRoutingProcessor(v3=None, owner_read_candidate=candidate)
+        processor = EngineRoutingProcessor(owner_read_candidate=candidate)
     project_store = project_store or ProjectStore()
     artifact_store.capture_legacy_roots(project_store)
     artifact_resources = ArtifactResources(artifact_store, skill_store, project_store, repository_root=user_store.artifacts_root, is_admin=user_store.is_admin)
@@ -522,7 +524,7 @@ def refresh_runtime_artifacts(runtime: V2RuntimeHost) -> None:
     registry = build_native_tool_registry(runtime.web_tools_settings_store.get(), runtime.asset_store, runtime.media_tools_settings_store.get(), runtime.artifact_store, lambda: refresh_runtime_artifacts(runtime), runtime.user_store, runtime.skill_store, management_runtime=runtime, coding_skill_service=runtime.coding_skill_service)
     # Preserve the opt-in owner's native capability across catalog refreshes.
     if isinstance(runtime.processor, EngineRoutingProcessor) and runtime.processor.owner_read_candidate is not None:
-        from alphonse.agent_v2.core.intelligence.v3.owner_clock import build_owner_clock_tool_definition
+        from alphonse.agent_v2.core.intelligence.simple_loop.owner_clock import build_owner_clock_tool_definition
         registry.register(build_owner_clock_tool_definition())
     # Artifact programs are not members of the executable tool registry.
     runtime.core.tools = registry

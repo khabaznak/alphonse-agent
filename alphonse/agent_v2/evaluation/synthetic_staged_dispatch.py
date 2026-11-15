@@ -14,9 +14,9 @@ import sqlite3
 from typing import Callable
 from uuid import NAMESPACE_URL, uuid5
 
-from alphonse.agent_v2.core.intelligence.v3.single_loop_checkpoint import ExperimentalCheckpointStore
-from alphonse.agent_v2.core.intelligence.v3.single_loop_delivery_reservation import ACTION_KEY, ACTION_SCHEMA_VERSION, DeliveryBinding, delivery_claim_matches
-from alphonse.agent_v2.core.intelligence.v3.single_loop_managed_delivery import MANAGED_PREFLIGHT_KEY
+from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_checkpoint import ExperimentalCheckpointStore
+from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_delivery_reservation import ACTION_KEY, ACTION_SCHEMA_VERSION, DeliveryBinding, delivery_claim_matches
+from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_managed_delivery import MANAGED_PREFLIGHT_KEY
 from alphonse.agent_v2.core.io.checkpoint_claim_fence import experimental_checkpoint_claim_transaction
 from alphonse.agent_v2.core.io.experimental_staged_outbox import _validate_guards
 from alphonse.agent_v2.core.io.outbox import SQLiteOutboundStore

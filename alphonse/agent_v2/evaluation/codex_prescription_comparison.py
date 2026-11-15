@@ -1,16 +1,7 @@
-"""Synthetic prescription-memory V3/simple comparison using Codex subscription.
+"""Synthetic prescription-memory exercise using the simple loop.
 
-This test-level switch exercises the actual processors with fresh independent
-synthetic source services. Nothing dispatches at import. It is not a production
-engine switch, clinical evaluator, real delivery check, or billing sandbox.
-
-The default ``fixture_diagnostic`` candidate receives a hidden-source coverage
-signal on answer attempts and bounded feedback. ``matched_provenance`` instead
-keeps the hidden required-source list out of the candidate entirely, disables
-that retry feedback, and uses only basic recorded-read provenance. The latter
-is an evaluation convenience, not semantic grounding or a production medical
-safeguard. Both modes are scored by the independent post-run oracle; V3's
-completion mechanism and the candidate's provenance check still differ.
+The fixture uses invented records. The independent oracle grades structured
+answers and source observations; no result is clinical or delivery evidence.
 """
 from __future__ import annotations
 
@@ -19,8 +10,7 @@ import math
 from time import monotonic
 from typing import Any, Callable
 
-from .codex_clock_comparison import (_run_v3 as _run_shared_v3,
-                                     _run_simple as _run_shared_simple, _summarize_events)
+from .codex_clock_comparison import _run_simple as _run_shared_simple, _summarize_events
 from .codex_subscription_provider import CodexSubscriptionProvider
 from .clock_responses_attempt import _reason_category
 from .loopback_prescription_pilot import LoopbackPrescriptionPilot, PrescriptionSources, evaluate
@@ -78,12 +68,6 @@ def _expected(version='v1'):
     )
 
 
-def _run_v3(*, url, provider, jev, model, emit, cancelled, trace=None, goal=_GOAL):
-    return _run_shared_v3(url=url, provider=provider, jev=jev, model=model, emit=emit,
-        cancelled=cancelled, trace=trace, goal=goal, source_description='Read a named synthetic household record.',
-        allowed_source_names=_NAMES, required_source_names=_REQUIRED)
-
-
 def _run_simple(*, url, provider, model, emit, cancelled, trace=None,
                 verification_mode='fixture_diagnostic', goal=_GOAL):
     return _run_shared_simple(url=url, provider=provider, model=model, emit=emit,
@@ -128,7 +112,7 @@ def run_prescription_arm(*, arm: str, provider: Any, model: str, jev: Any = None
                          private_trace: Callable[[dict], None] | None = None,
                          verification_mode: str = 'fixture_diagnostic', fixture_version: str = 'v1') -> dict:
     """Execute a single synthetic arm; caller controls authorization and output custody."""
-    if arm not in {'v3', 'simple'}:
+    if arm != 'simple':
         raise ValueError('unsupported_prescription_arm')
     if verification_mode not in {'fixture_diagnostic', 'matched_provenance'}:
         raise ValueError('invalid_verification_mode')
@@ -154,9 +138,7 @@ def run_prescription_arm(*, arm: str, provider: Any, model: str, jev: Any = None
     goal = _GOAL if fixture_version == 'v1' else _GOAL_V2
     with LoopbackPrescriptionPilot(_sources(fixture_version)) as fixture:
         try:
-            result = (_run_v3(url=fixture.url, provider=provider, jev=jev, model=model, emit=events.append, cancelled=cancelled, trace=safe_trace if private_trace else None, goal=goal)
-                      if arm == 'v3' else
-                      _run_simple(url=fixture.url, provider=provider, model=model, emit=events.append, cancelled=cancelled, trace=safe_trace if private_trace else None, verification_mode=verification_mode, goal=goal))
+            result = _run_simple(url=fixture.url, provider=provider, model=model, emit=events.append, cancelled=cancelled, trace=safe_trace if private_trace else None, verification_mode=verification_mode, goal=goal)
             error = None
         except Exception as exc:
             result = None
@@ -185,18 +167,17 @@ def run_prescription_arm(*, arm: str, provider: Any, model: str, jev: Any = None
             'limitations': ['Synthetic fixture, not the full Alphonse desktop conversation path.',
                             'Exact structured result and three substantive source reads required; discovery index optional.',
                             'Codex provider usage may be estimated, not reported; hidden tokens are absent.',
-                            'Candidate local visible output bound differs from V3.',
-                            'Jev is separate; actual user delivery and hard timeout are unassessed.',
-                            'Matched provenance checks actor, nonempty output and recorded reads, not semantic grounding; V3 completion differs.']}
+                            'Actual user delivery and hard timeout are unassessed.',
+                            'Matched provenance checks actor, nonempty output and recorded reads, not semantic grounding.']}
 
 
-def compare_prescription(*, provider: Any, model: str, jev_factory: Callable[[], Any],
+def compare_prescription(*, provider: Any, model: str,
                          repetitions: int = 1, timeout_seconds: float = 150,
                          private_trace: Callable[[dict], None] | None = None,
                          verification_mode: str = 'fixture_diagnostic', fixture_version: str = 'v1') -> dict:
     if type(provider) is not CodexSubscriptionProvider or provider.model != model:
         raise ValueError('matching_codex_subscription_provider_required')
-    if not callable(jev_factory) or type(repetitions) is not int or not 1 <= repetitions <= 10:
+    if type(repetitions) is not int or not 1 <= repetitions <= 10:
         raise ValueError('invalid_comparison_configuration')
     if verification_mode not in {'fixture_diagnostic', 'matched_provenance'}:
         raise ValueError('invalid_verification_mode')
@@ -204,10 +185,10 @@ def compare_prescription(*, provider: Any, model: str, jev_factory: Callable[[],
         raise ValueError('invalid_fixture_version')
     rows=[]
     for repetition in range(1, repetitions + 1):
-        order = ('v3', 'simple') if repetition % 2 else ('simple', 'v3')
+        order = ('simple',)
         for arm in order:
             try:
-                jev = jev_factory() if arm == 'v3' else None
+                jev = None
                 result = run_prescription_arm(arm=arm, provider=provider, model=model, jev=jev,
                                               timeout_seconds=timeout_seconds, private_trace=private_trace,
                                               verification_mode=verification_mode, fixture_version=fixture_version)
@@ -217,9 +198,9 @@ def compare_prescription(*, provider: Any, model: str, jev_factory: Callable[[],
                           'elapsed_seconds': None, 'oracle': None,
                           'events': [], 'delivery': 'unassessed', 'qualification': 'unassessed'}
             rows.append({'repetition': repetition, **result})
-    return {'kind': 'synthetic_prescription_v3_vs_simple', 'model': model,
+    return {'kind': 'synthetic_prescription_simple_loop', 'model': model,
             'verification_mode': verification_mode, 'fixture_version': fixture_version, 'runs': rows,
             'qualification': 'unassessed',
             'limitations': ['Fresh synthetic sources; no live medical data or full desktop flow.',
-                            'TypeSafe Jev and actual user delivery are separate boundaries.',
+                            'Actual user delivery remains unassessed.',
                             'This is a structured synthetic task, not medical advice or clinical validation.']}

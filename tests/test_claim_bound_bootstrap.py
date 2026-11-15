@@ -5,9 +5,9 @@ import sqlite3
 import pytest
 
 from alphonse.agent_v2.core.core import CoreLoopContext, CoreMessage
-from alphonse.agent_v2.core.intelligence.v3.single_loop_atomic_step import run_atomic_step
+from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_atomic_step import run_atomic_step
 from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_candidate import CandidateHost
-from alphonse.agent_v2.core.intelligence.v3.single_loop_checkpoint import CheckpointConflict, ExperimentalCheckpointStore
+from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_checkpoint import CheckpointConflict, ExperimentalCheckpointStore
 from alphonse.agent_v2.core.intelligence.simple_loop.task_budget import BudgetLimits
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue, SQLiteMessageQueue
 from alphonse.agent_v2.core.messages.claim_fence import ClaimFenceUnavailable, ClaimSuperseded

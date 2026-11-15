@@ -1,7 +1,6 @@
 from types import SimpleNamespace
 
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
-from alphonse.agent_v2.core.intelligence.v3.context import _recent_conversation
 from alphonse.agent_v2.core.tools.registry.native.memory import execute_search_memory
 
 
@@ -27,14 +26,6 @@ class _ConversationStore:
         ]
 
 
-def test_recent_conversation_keeps_mixed_and_historical_project_events() -> None:
-    context = SimpleNamespace(conversation_store=_ConversationStore())
-
-    rendered = _recent_conversation(TaskState(user="alex"), context)
-
-    assert "Earlier unassociated question" in rendered
-    assert "Reply from archived project task" in rendered
-    assert "Current project request" in rendered
 
 
 def test_scheduled_task_keeps_its_own_messages_separate_from_recent_turns() -> None:
@@ -133,16 +124,3 @@ def test_transcript_does_not_duplicate_current_recorded_user_message() -> None:
     task = TaskState(user="alex")
     task.append_conversation_message("alex", 'Check the "study" temperature')
     assert conversation_transcript(task, Store()).count("temperature") == 1
-
-
-def test_decision_context_keeps_memory_and_conversation_separate() -> None:
-    from alphonse.agent_v2.core.core import CoreLoopContext
-    from alphonse.agent_v2.core.intelligence.v3.context import task_context_for_decision
-    from alphonse.agent_v2.core.messages import InMemoryMessageQueue
-
-    task = TaskState(user="alex", goal="Current request", memory_context_md="Known project file: journal.md")
-    task.append_conversation_message("alex", "Current request")
-    rendered = task_context_for_decision(task, CoreLoopContext(messages=InMemoryMessageQueue()))
-    assert "Current request" in rendered
-    assert "Known project file: journal.md" in rendered
-    assert "Durable household memory (person/audience scoped; project association is optional):" in rendered

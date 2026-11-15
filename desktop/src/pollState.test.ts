@@ -1,7 +1,15 @@
-import { describe, expect, it } from "vitest";
-import { reuseQuestions, reuseQueueStatus, withoutTaskProgressSurfaces } from "./pollState";
+import { describe, expect, it, vi } from "vitest";
+import { pollForKnownUser, reuseQuestions, reuseQueueStatus, withoutTaskProgressSurfaces } from "./pollState";
 
 describe("idle desktop poll state", () => {
+  it("waits for the actual owner before making an authenticated poll", async () => {
+    const poll = vi.fn(async () => ({ connected: true }));
+    expect(await pollForKnownUser("", poll)).toBeNull();
+    expect(await pollForKnownUser("  ", poll)).toBeNull();
+    expect(poll).not.toHaveBeenCalled();
+    expect(await pollForKnownUser("fixture-owner", poll)).toEqual({ connected: true });
+    expect(poll).toHaveBeenCalledTimes(1);
+  });
   it("preserves question identity when contents are unchanged", () => {
     const current = [{ question_id: "q1", task_id: "task-1", project_id: "p1", message: "Continue?", kind: "yes_no" as const, choices: [] }];
     expect(reuseQuestions(current, current.map((question) => ({ ...question })))).toBe(current);

@@ -12,16 +12,11 @@ if TYPE_CHECKING:
 class EngineRoutingProcessor:
     """Delegate to the engine stamped on the queued task."""
 
-    def __init__(self, *, v3: "IntelligenceProcessor | None",
-                 owner_read_candidate: "IntelligenceProcessor | None" = None) -> None:
-        self.v3 = v3
+    def __init__(self, *, owner_read_candidate: "IntelligenceProcessor | None" = None) -> None:
         self.owner_read_candidate = owner_read_candidate
 
     def processor_for(self, task: "TaskState") -> "IntelligenceProcessor":
         """Validate a task's engine stamp before task-scoped context is loaded."""
-        if (task.intelligence_engine == "hierarchical_v3" and task.intelligence_schema_version == 3
-                and self.v3 is not None):
-            return self.v3
         if (task.intelligence_engine == "single_loop_experimental" and task.intelligence_schema_version == 1
                 and self.owner_read_candidate is not None):
             return self.owner_read_candidate

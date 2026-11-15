@@ -8,11 +8,11 @@ import sys
 
 import pytest
 
-from alphonse.agent_v2.core.intelligence.v3.single_loop_atomic_step import run_atomic_step
+from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_atomic_step import run_atomic_step
 from alphonse.agent_v2.core.core import CoreLoopContext
 from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_candidate import CandidateHost
-from alphonse.agent_v2.core.intelligence.v3.single_loop_checkpoint import CheckpointConflict, ExperimentalCheckpointStore
-from alphonse.agent_v2.core.intelligence.v3.single_loop_delivery_reservation import DeliveryBinding, reserve_delivery
+from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_checkpoint import CheckpointConflict, ExperimentalCheckpointStore
+from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_delivery_reservation import DeliveryBinding, reserve_delivery
 from alphonse.agent_v2.core.io.experimental_staged_outbox import install_experimental_staging, stage_experimental_response
 from alphonse.agent_v2.core.io.outbox import SQLiteOutboundStore
 from alphonse.agent_v2.evaluation.synthetic_staged_dispatch import dispatch_fixture_staged
@@ -72,7 +72,7 @@ def test_selected_answer_is_bound_through_fixture_effect_and_settlement(boot_fix
     # original claim receipt. This is fixture reconciliation, not takeover.
     script = '''from datetime import datetime
 import sys
-from alphonse.agent_v2.core.intelligence.v3.single_loop_checkpoint import ExperimentalCheckpointStore
+from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_checkpoint import ExperimentalCheckpointStore
 from alphonse.agent_v2.core.questions import SQLiteQuestionStore
 from alphonse.agent_v2.evaluation.synthetic_delivery_settlement import recover_expired_fixture_effect
 store = ExperimentalCheckpointStore(SQLiteQuestionStore(sys.argv[1]))
@@ -137,7 +137,7 @@ def test_claim_loss_during_answer_verification_retains_model_marker(setup, host)
 
 
 def test_final_stale_evidence_cannot_be_delivered(setup, host, monkeypatch):
-    from alphonse.agent_v2.core.intelligence.v3 import single_loop_atomic_step
+    from alphonse.agent_v2.core.intelligence.simple_loop import single_loop_atomic_step
     _, _, questions, store, claim, version, now = setup
     checks = iter((True, True, True, False))
     monkeypatch.setattr(single_loop_atomic_step, '_is_fresh', lambda *_: next(checks))

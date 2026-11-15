@@ -1,15 +1,12 @@
 """Fixed clock development fixture and offline real-processor integration."""
-from dataclasses import replace
 import json
 from urllib.error import HTTPError
 from urllib.request import urlopen
 
 import pytest
 
-from alphonse.agent_v2.core.inference import InferencePurpose, InferenceResult
-from alphonse.agent_v2.evaluation.deterministic_adapters import _Action, _DeterministicProvider, _ReplayJev
 from alphonse.agent_v2.evaluation.loopback_clock_pilot import LoopbackClockPilot, evaluate
-from alphonse.agent_v2.evaluation.prescription_http_processors import run_candidate_http, run_v3_http
+from alphonse.agent_v2.evaluation.prescription_http_processors import run_candidate_http
 
 INSTANT = '2026-04-15T05:30:00+00:00'
 ZONE = 'America/Mexico_City'
@@ -84,34 +81,10 @@ class Chooser:
                                       'output_tokens': len(json.dumps(decision).encode())}}
 
 
-class Judge(_ReplayJev):
-    offline = True
-
-
-def provider_factory(state):
-    state.scenario = replace(state.scenario,
-        actions=(_Action('native.fixture_read', 'project_record_search', {'source': 'index'}, role='read_clock', behavior='read'),),
-        final_response=json.dumps(ANSWER))
-    class Provider(_DeterministicProvider):
-        def generate_json(self, request):
-            if request.purpose == InferencePurpose.TASK_UNDERSTANDING:
-                return InferenceResult(json_value={'requested_outcome': GOAL, 'supplied_parameters': [],
-                    'constraints': [], 'unresolved_dependencies': [], 'superseded_constraints': []})
-            return super().generate_json(request)
-    return Provider(state)
-provider_factory.offline = True
-
-
-@pytest.mark.parametrize('arm', ['candidate', 'current_v3', 'targeted_v3'])
-def test_actual_processor_reads_common_http_clock(monkeypatch, arm):
-    monkeypatch.setenv('ALPHONSE_V3_CONTEXT_PROJECTIONS', '1' if arm == 'targeted_v3' else '0')
+def test_simple_loop_reads_http_clock():
     events = []
     with LoopbackClockPilot(INSTANT, ZONE) as pilot:
-        if arm == 'candidate':
-            result = run_candidate_http(base_url=pilot.url, goal=GOAL, chooser=Chooser(), emit=events.append)
-        else:
-            result = run_v3_http(base_url=pilot.url, goal=GOAL, provider_factory=provider_factory,
-                                 jev=Judge(), emit=events.append)
+        result = run_candidate_http(base_url=pilot.url, goal=GOAL, chooser=Chooser(), emit=events.append)
     assert result.status == 'completed', result.reason
     verdict = evaluate(pilot, response=json.loads(result.response), expected_instant_utc=INSTANT, expected_timezone=ZONE)
     assert verdict['passed'] is True and verdict['decision_qualified'] is False

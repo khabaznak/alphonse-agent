@@ -1,14 +1,11 @@
 """Processors use a shared synthetic service, with scripted decisions only."""
-from dataclasses import replace
 import json
 from urllib.error import URLError
 
 import pytest
 
-from alphonse.agent_v2.core.inference import InferencePurpose, InferenceResult
-from alphonse.agent_v2.evaluation.deterministic_adapters import _Action, _DeterministicProvider, _ReplayJev
 from alphonse.agent_v2.evaluation.loopback_prescription_pilot import LoopbackPrescriptionPilot, PrescriptionSources, evaluate
-from alphonse.agent_v2.evaluation.prescription_http_processors import LocalSource, run_candidate_http, run_v3_http
+from alphonse.agent_v2.evaluation.prescription_http_processors import LocalSource, run_candidate_http
 
 SOURCES = PrescriptionSources({'start_date': '2026-04-10'}, {'name': 'Asterin', 'dose': '10 mg'}, {'state': 'active'})
 KEY = {'index': {'sources': ['conversation', 'prescription', 'treatment-status']},
@@ -30,34 +27,11 @@ class OfflineChooser:
         return result
 
 
-class OfflineJev(_ReplayJev):
-    offline = True
-
-
-def v3_factory(state):
-    state.scenario = replace(state.scenario,
-        actions=tuple(_Action('native.fixture_read', 'project_record_search', {'source': p}, role=f'read_{i}', behavior='read')
-                      for i, p in enumerate(ORDER)), final_response=json.dumps(ANSWER))
-    class Provider(_DeterministicProvider):
-        def generate_json(self, request):
-            if request.purpose == InferencePurpose.TASK_UNDERSTANDING:
-                return InferenceResult(json_value={'requested_outcome': 'Read the synthetic sources', 'supplied_parameters': [],
-                    'constraints': [], 'unresolved_dependencies': [], 'superseded_constraints': []})
-            return super().generate_json(request)
-    return Provider(state)
-v3_factory.offline = True
-
-
-@pytest.mark.parametrize('arm', ['candidate', 'v3'])
-def test_real_processor_reads_same_http_sources_and_independent_oracle(arm):
+def test_simple_loop_reads_http_sources_and_independent_oracle():
     events = []
     with LoopbackPrescriptionPilot(SOURCES) as pilot:
-        if arm == 'candidate':
-            result = run_candidate_http(base_url=pilot.url, goal='Read the synthetic records.',
-                                        chooser=OfflineChooser(), emit=events.append)
-        else:
-            result = run_v3_http(base_url=pilot.url, goal='Read the synthetic records.',
-                                 provider_factory=v3_factory, jev=OfflineJev(), emit=events.append)
+        result = run_candidate_http(base_url=pilot.url, goal='Read the synthetic records.',
+                                    chooser=OfflineChooser(), emit=events.append)
     assert result.status == 'completed', result.reason
     oracle = evaluate(pilot, response=json.loads(result.response), expected_response=ANSWER, expected_sources=KEY)
     assert oracle['passed'] is True

@@ -22,9 +22,9 @@ from alphonse.agent_v2.skill_bindings import SkillBindings
 from .checkpoint_claim_fence import experimental_checkpoint_claim_transaction
 from .outbox import SQLiteOutboundStore, _OUTBOX_STATUSES, _outbox_status_schema, _validate_outbox_rebuild
 from alphonse.agent_v2.core.messages.claim_fence import ClaimReceipt, ClaimFenceUnavailable
-from alphonse.agent_v2.core.intelligence.v3.single_loop_checkpoint import ExperimentalCheckpointStore
-from alphonse.agent_v2.core.intelligence.v3.single_loop_delivery_reservation import ACTION_KEY, ACTION_SCHEMA_VERSION, DeliveryBinding, delivery_claim_matches
-from alphonse.agent_v2.core.intelligence.v3.single_loop_managed_delivery import MANAGED_PREFLIGHT_KEY, _capture, managed_record_matches
+from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_checkpoint import ExperimentalCheckpointStore
+from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_delivery_reservation import ACTION_KEY, ACTION_SCHEMA_VERSION, DeliveryBinding, delivery_claim_matches
+from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_managed_delivery import MANAGED_PREFLIGHT_KEY, _capture, managed_record_matches
 
 
 _OLD = "'pending', 'claimed', 'retry_wait', 'delivered', 'failed', 'unconfirmed'"

@@ -11,11 +11,11 @@ from alphonse.agent_v2.core.core import ProcessingStatus
 from alphonse.agent_v2.core.inference.models import InferenceResult, ModelProfile
 from alphonse.agent_v2.core.inference.router import InferenceRouter
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
-from alphonse.agent_v2.core.intelligence.v3.owner_atomic_checkpoint import OwnerAtomicCheckpoint
-from alphonse.agent_v2.core.intelligence.v3.owner_read_recovery import OwnerRecoveryUnavailable, restore_owner_read_observations
-from alphonse.agent_v2.core.intelligence.v3.owner_read_processor import OwnerReadConversationProcessor, authorize_trusted_owner_claim
+from alphonse.agent_v2.core.intelligence.simple_loop.owner_atomic_checkpoint import OwnerAtomicCheckpoint
+from alphonse.agent_v2.core.intelligence.simple_loop.owner_read_recovery import OwnerRecoveryUnavailable, restore_owner_read_observations
+from alphonse.agent_v2.core.intelligence.simple_loop.owner_read_processor import OwnerReadConversationProcessor, authorize_trusted_owner_claim
 from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_candidate import CandidateState
-from alphonse.agent_v2.core.intelligence.v3.single_loop_checkpoint import ExperimentalCheckpointStore
+from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_checkpoint import ExperimentalCheckpointStore
 from alphonse.agent_v2.core.intelligence.simple_loop.task_budget import BudgetLimits, TaskBudget, SQLiteTaskBudgetStore
 from alphonse.agent_v2.core.messages.sqlite_queue import SQLiteMessageQueue
 from alphonse.agent_v2.core.questions import SQLiteQuestionStore
@@ -291,7 +291,7 @@ def test_recovery_refuses_uncommitted_model_decision(setup):
 
 
 def test_recovery_rechecks_owner_after_source_io(setup, monkeypatch):
-    from alphonse.agent_v2.core.intelligence.v3 import owner_read_recovery
+    from alphonse.agent_v2.core.intelligence.simple_loop import owner_read_recovery
 
     atomic, _, ctx, _, owner = setup
     saved = settled_read(setup)
@@ -308,7 +308,7 @@ def test_recovery_rechecks_owner_after_source_io(setup, monkeypatch):
 
 
 def test_recovery_does_not_reread_source_after_owner_revoked_during_read(setup, monkeypatch):
-    from alphonse.agent_v2.core.intelligence.v3 import owner_read_recovery
+    from alphonse.agent_v2.core.intelligence.simple_loop import owner_read_recovery
 
     atomic, _, ctx, _, owner = setup
     saved = settled_read(setup)
@@ -332,7 +332,7 @@ def test_recovery_does_not_reread_source_after_owner_revoked_during_read(setup, 
 
 
 def test_recovery_does_not_reread_after_checkpoint_changes_during_read(setup, monkeypatch):
-    from alphonse.agent_v2.core.intelligence.v3 import owner_read_recovery
+    from alphonse.agent_v2.core.intelligence.simple_loop import owner_read_recovery
 
     atomic, _, ctx, _, _ = setup
     saved = settled_read(setup)

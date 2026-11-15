@@ -16,7 +16,7 @@ import sqlite3
 from typing import Callable
 
 from .claim_fence import ClaimFenceUnavailable, ClaimReceipt, _time, fenced_claim_transaction
-from alphonse.agent_v2.core.intelligence.v3.single_loop_checkpoint import (
+from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_checkpoint import (
     Checkpoint, CheckpointConflict, ExperimentalCheckpointStore,
 )
 from alphonse.agent_v2.core.intelligence.simple_loop.task_budget import BudgetExhausted

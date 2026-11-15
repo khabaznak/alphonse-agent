@@ -24,7 +24,7 @@ class Recorder:
 
 
 def RegisteredRouter(candidate):
-    return EngineRoutingProcessor(v3=None, owner_read_candidate=candidate)
+    return EngineRoutingProcessor(owner_read_candidate=candidate)
 
 
 def make_core(tmp_path, router):
@@ -148,7 +148,7 @@ def test_candidate_rejects_embedded_resume_and_default_router_stays_disabled(tmp
     assert (result.status, result.error) == (LoopStepStatus.FAILED, 'candidate_checkpoint_unavailable')
     assert not recorder.seen
     reset_state()
-    core, queue, _ = make_core(tmp_path, EngineRoutingProcessor(v3=None))
+    core, queue, _ = make_core(tmp_path, EngineRoutingProcessor())
     enqueue(queue)
     result = core.step()
     assert (result.status, result.error) == (LoopStepStatus.FAILED, 'intelligence_engine_unregistered')

@@ -7,9 +7,9 @@ import sqlite3
 import pytest
 
 from test_experimental_staged_outbox import setup, stage
-from alphonse.agent_v2.core.intelligence.v3.single_loop_checkpoint import ExperimentalCheckpointStore
-from alphonse.agent_v2.core.intelligence.v3.single_loop_delivery_reservation import DeliveryBinding
-from alphonse.agent_v2.core.intelligence.v3.single_loop_managed_delivery import managed_record_matches
+from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_checkpoint import ExperimentalCheckpointStore
+from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_delivery_reservation import DeliveryBinding
+from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_managed_delivery import managed_record_matches
 from alphonse.agent_v2.core.messages.claim_fence import ClaimFenceUnavailable, ClaimSuperseded
 from alphonse.agent_v2.evaluation.synthetic_delivery_settlement import settle_fixture_delivery
 from alphonse.agent_v2.evaluation.synthetic_staged_dispatch import dispatch_fixture_staged

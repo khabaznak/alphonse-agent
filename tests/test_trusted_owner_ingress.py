@@ -82,7 +82,7 @@ def test_owner_ingress_transaction_rolls_back_queue_on_origin_failure(tmp_path):
 def test_owner_origin_verified_by_real_candidate_against_claim_and_payload(tmp_path):
     from alphonse.agent_v2.core.core import CoreLoopContext
     from alphonse.agent_v2.core.intelligence.task_state import TaskState
-    from alphonse.agent_v2.core.intelligence.v3.owner_read_processor import OwnerReadConversationProcessor
+    from alphonse.agent_v2.core.intelligence.simple_loop.owner_read_processor import OwnerReadConversationProcessor
     from alphonse.agent_v2.core.intelligence.simple_loop.task_budget import SQLiteTaskBudgetStore
     from alphonse.agent_v2.core.inference.models import InferenceResult, ModelProfile
     from alphonse.agent_v2.core.inference.router import InferenceRouter

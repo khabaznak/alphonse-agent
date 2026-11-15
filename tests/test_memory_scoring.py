@@ -9,7 +9,7 @@ import sys
 
 import pytest
 
-from alphonse.agent_v2.evaluation.memory_replay import load_corpus, run
+from alphonse.agent_v2.evaluation.memory_corpus import load_corpus
 from alphonse.agent_v2.evaluation.memory_scoring import load_rubric, rescore, score_response
 
 ROOT = Path(__file__).parents[1]
@@ -170,13 +170,6 @@ def test_cli_cannot_overwrite_original_evidence():
                              '--input', str(LIVE), '--output', str(LIVE)], capture_output=True, text=True)
     assert result.returncode == 2
     assert 'must preserve inputs' in result.stderr
-
-
-def test_responder_requires_versioned_rubric_before_any_call():
-    def responder(_payload):
-        raise AssertionError('provider called without response rubric')
-    with pytest.raises(ValueError, match='response_rubric_required'):
-        run(CORPUS, responder=responder)
 
 
 @pytest.mark.parametrize('mutation', ['version', 'case', 'empty', 'regex'])

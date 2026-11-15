@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { assertLegacyConversationAvailable, OwnerConversation, ownerUnavailableMessage, type OwnerRequest } from "./ownerConversation";
+import { OwnerConversation, ownerUnavailableMessage, type OwnerRequest } from "./ownerConversation";
 
 const id = "a".repeat(32);
 const token = "b".repeat(32);
@@ -29,10 +29,6 @@ describe("explicit owner conversation transport", () => {
     const client = new OwnerConversation(request as OwnerRequest);
     await client.send("A different topic");
     expect(request).toHaveBeenCalledWith("experimental_owner_ingress", { prompt: "A different topic" });
-  });
-  it("blocks the legacy send route while the exclusive owner worker is running", () => {
-    expect(() => assertLegacyConversationAvailable(true)).toThrow("Turn on the simpler conversation loop");
-    expect(() => assertLegacyConversationAvailable(false)).not.toThrow();
   });
   it("does not submit unless the daemon confirms a connected owner worker", async () => {
     const request = vi.fn(async () => ({ processing_ready: false }));

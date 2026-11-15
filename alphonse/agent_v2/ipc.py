@@ -8,7 +8,6 @@ import re
 import socket
 import sys
 import threading
-import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -394,14 +393,20 @@ class V2DaemonServer:
                     result = self._dispatch(request)
                 response = {"version": PROTOCOL_VERSION, "request_id": _request_id(request), "ok": True, "result": result}
             except Exception as exc:
-                traceback.print_exc()
                 response = {
                     "version": PROTOCOL_VERSION,
                     "request_id": _request_id(request),
                     "ok": False,
                     "error": f"{type(exc).__name__}: {exc}",
                 }
-            connection.sendall((json.dumps(response, sort_keys=True) + "\n").encode("utf-8"))
+            try:
+                encoded = (json.dumps(response, sort_keys=True) + "\n").encode("utf-8")
+            except (TypeError, ValueError, UnicodeError):
+                # A malformed service result must not close the connection
+                # without a protocol response or leak the malformed value.
+                encoded = (json.dumps({"version": PROTOCOL_VERSION, "request_id": _request_id(request),
+                    "ok": False, "error": "daemon_response_unavailable"}) + "\n").encode("utf-8")
+            connection.sendall(encoded)
 
     def _owner_ingress(self, connection, request):
         if not self.experimental_owner_ingress:

@@ -13,7 +13,7 @@ from typing import Any, Callable
 
 from alphonse.agent_v2.core.inference import InferencePurpose, InferenceRequest, InferenceResult, ModelProfile
 from alphonse.agent_v2.core.inference.openai_codex import _json_envelope
-from alphonse.agent_v2.core.intelligence.v3.candidate_decision_policy import action_schema, make_request, normalize_action
+from alphonse.agent_v2.core.intelligence.simple_loop.candidate_decision_policy import action_schema, make_request, normalize_action
 from .codex_subscription_provider import CodexSubscriptionProvider
 from .token_usage_diagnostics import usage_diagnostics
 

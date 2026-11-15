@@ -162,59 +162,6 @@ def test_recursive_step_returns_busy_without_consuming_another_message() -> None
     assert queue.size() == 1
 
 
-def test_v3_retry_restores_checkpoint_and_keeps_acceptance_contract(tmp_path) -> None:
-    reset_state()
-    queue = InMemoryMessageQueue()
-    message_id = "stable-v3-message"
-    queue.enqueue(
-        CoreMessage(
-            timestamp=datetime.now().astimezone(),
-            prompt="Change exactly one record",
-            user="alex",
-            metadata={"intelligence_engine": "hierarchical_v3", "intelligence_schema_version": 3},
-        ),
-        message_id=message_id,
-    )
-    questions = SQLiteQuestionStore(tmp_path / "questions.sqlite3")
-    checkpoint = TaskState(
-        task_id=message_id,
-        message_id=message_id,
-        user="alex",
-        goal="Change exactly one record",
-        intelligence_engine="hierarchical_v3",
-        intelligence_schema_version=3,
-        acceptance_criteria_md="1.- [ ] The exact record is updated",
-        acceptance_contract=contract_from_markdown(
-            "1.- [ ] The exact record is updated", source_message_id=message_id
-        ),
-    )
-    questions.save_task_checkpoint(checkpoint, status="running")
-
-    class CaptureProcessor:
-        received = None
-
-        def process(self, task, context):
-            self.received = task
-            return ProcessingResult(snapshot=StateSnapshot(current_work=task.goal))
-
-    processor = CaptureProcessor()
-    core = AlphonseCore(
-        intelligence=processor,
-        messages=queue,
-        tools=_NullTools(),
-        prompts=_NullPrompts(),
-        state=_RecordingState(),
-        memory=_NullMemory(),
-        question_store=questions,
-    )
-
-    result = core.step()
-
-    assert result.status == LoopStepStatus.PROCESSED
-    assert processor.received is not None
-    assert processor.received.task_id == message_id
-    assert processor.received.acceptance_contract == checkpoint.acceptance_contract
-    assert processor.received.acceptance_criteria_md == checkpoint.acceptance_criteria_md
 
 
 def test_v3_correlated_answer_preserves_original_task_identity() -> None:

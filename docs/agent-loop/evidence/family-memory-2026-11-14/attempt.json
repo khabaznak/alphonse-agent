@@ -1,0 +1,54 @@
+{
+  "case": "family-memory-conversation-v1",
+  "attempt": 1,
+  "provider": "Codex CLI ChatGPT subscription",
+  "model": "gpt-6-luna",
+  "status": "failed",
+  "provider_usage": "unknown",
+  "delivery": "not exercised",
+  "start_source_sha256": {
+    "alphonse/agent_v2/core/intelligence/simple_loop/owner_read_processor.py": "6df7efb7516eb96a4120291c2e74749caec10fe0be669012b92bd433b5d0edbb",
+    "alphonse/agent_v2/core/intelligence/simple_loop/single_loop_candidate.py": "668f062d4cf867d36d278e45c2575649d3c5c176ee6530a8509adf91fd13d22a",
+    "alphonse/agent_v2/core/intelligence/simple_loop/router_candidate_chooser.py": "7f8545d96190e45d1bd2ebde77e9a962f7d8f4f8e7a9edb6661b20ae89b93eed",
+    "alphonse/agent_v2/evaluation/family_memory_gym.py": "efd1dc3c162b7e704bb95bca8a2be409efc0301df52a4d556d5b4b0f92475d71"
+  },
+  "error": "candidate_model_usage_unknown_or_overrun",
+  "answer": "",
+  "decisions": [
+    {
+      "kind": "tool",
+      "tool_id": "native.search_memory",
+      "arguments": {
+        "query": "family",
+        "source_types": [
+          "conversation"
+        ],
+        "limit": 30
+      },
+      "text": null
+    }
+  ],
+  "synthetic_source_ids": {
+    "people": "conversation:64922386-3794-45c4-a72c-2b0a2f0b05e9",
+    "pet": "conversation:742847be-d4d3-4aa0-a223-49fe222d7cd3",
+    "unrelated": "conversation:994095a0-4781-4692-997b-fc21a8869401"
+  },
+  "oracle": {
+    "mentions_people": false,
+    "mentions_pet": false,
+    "reads_relevant_sources": false,
+    "omits_unrelated_source": true,
+    "avoids_irrelevant_detail": true,
+    "does_not_invent_child": true
+  },
+  "oracle_pass": false,
+  "provider_calls": 1,
+  "elapsed_seconds": 6.683,
+  "end_source_sha256": {
+    "alphonse/agent_v2/core/intelligence/simple_loop/owner_read_processor.py": "6df7efb7516eb96a4120291c2e74749caec10fe0be669012b92bd433b5d0edbb",
+    "alphonse/agent_v2/core/intelligence/simple_loop/single_loop_candidate.py": "668f062d4cf867d36d278e45c2575649d3c5c176ee6530a8509adf91fd13d22a",
+    "alphonse/agent_v2/core/intelligence/simple_loop/router_candidate_chooser.py": "7f8545d96190e45d1bd2ebde77e9a962f7d8f4f8e7a9edb6661b20ae89b93eed",
+    "alphonse/agent_v2/evaluation/family_memory_gym.py": "efd1dc3c162b7e704bb95bca8a2be409efc0301df52a4d556d5b4b0f92475d71"
+  },
+  "source_changed_during_attempt": false
+}

@@ -7,7 +7,6 @@ import pytest
 
 from alphonse.agent_v2.core.core import CoreLoopContext
 from alphonse.agent_v2.core.core import ToolExecutionContext
-from alphonse.agent_v2.core.intelligence.acceptance_planning import _render_acceptance_criteria_prompt
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
 from alphonse.agent_v2.core.projects import ProjectStore
@@ -92,65 +91,36 @@ def test_project_store_archives_restores_and_updates_metadata(tmp_path: Path) ->
 
 
 
-def test_prompt_render_paths_include_project_context(tmp_path: Path) -> None:
+def test_project_context_includes_configured_scope(tmp_path: Path) -> None:
     store = ProjectStore(":memory:")
     project = store.create_project(name="Alpha", description="Build docs", root_path=str(tmp_path / "alpha"), owner_user_id="alex")
     store.write_project_config(project.project_id, {"scope": "Prefer concise markdown."}, requester_user_id="alex")
-    task = TaskState(
-        goal="Write docs",
-        user="alex",
-        project_id=project.project_id,
-        acceptance_criteria_md="1.- [ ] Docs exist",
-        metadata={"v3_context_selection": {"selected_context_ids": ["project:" + project.project_id]}},
-    )
-    assert "Prefer concise markdown." in _render_acceptance_criteria_prompt(
-        task,
-        project_context_md=store.render_project_context(project.project_id, requester_user_id="alex"),
-    )
+    assert "Prefer concise markdown." in store.render_project_context(project.project_id, requester_user_id="alex")
 
 
-def test_capd_prompts_keep_user_and_project_contexts_isolated(tmp_path: Path) -> None:
+def test_project_contexts_are_isolated_between_users(tmp_path: Path) -> None:
     store = ProjectStore(":memory:")
     alex_project = store.create_project(name="Alex project", root_path=str(tmp_path / "alex"), owner_user_id="alex")
     gaby_project = store.create_project(name="Gaby project", root_path=str(tmp_path / "gaby"), owner_user_id="gaby")
     store.write_project_config(alex_project.project_id, {"scope": "ALEX_PROJECT_SENTINEL"}, requester_user_id="alex")
     store.write_project_config(gaby_project.project_id, {"scope": "GABY_PROJECT_SENTINEL"}, requester_user_id="gaby")
-    context = CoreLoopContext(
-        messages=InMemoryMessageQueue(),
-        tools=build_native_tool_registry(),
-        project_store=store,
-        user_context_provider=lambda user_id: f"{user_id.upper()}_USER_SENTINEL",
-    )
-
-    alex_task = TaskState(goal="Respond", user="alex", project_id=alex_project.project_id, acceptance_criteria_md="1.- [ ] Reply", metadata={"v3_context_selection": {"selected_context_ids": ["project:" + alex_project.project_id]}})
-    gaby_task = TaskState(goal="Respond", user="gaby", project_id=gaby_project.project_id, acceptance_criteria_md="1.- [ ] Reply", metadata={"v3_context_selection": {"selected_context_ids": ["project:" + gaby_project.project_id]}})
-    alex_prompt = _render_acceptance_criteria_prompt(alex_task, user_context_md=context.user_context_provider('alex'),
-        project_context_md=store.render_project_context(alex_project.project_id, requester_user_id='alex'))
-    gaby_prompt = _render_acceptance_criteria_prompt(gaby_task, user_context_md=context.user_context_provider('gaby'),
-        project_context_md=store.render_project_context(gaby_project.project_id, requester_user_id='gaby'))
-    assert "ALEX_USER_SENTINEL" in alex_prompt
+    alex_prompt = store.render_project_context(alex_project.project_id, requester_user_id='alex')
+    gaby_prompt = store.render_project_context(gaby_project.project_id, requester_user_id='gaby')
     assert "ALEX_PROJECT_SENTINEL" in alex_prompt
-    assert "GABY_USER_SENTINEL" not in alex_prompt
     assert "GABY_PROJECT_SENTINEL" not in alex_prompt
     assert store.render_project_context(gaby_project.project_id, requester_user_id="alex") == ""
-    assert "GABY_USER_SENTINEL" in gaby_prompt
     assert "GABY_PROJECT_SENTINEL" in gaby_prompt
-    assert "ALEX_USER_SENTINEL" not in gaby_prompt
     assert "ALEX_PROJECT_SENTINEL" not in gaby_prompt
 
 
-def test_capd_prompt_uses_the_project_attached_to_each_new_task(tmp_path: Path) -> None:
+def test_project_context_uses_requested_project(tmp_path: Path) -> None:
     store = ProjectStore(":memory:")
     first = store.create_project(name="First", root_path=str(tmp_path / "first"), owner_user_id="alex")
     second = store.create_project(name="Second", root_path=str(tmp_path / "second"), owner_user_id="alex")
     store.write_project_config(first.project_id, {"scope": "FIRST_PROJECT_SENTINEL"}, requester_user_id="alex")
     store.write_project_config(second.project_id, {"scope": "SECOND_PROJECT_SENTINEL"}, requester_user_id="alex")
-    context = CoreLoopContext(messages=InMemoryMessageQueue(), tools=build_native_tool_registry(), project_store=store)
-
-    first_task = TaskState(goal="Respond", user="alex", project_id=first.project_id, acceptance_criteria_md="1.- [ ] Reply", metadata={"v3_context_selection": {"selected_context_ids": ["project:" + first.project_id]}})
-    second_task = TaskState(goal="Respond", user="alex", project_id=second.project_id, acceptance_criteria_md="1.- [ ] Reply", metadata={"v3_context_selection": {"selected_context_ids": ["project:" + second.project_id]}})
-    first_prompt = _render_acceptance_criteria_prompt(first_task, project_context_md=store.render_project_context(first.project_id, requester_user_id='alex'))
-    second_prompt = _render_acceptance_criteria_prompt(second_task, project_context_md=store.render_project_context(second.project_id, requester_user_id='alex'))
+    first_prompt = store.render_project_context(first.project_id, requester_user_id='alex')
+    second_prompt = store.render_project_context(second.project_id, requester_user_id='alex')
     assert "FIRST_PROJECT_SENTINEL" in first_prompt
     assert "SECOND_PROJECT_SENTINEL" not in first_prompt
     assert "SECOND_PROJECT_SENTINEL" in second_prompt

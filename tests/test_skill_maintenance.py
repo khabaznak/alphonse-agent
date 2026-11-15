@@ -10,7 +10,6 @@ import pytest
 from alphonse.agent_v2.core.core import CoreLoopContext
 from alphonse.agent_v2.core.inference import InferencePurpose, InferenceResult
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
-from alphonse.agent_v2.core.intelligence.v3 import HierarchicalCAPDProcessor, TacticalState
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
 from alphonse.agent_v2.core.tools.registry.native import build_native_tool_registry
 from alphonse.agent_v2.core.tools.registry.native.skill_maintain import execute_skill_maintain
@@ -212,17 +211,6 @@ def test_lost_publication_receipt_preserves_truth_and_never_repeats_checks(house
     assert count.read_text() == 'once\n'
 
 
-def test_other_tasks_keep_their_pins_and_external_edits_fail_closed(household):
-    from alphonse.agent_v2.core.intelligence.v3.context import selected_skill_guidance
-    from alphonse.agent_v2.skill_resources import SkillActivationError
-    f = household
-    old_task = TaskState(goal='Use report', user='owner', task_id='other-task')
-    old_task.metadata['v3_skill_selection'] = {'selected_skill_ids': [SKILL]}
-    selected_skill_guidance(old_task, f.core)
-    assert apply(f)['published']
-    with pytest.raises(SkillActivationError, match='package_changed'):
-        selected_skill_guidance(old_task, f.core)
-    assert 'The report prints' in selected_skill_guidance(f.task, f.core)[0]
 
 
 def test_concurrent_target_symlink_never_changes_external_storage(household, monkeypatch):
@@ -244,25 +232,6 @@ def test_concurrent_target_symlink_never_changes_external_storage(household, mon
     assert (f.skills.skills_dir / 'fixture').is_symlink()
 
 
-@pytest.mark.parametrize('caps,effects,allowed', [
-    (['skill_management'], ['local_skill_installation'], False),
-    (['local_shell'], ['local_skill_installation'], False),
-    (['skill_management', 'local_shell'], ['read_only'], False),
-    (['skill_management', 'local_shell'], ['local_skill_installation'], True),
-])
-def test_maintenance_reveal_requires_both_capabilities_and_install_effect(household, caps, effects, allowed):
-    from alphonse.agent_v2.core.intelligence.v3 import PhasePlan, new_tactical_state
-    from alphonse.agent_v2.core.intelligence.v3.revealing import ToolRevealPolicy
-    from alphonse.agent_v2.core.tools.registry.native.skill_maintain import build_skill_maintain_tool_definition
-    f = household
-    phase = PhasePlan.from_dict({'phase_id': 'maintenance', 'objective': 'Repair', 'criterion_ids': ['repair'],
-                                'authorized_capabilities': caps, 'subgoals': [{
-                                    'subgoal_id': 'edit', 'objective': 'Repair resources', 'required_output_type': 'edit',
-                                    'allowed_capabilities': caps, 'allowed_side_effects': effects,
-                                    'completion': {'kind': 'output_present', 'output_type': 'edit'}}]})
-    descriptor = build_skill_maintain_tool_definition(f.skills, is_admin=f.users.is_admin).descriptor
-    revealed = ToolRevealPolicy().reveal(f.task, new_tactical_state(phase), phase.subgoals[0], (descriptor,))
-    assert bool(revealed.tools) is allowed
 
 
 @pytest.mark.parametrize('interruption', ['cancelled', 'revoked'])
@@ -390,55 +359,3 @@ class SystemTwo:
                 value = {'tool_id': 'native.respond', 'arguments': {'message': 'Report verified: 5.'}}
             value['acceptance_questions'] = QUESTION
         return InferenceResult(json_value=value, model_profile=request.model_profile)
-
-
-def processor(f, identity, repair=False):
-    task = TaskState(goal='Repair the report skill' if repair else 'Run the report skill', user='owner',
-                     task_id=identity, message_id=identity, metadata={'routing_disposition': 'pdca_task'})
-    provider = SystemTwo(f, repair)
-    context = CoreLoopContext(messages=InMemoryMessageQueue(), skill_store=f.skills, inference=provider,
-                              system_one=Jev(), tools=build_native_tool_registry(skill_store=f.skills, user_store=f.users))
-    result = HierarchicalCAPDProcessor().process(task, context)
-    return result, task, context
-
-
-def test_failure_diagnosis_repair_and_fresh_use_through_real_processor(household):
-    f = household
-    result, broken, _ = processor(f, 'broken')
-    assert result.status.value != 'completed'
-    state = TacticalState.from_dict(broken.hierarchical_state)
-    assert state.actions[0].status == 'failed'
-    assert 'NameError' in state.actions[0].result['stderr']
-    result, repaired, context = processor(f, 'repair', repair=True)
-    assert result.status.value == 'completed', json.dumps(repaired.metadata, default=str)
-    state = TacticalState.from_dict(repaired.hierarchical_state)
-    assert [a.tool_id for a in state.actions] == ['native.skill_read', 'native.skill_maintain', 'native.respond']
-    assert state.actions[1].result['checks'][0]['exit_code'] == 0
-    assert repaired.metadata['v3_skill_publications'][0]['from'] != repaired.metadata['v3_skill_publications'][0]['to']
-    assert not any(t.tool_id.startswith('artifact.') for t in context.tools.list())
-    result, fresh, _ = processor(f, 'fresh')
-    assert result.status.value == 'completed' and not fresh.project_id
-    assert fresh.metadata['v3_skill_selection']['loaded_skill_ids'] == [SKILL, 'skill:diagnosis']
-    state = TacticalState.from_dict(fresh.hierarchical_state)
-    assert state.actions[0].result['stdout'].strip() == '5'
-    assert 'Report verified: 5' in fresh.metadata['prepared_user_response']['message']
-
-
-def test_failed_validation_cannot_become_processor_success(household):
-    f = household
-    f.invalid_check = True
-    result, task, _ = processor(f, 'failed-repair', repair=True)
-    assert result.status.value != 'completed'
-    state = TacticalState.from_dict(task.hierarchical_state)
-    assert state.actions[-1].status == 'failed'
-    evidence = [e for phase in task.metadata['v3_phase_history'] for e in phase['evidence']['entries']
-                if isinstance(e.get('result'), dict) and e['result'].get('published') is False]
-    assert len({e['evidence_ref'] for e in evidence}) == 1
-    assert 'validation_failed' in evidence[0]['result']['error']
-    assert not task.metadata.get('prepared_user_response')
-    assert 'could not be verified' in task.metadata['v3_failure_response']['message']
-    assert 'retained draft' in task.metadata['v3_failure_response']['message']
-    assert f.skills.read_file(SKILL, 'scripts/report.py') == BROKEN
-
-
-pytestmark = pytest.mark.usefixtures("task_understanding_provider")

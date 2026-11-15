@@ -5,7 +5,6 @@ import pytest
 
 from alphonse.agent_v2.core.memory.formatting import bound_memory_context, join_context_sections
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
-from alphonse.agent_v2.core.intelligence.v3.context import task_context_addenda, task_context_for_decision
 from alphonse.agent_v2.core.core import _task_progress_snapshot
 
 
@@ -31,24 +30,8 @@ def test_every_memory_budget_keeps_whole_records(budget):
     assert "omitted" in rendered
 
 
-def test_v3_and_desktop_preserve_record_status_and_citations():
-    text, blocks = fixture_memory()
-    task = TaskState(user="alex", goal="Filter", memory_context_md=text)
-    for rendered in [task_context_addenda(task)[1], _task_progress_snapshot(task)["durable_memory"]]:
-        assert_complete_records(rendered, blocks)
-        assert "disputed" in rendered
-        assert "sources=conversation:" in rendered
 
 
-def test_final_composed_prompt_does_not_recut_complete_memory_records(monkeypatch):
-    import alphonse.agent_v2.core.intelligence.v3.context as context_module
-    text, blocks = fixture_memory()
-    task = TaskState(user="alex", goal="Filter", memory_context_md=text)
-    monkeypatch.setattr(context_module, "conversation_context", lambda *args, **kwargs: "preamble " * 3550)
-    rendered = task_context_for_decision(task, SimpleNamespace())
-    assert len(rendered) <= 36000
-    assert_complete_records(rendered, blocks)
-    assert "omitted" in rendered
 
 
 def test_unstructured_oversized_memory_is_omitted_instead_of_sliced():

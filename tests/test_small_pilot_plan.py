@@ -12,17 +12,17 @@ from alphonse.agent_v2.evaluation.small_pilot_plan import (
 def test_paired_agenda_includes_all_arms_and_external_anchors():
     agenda = create_agenda(b'pilot protocol', seed='fixed')
     assert agenda == create_agenda(b'pilot protocol', seed='fixed')
-    assert len(agenda['schedule']) == 36
+    assert len(agenda['schedule']) == 16
     counts = Counter((row['case'], row['arm']) for row in agenda['schedule'])
     for case in CASES:
-        for arm in ('v3', 'targeted_v3', 'single_loop'):
+        for arm in ('single_loop',):
             assert counts[(case, arm)] == 2
     assert {case for case, arm in counts if arm == 'external'} == {'clock', 'traffic', 'prescription'}
     assert all(config['availability'] == 'unavailable' for config in agenda['arms'].values())
     assert agenda['kind'] == 'development_agenda_not_frozen_experiment'
     validate_agenda(agenda, b'pilot protocol')
     receipt = readiness_receipt(agenda, b'pilot protocol')
-    assert len(receipt['slots']) == 36 and receipt['attempted'] == 0
+    assert len(receipt['slots']) == 16 and receipt['attempted'] == 0
     assert all(row['passed'] is None and row['attempt_state'] == 'not_started'
                for row in receipt['slots'])
     assert receipt['qualification'] == 'unassessed'

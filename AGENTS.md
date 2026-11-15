@@ -19,10 +19,10 @@ coordinated specialized agents as family needs grow.
 
 ## Agent-loop direction and gym
 
-The owner selected the simpler loop as the target architecture. V3 is a
-temporary production bridge; the simpler loop is not yet qualified for normal
-household conversations. Coordinator issue #230 tracks the gym, safe
-integration, qualification and eventual retirement of the older loops.
+The owner selected the simpler loop as the sole agent-loop architecture and
+directed removal of the V2 and V3 loops. Coordinator issue #230 tracks the gym,
+integration and qualification of the simpler loop. Preserve household data and
+make unsupported capabilities explicit while the simpler loop is developed.
 
 For historical context, open `docs/agent-loop/v3-current-state-2026-11.html`
 and `docs/agent-loop/simpler-loop-proposal-2026-11.html` in a browser. These are
@@ -34,9 +34,9 @@ The evidence and its limitations are documented in
 `docs/v3-hierarchical-capd/38-candidate-recovery-experiment.md`, and
 `docs/v3-hierarchical-capd/39-candidate-conversation-integration.md`.
 
-## V3 decision architecture: System One and System Two
+## Decision architecture: System One and System Two
 
-Version 3 introduces Jev, a model specialized in calibrated decision-making.
+Jev is a model specialized in calibrated decision-making.
 Jev is not a large language model: it does not answer ordinary questions,
 express opinions, generate prose, devise strategies, or compose tool calls.
 Alphonse gives Jev bounded content and explicit decision questions, and Jev
@@ -44,7 +44,7 @@ answers using only three primitives: `Noul`, `Choice`, and `Score`.
 
 Jev is exceptionally fast and inexpensive compared with an LLM. Alphonse can
 submit many independent questions to it in parallel and receive calibrated
-answers in milliseconds. V3 uses this property to shift high-volume decision
+answers in milliseconds. This can shift high-volume decision
 and categorization work that previously required an LLM to Jev, including tool
 relevance, semantic progress, evidence classification, completion judgments,
 and bounded routing choices.
@@ -56,7 +56,7 @@ The resulting architecture is inspired by *Thinking, Fast and Slow*:
 - Regular LLMs provide System Two: deliberate reasoning, planning, strategy,
   tool-call composition, recovery, and user-facing language.
 
-Keep this division clear when changing V3. Do not ask Jev for open-ended
+Keep this division clear when changing the decision architecture. Do not ask Jev for open-ended
 reasoning or text generation, and do not spend an LLM call on a bounded
 classification that fits Jev's primitives. Jev's answers are a probabilistic
 judgment layer, not an authority boundary: deterministic code must continue to
@@ -128,9 +128,9 @@ and `tests/test_legacy_skill_migration.py` before changing migration.
 - Consider persistence, recovery, containment, skill instructions, authorization,
   IPC, Desktop/TUI, progressive revealing and tests when changing this contract.
 
-# Alphonse Version 3 Concepts
+# Alphonse Concepts
 
-Alphonse v3 aims to make interacting with Alphonse reliable and easy for every household member. Conversations should be the normal way to interact; people should not need to remember or select a project just to ask an everyday question. Projects, skills, and memory support the conversation rather than acting as mandatory interaction boundaries.
+Alphonse aims to make interacting with Alphonse reliable and easy for every household member. Conversations should be the normal way to interact; people should not need to remember or select a project just to ask an everyday question. Projects, skills, and memory support the conversation rather than acting as mandatory interaction boundaries.
 
 ## Conversation
 

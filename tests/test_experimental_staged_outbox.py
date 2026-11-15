@@ -12,8 +12,8 @@ import pytest
 from alphonse.agent_v2.core.core import CoreMessage
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_candidate import CandidateState
-from alphonse.agent_v2.core.intelligence.v3.single_loop_checkpoint import ExperimentalCheckpointStore
-from alphonse.agent_v2.core.intelligence.v3.single_loop_delivery_reservation import DeliveryBinding, reserve_delivery
+from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_checkpoint import ExperimentalCheckpointStore
+from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_delivery_reservation import DeliveryBinding, reserve_delivery
 from alphonse.agent_v2.core.intelligence.simple_loop.task_budget import BudgetLimits, TaskBudget
 from alphonse.agent_v2.core.io.experimental_staged_outbox import (
     install_experimental_staging, rollback_empty_experimental_staging, stage_experimental_response,
@@ -221,7 +221,7 @@ import sys
 from datetime import datetime
 from alphonse.agent_v2.core.messages.claim_fence import ClaimReceipt
 from alphonse.agent_v2.core.questions import SQLiteQuestionStore
-from alphonse.agent_v2.core.intelligence.v3.single_loop_checkpoint import ExperimentalCheckpointStore
+from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_checkpoint import ExperimentalCheckpointStore
 from alphonse.agent_v2.core.io.experimental_staged_outbox import restage_experimental_response_after_restart
 path, message_id, user, owner, generation, version, now = sys.argv[1:]
 claim = ClaimReceipt(message_id, user, owner, generation)

@@ -8,7 +8,7 @@ import pytest
 from alphonse.agent_v2.core.core import CoreMessage
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_candidate import CandidateState
-from alphonse.agent_v2.core.intelligence.v3.single_loop_checkpoint import ENGINE, CheckpointConflict, ExperimentalCheckpointStore
+from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_checkpoint import ENGINE, CheckpointConflict, ExperimentalCheckpointStore
 from alphonse.agent_v2.core.intelligence.simple_loop.task_budget import BudgetLimits, BudgetExhausted, TaskBudget
 from alphonse.agent_v2.core.messages.claim_fence import ClaimFenceUnavailable, ClaimSuperseded
 from alphonse.agent_v2.core.messages.experimental_claim_checkpoint import reserve_model_under_claim, settle_model_under_claim

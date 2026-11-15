@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 
 from alphonse.agent_v2.database import default_database_path
-from alphonse.agent_v2.evaluation.resourceful_live import BudgetTransport, read_settings
+from alphonse.agent_v2.evaluation.gym_budget import BudgetTransport, read_settings
 from alphonse.agent_v2.system_one import JevCriterionDecisionProvider
 
 

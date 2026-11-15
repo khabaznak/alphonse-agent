@@ -12,7 +12,7 @@ import json
 from pathlib import Path
 import subprocess
 
-from .resourceful_live import AUDIT_QUESTIONS, BudgetTransport, read_settings
+from .gym_budget import AUDIT_QUESTIONS, BudgetTransport, read_settings
 from alphonse.agent_v2.database import default_database_path
 
 QUESTIONS = dict(AUDIT_QUESTIONS, unnecessary_input_request={

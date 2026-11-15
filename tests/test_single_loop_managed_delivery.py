@@ -8,8 +8,8 @@ import pytest
 
 from test_single_loop_delivery_reservation import setup
 from alphonse.agent_v2.accounts import AccountSession
-from alphonse.agent_v2.core.intelligence.v3.single_loop_delivery_reservation import ACTION_KEY
-from alphonse.agent_v2.core.intelligence.v3.single_loop_managed_delivery import (
+from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_delivery_reservation import ACTION_KEY
+from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_managed_delivery import (
     MANAGED_PREFLIGHT_KEY, reserve_managed_delivery,
 )
 from alphonse.agent_v2.core.messages.claim_fence import ClaimFenceUnavailable
@@ -74,7 +74,7 @@ def test_real_resolver_pins_scoped_preflight_with_reservation(managed, monkeypat
 
 
 def test_lost_managed_preflight_never_becomes_synthetic_recovery(managed):
-    from alphonse.agent_v2.core.intelligence.v3.single_loop_recovery_inspection import inspect_recovery
+    from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_recovery_inspection import inspect_recovery
     setup, _, session, _ = managed
     saved = invoke(managed)
     with setup[2]._connect() as conn:
@@ -86,7 +86,7 @@ def test_lost_managed_preflight_never_becomes_synthetic_recovery(managed):
 
 
 def test_v2_managed_action_stays_pending_for_explicit_reconciliation(managed):
-    from alphonse.agent_v2.core.intelligence.v3.single_loop_recovery_inspection import inspect_recovery
+    from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_recovery_inspection import inspect_recovery
     setup, _, session, _ = managed
     saved = invoke(managed)
     with setup[2]._connect() as conn:
@@ -151,7 +151,7 @@ def test_read_authority_cannot_be_bound_to_delivery(managed):
 
 
 def test_stored_read_preflight_is_not_a_delivery_binding(managed):
-    from alphonse.agent_v2.core.intelligence.v3.single_loop_recovery_inspection import inspect_recovery
+    from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_recovery_inspection import inspect_recovery
     setup, _, session, _ = managed
     saved = invoke(managed)
     with setup[2]._connect() as conn:
@@ -163,7 +163,7 @@ def test_stored_read_preflight_is_not_a_delivery_binding(managed):
 
 
 def test_revocation_writer_cannot_race_locked_reservation(managed, monkeypatch):
-    from alphonse.agent_v2.core.intelligence.v3 import single_loop_managed_delivery as module
+    from alphonse.agent_v2.core.intelligence.simple_loop import single_loop_managed_delivery as module
     original = module._capture
     calls = []
     def capture(conn, **kwargs):
@@ -229,7 +229,7 @@ def test_unscoped_destination_never_reserves(managed):
 
 
 def test_recovery_rechecks_real_authority_without_settling(managed):
-    from alphonse.agent_v2.core.intelligence.v3.single_loop_recovery_inspection import inspect_managed_delivery_authority
+    from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_recovery_inspection import inspect_managed_delivery_authority
     setup, bindings, session, _ = managed
     saved = invoke(managed)
     kwargs = dict(bindings=bindings, task_id='task', expected_version=saved.version, clock=lambda: setup[6])
@@ -243,7 +243,7 @@ def test_recovery_rechecks_real_authority_without_settling(managed):
 
 
 def test_recovery_revocation_during_real_resolution_preserves_marker(managed, monkeypatch):
-    from alphonse.agent_v2.core.intelligence.v3.single_loop_recovery_inspection import inspect_managed_delivery_authority
+    from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_recovery_inspection import inspect_managed_delivery_authority
     setup, bindings, session, _ = managed
     saved = invoke(managed)
     original = bindings.resolve_account
@@ -259,7 +259,7 @@ def test_recovery_revocation_during_real_resolution_preserves_marker(managed, mo
 
 
 def test_recovery_denied_skill_and_unavailable_vault_are_opaque(managed, monkeypatch):
-    from alphonse.agent_v2.core.intelligence.v3.single_loop_recovery_inspection import inspect_managed_delivery_authority
+    from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_recovery_inspection import inspect_managed_delivery_authority
     setup, bindings, session, _ = managed
     saved = invoke(managed)
     kwargs = dict(bindings=bindings, task_id='task', expected_version=saved.version, clock=lambda: setup[6])
@@ -273,7 +273,7 @@ def test_recovery_denied_skill_and_unavailable_vault_are_opaque(managed, monkeyp
 
 
 def test_recovery_expired_claim_or_changed_checkpoint_fails_closed(managed, monkeypatch):
-    from alphonse.agent_v2.core.intelligence.v3.single_loop_recovery_inspection import inspect_managed_delivery_authority
+    from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_recovery_inspection import inspect_managed_delivery_authority
     setup, bindings, session, _ = managed
     saved = invoke(managed)
     args = dict(bindings=bindings, task_id='task', expected_version=saved.version)
@@ -293,7 +293,7 @@ def test_recovery_expired_claim_or_changed_checkpoint_fails_closed(managed, monk
 
 
 def test_recovery_rejects_binding_revision_changed_after_reservation(managed):
-    from alphonse.agent_v2.core.intelligence.v3.single_loop_recovery_inspection import inspect_managed_delivery_authority
+    from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_recovery_inspection import inspect_managed_delivery_authority
     setup, bindings, session, _ = managed
     saved = invoke(managed)
     with bindings.integrations._connect() as conn:
@@ -305,7 +305,7 @@ def test_recovery_rejects_binding_revision_changed_after_reservation(managed):
 
 
 def test_recovery_rejects_clock_regression_between_locked_checks(managed):
-    from alphonse.agent_v2.core.intelligence.v3.single_loop_recovery_inspection import inspect_managed_delivery_authority
+    from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_recovery_inspection import inspect_managed_delivery_authority
     setup, bindings, session, _ = managed
     saved = invoke(managed)
     now = setup[6]
@@ -318,7 +318,7 @@ def test_recovery_rejects_clock_regression_between_locked_checks(managed):
 
 @pytest.mark.parametrize('change', ['version', 'scope', 'project', 'action', 'missing_action'])
 def test_malformed_managed_record_never_projects_recovery_as_clear(managed, change):
-    from alphonse.agent_v2.core.intelligence.v3.single_loop_recovery_inspection import inspect_recovery
+    from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_recovery_inspection import inspect_recovery
     saved = invoke(managed)
     questions, store = managed[0][2], managed[0][3]
     with questions._connect() as conn:

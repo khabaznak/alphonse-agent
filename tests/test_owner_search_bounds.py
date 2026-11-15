@@ -8,7 +8,7 @@ from alphonse.agent_v2.core.core import CoreLoopContext, ProcessingStatus
 from alphonse.agent_v2.core.inference.models import InferenceResult, ModelProfile
 from alphonse.agent_v2.core.inference.router import InferenceRouter
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
-from alphonse.agent_v2.core.intelligence.v3.owner_read_processor import OwnerReadConversationProcessor
+from alphonse.agent_v2.core.intelligence.simple_loop.owner_read_processor import OwnerReadConversationProcessor
 from alphonse.agent_v2.core.intelligence.simple_loop.task_budget import SQLiteTaskBudgetStore
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
 from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry

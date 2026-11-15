@@ -10,7 +10,7 @@ from alphonse.agent_v2.core.core import AlphonseCore, CoreLoopContext, CoreMessa
 from alphonse.agent_v2.core.inference.models import InferencePurpose, InferenceResult, ModelProfile
 from alphonse.agent_v2.core.inference.router import InferenceRouter
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
-from alphonse.agent_v2.core.intelligence.v3.owner_read_processor import OwnerReadConversationProcessor, authorize_trusted_owner_claim
+from alphonse.agent_v2.core.intelligence.simple_loop.owner_read_processor import OwnerReadConversationProcessor, authorize_trusted_owner_claim
 from alphonse.agent_v2.core.intelligence.engine_router import EngineRoutingProcessor
 from alphonse.agent_v2.core.intelligence.simple_loop.task_budget import SQLiteTaskBudgetStore
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
@@ -280,7 +280,7 @@ def test_owner_non_draft_outcomes_cannot_enter_legacy_outbox(tmp_path, monkeypat
     processor = OwnerReadConversationProcessor(users=users, budgets=SQLiteTaskBudgetStore(str(tmp_path / 'budget.db')),
         authorize_claim=lambda *_: outcome != 'failed', save_checkpoint=lambda *_: None)
     if outcome == 'cancelled':
-        monkeypatch.setattr('alphonse.agent_v2.core.intelligence.v3.owner_read_processor.run_candidate',
+        monkeypatch.setattr('alphonse.agent_v2.core.intelligence.simple_loop.owner_read_processor.run_candidate',
                             lambda *_: SimpleNamespace(status='cancelled'))
     result = processor.process(task, ctx)
     assert result.status == (ProcessingStatus.FAILED if outcome == 'failed' else ProcessingStatus.CANCELLED)
@@ -332,7 +332,7 @@ def test_injected_owner_candidate_runs_from_queue_with_real_memory(tmp_path):
     state = SimpleNamespace(value=None)
     state.update = lambda value: setattr(state, 'value', value)
     state.snapshot = lambda: state.value or StateSnapshot()
-    core = AlphonseCore(intelligence=EngineRoutingProcessor(v3=None, owner_read_candidate=processor),
+    core = AlphonseCore(intelligence=EngineRoutingProcessor(owner_read_candidate=processor),
         messages=queue, tools=registry, prompts=object(), state=state, memory=None,
         conversation_store=conversation, inference=inference,
         question_store=SQLiteQuestionStore(tmp_path / 'questions.db'))

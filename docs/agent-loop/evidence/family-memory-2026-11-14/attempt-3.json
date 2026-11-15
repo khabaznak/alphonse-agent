@@ -1,0 +1,130 @@
+{
+  "case": "family-memory-conversation-v1",
+  "attempt": 3,
+  "provider": "Codex CLI ChatGPT subscription",
+  "model": "gpt-6-luna",
+  "status": "waiting",
+  "provider_usage": "reported per call by CLI",
+  "delivery": "not exercised",
+  "start_source_sha256": {
+    "alphonse/agent_v2/core/intelligence/simple_loop/owner_read_processor.py": "8676977af7ebaf4eabb7ede1d239e6c37d69b327ebe6984e3dc0f5dd2e238b59",
+    "alphonse/agent_v2/core/intelligence/simple_loop/single_loop_candidate.py": "668f062d4cf867d36d278e45c2575649d3c5c176ee6530a8509adf91fd13d22a",
+    "alphonse/agent_v2/core/intelligence/simple_loop/router_candidate_chooser.py": "7f8545d96190e45d1bd2ebde77e9a962f7d8f4f8e7a9edb6661b20ae89b93eed",
+    "alphonse/agent_v2/core/intelligence/simple_loop/candidate_decision_policy.py": "ea5869e8d5b9ad2335caf5242006533b073ca80e3115cc4d39cf022f197291f5",
+    "alphonse/agent_v2/evaluation/family_memory_gym.py": "efd1dc3c162b7e704bb95bca8a2be409efc0301df52a4d556d5b4b0f92475d71"
+  },
+  "error": null,
+  "answer": "I remember a few notes: Mira and Theo live in the household, your dog is called Pepper, and the projector needed a new cable for family movie night. Those are historical notes, so I can’t confirm whether they’re still current.",
+  "decisions": [
+    {
+      "kind": "tool",
+      "tool_id": "native.search_memory",
+      "arguments": {
+        "query": "family",
+        "source_types": [
+          "conversation"
+        ],
+        "limit": 30
+      },
+      "text": null
+    },
+    {
+      "kind": "answer",
+      "tool_id": null,
+      "arguments": null,
+      "text": "I remember that Mira and Theo live in your household, and your dog is called Pepper. You also mentioned that the projector needs a new cable for family movie night."
+    },
+    {
+      "kind": "tool",
+      "tool_id": "native.read_memory_source",
+      "arguments": {
+        "source_id": "conversation:b42dcc66-1b37-4aba-8322-45e08ef1490f",
+        "neighbors": 2,
+        "max_chars": 12000
+      },
+      "text": null
+    },
+    {
+      "kind": "tool",
+      "tool_id": "native.read_memory_source",
+      "arguments": {
+        "source_id": "conversation:e85aef50-496a-42c2-a2b0-c138eb0f20b4",
+        "neighbors": 0,
+        "max_chars": 4000
+      },
+      "text": null
+    },
+    {
+      "kind": "tool",
+      "tool_id": "native.read_memory_source",
+      "arguments": {
+        "source_id": "conversation:6f4ca02e-31ac-405e-80dd-dd013aeeb733",
+        "neighbors": 0,
+        "max_chars": 4000
+      },
+      "text": null
+    },
+    {
+      "kind": "answer",
+      "tool_id": null,
+      "arguments": null,
+      "text": "I remember a few notes: Mira and Theo live in the household, your dog is called Pepper, and the projector needed a new cable for family movie night. Those are historical notes, so I can’t confirm whether they’re still current."
+    }
+  ],
+  "synthetic_source_ids": {
+    "people": "conversation:b42dcc66-1b37-4aba-8322-45e08ef1490f",
+    "pet": "conversation:e85aef50-496a-42c2-a2b0-c138eb0f20b4",
+    "unrelated": "conversation:6f4ca02e-31ac-405e-80dd-dd013aeeb733"
+  },
+  "oracle": {
+    "mentions_people": true,
+    "mentions_pet": true,
+    "reads_relevant_sources": true,
+    "omits_unrelated_source": false,
+    "avoids_irrelevant_detail": false,
+    "does_not_invent_child": true
+  },
+  "oracle_pass": false,
+  "provider_calls": 6,
+  "actual_usage_per_call": [
+    {
+      "input_tokens": 43555,
+      "output_tokens": 112
+    },
+    {
+      "input_tokens": 18134,
+      "output_tokens": 60
+    },
+    {
+      "input_tokens": 36533,
+      "output_tokens": 242
+    },
+    {
+      "input_tokens": 37153,
+      "output_tokens": 273
+    },
+    {
+      "input_tokens": 37710,
+      "output_tokens": 222
+    },
+    {
+      "input_tokens": 19073,
+      "output_tokens": 189
+    }
+  ],
+  "elapsed_seconds": 50.258,
+  "end_source_sha256": {
+    "alphonse/agent_v2/core/intelligence/simple_loop/owner_read_processor.py": "8676977af7ebaf4eabb7ede1d239e6c37d69b327ebe6984e3dc0f5dd2e238b59",
+    "alphonse/agent_v2/core/intelligence/simple_loop/single_loop_candidate.py": "668f062d4cf867d36d278e45c2575649d3c5c176ee6530a8509adf91fd13d22a",
+    "alphonse/agent_v2/core/intelligence/simple_loop/router_candidate_chooser.py": "7f8545d96190e45d1bd2ebde77e9a962f7d8f4f8e7a9edb6661b20ae89b93eed",
+    "alphonse/agent_v2/core/intelligence/simple_loop/candidate_decision_policy.py": "ea5869e8d5b9ad2335caf5242006533b073ca80e3115cc4d39cf022f197291f5",
+    "alphonse/agent_v2/evaluation/family_memory_gym.py": "efd1dc3c162b7e704bb95bca8a2be409efc0301df52a4d556d5b4b0f92475d71"
+  },
+  "source_changed_during_attempt": false,
+  "oracle_interpretation": "A premature answer was rejected. Explicit reads included both relevant synthetic sources and the unrelated movie-night source. The final answer contained the unrelated projector detail. This single tuned rerun fails the source-selectivity oracle; it does not establish real-person delivery or general task performance.",
+  "synthetic_sources": {
+    "people": "Family note: Mira and Theo live in the household.",
+    "pet": "Family note: Their dog is called Pepper.",
+    "unrelated": "Family movie night: the projector needs a new cable."
+  }
+}

@@ -13,7 +13,7 @@ from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_candidate impor
 from alphonse.agent_v2.core.intelligence.simple_loop.task_budget import BudgetLimits, SQLiteTaskBudgetStore, SyntheticEvaluationBudgetStore, TaskBudget
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
 from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry, ToolDefinition
-from alphonse.agent_v2.core.intelligence.v3.router_candidate_chooser import RouterCandidateChooser
+from alphonse.agent_v2.core.intelligence.simple_loop.router_candidate_chooser import RouterCandidateChooser
 
 
 class ScriptedProvider:

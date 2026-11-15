@@ -36,27 +36,6 @@ def test_expired_scheduled_send_is_unconfirmed_instead_of_reclaimed(tmp_path):
     assert store.claim_next(OutboundSelector(integration_id="fixture")) is None
 
 
-def test_receipt_wait_timeout_freezes_delivery_instead_of_resending(tmp_path):
-    from alphonse.agent_v2.core.core import CoreLoopContext
-    from alphonse.agent_v2.core.intelligence.task_state import TaskState
-    from alphonse.agent_v2.core.intelligence.v3.processor import _await_scheduled_delivery
-    from alphonse.agent_v2.core.io.outbox import build_outbox_delivery_sink
-    from alphonse.agent_v2.core.messages import InMemoryMessageQueue
-
-    store = SQLiteOutboundStore(tmp_path / "outbox.sqlite3")
-    task = TaskState(task_id="task-1", user="alex", metadata={"source": "scheduled_task", "occurrence_key": "occurrence-1"})
-    outbound = store.enqueue(
-        address=ChannelAddress(integration_id="fixture", provider_key="fixture", channel_target="target"),
-        message="Synthetic reminder", task_id="task-1", audience_user_id="recipient",
-        metadata={"occurrence_key": "occurrence-1"},
-    )
-    context = CoreLoopContext(messages=InMemoryMessageQueue(), delivery_sink=build_outbox_delivery_sink(outbox=store))
-    waiting = {"outbox_message_id": outbound.outbox_message_id, "recipient_user_id": "recipient",
-               "started_at": (datetime.now(timezone.utc) - timedelta(minutes=6)).isoformat()}
-    assert not _await_scheduled_delivery(task, context, waiting)
-    assert task.outcome["reason"] == "scheduled_delivery_outcome_unavailable"
-    assert store.get(outbound.outbox_message_id).status == "unconfirmed"
-    assert store.claim_next(OutboundSelector(integration_id="fixture")) is None
 
 
 def test_outbox_status_migration_preserves_retry_wait(tmp_path):

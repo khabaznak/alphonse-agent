@@ -21,11 +21,11 @@ def test_real_traffic_arms_are_individual_journal_attempts(tmp_path):
     path = tmp_path / 'traffic.jsonl'
     payload = {'actions': [{'operation': 'inspect'}, {'operation': 'search', 'field': 'plate', 'subject': 'TEST-701'}],
                'answer': {'status': 'verified', 'subject': 'TEST-701', 'ticket_ids': ['T-71']}}
-    attempts = [row('ticket', arm, payload) for arm in ('current_v3', 'targeted_v3_projection', 'single_loop')]
+    attempts = [row('ticket', 'single_loop', payload)]
     result = run_synthetic_suite(path, suite_id='traffic-development', attempts=attempts,
         execute=offline(lambda item: run_traffic_arm(item['case_id'], item['arm'], **item['input'])))
     assert result['complete'] and result['valid'] and result['qualification'] == 'unassessed'
-    assert len(result['outcomes']) == 3
+    assert len(result['outcomes']) == 1
     for outcome in result['outcomes'].values():
         assert outcome['passed'] is True
         assert outcome['oracle']['checks'] == {'fixture_only': True}

@@ -6,8 +6,8 @@ import pytest
 from alphonse.agent_v2.accounts import AccountSession
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_candidate import CandidateState
-from alphonse.agent_v2.core.intelligence.v3.single_loop_checkpoint import ENGINE, ExperimentalCheckpointStore
-from alphonse.agent_v2.core.intelligence.v3.single_loop_recovery_inspection import inspect_recovery
+from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_checkpoint import ENGINE, ExperimentalCheckpointStore
+from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_recovery_inspection import inspect_recovery
 from alphonse.agent_v2.core.intelligence.simple_loop.task_budget import BudgetLimits, TaskBudget
 from alphonse.agent_v2.core.questions import SQLiteQuestionStore
 from alphonse.agent_v2.users import V2UserStore
@@ -110,8 +110,8 @@ def test_orphaned_claim_bound_model_marker_is_never_reported_clear(fixture):
 def test_delivery_binding_without_pending_marker_is_not_reported_clear(fixture):
     """A corrupt checkpoint cannot turn an uncertain delivery into no_pending."""
     from dataclasses import asdict
-    from alphonse.agent_v2.core.intelligence.v3.single_loop_checkpoint import STATE_KEY
-    from alphonse.agent_v2.core.intelligence.v3.single_loop_delivery_reservation import ACTION_KEY, ACTION_SCHEMA_VERSION, DeliveryBinding
+    from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_checkpoint import STATE_KEY
+    from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_delivery_reservation import ACTION_KEY, ACTION_SCHEMA_VERSION, DeliveryBinding
 
     _, questions, store, version = fixture
     binding = DeliveryBinding('action', 'fixture', 'provider', 'channel', 'alice', 'a' * 64,
@@ -132,7 +132,7 @@ def test_delivery_binding_without_pending_marker_is_not_reported_clear(fixture):
 
 def test_delivery_binding_cannot_relabel_a_model_reservation(fixture):
     from dataclasses import asdict
-    from alphonse.agent_v2.core.intelligence.v3.single_loop_delivery_reservation import ACTION_KEY, ACTION_SCHEMA_VERSION, DeliveryBinding
+    from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_delivery_reservation import ACTION_KEY, ACTION_SCHEMA_VERSION, DeliveryBinding
 
     _, questions, store, version = fixture
     checkpoint = store.reserve('task', 'alice', expected_version=version, reservation_id='action', kind='model',

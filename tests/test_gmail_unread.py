@@ -140,67 +140,6 @@ def test_tool_cancellation_and_missing_service_are_safe(f):
         tool.callable({}, context=context)
 
 
-def test_fixture_registered_gmail_tool_curation_reveal_and_tactical_execution(f, monkeypatch):
-    """Synthetic Spanish request through real registry, curation and V3 Do.
-
-    The model responses are fixtures; this does not establish live intent accuracy.
-    """
-    from alphonse.agent_v2.core.core import CoreLoopContext
-    from alphonse.agent_v2.core.intelligence.v3 import (
-        PhaseExecutor, PhasePlan, PhaseStatus, PhaseSubgoal, SideEffectClass,
-        CompletionCondition, ToolRevealPolicy, new_tactical_state,
-    )
-    from alphonse.agent_v2.core.intelligence.v3.tool_curation import curate_request_tools
-    from alphonse.agent_v2.core.messages import InMemoryMessageQueue
-    from alphonse.agent_v2.core.tools.registry.native import build_native_tool_registry
-    from alphonse.agent_v2.integrations.gmail import GmailTransport
-    import alphonse.agent_v2.system_one as system_one
-    from alphonse.agent_v2.system_one import JevCriterionDecisionProvider, SystemOneSettings, SystemOneTacticalReview
-
-    connect(f); grant(f, 'one', 'grant')
-    wire = Wire({'id': 'INBOX', 'messagesUnread': 7})
-    monkeypatch.setattr(GmailTransport, 'get', lambda self, path, **kw: wire.get(path, **kw))
-    management = SimpleNamespace(accounts=f.accounts, oauth_factory=lambda session: f.service, oauth=None)
-    runtime = SimpleNamespace(integration_management=management)
-    registry = build_native_tool_registry(management_runtime=runtime)
-    # Production registration is intentionally disabled until an authenticated
-    # private-channel audience contract and account-choice binding exist.
-    assert registry.get('native.gmail_unread_count') is None
-    registry.register(build_gmail_unread_tool_definition(runtime=runtime, delivery_is_private=lambda context: True))
-    assert registry.get('native.gmail_unread_count').metadata['v3_capabilities'] == ['mail_read']
-    requests = []
-    def transport(url, key, payload, timeout):
-        requests.append(payload)
-        return {'answers': {q: {'type': 'noul', 'noul': .95} for q in payload['questions']}}
-    # Fixture-only relevance question; production registration remains disabled.
-    native_templates = dict(system_one._load_jev_native_tool_registry())
-    native_templates['native.gmail_unread_count'] = {'type': 'noul',
-        'instructions': 'Does `request.text` ask for a current Gmail unread count?',
-        'criteria': {'true': 'The requester wants an unread Gmail count.',
-                     'false': 'The requester does not ask for an unread Gmail count.'}}
-    monkeypatch.setattr(system_one, '_load_jev_native_tool_registry', lambda: native_templates)
-    jev = JevCriterionDecisionProvider(SystemOneSettings(api_key='fixture-secret'), transport=transport)
-    task = TaskState(task_id='gmail-test', user='owner', goal='Hola Alphonse, puedes ver mi gmail? cuántos correos nuevos tengo sin revisar?')
-    context = CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry, system_one=jev)
-    selected = curate_request_tools(task, registry.list(), context)
-    assert 'native.gmail_unread_count' in {row.tool_id for row in selected}
-    assert len(requests) == 1 and any('Gmail unread count' in q['instructions'] for q in requests[0]['questions'].values())
-    assert task.metadata['v3_request_tool_curation']['status'] == 'used'
-    stage = PhaseSubgoal('count', 'Count unread inbox messages', 'gmail_count',
-        allowed_capabilities=('mail_read',), allowed_side_effects=(SideEffectClass.READ_ONLY,),
-        completion=CompletionCondition('field_equals', field='status', expected='complete'))
-    state = new_tactical_state(PhasePlan('phase', 'Get current Gmail count', (stage,), authorized_capabilities=('mail_read',)))
-    context.system_one = SimpleNamespace(evaluate_tactical_progress=lambda **kw: SystemOneTacticalReview(
-        complete=True, confidence=.99, confident=True, answers={'runtime_declared_subgoal_complete': .99}))
-    selected_actions = []
-    def select(state, subgoal, tools):
-        selected_actions.append([t.tool_id for t in tools])
-        return {'tool_id': 'native.gmail_unread_count', 'arguments': {}}
-    outcome = PhaseExecutor(action_selector=select, reveal_policy=ToolRevealPolicy()).run(task, state, context)
-    assert outcome.status == PhaseStatus.PHASE_COMPLETE, (outcome, state.to_dict())
-    assert len(selected_actions) == 1 and 'native.gmail_unread_count' in selected_actions[0]
-    assert len(wire.calls) == 1 and wire.calls[0][0] == 'labels/INBOX'
-    assert state.actions[0].result['count'] == 7
 
 
 def test_choice_candidates_are_reauthorized_before_disclosure(f, monkeypatch):

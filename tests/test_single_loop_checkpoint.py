@@ -6,7 +6,7 @@ import pytest
 
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_candidate import CandidateState
-from alphonse.agent_v2.core.intelligence.v3.single_loop_checkpoint import (
+from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_checkpoint import (
     ENGINE, STATE_KEY, CheckpointConflict, ExperimentalCheckpointStore,
 )
 from alphonse.agent_v2.core.intelligence.simple_loop.task_budget import BudgetExhausted, BudgetLimits, TaskBudget

@@ -12,7 +12,6 @@ from alphonse.agent_v2.artifacts import SQLiteArtifactStore
 from alphonse.agent_v2.artifact_resources import ArtifactResources
 from alphonse.agent_v2.core.core import CoreLoopContext, ToolExecutionContext
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
-from alphonse.agent_v2.core.intelligence.v3.context import selected_skill_guidance
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
 from alphonse.agent_v2.core.projects import ProjectStore
 from alphonse.agent_v2.core.tools.registry.native.bash import execute_bash, BASH_ARGUMENT_SCHEMA
@@ -72,41 +71,6 @@ def context(f, actor='owner'):
                                 artifact_resources=f.resources, skill_bindings=f.bindings)
 
 
-def test_inventory_apply_no_project_execution_and_rollback(legacy, monkeypatch, tmp_path):
-    f = legacy
-    report = preview(f)
-    assert report['source']['owner_user_id'] == 'owner'
-    assert report['skill_id'] == f.skill.skill_id
-    assert report['runtime_path'] == str(Path(sys.executable).absolute())
-    assert report['configuration_paths'][0]['path'] == str(f.directory / 'config.env')
-    assert 'SYNTHETIC_SECRET' not in json.dumps(report)
-    assert report['file_moves'] == []
-    result = apply(f)
-    after = (Path(f.skill.directory) / 'SKILL.md').read_bytes()
-    assert b'Artifact ID:' not in after and b'KEEP_OTHER_WORKFLOW' in after
-    assert b'REVIEWED_PRIVATE' not in after  # Paths/instructions stay actor-scoped.
-    assert f.store.get(f.record.artifact_id) == f.record  # Provenance unchanged.
-    assert apply(f) == result
-    assert (Path(f.skill.directory) / 'SKILL.md').read_bytes() == after
-    monkeypatch.chdir(tmp_path)
-    ctx = context(f)
-    text, loaded = selected_skill_guidance(ctx.task, CoreLoopContext(messages=ctx.messages, skill_store=f.skills,
-        artifact_resources=f.resources, skill_bindings=f.bindings))
-    assert loaded == [f.skill.skill_id]
-    assert 'REVIEWED_PRIVATE' in text and 'KEEP_OTHER_WORKFLOW' in text
-    assert f.record.artifact_id not in text and 'artifact_id' not in text
-    assert 'SYNTHETIC_SECRET' not in text and 'OLD_PRIVATE' not in text
-    assert 'PRIVATE_LEGACY_SUBHEADING' not in text
-    response = execute_bash({'skill_id': f.skill.skill_id, 'binding_names': [result['binding_name']],
-        'command': report['suggested_command']}, context=ctx)
-    assert response['exit_code'] == 0 and response['stdout'].strip() == 'original household data'
-    assert f.migration.rollback('owner', f.record.artifact_id)['state'] == 'rolled_back'
-    assert f.migration.rollback('owner', f.record.artifact_id)['state'] == 'rolled_back'
-    assert (Path(f.skill.directory) / 'SKILL.md').read_bytes() == f.before
-    assert (f.directory / 'data.txt').read_text() == 'original household data'
-    assert (f.directory / 'reader.py').read_text().startswith('from pathlib')
-    assert (f.directory / 'config.env').read_text() == 'SYNTHETIC_SECRET_NOT_FOR_PROMPTS'
-    assert apply(f)['state'] == 'complete'
 
 
 def test_access_and_binding_revocation(legacy):
@@ -258,13 +222,6 @@ def test_unassigned_record_needs_explicit_skill_mapping(legacy):
     assert not f.store.get(f.record.artifact_id).skill_id  # Original provenance preserved.
 
 
-def test_private_legacy_subheadings_never_load_before_migration(legacy):
-    f = legacy
-    ctx = context(f, 'stranger')
-    text, _ = selected_skill_guidance(ctx.task, CoreLoopContext(messages=ctx.messages, skill_store=f.skills,
-        artifact_resources=f.resources, skill_bindings=f.bindings))
-    assert 'PRIVATE_LEGACY_SUBHEADING' not in text
-    assert 'OLD_PRIVATE' not in text
 
 
 def test_lifecycle_preserves_migrated_external_data_and_blocks_embedded_data(legacy, tmp_path):

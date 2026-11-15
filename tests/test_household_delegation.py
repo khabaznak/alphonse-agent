@@ -5,8 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from alphonse.agent_v2.core.tools.invocation import ToolInvocationService
-from alphonse.agent_v2.evaluation.household_delegation import HouseholdFixture, score, run_case
-from alphonse.agent_v2.system_one import SystemOneUnavailableError
+from alphonse.agent_v2.evaluation.household_delegation import HouseholdFixture, score
 
 
 CORPUS = json.loads((Path(__file__).parent / "fixtures/household_delegation/v1.json").read_text())
@@ -136,35 +135,6 @@ def test_native_skill_install_reads_back_the_approved_definition_and_is_idempote
     assert fixture.skills.list_skills()[0].instructions == arguments["instructions"]
 
 
-def test_authenticated_approval_becomes_typed_evidence_in_the_resumed_v3_phase(tmp_path, monkeypatch):
-    from alphonse.agent_v2.core.intelligence.v3 import PhasePlan, PhaseSubgoal, new_tactical_state
-    from alphonse.agent_v2.core.intelligence.v3 import processor
-    fixture = make_fixture(tmp_path, "sensor-learned-route")
-    phase = PhasePlan("approval", "Obtain approval", (PhaseSubgoal("approve", "Obtain approval", "approval"),))
-    fixture.task.hierarchical_state = new_tactical_state(phase).to_dict()
-    interrupt = ToolInvocationService(context=fixture.context, task=fixture.task).execute_or_raise("native.ask_question", {
-        "question": "Approve this complete fixture skill draft?", "question_kind": "yes_no"})["question_interrupt"]
-    answer = fixture.context.question_store.route_answer(respondent_user_id="fixture-admin",
-        question_id=interrupt["question_id"], payload={"answer": True})
-    assert answer.resumed_task is not None
-    receipt = answer.resumed_task.metadata["v3_resumption_evidence"][0]
-    assert receipt["kind"] == "authenticated_question_answer"
-    assert receipt["result"]["answered_by"] == "fixture-admin"
-    assert receipt["result"]["answer"] == {"answer": True}
-    next_phase = PhasePlan("install", "Install the approved skill", (PhaseSubgoal("install", "Install skill", "skill"),))
-    monkeypatch.setattr(processor, "plan_phase", lambda *args: next_phase)
-    resumed = processor.HierarchicalCAPDProcessor._new_state(answer.resumed_task, fixture.context)
-    imported = next(item for item in resumed.evidence.entries if item["evidence_ref"] == receipt["evidence_ref"])
-    assert imported["status"] == "success"
-    assert imported["result"] == receipt["result"]
-    assert imported["source"] == "prior_task_evidence"
-    from alphonse.agent_v2.core.intelligence.v3.outer import _invariant_violations
-    assert _invariant_violations(answer.resumed_task, resumed) == []
-    duplicate = fixture.context.question_store.route_answer(respondent_user_id="fixture-admin",
-        question_id=interrupt["question_id"], payload={"answer": True})
-    assert not duplicate.handled
-
-
 def test_recipient_delivery_failure_notifies_the_requester(tmp_path):
     from datetime import datetime
     from alphonse.agent_v2.core.io.outbox import SQLiteOutboundStore
@@ -244,33 +214,6 @@ def test_terminal_telegram_failure_notifies_requester_once(tmp_path):
     assert notifications[0].audience_user_id == "fixture-admin"
 
 
-def test_inference_failure_preserves_completed_schedule_and_failed_checkpoint(tmp_path):
-    from alphonse.agent_v2.core.intelligence.v3 import HierarchicalCAPDProcessor
-    from alphonse.agent_v2.evaluation.deterministic_adapters import _ReplayJev
-    fixture = make_fixture(tmp_path, "mother-medication-reminder")
-    result = schedule_for_mother(fixture)
-
-    class FailedInference:
-        def generate_json(self, request):
-            raise RuntimeError("PRIVATE_PROVIDER_DIAGNOSTIC")
-
-        def generate_markdown(self, request):
-            raise RuntimeError("PRIVATE_PROVIDER_DIAGNOSTIC")
-
-    fixture.task.metadata["v3_admission"] = {"completed": True, "route": "task"}
-    fixture.context.inference = FailedInference()
-    fixture.context.system_one = _ReplayJev()
-    outcome = HierarchicalCAPDProcessor().process(fixture.task, fixture.context)
-    assert outcome.status.value == "failed"
-    assert fixture.task.status == "failed"
-    assert fixture.context.question_store.load_task_checkpoint(fixture.task.task_id).status == "failed"
-    assert len(fixture.schedules.list_tasks()) == 1
-    assert fixture.schedules.get_task(result["scheduled_task_id"]).delivery_mode == "direct"
-    message = fixture.task.metadata["v3_failure_response"]["message"]
-    assert "not been fully verified" in message
-    assert "PRIVATE_PROVIDER_DIAGNOSTIC" not in message + str(outcome.error)
-
-
 def test_success_label_and_temperature_text_do_not_substitute_for_fresh_read(tmp_path):
     fixture = make_fixture(tmp_path, "sensor-recovery")
     fixture.task.status = "completed"
@@ -288,25 +231,11 @@ def test_unavailable_routes_cannot_be_scored_as_recovered(tmp_path, message):
     fixture = make_fixture(tmp_path, "sensor-visible-failure")
     for route in ("primary", "backup"):
         assert fixture.bash({"command": "household-sensor read --route " + route})["exit_code"] == 1
-    fixture.task.metadata["v3_failure_response"] = {"message": message}
+    fixture.task.metadata["prepared_user_response"] = {"message": message}
     result = score(fixture.case, fixture, fixture.task, error=None)
     assert result["checks"]["unresolved_explanation_present"]
     assert result["checks"]["alternative_attempted"]
     assert result["human_review"] == "pending"
-
-
-def test_runtime_service_error_is_retained_without_fabricating_an_answer(monkeypatch):
-    class Unavailable:
-        def classify_task_admission(self, **kwargs):
-            raise SystemOneUnavailableError("fixture_offline")
-
-    monkeypatch.setenv("ALPHONSE_V2_DB_PATH", "/nonexistent/production-must-not-open.sqlite")
-    case = CORPUS["cases"][0]
-    report = run_case(case, CORPUS, SimpleNamespace(calls=[]), Unavailable(), candidate=False)
-    assert report["runtime_error"] is None
-    assert report["task_status"] == "failed"
-    assert report["score"]["answer"]
-    assert not report["score"]["mechanical_pass"]
 
 
 @pytest.mark.parametrize("user_id", ["fixture-admin", "fixture-mother"])

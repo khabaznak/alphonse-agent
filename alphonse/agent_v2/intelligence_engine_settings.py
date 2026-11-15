@@ -1,4 +1,4 @@
-"""Persistent default and rollback settings for the hierarchical V3 engine."""
+"""Persist the selected simple-loop engine without rewriting legacy tasks."""
 
 from __future__ import annotations
 
@@ -10,15 +10,13 @@ from pathlib import Path
 
 from alphonse.agent_v2.database import connect_database, default_database_path
 
-TACTICAL_V2 = "tactical_v2"
-HIERARCHICAL_V3 = "hierarchical_v3"
-VALID_ENGINES = {HIERARCHICAL_V3}
+SIMPLE_LOOP = "single_loop_experimental"
+VALID_ENGINES = {SIMPLE_LOOP}
 
 
 @dataclass(frozen=True)
 class IntelligenceEngineSettings:
-    default_engine: str = HIERARCHICAL_V3
-    v3_project_ids: tuple[str, ...] = ()
+    default_engine: str = SIMPLE_LOOP
     updated_at: str = ""
 
     def __post_init__(self) -> None:
@@ -26,10 +24,10 @@ class IntelligenceEngineSettings:
             raise ValueError("intelligence_engine_invalid")
 
     def engine_for(self, project_id: str) -> str:
-        return HIERARCHICAL_V3 if str(project_id or "") in set(self.v3_project_ids) else self.default_engine
+        return self.default_engine
 
     def to_dict(self) -> dict[str, object]:
-        return {"default_engine": self.default_engine, "v3_project_ids": list(self.v3_project_ids), "updated_at": self.updated_at}
+        return {"default_engine": self.default_engine, "updated_at": self.updated_at}
 
 
 class SQLiteIntelligenceEngineSettingsStore:
@@ -49,20 +47,16 @@ class SQLiteIntelligenceEngineSettingsStore:
             row = conn.execute("SELECT * FROM v2_intelligence_engine_settings WHERE settings_id=1").fetchone()
         if row is None:
             return IntelligenceEngineSettings()
-        return IntelligenceEngineSettings(
-            # Retired preferences affect new work only, never saved tasks.
-            default_engine=(HIERARCHICAL_V3 if str(row["default_engine"]) == TACTICAL_V2
-                            else str(row["default_engine"])),
-            v3_project_ids=tuple(str(item) for item in json.loads(str(row["v3_project_ids_json"]))),
-            updated_at=str(row["updated_at"]),
-        )
+        # Historical preferences cannot reactivate a retired engine. Keep the
+        # row untouched and retain each old task's original engine stamp.
+        return IntelligenceEngineSettings(updated_at=str(row["updated_at"]))
 
     def save(self, settings: IntelligenceEngineSettings) -> IntelligenceEngineSettings:
-        validated = IntelligenceEngineSettings(settings.default_engine, tuple(dict.fromkeys(settings.v3_project_ids)))
+        validated = IntelligenceEngineSettings(settings.default_engine)
         with self._connect() as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO v2_intelligence_engine_settings(settings_id,default_engine,v3_project_ids_json,updated_at) VALUES(1,?,?,?)",
-                (validated.default_engine, json.dumps(list(validated.v3_project_ids)), datetime.now(timezone.utc).isoformat()),
+                (validated.default_engine, json.dumps([]), datetime.now(timezone.utc).isoformat()),
             )
         return self.get()
 
@@ -76,7 +70,7 @@ class SQLiteIntelligenceEngineSettingsStore:
         with self._connect() as conn:
             conn.execute("""CREATE TABLE IF NOT EXISTS v2_intelligence_engine_settings(
                 settings_id INTEGER PRIMARY KEY CHECK(settings_id=1),
-                default_engine TEXT NOT NULL DEFAULT 'hierarchical_v3',
+                default_engine TEXT NOT NULL DEFAULT 'single_loop_experimental',
                 v3_project_ids_json TEXT NOT NULL DEFAULT '[]',
                 updated_at TEXT NOT NULL
             ) STRICT""")

@@ -68,132 +68,6 @@ def _summarize_events(events: list[dict]) -> dict:
             'estimate_note': 'Per-call provenance is in events; mixed totals include estimates and may omit provider framing or reasoning.'}
 
 
-class _TrackedProvider:
-    """Record observed V3 calls without changing provider behavior or storing text."""
-    def __init__(self, provider, emit, trace=None):
-        self.provider, self.emit, self.trace = provider, emit, trace
-        self.supports_image_input = getattr(provider, 'supports_image_input', False)
-
-    def _call(self, name, request):
-        from alphonse.agent_v2.core.inference.openai_codex import (
-            _json_envelope, _markdown_envelope, _tool_planning_envelope,
-        )
-        observed = {'generate_json': _json_envelope, 'generate_markdown': _markdown_envelope,
-                    'plan_tool_call': _tool_planning_envelope}[name](request)
-        start = monotonic()
-        try:
-            result = getattr(self.provider, name)(request)
-        except Exception:
-            self.emit({'kind': 'system_two', 'status': 'failed',
-                       'elapsed_seconds': monotonic() - start,
-                       'usage_diagnostics': usage_diagnostics(input_text=observed, output_text=None)})
-            raise
-        if self.trace is not None:
-            value = getattr(result, 'json_value', None)
-            tool = value.get('tool_id') if isinstance(value, dict) else None
-            self.trace({'event': 'model_decision', 'arm': 'v3',
-                        'purpose': getattr(getattr(request, 'purpose', None), 'value', 'unknown'),
-                        'tool': tool if isinstance(tool, str) and tool in {'native.fixture_read', 'native.respond', 'native.ask_question'} else None,
-                        'structured_output': isinstance(value, dict)})
-        self.emit({'kind': 'system_two', 'status': 'returned',
-                   'elapsed_seconds': monotonic() - start,
-                   'usage_diagnostics': usage_diagnostics(input_text=observed,
-                       output_text=getattr(result, 'raw_response', None) or getattr(result, 'content', None) or None,
-                       provider_usage=getattr(result, 'usage', None))})
-        return result
-
-    def generate_json(self, request):
-        return self._call('generate_json', request)
-
-    def generate_markdown(self, request):
-        return self._call('generate_markdown', request)
-
-    def plan_tool_call(self, request):
-        return self._call('plan_tool_call', request)
-
-
-def _run_v3(*, url: str, provider: Any, jev: Any, model: str,
-            emit: Callable[[dict], None], cancelled: Callable[[], bool], trace=None,
-            goal: str = GOAL, source_description: str = 'Read the synthetic clock source.',
-            allowed_source_names: tuple[str, ...] = ('index',),
-            required_source_names: tuple[str, ...] = ('index',)):
-    """Run the actual V3 processor; injected provider and Jev are not mocked here."""
-    if jev is None:
-        raise ValueError('v3_requires_system_one')
-    from alphonse.agent_v2.core.core import CoreLoopContext, ToolDescriptor, ToolKind
-    from alphonse.agent_v2.core.inference import InferenceRouter, ModelProfile
-    from alphonse.agent_v2.core.intelligence.task_state import TaskState
-    from alphonse.agent_v2.core.intelligence.v3 import HierarchicalCAPDProcessor
-    from alphonse.agent_v2.core.messages import InMemoryMessageQueue
-    from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry, ToolDefinition
-    from alphonse.agent_v2.core.tools.registry.native.respond import build_respond_tool_definition
-    from .simplified_loop import Run
-
-    if (not isinstance(required_source_names, tuple) or not required_source_names
-            or not set(required_source_names) <= set(allowed_source_names)):
-        raise ValueError('invalid_required_sources')
-    source = LocalSource(url, allowed_source_names=allowed_source_names)
-    def diagnostic(event):
-        if trace is not None:
-            try:
-                trace(event)
-            except Exception:
-                pass
-    registry = InMemoryToolRegistry()
-    source_schema = ({'const': 'index'} if allowed_source_names == ('index',)
-                     else {'type': 'string', 'enum': list(allowed_source_names)})
-    descriptor = ToolDescriptor('native.fixture_read', 'fixture_read', ToolKind.NATIVE,
-        description=source_description,
-        argument_schema={'type': 'object', 'properties': {'source': source_schema},
-                         'required': ['source'], 'additionalProperties': False},
-        metadata={'v3_capabilities': ['project_record_search']}, read_only=True)
-
-    def read(args):
-        name = args.get('source') if isinstance(args, dict) else None
-        name = name if isinstance(name, str) and name in allowed_source_names else None
-        diagnostic({'event': 'source_read_attempt', 'arm': 'v3', 'source': name})
-        if cancelled():
-            raise ValueError('clock_cancelled_before_read')
-        emit({'kind': 'tool', 'tool': 'native.fixture_read'})
-        result = source.read(args)
-        if cancelled():
-            raise ValueError('clock_cancelled_after_read')
-        emit({'kind': 'source_read', 'source': args['source']})
-        diagnostic({'event': 'source_read_observed', 'arm': 'v3', 'source': name})
-        return result
-
-    registry.register(ToolDefinition(descriptor, read, descriptor.argument_schema,
-                                     enabled=True, accepts_context=False))
-    # Use the product's real response descriptor, schema and local payload
-    # builder. The deterministic fixture's generic read-only descriptor
-    # misrepresents a user response; this tool only prepares a payload and
-    # does not send a message or establish user-visible delivery.
-    response_tool = build_respond_tool_definition()
-    def respond(args):
-        emit({'kind': 'tool', 'tool': 'native.respond'})
-        result = response_tool.callable(args)
-        diagnostic({'event': 'response_prepared', 'arm': 'v3'})
-        return result
-    registry.register(ToolDefinition(response_tool.descriptor, respond, response_tool.argument_schema,
-                                     enabled=response_tool.enabled, accepts_context=response_tool.accepts_context))
-    router = InferenceRouter(provider=_TrackedProvider(provider, emit, trace), default_profile=ModelProfile(
-        provider='openai_codex', model=model, profile_id='codex-clock'))
-    task = TaskState(task_id='codex-v3-clock', message_id='codex-v3-clock', user=ACTOR,
-                     project_id='synthetic-clock', goal=goal,
-                     intelligence_engine='hierarchical_v3', intelligence_schema_version=3)
-    context = CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry,
-                              inference=router, system_one=jev, cancellation_checker=cancelled)
-    result = HierarchicalCAPDProcessor().process(task, context)
-    final = TaskState.from_dict(result.snapshot.metadata.get('task_state') or task.to_dict())
-    response = final.metadata.get('prepared_user_response') or {}
-    reason = str((final.outcome or {}).get('reason') or '') or None
-    diagnostic({'event': 'terminal', 'arm': 'v3',
-                'status': final.status if final.status in {'completed', 'failed', 'cancelled', 'waiting_user', 'blocked', 'running'} else 'other',
-                'response_accepted': bool(response), 'reason_category': _reason_category(reason)})
-    return Run(status=final.status, response=str(response.get('message') or ''),
-               reason=reason)
-
-
 def _run_simple(*, url: str, provider: Any, model: str,
                 emit: Callable[[dict], None], cancelled: Callable[[], bool], trace=None,
                 goal: str = GOAL, source_description: str = 'Read the synthetic clock source.',
@@ -348,7 +222,7 @@ def run_clock_arm(*, arm: str, provider: Any, model: str, jev: Any = None,
     hard timeout, or send real user-facing messages.
     """
     from .codex_subscription_provider import CodexSubscriptionProvider
-    if arm not in {'v3', 'simple'}:
+    if arm != 'simple':
         raise ValueError('unsupported_clock_arm')
     if not isinstance(model, str) or not model.strip():
         raise ValueError('model_required')
@@ -371,9 +245,7 @@ def run_clock_arm(*, arm: str, provider: Any, model: str, jev: Any = None,
                 pass  # Diagnostic failures must not alter the processor.
     with LoopbackClockPilot(instant_utc, timezone) as fixture:
         try:
-            run = (_run_v3(url=fixture.url, provider=provider, jev=jev, model=model, emit=events.append, cancelled=cancelled, trace=safe_trace if private_trace else None)
-                   if arm == 'v3' else
-                   _run_simple(url=fixture.url, provider=provider, model=model, emit=events.append, cancelled=cancelled, trace=safe_trace if private_trace else None))
+            run = _run_simple(url=fixture.url, provider=provider, model=model, emit=events.append, cancelled=cancelled, trace=safe_trace if private_trace else None)
             error = None
         except Exception as exc:
             # No provider or source exception text can leak secrets into summary.
@@ -394,33 +266,31 @@ def run_clock_arm(*, arm: str, provider: Any, model: str, jev: Any = None,
             'qualification': 'unassessed',
             'limitations': ['Synthetic fixture and tools, not the full desktop conversation path.',
                             'Subscription login checks do not prove billing mode during dispatch.',
-                            'Candidate locally checks a 16384-byte visible output bound; V3 is not identically bounded.',
                             'Missing candidate provider usage is unknown; synthetic accounting retains the full reservation.',
-                            'Jev is separate and required by the V3 arm.',
                             'Timeout is cooperative; in-flight work may overrun.']}
 
 
-def compare_clock(*, provider: Any, model: str, jev_factory: Callable[[], Any],
+def compare_clock(*, provider: Any, model: str,
                   repetitions: int = 1, timeout_seconds: float = 100,
                   private_trace: Callable[[dict], None] | None = None) -> dict:
-    """Run both arms on fresh clocks; never a production rollout or implicit provider call.
+    """Run the simple loop on fresh clocks; never a production rollout or implicit provider call.
 
     This function calls the explicitly supplied provider and is not invoked at
-    import. The user must authorize live Codex and Jev use before calling it with
-    enabled providers. Two repetitions alternate arm order to reduce order bias.
+    import. The user must authorize live Codex use before calling it with
+    enabled providers. Repetitions run on separate fixtures.
     The caller must retain output as synthetic evaluation data only.
     """
     from .codex_subscription_provider import CodexSubscriptionProvider
     if type(provider) is not CodexSubscriptionProvider or provider.model != model:
         raise ValueError('matching_codex_subscription_provider_required')
-    if not callable(jev_factory) or type(repetitions) is not int or not 1 <= repetitions <= 10:
+    if type(repetitions) is not int or not 1 <= repetitions <= 10:
         raise ValueError('invalid_comparison_configuration')
     results = []
     for repetition in range(1, repetitions + 1):
-        order = ('v3', 'simple') if repetition % 2 else ('simple', 'v3')
+        order = ('simple',)
         for arm in order:
             try:
-                jev = jev_factory() if arm == 'v3' else None
+                jev = None
                 result = run_clock_arm(arm=arm, provider=provider, model=model, jev=jev,
                                        timeout_seconds=timeout_seconds, private_trace=private_trace)
             except Exception as exc:
@@ -430,9 +300,9 @@ def compare_clock(*, provider: Any, model: str, jev_factory: Callable[[], Any],
                           'oracle': None, 'events': [], 'delivery': 'unassessed',
                           'qualification': 'unassessed'}
             results.append({'repetition': repetition, **result})
-    return {'kind': 'synthetic_clock_v3_vs_simple', 'model': model, 'runs': results,
+    return {'kind': 'synthetic_clock_simple_loop', 'model': model, 'runs': results,
             'qualification': 'unassessed',
             'limitations': ['Fresh fixtures; this does not run the full Alphonse desktop flow.',
                             'Verify ChatGPT subscription authentication before any live run.',
                             'Codex usage may be estimated, not provider reported.',
-                            'Jev and actual user delivery remain separate observability boundaries.']}
+                            'Actual user delivery remains unassessed.']}

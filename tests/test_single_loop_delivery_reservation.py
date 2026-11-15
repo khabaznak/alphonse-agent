@@ -9,8 +9,8 @@ import pytest
 from alphonse.agent_v2.core.core import CoreMessage
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_candidate import CandidateState
-from alphonse.agent_v2.core.intelligence.v3.single_loop_checkpoint import ENGINE, ExperimentalCheckpointStore
-from alphonse.agent_v2.core.intelligence.v3.single_loop_delivery_reservation import ACTION_KEY, DeliveryBinding, reserve_delivery
+from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_checkpoint import ENGINE, ExperimentalCheckpointStore
+from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_delivery_reservation import ACTION_KEY, DeliveryBinding, reserve_delivery
 from alphonse.agent_v2.core.intelligence.simple_loop.task_budget import BudgetLimits, TaskBudget
 from alphonse.agent_v2.core.messages.claim_fence import ClaimFenceUnavailable, ClaimSuperseded
 from alphonse.agent_v2.core.messages.sqlite_queue import SQLiteMessageQueue
@@ -86,7 +86,7 @@ def test_binding_rejects_invalid_grant_identity(setup, field, value):
 def test_v1_action_is_not_adopted_or_reconciled_by_guessing(setup):
     import json
     from alphonse.agent_v2.accounts import AccountSession
-    from alphonse.agent_v2.core.intelligence.v3.single_loop_recovery_inspection import inspect_delivery_binding
+    from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_recovery_inspection import inspect_delivery_binding
 
     _, _, questions, store, claim, _, now, binding = setup
     saved = reserve(setup)
@@ -106,7 +106,7 @@ def test_v1_action_is_not_adopted_or_reconciled_by_guessing(setup):
 def test_v3_action_without_claim_binding_remains_unresolved(setup):
     import json
     from alphonse.agent_v2.accounts import AccountSession
-    from alphonse.agent_v2.core.intelligence.v3.single_loop_recovery_inspection import inspect_delivery_binding, inspect_recovery
+    from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_recovery_inspection import inspect_delivery_binding, inspect_recovery
 
     _, _, questions, store, claim, _, now, binding = setup
     saved = reserve(setup)
@@ -228,7 +228,7 @@ def test_competing_reservations_from_same_version_have_one_winner(setup):
 
 def test_recovery_inspection_requires_exact_binding_and_leaves_marker_untouched(setup):
     from alphonse.agent_v2.accounts import AccountSession
-    from alphonse.agent_v2.core.intelligence.v3.single_loop_recovery_inspection import inspect_delivery_binding
+    from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_recovery_inspection import inspect_delivery_binding
 
     _, _, questions, store, claim, _, now, binding = setup
     saved = reserve(setup)
@@ -254,7 +254,7 @@ def test_recovery_inspection_requires_exact_binding_and_leaves_marker_untouched(
 def test_recovery_inspection_rejects_tampered_binding_and_inactive_owner(setup):
     import json
     from alphonse.agent_v2.accounts import AccountSession
-    from alphonse.agent_v2.core.intelligence.v3.single_loop_recovery_inspection import inspect_delivery_binding
+    from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_recovery_inspection import inspect_delivery_binding
 
     _, users, questions, store, claim, _, now, binding = setup
     saved = reserve(setup)
@@ -275,7 +275,7 @@ def test_recovery_inspection_rejects_tampered_binding_and_inactive_owner(setup):
 def test_recovery_inspection_rejects_boolean_revision_even_when_python_equal(setup, field):
     import json
     from alphonse.agent_v2.accounts import AccountSession
-    from alphonse.agent_v2.core.intelligence.v3.single_loop_recovery_inspection import inspect_delivery_binding
+    from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_recovery_inspection import inspect_delivery_binding
 
     _, _, questions, store, claim, _, now, binding = setup
     saved = reserve(setup)
@@ -291,7 +291,7 @@ def test_recovery_inspection_rejects_boolean_revision_even_when_python_equal(set
 
 def test_recovery_inspection_rejects_old_claim_after_same_owner_reclaim(setup):
     from alphonse.agent_v2.accounts import AccountSession
-    from alphonse.agent_v2.core.intelligence.v3.single_loop_recovery_inspection import inspect_delivery_binding
+    from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_recovery_inspection import inspect_delivery_binding
 
     queue, _, _, store, claim, _, now, binding = setup
     saved = reserve(setup)
@@ -313,7 +313,7 @@ def test_recovery_inspection_rejects_old_claim_after_same_owner_reclaim(setup):
 def test_recovery_inspection_locks_against_concurrent_revocation_then_rechecks(setup):
     import sqlite3
     from alphonse.agent_v2.accounts import AccountSession
-    from alphonse.agent_v2.core.intelligence.v3.single_loop_recovery_inspection import inspect_delivery_binding
+    from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_recovery_inspection import inspect_delivery_binding
 
     _, users, questions, store, claim, _, now, binding = setup
     saved = reserve(setup)

@@ -139,7 +139,7 @@ class ToolInvocationService:
 
 
 def _check_browser_effect_guard(task: Any, descriptor: Any, tool_id: str) -> None:
-    from alphonse.agent_v2.core.intelligence.v3 import browser_workflow
+    from alphonse.agent_v2.core.intelligence import browser_workflow
     if browser_workflow.KEY not in task.metadata:
         if browser_workflow._legacy_browser_state(task):
             raise PermissionError("browser_reconciliation_required")

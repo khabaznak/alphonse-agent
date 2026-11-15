@@ -4,7 +4,6 @@ from types import SimpleNamespace
 
 from alphonse.agent_v2.core.core import CoreLoopContext, ToolDescriptor, ToolKind
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
-from alphonse.agent_v2.core.intelligence.v3 import PhaseExecutor, PhasePlan, PhaseSubgoal, ToolRevealPolicy, new_tactical_state
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
 from alphonse.agent_v2.core.tools.invocation import ToolInvocationService
 from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry, ToolDefinition
@@ -77,18 +76,6 @@ def test_sensitive_tool_events_are_both_scoped_and_redacted():
     assert all(row['event']['payload']['task_id'] == 'a' for row in alice)
 
 
-def test_v3_reveal_event_is_scoped_and_missing_actor_is_not_broadcast():
-    context, events = setup()
-    subgoal = PhaseSubgoal('read', 'Read synthetic', 'observation', allowed_capabilities=('fixture_read',))
-    phase = PhasePlan('phase', 'Read synthetic', (subgoal,), authorized_capabilities=('fixture_read',))
-    executor = PhaseExecutor(reveal_policy=ToolRevealPolicy())
-    executor._revealed_tools(TaskState(task_id='a', user='alice'), new_tactical_state(phase), subgoal, context)
-    executor._revealed_tools(TaskState(task_id='anonymous'), new_tactical_state(phase), subgoal, context)
-    daemon = project(events)
-    alice_events, _ = daemon.ui_events_since(user='alice')
-    bob_events, _ = daemon.ui_events_since(user='bob')
-    assert len(alice_events) == 1 and alice_events[0]['event']['type'] == 'tactical_tools_revealed'
-    assert bob_events == []
 
 
 
@@ -146,11 +133,3 @@ def test_real_agui_scopes_tool_results_and_drops_unowned_sensitive_events():
                ('malformed-private', 'empty-private', 'conflicting-private'))
     assert any(row['event'].get('snapshot', {}).get('status') == 'working' for row in bob)
     assert any(row['event'].get('name') == 'public_status' for row in bob)
-
-
-def test_anonymous_v3_processor_does_not_publish_task():
-    from alphonse.agent_v2.core.intelligence.v3.processor import HierarchicalCAPDProcessor
-    context, events = setup()
-    other = TaskState(task_id='anonymous-v3', goal='private-anonymous-v3')
-    HierarchicalCAPDProcessor().process(other, context)
-    assert not events

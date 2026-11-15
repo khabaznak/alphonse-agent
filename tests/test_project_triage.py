@@ -220,19 +220,3 @@ def test_crash_after_receipt_recovers_checkpoint_without_inference(acquisition, 
     assert f.process()['outcome'] == 'complete'
     assert len(f.client.calls) == 1
     assert len(f.acquisition.processing(AccountSession('child'), f.run_id)['classification']) == 1
-
-
-def test_activated_skill_context_exposes_only_current_managed_choices(f):
-    from alphonse.agent_v2.core.core import CoreLoopContext
-    from alphonse.agent_v2.core.intelligence.task_state import TaskState
-    from alphonse.agent_v2.core.intelligence.v3.context import selected_skill_guidance
-    from alphonse.agent_v2.core.messages import InMemoryMessageQueue
-    task = TaskState(task_id='triage-test', user='child')
-    task.metadata['v3_skill_selection'] = {'selected_skill_ids': ['skill:fixture']}
-    context = CoreLoopContext(messages=InMemoryMessageQueue(), skill_store=f.skills, skill_bindings=f.bindings)
-    text, _ = selected_skill_guidance(task, context)
-    assert 'Managed account capabilities' in text and '"operation": "read"' in text
-    assert '"credentials"' not in text
-    f.service.revoke_grant(AccountSession('parent'), grant_id='grant-one', expected_revision=1)
-    text, _ = selected_skill_guidance(task, context)
-    assert 'Managed account capabilities' not in text

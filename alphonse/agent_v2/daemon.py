@@ -258,7 +258,7 @@ class V2Daemon:
         V3 worker. Fenced queue ownership and an atomic owner processor are
         required; uncertain claims are left untouched rather than reclaimed.
         """
-        from alphonse.agent_v2.core.intelligence.v3.owner_read_processor import OwnerReadConversationProcessor
+        from alphonse.agent_v2.core.intelligence.simple_loop.owner_read_processor import OwnerReadConversationProcessor
         from alphonse.agent_v2.core.messages.sqlite_queue import SQLiteMessageQueue
         processor = getattr(self.runtime.processor, 'owner_read_candidate', None)
         if (type(self.experimental_owner_only) is not bool
@@ -419,7 +419,7 @@ class V2Daemon:
         revalidated again during enqueue and under the new task's live claim.
         """
         import os
-        from alphonse.agent_v2.core.intelligence.v3.owner_clarification import resolve_owner_question
+        from alphonse.agent_v2.core.intelligence.simple_loop.owner_clarification import resolve_owner_question
         if not self.experimental_owner_only:
             raise ValueError('owner_question_context_unavailable')
         try:
@@ -463,8 +463,8 @@ class V2Daemon:
             return False
         from alphonse.agent_v2.core.core import CoreLoopContext
         from alphonse.agent_v2.core.intelligence.task_state import TaskState
-        from alphonse.agent_v2.core.intelligence.v3.owner_atomic_checkpoint import OwnerAtomicCheckpoint, _decision_digest
-        from alphonse.agent_v2.core.intelligence.v3.single_loop_checkpoint import STATE_KEY
+        from alphonse.agent_v2.core.intelligence.simple_loop.owner_atomic_checkpoint import OwnerAtomicCheckpoint, _decision_digest
+        from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_checkpoint import STATE_KEY
         from alphonse.agent_v2.core.messages.experimental_claim_checkpoint import _claim_digest
         from alphonse.agent_v2.core.messages.sqlite_queue import _row_to_message
         try:
@@ -1345,7 +1345,6 @@ class V2Daemon:
         current = self.runtime.intelligence_engine_settings_store.get()
         saved = self.runtime.intelligence_engine_settings_store.save(IntelligenceEngineSettings(
             default_engine=str(values.get("default_engine") or current.default_engine),
-            v3_project_ids=tuple(str(item) for item in values.get("v3_project_ids", current.v3_project_ids)),
         ))
         return saved.to_dict()
 
@@ -1785,7 +1784,7 @@ class V2Daemon:
 
     def register_owner_checkpoint(self, checkpoint: Any, context: Any) -> None:
         """Register a terminal candidate checkpoint for opt-in owner pickup."""
-        from alphonse.agent_v2.core.intelligence.v3.owner_atomic_checkpoint import OwnerAtomicCheckpoint
+        from alphonse.agent_v2.core.intelligence.simple_loop.owner_atomic_checkpoint import OwnerAtomicCheckpoint
         from alphonse.agent_v2.core.core import CoreLoopContext
         if (type(checkpoint) is not OwnerAtomicCheckpoint or not isinstance(context, CoreLoopContext)
                 or checkpoint.queue is not self.runtime.queue or context.messages is not checkpoint.queue
@@ -1824,7 +1823,7 @@ class V2Daemon:
         with self._owner_checkpoint_lock:
             pair = self._owner_checkpoints.get(message_id)
             if pair is None:
-                from alphonse.agent_v2.core.intelligence.v3.owner_atomic_checkpoint import verify_finalized_owner_ack
+                from alphonse.agent_v2.core.intelligence.simple_loop.owner_atomic_checkpoint import verify_finalized_owner_ack
                 if verify_finalized_owner_ack(self.runtime.queue, message_id, token):
                     return
                 raise ValueError('owner_desktop_ack_unavailable')
@@ -3988,15 +3987,7 @@ def _question_answer_text(payload: dict[str, Any] | None) -> str:
     return "answer"
 
 
-def _owner_only_requested() -> bool:
-    value = os.environ.get('ALPHONSE_OWNER_ONLY_SIMPLE_LOOP', '0')
-    if value not in {'0', '1'}:
-        raise ValueError('owner_only_startup_configuration_invalid')
-    return value == '1'
-
-
 def main() -> None:
-    owner_only = _owner_only_requested()
     daemon_id = f"daemon-{uuid4().hex[:12]}"
     startup_lock = _claim_single_instance_lock(daemon_id)
     try:
@@ -4014,8 +4005,8 @@ def main() -> None:
             build_runtime_host(
                 user=user_store.admin_user().user_id if user_store.admin_user() else "",
                 user_store=user_store,
-                messages=(SQLiteMessageQueue(default_database_path(), lease_owner=daemon_id,
-                    experimental_claim_fencing=True) if owner_only else SQLiteMessageQueue.default(lease_owner=daemon_id)),
+                messages=SQLiteMessageQueue(default_database_path(), lease_owner=daemon_id,
+                    experimental_claim_fencing=True),
                 question_store=SQLiteQuestionStore.default(),
                 project_store=ProjectStore.default(),
                 schedule_store=ScheduledTaskStore.default(),
@@ -4035,15 +4026,13 @@ def main() -> None:
                 project_session_store=SQLiteProjectSessionStore.default(),
                 memory_session_store=SQLiteMemorySessionStore.default(),
                 communication_thread_store=SQLiteCommunicationThreadStore.default(),
-                experimental_owner_read=owner_only,
-                owner_selected_draft_sink=(lambda *_: None) if owner_only else None,
+                experimental_owner_read=True,
+                owner_selected_draft_sink=lambda *_: None,
             ),
             daemon_id=daemon_id,
-            experimental_owner_only=owner_only,
+            experimental_owner_only=True,
         )
-        if owner_only:
-            logger.warning('Owner-only simple-loop test mode: read-only conversation only; '
-                           'schedulers and integrations are disabled; clarification and automatic recovery are unavailable.')
+        logger.warning('Simple loop: owner-only read conversation; schedulers and integrations are disabled.')
         daemon._lock_file = startup_lock
         startup_lock = None
     finally:

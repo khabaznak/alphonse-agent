@@ -6,7 +6,7 @@ import sys
 
 import pytest
 
-from alphonse.agent_v2.core.intelligence.v3.single_loop_checkpoint import ExperimentalCheckpointStore
+from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_checkpoint import ExperimentalCheckpointStore
 from alphonse.agent_v2.core.io.channels import ChannelAddress
 from alphonse.agent_v2.core.io.experimental_staged_outbox import _GUARDS
 from alphonse.agent_v2.core.messages.claim_fence import ClaimFenceUnavailable
@@ -48,7 +48,7 @@ def test_subprocess_reconciles_expired_effect_without_receipt_or_queue_mutation(
     # fixture clock cross the boundary, never the original receipt/generation.
     script = '''from datetime import datetime
 import sys
-from alphonse.agent_v2.core.intelligence.v3.single_loop_checkpoint import ExperimentalCheckpointStore
+from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_checkpoint import ExperimentalCheckpointStore
 from alphonse.agent_v2.core.questions import SQLiteQuestionStore
 from alphonse.agent_v2.evaluation.synthetic_delivery_settlement import recover_expired_fixture_effect
 s = ExperimentalCheckpointStore(SQLiteQuestionStore(sys.argv[1]))

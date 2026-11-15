@@ -9,7 +9,7 @@ import pytest
 
 from test_single_loop_delivery_reservation import setup, reserve
 from alphonse.agent_v2.evaluation.synthetic_delivery_settlement import settle_fixture_delivery
-from alphonse.agent_v2.core.intelligence.v3.single_loop_checkpoint import ExperimentalCheckpointStore
+from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_checkpoint import ExperimentalCheckpointStore
 from alphonse.agent_v2.core.messages.claim_fence import ClaimFenceUnavailable, ClaimSuperseded
 from alphonse.agent_v2.core.io.experimental_staged_outbox import _ATTEMPT_TABLE, _ATTEMPT_GUARDS
 

@@ -43,14 +43,9 @@ export function ownerFailureMessage(code?: string): string {
     ? messages[code] : "This conversation needs attention; its result may be unavailable or unconfirmed.";
 }
 
-export function assertLegacyConversationAvailable(ownerOnly: boolean): void {
-  if (ownerOnly) throw new Error("Turn on the simpler conversation loop to send a message while this owner-only service is running.");
-}
-
 /**
  * In-memory tracking is intentional: a lost pickup or submission response is
- * uncertain and must not be repeated automatically. The default UI never
- * constructs this transport unless the explicit local opt-in is set.
+ * uncertain and must not be repeated automatically.
  */
 export class OwnerConversation {
   private pending = new Map<string, Pending>();

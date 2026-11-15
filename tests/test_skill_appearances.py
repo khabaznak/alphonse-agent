@@ -183,28 +183,3 @@ def test_ipc_appearance_authorization_and_active_task_projection(tmp_path):
         assert daemon.desktop_appearance_context(admin.user_id)["appearance"] is None
     skills.uninstall(record.skill_id)
     assert request("skill_appearance")["appearance"] is None
-
-
-def test_direct_conversation_publishes_skill_selection_before_composing_reply(tmp_path):
-    from alphonse.agent_v2.core.core import CoreLoopContext
-    from alphonse.agent_v2.core.inference import InferenceResult
-    from alphonse.agent_v2.core.intelligence.task_state import TaskState
-    from alphonse.agent_v2.core.intelligence.v3.processor import HierarchicalCAPDProcessor
-    from alphonse.agent_v2.core.messages import InMemoryMessageQueue
-    from alphonse.agent_v2.core.questions import SQLiteQuestionStore
-
-    skills = SkillStore(tmp_path / "installed")
-    record = skills.install_directory(package(tmp_path, {"version": 1, "preset": "doctor"}))
-    questions = SQLiteQuestionStore(":memory:")
-    task = TaskState(task_id="conversation", message_id="message", user="fixture", metadata={"v3_skill_selection": {"selected_skill_ids": [record.skill_id], "primary_skill_ids": [record.skill_id]}})
-
-    class Inference:
-        def generate_markdown(self, request):
-            checkpoint = questions.load_task_checkpoint(task.task_id)
-            assert checkpoint is not None and checkpoint.status == "running"
-            assert leading_skill(checkpoint.metadata["v3_skill_selection"]) == record.skill_id
-            return InferenceResult(content="Fixture reply.", model_profile=request.model_profile)
-
-    context = CoreLoopContext(messages=InMemoryMessageQueue(), question_store=questions, skill_store=skills, inference=Inference())
-    HierarchicalCAPDProcessor._complete_direct_response(task, context)
-    assert task.status == "completed"

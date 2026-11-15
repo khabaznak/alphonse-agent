@@ -10,7 +10,7 @@ from alphonse.agent_v2.core.core import CoreLoopContext, LoopStepStatus, Process
 from alphonse.agent_v2.core.inference.models import InferenceResult, ModelProfile
 from alphonse.agent_v2.core.inference.router import InferenceRouter
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
-from alphonse.agent_v2.core.intelligence.v3.owner_read_processor import OwnerReadConversationProcessor
+from alphonse.agent_v2.core.intelligence.simple_loop.owner_read_processor import OwnerReadConversationProcessor
 from alphonse.agent_v2.core.messages.sqlite_queue import SQLiteMessageQueue
 from alphonse.agent_v2.core.io.outbox import SQLiteOutboundStore
 from alphonse.agent_v2.core.questions import SQLiteQuestionStore
@@ -27,19 +27,13 @@ def test_owner_import_does_not_load_v3_processor_in_a_fresh_interpreter():
     subprocess.run([sys.executable, '-c', '''
 import sys
 import alphonse.agent_v2.runtime
-import alphonse.agent_v2.core.intelligence.v3.owner_read_processor
+import alphonse.agent_v2.core.intelligence.simple_loop.owner_read_processor
 for name in ('processor', 'executor', 'planner', 'outer'):
     assert f'alphonse.agent_v2.core.intelligence.v3.{name}' not in sys.modules, name
-from alphonse.agent_v2.core.intelligence.v3 import HierarchicalCAPDProcessor
-from alphonse.agent_v2.core.intelligence.v3.processor import HierarchicalCAPDProcessor as Direct
-assert HierarchicalCAPDProcessor is Direct
 '''], check=True)
 
 
 def test_explicit_registration_uses_same_store_and_preserves_worker_refusal(tmp_path, monkeypatch):
-    def forbid_v3():
-        pytest.fail('owner-only runtime must not construct the V3 loop')
-    monkeypatch.setattr('alphonse.agent_v2.core.intelligence.v3.HierarchicalCAPDProcessor', forbid_v3)
     path = tmp_path / 'owner.sqlite'
     users = V2UserStore(path)
     queue = SQLiteMessageQueue(path, experimental_claim_fencing=True)
@@ -50,7 +44,6 @@ def test_explicit_registration_uses_same_store_and_preserves_worker_refusal(tmp_
         coding_skill_service=object(), experimental_owner_read=True, owner_selected_draft_sink=callback)
     candidate = runtime.processor.owner_read_candidate
     assert isinstance(candidate, OwnerReadConversationProcessor)
-    assert runtime.processor.v3 is None
     with pytest.raises(ValueError, match='intelligence_engine_unregistered'):
         runtime.processor.processor_for(TaskState(intelligence_engine='hierarchical_v3', intelligence_schema_version=3))
     assert candidate.atomic_checkpoints.store is questions

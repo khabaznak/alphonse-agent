@@ -739,8 +739,6 @@ class AlphonseCore:
                     state_after=self._transition(PROCESSOR_FAILED), queued_message_id=queued.message_id,
                     error="scheduled_handoff_checkpoint_unavailable",
                 )
-        elif queued_engine == "hierarchical_v3" and self.question_store is not None:
-            task = self.question_store.load_task_checkpoint(queued.message_id)
         if task is None:
             task = TaskState.from_queued_message(queued)
         routing_disposition = str(queued.message.metadata.get("routing_disposition") or "")
@@ -754,31 +752,19 @@ class AlphonseCore:
         question = self.question_store.get_question(question_id) if self.question_store is not None and question_id else None
         authoritative = (self.question_store.load_task_checkpoint(question.task_id)
                          if self.question_store is not None and question is not None else None)
-        browser_resume = (is_correlated_resume and "v3_browser_workflow" in task.metadata) or (
-            authoritative is not None and "v3_browser_workflow" in authoritative.metadata)
-        if browser_resume:
-            if (not is_correlated_resume or authoritative is None or question is None or question.status != "answered"
-                    or task.task_id != authoritative.task_id or question.task_id != authoritative.task_id
-                    or question.respondent_user_id != queued.message.user
-                    or question.originator_user_id != authoritative.user
-                    or "v3_browser_workflow" not in authoritative.metadata
-                    or not self.question_store.claim_browser_resumption(authoritative)):
-                snapshot = StateSnapshot(current_work="", metadata={"status": "failed", "reason": "browser_resumption_unavailable"})
-                self.state.update(snapshot)
-                return LoopStepResult(status=LoopStepStatus.FAILED, state_before=state_before,
-                    state_after=self._transition(PROCESSOR_FAILED), queued_message_id=queued.message_id,
-                    error="browser_resumption_unavailable")
-            task = authoritative
-            task.message_id = queued.message_id
+        # Never reattach a retired browser workflow to a new task. The stored
+        # checkpoint remains available for inspection, with no replay attempt.
+        if ("v3_browser_workflow" in task.metadata or
+                (authoritative is not None and "v3_browser_workflow" in authoritative.metadata)):
+            snapshot = StateSnapshot(current_work="", metadata={"status": "failed", "reason": "browser_resumption_unavailable"})
+            self.state.update(snapshot)
+            return LoopStepResult(status=LoopStepStatus.FAILED, state_before=state_before,
+                state_after=self._transition(PROCESSOR_FAILED), queued_message_id=queued.message_id,
+                error="browser_resumption_unavailable")
         if registered_candidate:
             # Candidate identity was either restored from the owner-bound row
             # or set from this queue message; never replace it with a new UUID.
             pass
-        elif queued_engine == "hierarchical_v3" and not is_correlated_resume and not handoff_task_id:
-            # A queue delivery may be retried, but it is still the same V3 task.
-            # Using the durable message id prevents a retry from silently creating
-            # a new acceptance contract and a different execution history.
-            task.task_id = queued.message_id
         elif not task.task_id:
             task.task_id = str(uuid4())
         # The legacy callback mutates daemon lifecycle state without the queue

@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from alphonse.agent_v2.core.intelligence.v3.owner_read_recovery import OwnerRecoveryUnavailable
+from alphonse.agent_v2.core.intelligence.simple_loop.owner_read_recovery import OwnerRecoveryUnavailable
 from alphonse.agent_v2.conversations import SQLiteConversationStore
 from alphonse.agent_v2.core.inference.models import InferenceResult, ModelProfile
 from alphonse.agent_v2.core.inference.router import InferenceRouter
@@ -84,7 +84,7 @@ def test_pickup_revalidates_clock_evidence(tmp_path, monkeypatch, change):
         if change == 'zone':
             users.set_timezone('UTC', owner.user_id)
         elif change == 'expired':
-            from alphonse.agent_v2.core.intelligence.v3 import owner_clock
+            from alphonse.agent_v2.core.intelligence.simple_loop import owner_clock
             class Later(datetime):
                 @classmethod
                 def now(cls, tz=None):

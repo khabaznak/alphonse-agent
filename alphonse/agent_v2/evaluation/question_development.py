@@ -4,14 +4,12 @@ from __future__ import annotations
 import json
 from .decision_followthrough_development import Case
 from .followthrough_candidate_adapter import run_candidate_fixture
-from .followthrough_v3_adapter import run_v3_fixture
 
 
 def compare_missing_identity(*, simulate_delivery=False):
-    """Run the same lookup and necessary question through three processors.
+    """Exercise the simple loop's lookup and necessary question.
 
-    The V3 action explicitly invokes its question tool; the candidate chooses
-    its question decision. A simulated bridge is optional and is not product
+    The candidate chooses its question decision. A simulated bridge is optional and is not product
     delivery. Provider decisions are preselected, not autonomous reasoning.
     """
     if type(simulate_delivery) is not bool:
@@ -24,10 +22,6 @@ def compare_missing_identity(*, simulate_delivery=False):
                         'arguments': {'source': 'primary'}}, {'kind': 'question', 'text': text}])
         return run_candidate_fixture(case, lambda _text: next(script), simulate_delivery=simulate_delivery)
     arms = {
-        'current_v3': run_v3_fixture(case, projection_enabled=False, scripted_sources=['primary'],
-                                     scripted_response=text, scripted_question=text, simulate_delivery=simulate_delivery),
-        'targeted_v3_projection': run_v3_fixture(case, projection_enabled=True, scripted_sources=['primary'],
-                                     scripted_response=text, scripted_question=text, simulate_delivery=simulate_delivery),
         'single_loop': candidate(),
     }
     return {'arms': arms, 'decision_qualified': False, 'delivery': 'synthetic_bridge' if simulate_delivery else 'unassessed',

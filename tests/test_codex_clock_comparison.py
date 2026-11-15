@@ -56,27 +56,6 @@ def test_candidate_actual_loop_runs_same_subscription_provider_and_checks_clock(
     assert result['metrics']['input_tokens_measured_or_estimated'] > 0
 
 
-def test_switch_runs_both_arms_with_same_provider_and_fresh_clock(monkeypatch):
-    seen = []
-    provider = CodexSubscriptionProvider(model=MODEL)
-    def fake_v3(*, url, provider, jev, model, emit, cancelled, trace=None):
-        seen.append((url, provider, jev, model))
-        with urlopen(url, timeout=2) as response:
-            json.load(response)
-        return Run(status='completed', response=json.dumps(ANSWER))
-    def fake_simple(*, url, provider, model, emit, cancelled, trace=None):
-        seen.append((url, provider, None, model))
-        with urlopen(url, timeout=2) as response:
-            json.load(response)
-        return Run(status='completed', response=json.dumps(ANSWER))
-    monkeypatch.setattr(comparison, '_run_v3', fake_v3)
-    monkeypatch.setattr(comparison, '_run_simple', fake_simple)
-    result = comparison.compare_clock(provider=provider, model=MODEL, jev_factory=lambda: object())
-    assert [item['arm'] for item in result['runs']] == ['v3', 'simple']
-    assert all(item['passed'] for item in result['runs'])
-    assert all(item[1] is provider and item[3] == MODEL for item in seen)
-    assert seen[0][0] != seen[1][0]
-    assert result['qualification'] == 'unassessed'
 
 
 def test_non_subscription_and_invalid_arm_are_rejected_before_work():
@@ -86,63 +65,8 @@ def test_non_subscription_and_invalid_arm_are_rejected_before_work():
         comparison.run_clock_arm(arm='missing', provider=object(), model=MODEL)
 
 
-def test_v3_provider_failure_records_unknown_output_not_fabricated_usage():
-    class Failure:
-        def generate_json(self, request):
-            raise RuntimeError('secret diagnostic')
-    events = []
-    provider = comparison._TrackedProvider(Failure(), events.append)
-    with pytest.raises(RuntimeError):
-        provider.generate_json(InferenceRequest(prompt='synthetic prompt', purpose=InferencePurpose.TACTICAL_ACTION))
-    assert events[0]['status'] == 'failed'
-    assert events[0]['usage_diagnostics']['output']['source'] == 'unknown'
-    assert 'secret diagnostic' not in repr(events)
-    assert comparison._summarize_events(events)['output_tokens_measured_or_estimated'] is None
 
 
-def test_v3_actual_loop_with_scripted_codex_provider_is_fixture_plumbing_only(monkeypatch, tmp_path):
-    from alphonse.agent_v2.evaluation.deterministic_adapters import (
-        _Action, _DeterministicProvider, _ReplayJev, _RunState, _Scenario,
-    )
-    from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry
-    from alphonse.agent_v2.core.tools.registry.native.respond import build_respond_tool_definition
-    installed = []
-    original_register = InMemoryToolRegistry.register
-    def inspect_register(registry, definition):
-        if definition.descriptor.tool_id == 'native.respond':
-            installed.append(definition)
-        return original_register(registry, definition)
-    monkeypatch.setattr(InMemoryToolRegistry, 'register', inspect_register)
-    action = _Action('native.fixture_read', 'project_record_search', {'source': 'index'}, role='read_clock', behavior='read')
-    replay = _RunState(_Scenario((action,), 'Answer from the synthetic clock.', json.dumps(ANSWER)), tmp_path, 'hierarchical_v3')
-    delegate = _DeterministicProvider(replay)
-    def json_method(self, request):
-        if request.purpose == InferencePurpose.TASK_UNDERSTANDING:
-            return InferenceResult(json_value={'requested_outcome': comparison.GOAL, 'supplied_parameters': [],
-                'constraints': [], 'unresolved_dependencies': [], 'superseded_constraints': []})
-        return delegate.generate_json(request)
-    monkeypatch.setattr(CodexSubscriptionProvider, 'generate_json', json_method)
-    monkeypatch.setattr(CodexSubscriptionProvider, 'generate_markdown', lambda self, request: delegate.generate_markdown(request))
-    monkeypatch.setattr(CodexSubscriptionProvider, 'plan_tool_call', lambda self, request: delegate.plan_tool_call(request))
-    provider = CodexSubscriptionProvider(model=MODEL)
-    trace = []
-    result = comparison.run_clock_arm(arm='v3', provider=provider, model=MODEL, jev=_ReplayJev(),
-                                      private_trace=trace.append)
-    actual = build_respond_tool_definition()
-    assert installed[-1].descriptor == actual.descriptor
-    assert installed[-1].argument_schema == actual.argument_schema
-    assert installed[-1].descriptor.read_only is False
-    assert installed[-1].descriptor.metadata['side_effect_class'] == 'user_response'
-    assert result['passed'] is True, result
-    assert result['oracle']['clock_source_matches'] is True
-    assert any(event['kind'] == 'system_two' for event in result['events'])
-    assert {'event': 'source_read_attempt', 'arm': 'v3', 'source': 'index'} in trace
-    assert {'event': 'source_read_observed', 'arm': 'v3', 'source': 'index'} in trace
-    assert {'event': 'response_prepared', 'arm': 'v3'} in trace
-    assert trace[-1]['event'] == 'terminal' and trace[-1]['response_accepted'] is True
-    assert json.dumps(ANSWER) not in repr(trace)
-    # A scripted provider is not evidence of real task effectiveness.
-    assert result['qualification'] == 'unassessed'
 
 
 def test_reason_category_never_exposes_unrecognized_reason():
@@ -155,8 +79,8 @@ def test_each_failed_arm_is_preserved_and_error_text_not_exposed(monkeypatch):
     def fail(**_kwargs):
         raise ValueError('sensitive-contents')
     monkeypatch.setattr(comparison, 'run_clock_arm', fail)
-    result = comparison.compare_clock(provider=provider, model=MODEL, jev_factory=lambda: object())
-    assert [x['arm'] for x in result['runs']] == ['v3', 'simple']
+    result = comparison.compare_clock(provider=provider, model=MODEL)
+    assert [x['arm'] for x in result['runs']] == ['simple']
     assert all(x['passed'] is None and x['error_type'] == 'ValueError' for x in result['runs'])
     assert 'sensitive-contents' not in repr(result)
 
@@ -255,15 +179,6 @@ def test_trace_callback_failure_does_not_change_clock_result(monkeypatch):
     assert result['passed'] is True
 
 
-def test_private_trace_handles_malformed_model_tool_without_affecting_result():
-    class Malformed:
-        def generate_json(self, request):
-            return InferenceResult(json_value={'tool_id': ['invalid']})
-    traces = []
-    provider = comparison._TrackedProvider(Malformed(), lambda _: None, traces.append)
-    result = provider.generate_json(InferenceRequest(prompt='synthetic', purpose=InferencePurpose.TACTICAL_ACTION))
-    assert result.json_value == {'tool_id': ['invalid']}
-    assert traces[0]['tool'] is None
 
 
 def test_candidate_recovery_uses_advertised_inventory_not_hidden_required_set(monkeypatch):

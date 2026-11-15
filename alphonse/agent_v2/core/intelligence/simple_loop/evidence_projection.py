@@ -156,7 +156,7 @@ def project_evidence(
         fingerprint = json.dumps(next_coverage, sort_keys=True)
         if fingerprint in seen:
             # A varying coverage size must never result in an unbounded cycle.
-            from .projections import ContextBudgetExceeded
+            from alphonse.agent_v2.core.intelligence.context_projection import ContextBudgetExceeded
             raise ContextBudgetExceeded("v3_evidence_coverage_does_not_stabilize")
         seen.add(fingerprint)
         coverage = next_coverage

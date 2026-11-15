@@ -13,7 +13,7 @@ import json
 from .decision_manifest import bytes_digest, canonical_digest
 
 CASES = ('clock', 'gmail', 'prescription', 'traffic', 'recovery')
-ALPHONSE_ARMS = ('v3', 'targeted_v3', 'single_loop')
+ALPHONSE_ARMS = ('single_loop',)
 EXTERNAL_CASES = frozenset({'clock', 'prescription', 'traffic'})
 
 
@@ -33,8 +33,6 @@ def create_agenda(protocol: bytes, *, seed: str) -> dict:
     plan = {'schema_version': 1, 'kind': 'development_agenda_not_frozen_experiment',
             'protocol_sha256': bytes_digest(protocol), 'seed': seed, 'schedule': schedule,
             'arms': {arm: {'availability': 'unavailable', 'reason': reason} for arm, reason in {
-                'v3': 'model_provider_jev_budget_and_isolation_not_ready',
-                'targeted_v3': 'model_provider_jev_budget_and_isolation_not_ready',
                 'single_loop': 'live_bridge_metering_and_isolation_not_ready',
                 'external': 'external_agent_isolation_and_attribution_not_ready'}.items()},
             'fixture_status': {

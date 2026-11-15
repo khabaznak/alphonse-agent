@@ -19,7 +19,6 @@ from typing import Mapping
 from uuid import uuid4
 
 from .candidate_comparison import SingleLoopFixtureAdapter
-from .isolated_v3_arm import IsolatedV3ReadArm
 from .simplified_loop import Adapter, _run, load_frozen
 
 
@@ -80,17 +79,15 @@ def run_journal(corpus_path: str | Path, output: str | Path, *,
     all transitive inputs or the executing environment.
     """
     if arms is None:
-        arms = {'current_v3': IsolatedV3ReadArm(projection_enabled=False),
-                'targeted_v3_projection': IsolatedV3ReadArm(projection_enabled=True),
-                'single_loop': SingleLoopFixtureAdapter()}
+        arms = {'single_loop': SingleLoopFixtureAdapter()}
     if not arms or any(not isinstance(name, str) or not name.strip() for name in arms):
         raise ValueError('arm_names_required')
     corpus, digest = load_frozen(corpus_path)
     schedule = [{'case_id': case['id'], 'arm': name} for case in corpus['cases'] for name in arms]
     run_id = str(uuid4())
     source_dir = Path(__file__).resolve().parent
-    source_names = ('offline_run_journal.py', 'offline_three_arm.py', 'simplified_loop.py',
-                    'candidate_comparison.py', 'isolated_v3_arm.py')
+    source_names = ('offline_run_journal.py', 'offline_fixture_runner.py', 'simplified_loop.py',
+                    'candidate_comparison.py')
     sources = {name: hashlib.sha256((source_dir / name).read_bytes()).hexdigest() for name in source_names}
     header = {'event': 'run_started', 'schema_version': 1, 'run_id': run_id,
               'experiment_kind': 'offline_scripted_plumbing', 'recorded_at': _timestamp(), 'corpus_sha256': digest,

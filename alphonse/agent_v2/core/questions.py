@@ -209,29 +209,18 @@ class SQLiteQuestionStore:
 
         delivery = dict(delivery_metadata or {})
         if delivery.get("private_browser_value") is True:
-            from alphonse.agent_v2.core.intelligence.v3 import browser_workflow
-            field = delivery.get("browser_private_field")
-            phase = (task.hierarchical_state.get("phase") or {}).get("phase_id")
-            if (field not in browser_workflow.FIELDS or respondent != originator
-                    or task.intelligence_engine != "hierarchical_v3"):
-                raise ValueError("browser_private_question_invalid")
-            browser_workflow.append(task, kind="requested", field=field, phase=phase, source=interrupt.question_id)
+            # The V3 private-browser question flow is retired. Never retain or
+            # route a private value through the ordinary question channel.
+            raise ValueError("browser_private_question_invalid")
 
+        if task.intelligence_engine == "hierarchical_v3" or "v3_browser_workflow" in task.metadata:
+            raise ValueError("retired_task_unavailable")
         task.status = "waiting_user"
-        if task.intelligence_engine == "hierarchical_v3" and task.hierarchical_state.get("status") == "running":
-            # The answer may arrive during delivery, before the executor returns.
-            task.hierarchical_state = {**task.hierarchical_state, "status": "waiting_user"}
         task.metadata["pending_question_id"] = interrupt.question_id
         task.metadata["question_interrupt"] = interrupt.to_dict()
         task.append_update(f"Task parked waiting for answer to question {interrupt.question_id}.")
 
         with self._connect() as conn:
-            if "v3_browser_workflow" in task.metadata:
-                conn.execute("BEGIN IMMEDIATE")
-                row = conn.execute("SELECT status, owner_id, version FROM v2_task_checkpoints WHERE task_id=?", (task_id,)).fetchone()
-                if (row is None or row["status"] != "running" or row["owner_id"] != str(task.user or "")
-                        or int(row["version"]) != getattr(task, "_checkpoint_version", None)):
-                    raise ValueError("browser_checkpoint_stale")
             self._save_task_checkpoint(conn, task, status="waiting_user")
             conn.execute(
                 """
@@ -687,6 +676,12 @@ class SQLiteQuestionStore:
         if task is None:
             return QuestionAnswerResult(handled=True, question=question, invalid=True, message="The waiting task is unavailable. The question has not been answered.")
 
+        # Do not resume historical V3 work under the simple-loop runtime.
+        # Keep the question and its associated checkpoint unchanged.
+        if task.intelligence_engine == "hierarchical_v3" or "v3_browser_workflow" in task.metadata:
+            return QuestionAnswerResult(handled=True, question=question, invalid=True,
+                message="This earlier task cannot resume in the current version.")
+
         task.status = "running"
         task.metadata.pop("pending_question_id", None)
         task.metadata.pop("question_answer", None)
@@ -700,15 +695,6 @@ class SQLiteQuestionStore:
 
         now = _now().isoformat()
         with self._connect() as conn:
-            if "v3_browser_workflow" in task.metadata:
-                conn.execute("BEGIN IMMEDIATE")
-                checkpoint = conn.execute(
-                    "SELECT status, owner_id, version FROM v2_task_checkpoints WHERE task_id=?", (task.task_id,)
-                ).fetchone()
-                if (checkpoint is None or checkpoint["status"] != "waiting_user"
-                        or checkpoint["owner_id"] != str(task.user or "")
-                        or int(checkpoint["version"]) != getattr(task, "_checkpoint_version", None)):
-                    return QuestionAnswerResult(handled=False)
             cursor = conn.execute(
                 """
                 UPDATE v2_questions
@@ -982,35 +968,6 @@ def _record_question_answer_tool_result(
         "answered_by": question.respondent_user_id,
     }
     now = _now().isoformat()
-    if task.intelligence_engine == "hierarchical_v3":
-        state = task.hierarchical_state if isinstance(task.hierarchical_state, dict) else {}
-        phase = state.get("phase") or {}
-        receipt = {
-            "evidence_ref": "question-answer:" + question.question_id,
-            "task_id": str(task.task_id or task.message_id or ""),
-            "phase_id": str(phase.get("phase_id") or "question-resume"),
-            "subgoal_id": str(state.get("active_subgoal_id") or "question-answer"),
-            "tool_id": "native.ask_question", "kind": "authenticated_question_answer",
-            "status": "success", "recorded_at": now,
-            "result": {**result, "question": question.message},
-        }
-        receipts = task.metadata.setdefault("v3_resumption_evidence", [])
-        if not any(item.get("evidence_ref") == receipt["evidence_ref"] for item in receipts):
-            receipts.append(receipt)
-        if phase.get("phase_id"):
-            history = task.metadata.setdefault("v3_phase_history", [])
-            source_phase = next((item for item in reversed(history)
-                                 if (item.get("phase") or {}).get("phase_id") == phase["phase_id"]), None)
-            if source_phase is None:
-                # Preserve the checkpoint's actual source scope even when the
-                # answer races the parked-phase history write. This is an
-                # evidence receipt, not an invented terminal phase outcome.
-                source_phase = {"phase": dict(phase), "record_kind": "question_answer_receipt",
-                                "evidence": {"entries": []}}
-                history.append(source_phase)
-            entries = source_phase.setdefault("evidence", {}).setdefault("entries", [])
-            if not any(item.get("evidence_ref") == receipt["evidence_ref"] for item in entries):
-                entries.append(dict(receipt))
     for index in range(len(calls) - 1, -1, -1):
         call = calls[index]
         if not isinstance(call, dict):
