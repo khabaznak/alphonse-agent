@@ -15,6 +15,7 @@ from alphonse.agent_v2.core.tools.registry import ToolDefinition
 SEARCH_MEMORY_TOOL_ID = "native.search_memory"
 SEARCH_MEMORY_TOOL_NAME = "search_memory"
 READ_MEMORY_SOURCE_TOOL_ID = "native.read_memory_source"
+OWNER_CONVERSATION_MAX_CHARS = 36000
 
 
 def complete_conversation_search(actor: str, tool_id: str, arguments: dict[str, Any], payload: dict[str, Any], *,
@@ -60,7 +61,8 @@ def complete_conversation_search(actor: str, tool_id: str, arguments: dict[str, 
     return payload['truncated'] == any(item['truncated'] for item in results)
 
 
-def complete_conversation_read(actor: str, tool_id: str, arguments: dict[str, Any], payload: dict[str, Any]) -> bool:
+def complete_conversation_read(actor: str, tool_id: str, arguments: dict[str, Any], payload: dict[str, Any], *,
+                               allow_chunks: bool = False) -> bool:
     """Recognize a complete direct-owner conversation read, not current authority.
 
     Invoke the native tool under the authenticated actor first. This checks the
@@ -71,10 +73,11 @@ def complete_conversation_read(actor: str, tool_id: str, arguments: dict[str, An
     if (not isinstance(actor, str) or not actor.strip() or tool_id != READ_MEMORY_SOURCE_TOOL_ID
             or not isinstance(source_id, str) or not source_id.startswith('conversation:')
             or not source_id.removeprefix('conversation:').strip()
-            or type(arguments.get('offset', 0)) is not int or arguments.get('offset', 0) != 0
+            or type(arguments.get('offset', 0)) is not int or arguments.get('offset', 0) < 0
+            or (arguments.get('offset', 0) != 0 and not allow_chunks)
             or type(payload.get('schema_version')) is not int or payload.get('schema_version') != 2
-            or payload.get('status') != 'found' or payload.get('truncated') is not False
-            or payload.get('next_offset') is not None or payload.get('historical_only') is not True):
+            or payload.get('status') != 'found' or type(payload.get('truncated')) is not bool
+            or payload.get('historical_only') is not True):
         return False
     items = payload.get('items')
     if not isinstance(items, list) or len(items) != 1 or not isinstance(items[0], dict):
@@ -83,12 +86,22 @@ def complete_conversation_read(actor: str, tool_id: str, arguments: dict[str, An
     source = item.get('source')
     access = source.get('access') if isinstance(source, dict) else None
     content = item.get('content')
+    offset = arguments.get('offset', 0)
     if not (item.get('source_id') == source_id and isinstance(source, dict)
         and source.get('source_id') == source_id and source.get('kind') == 'conversation'
         and isinstance(access, dict) and access.get('owner_user_id') == actor
-        and isinstance(content, str) and item.get('start_char') == 0
-        and type(item.get('end_char')) is int and item['end_char'] == len(content)
-        and type(item.get('total_chars')) is int and item['total_chars'] == len(content)):
+        and isinstance(content, str) and type(item.get('start_char')) is int and item['start_char'] == offset
+        and type(item.get('end_char')) is int and item['end_char'] == offset + len(content)
+        and type(item.get('total_chars')) is int and 0 <= offset <= item['end_char'] <= item['total_chars']):
+        return False
+    total, end = item['total_chars'], item['end_char']
+    # A partial page is useful only as a bounded, contiguous sequence. It is
+    # not complete evidence on its own, and an empty intermediate page cannot
+    # advance a sequence.
+    if (not allow_chunks and (offset != 0 or end != total)
+            or allow_chunks and (total > OWNER_CONVERSATION_MAX_CHARS or (offset < total and end == offset))
+            or payload.get('next_offset') != (end if end < total else None)
+            or payload['truncated'] != (offset > 0 or end < total)):
         return False
     # A read may also return adjacent messages. The anchor's owner does not
     # authorize promoting arbitrary neighbor text into the candidate's evidence.
@@ -115,7 +128,7 @@ def complete_conversation_read(actor: str, tool_id: str, arguments: dict[str, An
 
 def revalidate_conversation_observation(
     actor: str, tool_id: str, arguments: dict[str, Any], payload: dict[str, Any], *, context: ToolExecutionContext,
-    allow_excerpt_truncation: bool = False,
+    allow_excerpt_truncation: bool = False, allow_read_chunks: bool = False,
 ) -> bool:
     """Re-read an owner-scoped observation before promoting it to evidence.
 
@@ -140,10 +153,10 @@ def revalidate_conversation_observation(
             valid = complete_conversation_search(actor, tool_id, arguments, current,
                                                   allow_excerpt_truncation=allow_excerpt_truncation)
         elif tool_id == READ_MEMORY_SOURCE_TOOL_ID:
-            if not complete_conversation_read(actor, tool_id, arguments, payload):
+            if not complete_conversation_read(actor, tool_id, arguments, payload, allow_chunks=allow_read_chunks):
                 return False
             current = execute_read_memory_source(arguments, context=context)
-            valid = complete_conversation_read(actor, tool_id, arguments, current)
+            valid = complete_conversation_read(actor, tool_id, arguments, current, allow_chunks=allow_read_chunks)
         else:
             return False
         if cancelled is not None and cancelled() is not False:
@@ -154,6 +167,36 @@ def revalidate_conversation_observation(
                     == json.dumps(current, sort_keys=True, allow_nan=False))
     except Exception:
         return False
+
+
+def conversation_read_sequences(actor: str, observations: dict[str, tuple[str, dict, dict]]) -> dict[str, list[tuple[str, dict, dict]]]:
+    """Validate contiguous owner-read prefixes and group them by source.
+
+    Prefixes may be incomplete, but gaps, overlaps, changed source metadata or
+    inconsistent lengths are rejected. Callers must independently revalidate
+    every page against the currently authorized source before exposing content.
+    """
+    groups: dict[str, list[tuple[str, dict, dict]]] = {}
+    for ref, (tool, args, payload) in observations.items():
+        if tool != READ_MEMORY_SOURCE_TOOL_ID:
+            continue
+        if not complete_conversation_read(actor, tool, args, payload, allow_chunks=True):
+            raise ValueError('owner_read_sequence_invalid')
+        groups.setdefault(args['source_id'], []).append((ref, args, payload))
+    for pages in groups.values():
+        pages.sort(key=lambda entry: entry[1].get('offset', 0))
+        offset = 0
+        source = None
+        total = None
+        for _, args, payload in pages:
+            item = payload['items'][0]
+            if (args.get('offset', 0) != offset or (total is not None and total != item['total_chars'])
+                    or (source is not None and json.dumps(source, sort_keys=True, allow_nan=False)
+                        != json.dumps(item['source'], sort_keys=True, allow_nan=False))):
+                raise ValueError('owner_read_sequence_invalid')
+            offset = item['end_char']
+            total, source = item['total_chars'], item['source']
+    return groups
 
 
 def _identity(context):

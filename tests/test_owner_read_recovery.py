@@ -21,6 +21,7 @@ from alphonse.agent_v2.core.messages.sqlite_queue import SQLiteMessageQueue
 from alphonse.agent_v2.core.questions import SQLiteQuestionStore
 from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry
 from alphonse.agent_v2.core.tools.registry.native.memory import (execute_search_memory, SEARCH_MEMORY_TOOL_ID,
+    execute_read_memory_source, READ_MEMORY_SOURCE_TOOL_ID,
     build_search_memory_tool_definition, build_read_memory_source_tool_definition)
 from alphonse.agent_v2.users import V2UserStore
 
@@ -81,6 +82,89 @@ def test_recovery_reads_actor_bound_durable_source_and_returns_checkpoint(setup)
                               (atomic.task.task_id,)).fetchone()['task_state_json']
     assert 'Synthetic apples.' not in stored
     assert 'observation_sha256' in stored
+
+
+def test_recovery_reconstructs_partial_page_without_persisting_content(setup):
+    atomic, initial, ctx, conversations, owner = setup
+    event = conversations.record(owner_user_id=owner.user_id, role='user',
+        content='Willow picnic Thursday. ' + 'filler ' * 2000 + 'Correction Saturday.',
+        source='test', source_message_id='long-source')
+    args = {'source_id': 'conversation:' + event.event_id, 'neighbors': 0, 'max_chars': 12000}
+    decision = {'kind': 'tool', 'tool_id': READ_MEMORY_SOURCE_TOOL_ID, 'arguments': args}
+    model = atomic.reserve(expected_version=initial.version, reservation_id='long-model', kind='model',
+        amounts=dict(actions=0, model_calls=1, input_tokens=100, output_tokens=20), now_ms=initial.budget.started_at_ms)
+    selected = atomic.settle_model(expected_version=model.version, reservation_id='long-model', outcome='success',
+        input_tokens=10, output_tokens=10, decision=decision, projection_fingerprint='a' * 64)
+    reserved = atomic.reserve(expected_version=selected.version, reservation_id='long-read', kind='tool',
+        amounts=dict(actions=1, model_calls=0, input_tokens=0, output_tokens=0), now_ms=initial.budget.started_at_ms,
+        tool_id=READ_MEMORY_SOURCE_TOOL_ID, arguments=args, selected_decision=decision, projection_fingerprint='a' * 64)
+    observation = execute_read_memory_source(args, context=ctx.tool_execution_context(atomic.task))
+    assert observation['next_offset'] == 12000
+    saved = atomic.settle_read(expected_version=reserved.version, reservation_id='long-read',
+        tool_id=READ_MEMORY_SOURCE_TOOL_ID, arguments=args, evidence_ref='owner-read:long', observation=observation)
+    recovered, bindings = restore_owner_read_observations(atomic, ctx, expected_version=saved.version)
+    assert recovered.state.evidence_sources == ['owner-read:long']
+    assert bindings['owner-read:long']['observation']['next_offset'] == 12000
+    with atomic.store.store._connect() as conn:
+        stored = conn.execute('SELECT task_state_json FROM v2_task_checkpoints WHERE task_id=?',
+                              (atomic.task.task_id,)).fetchone()['task_state_json']
+    assert 'Willow picnic Thursday' not in stored
+    with conversations._connect() as conn:
+        conn.execute('UPDATE v2_conversation_events SET content=? WHERE event_id=?',
+                     ('Changed picnic Thursday. ' + 'filler ' * 2000 + 'Correction Saturday.', event.event_id))
+    with pytest.raises(OwnerRecoveryUnavailable):
+        restore_owner_read_observations(atomic, ctx, expected_version=saved.version)
+
+
+def test_real_owner_processor_continues_recovered_partial_source(setup, tmp_path):
+    atomic, initial, ctx, conversations, owner = setup
+    event = conversations.record(owner_user_id=owner.user_id, role='user',
+        content='Willow picnic Thursday. ' + 'filler ' * 2000 + 'Correction Saturday.',
+        source='test', source_message_id='long-source-resume')
+    source = 'conversation:' + event.event_id
+    args = {'source_id': source, 'neighbors': 0, 'max_chars': 12000}
+    decision = {'kind': 'tool', 'tool_id': READ_MEMORY_SOURCE_TOOL_ID, 'arguments': args}
+    model = atomic.reserve(expected_version=initial.version, reservation_id='model-partial', kind='model',
+        amounts=dict(actions=0, model_calls=1, input_tokens=100, output_tokens=20), now_ms=initial.budget.started_at_ms)
+    chosen = atomic.settle_model(expected_version=model.version, reservation_id='model-partial', outcome='success',
+        input_tokens=10, output_tokens=10, decision=decision, projection_fingerprint='a' * 64)
+    pending = atomic.reserve(expected_version=chosen.version, reservation_id='read-partial', kind='tool',
+        amounts=dict(actions=1, model_calls=0, input_tokens=0, output_tokens=0), now_ms=initial.budget.started_at_ms,
+        tool_id=READ_MEMORY_SOURCE_TOOL_ID, arguments=args, selected_decision=decision, projection_fingerprint='a' * 64)
+    page = execute_read_memory_source(args, context=ctx.tool_execution_context(atomic.task))
+    saved = atomic.settle_read(expected_version=pending.version, reservation_id='read-partial',
+        tool_id=READ_MEMORY_SOURCE_TOOL_ID, arguments=args, evidence_ref='owner-read:partial', observation=page)
+    task = atomic.task
+    task._checkpoint_version = saved.version
+
+    class Provider:
+        supports_image_input = False
+        def __init__(self):
+            self.requests = []
+        def generate_json(self, request):
+            self.requests.append(request)
+            if len(self.requests) == 1:
+                assert '12000' in request.prompt and 'Willow picnic Thursday' not in request.prompt
+                value = {'kind':'tool', 'tool_id':READ_MEMORY_SOURCE_TOOL_ID,
+                         'arguments':{'source_id':source, 'neighbors':0, 'max_chars':12000, 'offset':12000}, 'text':None}
+            else:
+                assert 'Correction Saturday' in request.prompt and 'Willow picnic Thursday' in request.prompt
+                value = {'kind':'answer', 'tool_id':None, 'arguments':None, 'text':'Saturday.'}
+            return InferenceResult(json_value=value, raw_response=json.dumps(value),
+                                   usage={'input_tokens':100, 'output_tokens':20})
+    provider = Provider()
+    ctx.inference = InferenceRouter(provider=provider, default_profile=ModelProfile('test', 'fixture', 'offline'))
+    ctx.tools = InMemoryToolRegistry()
+    ctx.tools.register(build_search_memory_tool_definition())
+    ctx.tools.register(build_read_memory_source_tool_definition())
+    processor = OwnerReadConversationProcessor(users=V2UserStore(atomic.queue.db_path),
+        budgets=SQLiteTaskBudgetStore(str(tmp_path / 'unused.sqlite')), authorize_claim=authorize_trusted_owner_claim,
+        save_checkpoint=lambda *_: None, atomic_checkpoints=atomic.store,
+        now_ms=lambda: initial.budget.started_at_ms)
+    result = processor.process(task, ctx)
+    assert result.status == ProcessingStatus.WAITING, result.error
+    assert result.snapshot.metadata['draft'] == 'Saturday.'
+    assert len(provider.requests) == 2
 
 
 def test_recovery_refuses_changed_source_and_inflight_action(setup):

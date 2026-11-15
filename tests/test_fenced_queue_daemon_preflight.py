@@ -149,26 +149,6 @@ def test_superseded_daemon_skips_snapshot_and_queue_disposition(tmp_path, monkey
     assert queue.status_for('msg') == 'processing'
 
 
-def test_superseded_tui_does_not_read_snapshot_or_drain_outbox(monkeypatch):
-    from types import SimpleNamespace
-    from alphonse.agent_v2.core.core import LoopStepResult
-    from alphonse.agent_v2.core.state import State, reset_state
-    from alphonse.agent_v2.integrations.presence import PresenceProjector
-    from alphonse.agent_v2.interfaces import tui
-
-    reset_state()
-    state = State.snapshot()
-    step = LoopStepResult(status=LoopStepStatus.SUPERSEDED, state_before=state, state_after=state)
-    runtime = SimpleNamespace(
-        queue=SimpleNamespace(peek=lambda: None),
-        presence_projector=PresenceProjector(),
-        core=SimpleNamespace(step=lambda: step),
-        visible_state=SimpleNamespace(snapshot=lambda: pytest.fail('stale snapshot read')),
-    )
-    monkeypatch.setattr(tui, '_drain_tui_outbox', lambda *_: pytest.fail('stale outbox drain'))
-    result = tui.process_tui_queue_once(runtime)
-    assert result.step_status is LoopStepStatus.SUPERSEDED
-    assert result.response == '' and result.queued_message_id is None
 
 
 def test_unadvertised_receipt_diagnostic_daemon_prework_precedes_core_refusal(tmp_path, monkeypatch):

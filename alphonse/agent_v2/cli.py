@@ -16,10 +16,7 @@ from alphonse.agent_v2.ipc import V2DaemonClient
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="alphonse", description="Alphonse daemon controls")
     subparsers = parser.add_subparsers(dest="command", required=True)
-    start_parser = subparsers.add_parser("start", help="Start the daemon or TUI")
-    start_parser.add_subparsers(dest="start_target", required=False).add_parser(
-        "tui", help="Start the daemon if needed, then open the TUI"
-    )
+    subparsers.add_parser("start", help="Start the daemon")
     subparsers.add_parser("status", help="Show daemon health and queue status")
     subparsers.add_parser("stop", help="Gracefully stop the daemon")
     coding = subparsers.add_parser("configure-codex-sandbox", help="Select a trusted immutable coding sandbox image")
@@ -30,8 +27,6 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "start":
-        if getattr(args, "start_target", "") == "tui":
-            return start_tui()
         return start_daemon()
     if args.command == "status":
         return show_status()
@@ -103,17 +98,6 @@ def stop_daemon(*, client: V2DaemonClient | None = None) -> int:
         return 1
     print("Alphonse daemon stopped.")
     return 0
-
-
-def start_tui() -> int:
-    if start_daemon() != 0:
-        return 1
-    completed = subprocess.run(
-        [sys.executable, "-m", "alphonse.agent_v2.tui"],
-        env=os.environ.copy(),
-        check=False,
-    )
-    return int(completed.returncode)
 
 
 def format_status(status: dict[str, Any]) -> str:

@@ -12,7 +12,7 @@ reactions through the Discord bot.
    intents. Alphonse needs this to read message text.
 3. Install the bot in the desired server with permission to view channels, send
    messages, attach files, add reactions, and send messages in threads.
-4. In Alphonse's TUI, open `/integrations`, select Discord, and enter the bot
+4. In Alphonse Desktop, open Settings, select Discord, and enter the bot
    token, your Discord user ID, then enable the integration.
 
 Guild messages are observed in every channel that the bot can read, subject to

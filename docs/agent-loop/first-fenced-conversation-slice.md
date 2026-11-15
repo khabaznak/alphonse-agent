@@ -19,15 +19,19 @@ chores. It can deliver a clarification as a conversation turn. The owner can
 explicitly select an acknowledged question when replying; its verified prior
 turns are supplied as quoted context to a new request. This does not resume the
 old waiting task or automatically treat a new topic as a reply. Its 180-second
-claim has no renewal. Lost
-or uncertain work needs explicit recovery; malformed or unknown effects can
+claim has no renewal. A completed, unpicked response can be recovered after
+daemon restart only under its still-live original claim and a durable
+post-cancellation handoff, with exclusive locking and source revalidation.
+Expired or uncertain work needs explicit recovery; malformed or unknown effects can
 remain blocked. Model and source I/O cannot be atomically fenced by SQLite,
-and client acknowledgment does not prove a person read the answer. Two
-subscription-backed disposable owner-worker attempts produced the expected
-synthetic answer and acknowledgment; the second retained a search observation
-but did not read the source. See
-`evidence/owner-only-synthetic-2026-11-14.jsonl`. These are development evidence,
-not qualification; no household data or existing daemon restart was used.
+and client acknowledgment does not prove a person read the answer. Conversation
+sources up to 36,000 characters can be assembled from contiguous revalidated
+pages; each page consumes a tool action. A synthetic subscription-backed
+clarification cycle and a 15,105-character multi-page case passed in the
+disposable owner worker. See `evidence/owner-clarification-2026-11-14.jsonl`
+and `evidence/owner-multipage-2026-11-14.jsonl`; the latter also preserves an
+invalid initial fixture. These are development evidence, not qualification;
+no household data or existing daemon restart was used.
 Actual deployment and broader retirement remain open.
 
 ## Earlier owner-only integration work — historical

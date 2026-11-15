@@ -24,6 +24,16 @@ def test_queue_message_requires_project_provenance() -> None:
 def test_queue_message_accepts_unassociated_conversation_message() -> None:
     queued = CommunicationChannel(InMemoryMessageQueue()).queue_message(prompt="hello", user="alex")
     assert queued.message.project_id == ""
+    assert queued.message.metadata["channel"]["integration_id"] == "desktop"
+    assert queued.message.metadata["channel"]["provider_key"] == "tui"
+
+
+def test_queue_message_preserves_explicit_legacy_channel_identity() -> None:
+    queued = CommunicationChannel(InMemoryMessageQueue()).queue_message(
+        prompt="hello", user="alex", integration_id="tui", provider_key="tui"
+    )
+    assert queued.message.metadata["channel"]["integration_id"] == "tui"
+    assert queued.message.metadata["channel"]["provider_key"] == "tui"
 
 
 def test_queue_message_generates_timezone_aware_local_timestamp() -> None:
@@ -81,7 +91,7 @@ def test_slash_command_detected_only_at_prompt_start() -> None:
     assert command.metadata["is_command"] is True
     assert command.metadata["command"] == "project"
     assert command.metadata["command_args"] == "new"
-    assert command.metadata["channel"]["integration_id"] == "tui"
+    assert command.metadata["channel"]["integration_id"] == "desktop"
     assert indented.metadata["channel"]["channel_target"] == "alex"
     assert sentence.metadata["channel"]["alphonse_user_id"] == "alex"
     assert {key: indented.metadata[key] for key in ("is_command", "command", "command_args")} == {

@@ -17,6 +17,7 @@ from alphonse.agent_v2.core.core import CoreLoopContext, ProcessingResult, Proce
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.tools.registry.native.memory import (
     READ_MEMORY_SOURCE_TOOL_ID, SEARCH_MEMORY_TOOL_ID, revalidate_conversation_observation,
+    conversation_read_sequences,
 )
 from alphonse.agent_v2.users import V2UserStore
 from alphonse.agent_v2.core.messages.sqlite_queue import SQLiteMessageQueue
@@ -103,7 +104,7 @@ class OwnerReadConversationProcessor:
             descriptors = (
                 replace(descriptors[0], argument_schema=search_schema,
                         description='Search the owner’s prior conversation messages. Results are historical, not proof of current state.'),
-                replace(descriptors[1], description='Read an owner conversation source ID returned by search; historical messages may be incomplete or outdated.'),
+                replace(descriptors[1], description='Read an owner conversation source ID returned by search. For a partial source, use the returned next_offset and read sequentially, preferably with max_chars 12000; content is available after all pages are checked. Sources above 36000 characters are unavailable. Historical messages may be outdated.'),
             )
             chooser = RouterCandidateChooser(router=context.inference, task=task, tools=descriptors,
                 max_input_tokens=65536, cancellation_checker=context.is_cancelled)
@@ -153,12 +154,28 @@ class OwnerReadConversationProcessor:
                 return False
             if tool_id == SEARCH_MEMORY_TOOL_ID:
                 return args.get('source_types') == ['conversation'] and args.get('offset', 0) == 0
-            return (tool_id == READ_MEMORY_SOURCE_TOOL_ID and isinstance(args.get('source_id'), str)
-                    and args['source_id'].startswith('conversation:') and args.get('offset', 0) == 0)
+            if (tool_id != READ_MEMORY_SOURCE_TOOL_ID or not isinstance(args.get('source_id'), str)
+                    or not args['source_id'].startswith('conversation:')
+                    or type(args.get('offset', 0)) is not int or args.get('offset', 0) < 0):
+                return False
+            try:
+                pages = conversation_read_sequences(actor, observations).get(args['source_id'], [])
+                if args.get('offset', 0) == 0:
+                    return not pages
+                if not pages or pages[-1][2].get('next_offset') != args['offset']:
+                    return False
+                # Recheck every prior page, not just its offset. Source
+                # mutation or revoked access stops continuation.
+                return all(revalidate_conversation_observation(actor, tool, previous_args, payload,
+                    context=execution_context, allow_read_chunks=True)
+                    for _, previous_args, payload in pages for tool in (READ_MEMORY_SOURCE_TOOL_ID,))
+            except Exception:
+                return False
 
         def valid(actor_id: str, tool_id: str, args: dict[str, Any], payload: dict[str, Any]) -> bool:
-            return allowed(actor_id, tool_id, args) and revalidate_conversation_observation(
-                actor_id, tool_id, args, payload, context=execution_context, allow_excerpt_truncation=True)
+            return (actor_id == actor and self._authorized(task, context) and isinstance(args, dict)
+                    and revalidate_conversation_observation(actor_id, tool_id, args, payload,
+                        context=execution_context, allow_excerpt_truncation=True, allow_read_chunks=True))
 
         def access(actor_id: str, ref: str) -> bool:
             if actor_id != actor or not self._authorized(task, context):
@@ -177,6 +194,22 @@ class OwnerReadConversationProcessor:
                 raise ValueError('owner_read_evidence_unavailable')
             if ref != 'goal':
                 tool_id, _, payload = observations[ref]
+                if tool_id == READ_MEMORY_SOURCE_TOOL_ID:
+                    pages = conversation_read_sequences(actor, observations)[payload['items'][0]['source_id']]
+                    # Never project an incomplete prefix as if it were the
+                    # original source. Expose only the next bounded offset.
+                    if pages[-1][2]['next_offset'] is not None:
+                        return json.dumps({'source_id': payload['items'][0]['source_id'], 'status': 'partial',
+                            'next_offset': pages[-1][2]['next_offset'],
+                            'notice': 'Read the next page; content is withheld until the complete source is available.'})
+                    if pages[-1][0] != ref:
+                        return json.dumps({'source_id': payload['items'][0]['source_id'], 'status': 'assembled_elsewhere'})
+                    if not all(valid(actor_id, READ_MEMORY_SOURCE_TOOL_ID, args, page) for _, args, page in pages):
+                        raise ValueError('owner_read_evidence_unavailable')
+                    return json.dumps({'status': 'found', 'source_id': payload['items'][0]['source_id'],
+                        'source': payload['items'][0]['source'],
+                        'content': ''.join(page['items'][0]['content'] for _, _, page in pages),
+                        'historical_only': True}, ensure_ascii=False, sort_keys=True)
                 if tool_id == SEARCH_MEMORY_TOOL_ID and payload.get('truncated') is True:
                     # A shortened preview can hide a later correction. Keep
                     # complete previews and identifying metadata for source
@@ -218,8 +251,9 @@ class OwnerReadConversationProcessor:
         def provenance(actor_id: str, text: str, refs: tuple[str, ...]) -> bool:
             if not (text.strip() and self._authorized(task, context) and all(access(actor_id, ref) for ref in refs)):
                 return False
-            reads = {args.get('source_id') for tool, args, _ in observations.values()
-                     if tool == READ_MEMORY_SOURCE_TOOL_ID}
+            sequences = conversation_read_sequences(actor, observations)
+            reads = {source_id for source_id, pages in sequences.items()
+                     if pages and pages[-1][2]['next_offset'] is None}
             for tool, _, payload in observations.values():
                 if tool == SEARCH_MEMORY_TOOL_ID and payload.get('truncated') is True:
                     shortened = {item['source_id'] for item in payload['results'] if item['truncated'] is True}

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { assertLegacyConversationAvailable, OwnerConversation, type OwnerRequest } from "./ownerConversation";
+import { assertLegacyConversationAvailable, OwnerConversation, ownerUnavailableMessage, type OwnerRequest } from "./ownerConversation";
 
 const id = "a".repeat(32);
 const token = "b".repeat(32);
@@ -39,6 +39,15 @@ describe("explicit owner conversation transport", () => {
     const client = new OwnerConversation(request as OwnerRequest);
     await expect(client.send("hello")).rejects.toThrow("not ready");
     expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("explains a legacy-claim conflict before submission", async () => {
+    const request = vi.fn(async () => ({ owner_only: true, processing_ready: false, blocking_reason: "legacy_claim_conflict" }));
+    const client = new OwnerConversation(request as OwnerRequest);
+    await expect(client.send("hello")).rejects.toThrow("queued work or its saved state");
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(ownerUnavailableMessage("queue_unavailable")).toContain("queue is unavailable");
+    expect(ownerUnavailableMessage("future_unknown_reason")).toContain("not ready");
   });
 
   it("does not submit a second turn while the previous turn is unresolved", async () => {
@@ -132,6 +141,33 @@ describe("explicit owner conversation transport", () => {
     await client.send("hello");
     await expect(client.poll(() => {})).rejects.toThrow("unavailable or unconfirmed");
     expect(request.mock.calls.filter(([method]) => method === "experimental_owner_take_draft")).toHaveLength(0);
+  });
+
+  it("explains a known failure without retrying the request or fetching a draft", async () => {
+    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === "experimental_owner_status") return params?.message_id
+        ? { status: "failed", failure_code: "source_incomplete" } : { processing_ready: true };
+      if (method === "experimental_owner_ingress") return { message_id: id };
+      throw new Error("unexpected request");
+    });
+    const client = new OwnerConversation(request as OwnerRequest);
+    await client.send("hello");
+    await expect(client.poll(() => {})).rejects.toThrow("source could not be verified as complete");
+    expect(request.mock.calls.filter(([method]) => method === "experimental_owner_take_draft")).toHaveLength(0);
+    expect(client.hasPending()).toBe(false);
+  });
+
+  it("never displays an unknown backend failure string", async () => {
+    const secret = "raw private source or exception";
+    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === "experimental_owner_status") return params?.message_id
+        ? { status: "failed", failure_code: secret } : { processing_ready: true };
+      if (method === "experimental_owner_ingress") return { message_id: id };
+      throw new Error("unexpected request");
+    });
+    const client = new OwnerConversation(request as OwnerRequest);
+    await client.send("hello");
+    await expect(client.poll(() => {})).rejects.toThrow("result may be unavailable or unconfirmed");
   });
 
   it("does not start the same pickup twice when poll cycles overlap", async () => {

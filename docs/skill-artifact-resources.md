@@ -105,8 +105,10 @@ registration/metadata tools or ID-based execution. Saved calls with `artifact_id
 fail with a migration/replanning diagnostic; they are never silently replayed as
 ordinary shell commands. Historical capability enums remain readable in checkpoints.
 Old artifact IPC methods return `artifact_catalog_retired`; use the migration API.
-The Desktop catalog editor is removed; `/artifacts` in TUI is a read-only migration
-report. Expanded skill/binding management belongs to #38.
+The Desktop catalog editor is removed. Open **Legacy resource review** in the
+Desktop Skills workspace for the read-only migration report; the underlying
+legacy skill migration IPC also supports preview. Expanded skill/binding
+management belongs to #38.
 
 The old SQLite reader, location validator and direct legacy helper modules remain
 only for importing historical records, provenance, containment checks and recovery

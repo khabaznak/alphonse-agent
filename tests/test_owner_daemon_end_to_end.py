@@ -4,18 +4,20 @@ import os
 import tempfile
 import threading
 import time
+from datetime import datetime, timezone
 from types import SimpleNamespace
 import pytest
 
 from alphonse.agent_v2.conversations import SQLiteConversationStore
 from alphonse.agent_v2.core.inference.models import InferenceResult, ModelProfile
+from alphonse.agent_v2.core.core import CoreMessage
 from alphonse.agent_v2.core.inference.router import InferenceRouter
 from alphonse.agent_v2.core.messages.sqlite_queue import SQLiteMessageQueue
 from alphonse.agent_v2.core.io.outbox import SQLiteOutboundStore
 from alphonse.agent_v2.core.questions import SQLiteQuestionStore
 from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry
 from alphonse.agent_v2.core.tools.registry.native.memory import build_read_memory_source_tool_definition, build_search_memory_tool_definition
-from alphonse.agent_v2.daemon import V2Daemon, _owner_only_requested
+from alphonse.agent_v2.daemon import V2Daemon, _owner_only_requested, _owner_public_failure_code
 from alphonse.agent_v2.ipc import V2DaemonClient, V2DaemonServer
 from alphonse.agent_v2.runtime import build_runtime_host
 from alphonse.agent_v2.users import V2UserStore
@@ -31,6 +33,14 @@ def test_owner_startup_requires_explicit_valid_opt_in(monkeypatch):
     monkeypatch.setenv('ALPHONSE_OWNER_ONLY_SIMPLE_LOOP', 'true')
     with pytest.raises(ValueError, match='owner_only_startup_configuration_invalid'):
         _owner_only_requested()
+
+
+def test_owner_failure_codes_are_allowlisted_and_do_not_disclose_errors():
+    assert _owner_public_failure_code('candidate_observation_incomplete') == 'source_incomplete'
+    assert _owner_public_failure_code('candidate_deadline_exceeded') == 'time_limit'
+    assert _owner_public_failure_code('raw private source text') == 'needs_attention'
+    assert _owner_public_failure_code(None) == 'needs_attention'
+    assert _owner_public_failure_code('candidate_deadline_exceeded', cancelled=True) == 'cancel_requested'
 
 
 @pytest.mark.parametrize('opt_in', [False, True])
@@ -164,6 +174,33 @@ def test_explicit_owner_worker_routes_to_socket_and_saves_history(tmp_path, monk
             assert runtime.integration_store.list() == existing_integrations
             assert users.list_addresses(owner.user_id) == existing_addresses
             if mode == 'answer':
+                # A live legacy claim makes the fenced worker unable to claim
+                # anything. Do not report readiness or accept a request that
+                # would otherwise sit pending indefinitely after a mode switch.
+                legacy = SQLiteMessageQueue(path, lease_owner='fixture-legacy')
+                legacy.enqueue(CoreMessage(timestamp=datetime.now(timezone.utc),
+                    prompt='Legacy pending work', user=owner.user_id), message_id='legacy-conflict')
+                assert legacy.claim_next() is not None
+                legacy.enqueue(CoreMessage(timestamp=datetime.now(timezone.utc),
+                    prompt='Legacy queued work', user=owner.user_id), message_id='legacy-queued')
+                assert client.request('experimental_owner_status') == {
+                    'owner_only': True, 'processing_ready': False,
+                    'blocking_reason': 'legacy_claim_conflict', 'paused_legacy_requests': 2}
+                with pytest.raises(RuntimeError, match='owner_worker_unavailable'):
+                    client.request('experimental_owner_ingress', prompt='Must not queue')
+                # Recheck atomically even when the preflight races a claim.
+                with monkeypatch.context() as patch:
+                    patch.setattr(daemon, 'owner_processing_ready', lambda: True)
+                    with pytest.raises(RuntimeError, match='owner_worker_claim_mode_conflict'):
+                        client.request('experimental_owner_ingress', prompt='Must not queue')
+                with queue._connect() as conn:
+                    rows = conn.execute('SELECT message_id,status FROM v2_inbound_messages ORDER BY sequence').fetchall()
+                assert [(row['message_id'], row['status']) for row in rows] == [
+                    ('legacy-conflict', 'processing'), ('legacy-queued', 'pending')]
+                assert legacy.ack('legacy-conflict')
+                assert client.request('experimental_owner_status') == {
+                    'owner_only': True, 'processing_ready': True,
+                    'blocking_reason': None, 'paused_legacy_requests': 1}
                 monkeypatch.setattr(runtime.question_store, 'list_for_conversation',
                                     lambda *_args, **_kwargs: pytest.fail('legacy question backfill'))
                 monkeypatch.setattr(runtime.conversation_store, 'import_legacy_events',
@@ -188,6 +225,8 @@ def test_explicit_owner_worker_routes_to_socket_and_saves_history(tmp_path, monk
             assert provider.calls == 3
             if mode == 'cancel':
                 assert status == 'failed'
+                assert client.request('experimental_owner_status', message_id=message_id) == {
+                    'status': 'failed', 'failure_code': 'cancel_requested'}
                 with pytest.raises(RuntimeError, match='owner_desktop_pickup_unavailable'):
                     client.request('experimental_owner_take_draft', message_id=message_id)
                 assert len(conversation.list(owner_user_id=owner.user_id)) == 1
@@ -314,6 +353,14 @@ def test_explicit_owner_worker_routes_to_socket_and_saves_history(tmp_path, monk
                 client.request('experimental_owner_ack_draft', message_id=reply_id,
                                acknowledgement_token=reply['acknowledgement_token'])
             assert not SQLiteMessageQueue(path).claim_mode_blocked()
+            if mode == 'answer':
+                # Owner mode leaves the earlier V3 request untouched. Once
+                # the owner answer is finalized, the previous queue mode can
+                # acquire that same request without silently migrating it.
+                restored = legacy.claim_next()
+                assert restored.message_id == 'legacy-queued'
+                assert restored.message.prompt == 'Legacy queued work'
+                assert legacy.ack('legacy-queued')
             users.update_user(owner.user_id, is_active=False)
             assert client.request('experimental_owner_status', message_id=message_id)['status'] == 'unavailable'
             assert client.request('experimental_owner_recovery_list')['items'] == []

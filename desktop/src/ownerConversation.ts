@@ -3,12 +3,48 @@ export type OwnerRequest = <T>(method: string, params?: Record<string, unknown>)
 
 type Pending = { messageId: string; pickupStarted: boolean; acknowledgementToken?: string; acknowledgementInFlight?: boolean; acknowledgementRetryAttempted?: boolean };
 type Status = "pending" | "ready" | "started_unconfirmed" | "client_acknowledged" | "failed" | "unavailable";
-type StatusReply = { processing_ready?: boolean; status?: Status };
+export type OwnerCapability = { owner_only?: boolean; processing_ready?: boolean; blocking_reason?: string | null; paused_legacy_requests?: number };
+type StatusReply = OwnerCapability & { status?: Status; failure_code?: string };
 type Pickup = { message_id: string; message: string; acknowledgement_token: string; delivery_status: string; kind?: "answer" | "question" };
 
+/** Old notifications remain untouched until their intended recipient and delivery are reconciled. */
+export function legacyNotificationReviewMessage(value: unknown): string {
+  if (value === null) return "Earlier notifications could not be checked for review.";
+  if (!value || typeof value !== "object") return "";
+  const summary = value as Record<string, unknown>;
+  const counts = [summary.owner_scoped, summary.ambiguous, summary.unassigned];
+  if (!counts.every((n) => typeof n === "number" && Number.isSafeInteger(n) && n >= 0)) return "";
+  const total = (counts as number[]).reduce((a, b) => a + b, 0);
+  if (!total) return "";
+  return `${total} earlier ${total === 1 ? "notification needs" : "notifications need"} review. They have not been resent automatically.`;
+}
+
 /** The exclusive owner worker cannot process the legacy queue. */
-export function assertLegacyConversationAvailable(ownerWorkerReady: boolean): void {
-  if (ownerWorkerReady) throw new Error("Turn on the simpler conversation loop to send a message while this owner-only service is running.");
+export function ownerUnavailableMessage(reason?: string | null): string {
+  if (reason === "legacy_claim_conflict") return "Earlier queued work or its saved state needs review before the simpler loop can start; your message was not sent.";
+  if (reason === "queue_unavailable") return "The conversation queue is unavailable. Your message was not sent.";
+  return "Owner conversation is not ready; your message was not sent.";
+}
+
+/** Fixed, non-sensitive categories supplied by the daemon; never render raw errors. */
+export function ownerFailureMessage(code?: string): string {
+  const messages: Record<string, string> = {
+    cancel_requested: "Cancellation was requested. Check unfinished requests before trying again.",
+    time_limit: "This request exceeded its time limit. Check unfinished requests before trying again.",
+    model_unavailable: "The model could not complete this request. Check unfinished requests before trying again.",
+    usage_unconfirmed: "Model usage could not be verified or exceeded the request limit. Check unfinished requests before trying again.",
+    source_unavailable: "A needed source was unavailable or access was denied. Check access and unfinished requests before trying again.",
+    source_changed: "A source changed or access was revoked during the request. Check unfinished requests before trying again.",
+    source_incomplete: "A source could not be verified as complete. Check unfinished requests before trying again.",
+    unsupported_operation: "This request needs an operation that is not available in owner conversation mode.",
+    answer_unverified: "I could not verify enough source information to answer. Check unfinished requests before trying again.",
+  };
+  return (code && Object.prototype.hasOwnProperty.call(messages, code))
+    ? messages[code] : "This conversation needs attention; its result may be unavailable or unconfirmed.";
+}
+
+export function assertLegacyConversationAvailable(ownerOnly: boolean): void {
+  if (ownerOnly) throw new Error("Turn on the simpler conversation loop to send a message while this owner-only service is running.");
 }
 
 /**
@@ -48,7 +84,7 @@ export class OwnerConversation {
     let queued: { message_id: string };
     try {
       const capability = await this.request<StatusReply>("experimental_owner_status", {});
-      if (capability.processing_ready !== true) throw new Error("Owner conversation is not ready; your message was not sent.");
+      if (capability.processing_ready !== true) throw new Error(ownerUnavailableMessage(capability.blocking_reason));
       try {
         queued = await this.request("experimental_owner_ingress", {
           prompt, ...(replyToMessageId === undefined ? {} : { reply_to_message_id: replyToMessageId }),
@@ -109,7 +145,7 @@ export class OwnerConversation {
       if (state.status !== "ready") {
         if (state.status === "failed") this.pending.delete(pending.messageId);
         pending.pickupStarted = true;
-        throw new Error(state.status === "started_unconfirmed"
+        throw new Error(state.status === "failed" ? ownerFailureMessage(state.failure_code) : state.status === "started_unconfirmed"
           ? "The answer could not be confirmed. It will not be fetched again automatically."
           : "This conversation needs attention; its result may be unavailable or unconfirmed.");
       }

@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from alphonse.agent_v2.conversations import SQLiteConversationStore
-from alphonse.agent_v2.core.core import CoreLoopContext, PromptFile, _task_progress_snapshot, CoreActivityEvent, ImprovementPhase
+from alphonse.agent_v2.core.core import CoreLoopContext, PromptFile, _task_progress_snapshot
 from alphonse.agent_v2.core.context_manifests import manifest_scope
 from alphonse.agent_v2.core.context_inventory import source
 from alphonse.agent_v2.core.inference import InferenceRouter, InferenceResult, ModelProfile
@@ -155,37 +155,6 @@ def test_default_memory_and_conversation_budget_keep_source_omissions(default_ca
     assert 'Whole fact too long.' not in text
 
 
-def test_tui_displays_the_captured_owner_inventory_after_task_changes(default_calls):
-    from alphonse.agent_v2.interfaces.tui import _build_textual_app_class
-    from textual.widgets import TextArea
-    task, context, *_ = default_calls
-    with manifest_scope(task, context):
-        plan_phase(task, context)
-    snapshot = _task_progress_snapshot(task)
-    cls = _build_textual_app_class()
-    # Invoke the actual app handlers without initializing any user runtime stores.
-    app = SimpleNamespace(runtime=SimpleNamespace(user='alex'), decision_work_log={}, spinner_index=0, reply_message_id='',
-        query_one=lambda *args: SimpleNamespace(update=lambda text: None), _is_tui_reply_event=lambda event: False)
-    event = CoreActivityEvent(phase=ImprovementPhase.PLAN, label='captured', message='', task_id=task.task_id, user='alex', progress=snapshot)
-    cls._append_activity_event(app, event)
-    cls._append_activity_event(app, CoreActivityEvent(phase=ImprovementPhase.PLAN, label='private', message='', task_id='other', user='other', progress={'decision_context_manifests': [{'decision_id': 'PRIVATE'}]}))
-    assert 'other' not in app.decision_work_log
-    screens = []
-    app.push_screen = screens.append
-    task.goal = 'LATER REQUEST'
-    cls.action_decision_work_log(app)
-    screen = screens[0]
-    import asyncio
-    from textual.app import App
-    async def inspect_screen():
-        async with App().run_test(size=(120, 40)) as pilot:
-            await pilot.app.push_screen(screen)
-            await pilot.pause()
-            text_widget = screen.query_one('#decision-manifest-text', TextArea)
-            assert 'LATER REQUEST' not in text_widget.text
-            assert all(m['decision_id'] in text_widget.text for m in snapshot['decision_context_manifests'])
-            assert 'PRIVATE' not in text_widget.text
-    asyncio.run(inspect_screen())
 
 
 def test_default_admission_candidate_clips_correspond_to_the_actual_fields(default_calls):

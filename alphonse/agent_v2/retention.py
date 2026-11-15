@@ -56,7 +56,8 @@ def prune_operational_data(
             (
                 "outbound",
                 "v2_outbox",
-                "DELETE FROM v2_outbox WHERE status IN ('delivered','failed') AND updated_at < ?",
+                "DELETE FROM v2_outbox WHERE status IN ('delivered','failed') AND updated_at < ? "
+                "AND NOT (status='failed' AND integration_id IN ('tui','retired_tui'))",
             ),
             (
                 "scheduled_executions",

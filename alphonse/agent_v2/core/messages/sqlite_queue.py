@@ -112,6 +112,11 @@ class SQLiteMessageQueue:
         timestamp = _now_iso()
         with self._connect() as conn:
             conn.execute('BEGIN IMMEDIATE')
+            # Readiness is only a snapshot. Recheck under the same write lock
+            # as insertion so an incompatible in-binary legacy claim cannot
+            # appear between a UI preflight and this enqueue.
+            if _claim_mode_conflict(conn, fenced=True):
+                raise RuntimeError('owner_worker_claim_mode_conflict')
             admin = conn.execute("""SELECT u.user_id FROM v2_users u JOIN v2_user_settings s
                 ON s.key='admin_user_id' AND s.value=u.user_id
                 WHERE u.role='admin' AND u.is_active=1""").fetchone()
@@ -284,7 +289,8 @@ class SQLiteMessageQueue:
                         raise ValueError
                     allowed_keys = set(expected_metadata) | {STATE_KEY, 'owner_read_observations',
                         'owner_read_pending_action', 'owner_read_pending_decision',
-                        'owner_read_selected_draft', 'owner_read_desktop_pickup_started'}
+                        'owner_read_selected_draft', 'owner_read_desktop_pickup_started',
+                        'owner_read_ready_handoff'}
                     if (set(metadata) - allowed_keys or type(metadata.get('intelligence_schema_version')) is not int
                             or any(metadata.get(key) != value for key, value in expected_metadata.items())):
                         raise ValueError
@@ -313,7 +319,7 @@ class SQLiteMessageQueue:
                         if (action.get('claim_digest') != claim_digest or not isinstance(reserved, dict)
                                 or reserved.get('kind') != action.get('kind') or reserved.get('status') != 'reserved'):
                             raise ValueError
-                    for key in ('owner_read_pending_decision', 'owner_read_selected_draft', 'owner_read_desktop_pickup_started'):
+                    for key in ('owner_read_pending_decision', 'owner_read_selected_draft', 'owner_read_desktop_pickup_started', 'owner_read_ready_handoff'):
                         marker = metadata.get(key)
                         if marker is not None and (not isinstance(marker, dict) or marker.get('claim_digest') != claim_digest):
                             raise ValueError

@@ -300,7 +300,7 @@ class DiscordIntegrationRuntime:
                 self.discord_client.send_message(channel_id=channel_id, text="Your request to talk to Alphonse has been sent to the administrator. Please wait for approval.")
             except Exception:
                 pass
-        self.outbox.enqueue(address=ChannelAddress(integration_id="tui", provider_key="tui", channel_target=self.owner_user_id, alphonse_user_id=self.owner_user_id, provider_user_id=self.owner_user_id), message=f"Discord message ignored because the sender is not mapped to an Alphonse user: provider_user_id={provider_user_id}, channel_id={channel_id}.", kind="identity_resolution", audience_user_id=self.owner_user_id, metadata={"provider_key": "discord", "integration_id": self.integration_id, "provider_user_id": provider_user_id, "channel_target": channel_id, "provider_raw_message": dict(raw)})
+        self.outbox.enqueue(address=ChannelAddress(integration_id="desktop", provider_key="tui", channel_target=self.owner_user_id, alphonse_user_id=self.owner_user_id, provider_user_id=self.owner_user_id), message=f"Discord message ignored because the sender is not mapped to an Alphonse user: provider_user_id={provider_user_id}, channel_id={channel_id}.", kind="identity_resolution", audience_user_id=self.owner_user_id, metadata={"provider_key": "discord", "integration_id": self.integration_id, "provider_user_id": provider_user_id, "channel_target": channel_id, "provider_raw_message": dict(raw)})
 
     def _ingest_attachments(self, descriptors: list[AttachmentDescriptor], user_id: str) -> tuple[list[str], list[dict[str, Any]]]:
         asset_ids: list[str] = []

@@ -388,6 +388,8 @@ class V2DaemonServer:
                     result = self._owner_recovery_list(connection, request)
                 elif isinstance(request, dict) and request.get('method') == 'experimental_owner_questions':
                     result = self._owner_questions(connection, request)
+                elif isinstance(request, dict) and request.get('method') in {'legacy_notification_list', 'legacy_notification_archive'}:
+                    result = self._legacy_notification_review(connection, request)
                 else:
                     result = self._dispatch(request)
                 response = {"version": PROTOCOL_VERSION, "request_id": _request_id(request), "ok": True, "result": result}
@@ -425,6 +427,28 @@ class V2DaemonServer:
         return {'message_id': queue.enqueue_trusted_local_owner(prompt=params['prompt'], peer_uid=uid,
                     reply_to_message_id=params.get('reply_to_message_id'))}
 
+    def _legacy_notification_review(self, connection, request):
+        """Review legacy deliveries as the authenticated local owner only."""
+        if request.get('version') != PROTOCOL_VERSION:
+            raise ValueError('daemon_protocol_version_unsupported')
+        params = request.get('params')
+        method = request.get('method')
+        expected = set() if method == 'legacy_notification_list' else {'message_id', 'review_token'}
+        if not isinstance(params, dict) or set(params) != expected:
+            raise ValueError('legacy_notification_payload_denied')
+        self._local_peer_uid(connection)
+        users = self.daemon.runtime.user_store
+        owner = users.admin_user()
+        if (owner is None or owner.is_active is not True or owner.role != 'admin'
+                or not users.is_admin(owner.user_id)):
+            raise PermissionError('legacy_notification_owner_unavailable')
+        outbox = self.daemon.runtime.outbox
+        if method == 'legacy_notification_list':
+            return {'items': outbox.list_legacy_tui_owner_items(owner.user_id)}
+        if not isinstance(params['message_id'], str) or not isinstance(params['review_token'], str):
+            raise ValueError('legacy_notification_payload_denied')
+        return outbox.archive_legacy_tui_owner_item(owner.user_id, params['message_id'], params['review_token'])
+
     def _owner_status(self, connection, request):
         if not self.experimental_owner_ingress:
             raise PermissionError('owner_status_unavailable')
@@ -435,8 +459,12 @@ class V2DaemonServer:
             raise ValueError('owner_status_payload_denied')
         self._local_peer_uid(connection)
         if not params:
-            return {'processing_ready': self.daemon.owner_processing_ready()}
-        return {'status': self.daemon.owner_message_status(params['message_id'])}
+            reason = self.daemon.owner_processing_blocking_reason()
+            return {'owner_only': getattr(self.daemon, 'experimental_owner_only', False) is True,
+                    'processing_ready': reason is None,
+                    'blocking_reason': reason,
+                    'paused_legacy_requests': self.daemon.owner_paused_legacy_requests()}
+        return self.daemon.owner_message_status_payload(params['message_id'])
 
     def _owner_recovery_list(self, connection, request):
         if not self.experimental_owner_ingress:
@@ -607,7 +635,7 @@ class V2DaemonServer:
         if method == "trigger_killswitch":
             return self.daemon.trigger_killswitch(
                 actor_user_id=str(params.get("actor_user_id") or ""),
-                source={"integration_id": "desktop", "provider_key": "tui"},
+                source={"integration_id": "desktop", "provider_key": "desktop"},
             )
         if method == "decision_context":
             return self.daemon.decision_context(
@@ -924,7 +952,7 @@ class V2DaemonServer:
             return {
                 "session": self.daemon.select_project_session(
                     user=str(params.get("user") or "local"),
-                    integration_id=str(params.get("integration_id") or "tui"),
+                    integration_id=str(params.get("integration_id") or "desktop"),
                     channel_target=str(params.get("channel_target") or params.get("user") or "local"),
                     thread_id=str(params.get("thread_id") or ""),
                     project_id=str(params.get("project_id") or ""),
@@ -934,7 +962,7 @@ class V2DaemonServer:
             return {
                 "session": self.daemon.active_project_session(
                     user=str(params.get("user") or "local"),
-                    integration_id=str(params.get("integration_id") or "tui"),
+                    integration_id=str(params.get("integration_id") or "desktop"),
                     channel_target=str(params.get("channel_target") or params.get("user") or "local"),
                     thread_id=str(params.get("thread_id") or ""),
                 )
@@ -953,7 +981,7 @@ class V2DaemonServer:
         if method in {"create_memory_session", "select_memory_session", "close_memory_session"}:
             common = {
                 "user": str(params.get("user") or "local"), "project_id": str(params.get("project_id") or ""),
-                "integration_id": str(params.get("integration_id") or "tui"),
+                "integration_id": str(params.get("integration_id") or "desktop"),
                 "channel_target": str(params.get("channel_target") or params.get("user") or "local"),
                 "thread_id": str(params.get("thread_id") or ""),
             }
@@ -1006,8 +1034,8 @@ class V2DaemonServer:
         if method == "queue_message":
             if getattr(self.daemon, 'experimental_owner_only', False) is True:
                 raise RuntimeError('owner_only_use_owner_conversation')
-            integration_id = str(params.get("integration_id") or "tui")
-            provider_key = str(params.get("provider_key") or "tui")
+            integration_id = str(params.get("integration_id") or "desktop")
+            provider_key = str(params.get("provider_key") or "desktop")
             user = str(params.get("user") or "")
             if provider_key == "tui" or integration_id in {"tui", "desktop"}:
                 current = self.daemon.current_user().get("user")

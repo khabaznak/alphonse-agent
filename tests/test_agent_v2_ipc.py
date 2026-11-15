@@ -65,6 +65,8 @@ def test_daemon_ipc_dispatches_ping_status_and_queue_message() -> None:
     assert queued["message_id"]
     assert queued["created_at"]
     assert queued["conversation_sequence"] == 1
+    assert runtime.queue.peek().message.metadata['channel']['integration_id'] == 'desktop'
+    assert runtime.queue.peek().message.metadata['channel']['provider_key'] == 'desktop'
     assert daemon.ipc._dispatch({"method": "status"})["queue_size"] == 1
     daemon.run_once()
     assert daemon.ipc._dispatch({"method": "status"})["queue_size"] == 0

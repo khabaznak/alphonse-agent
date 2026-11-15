@@ -139,7 +139,7 @@ class InferenceRouter:
         self.telemetry_sink(event.to_dict())
 
     def _with_profile(self, request: InferenceRequest) -> InferenceRequest:
-        # Callers cannot override the Desktop/TUI selection per project, node,
+        # Callers cannot override the Desktop selection per project, node,
         # purpose, or request.
         return replace(request, model_profile=self.select_profile(request))
 

@@ -207,7 +207,7 @@ def test_scheduled_occurrence_expired_lease_is_reclaimed() -> None:
     assert reclaimed[0].occurrence_key == first[0].occurrence_key
 
 
-def test_daemon_processes_host_queue_without_tui() -> None:
+def test_daemon_processes_host_queue() -> None:
     runtime = build_runtime_host(
         schedule_store=ScheduledTaskStore(":memory:"),
         inference=_respond_router(),

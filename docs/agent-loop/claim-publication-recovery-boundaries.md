@@ -1,10 +1,12 @@
 # Claim, publication and recovery integration boundaries
 
-Working map for #216, #224 and #225. These are prerequisites, not an enabled
-runtime protocol. The existing daemon and core explicitly reject experimental
-claim-fencing mode before processing; do not remove those guards independently.
+Historical working map for #216, #224 and #225. It records the flow and gaps
+at the time of the investigation, including the then-existing TUI. It is not
+an authoritative description of the current runtime; see
+[the current owner slice](first-fenced-conversation-slice.md) and #234 for the
+terminal interface retirement.
 
-## Current flow and gaps
+## Flow and gaps at the time
 
 1. The experimental SQLite queue can return an internal `ClaimReceipt` on a
    `QueuedMessage`, binding message, queue user, lease owner and acquisition

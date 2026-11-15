@@ -30,7 +30,7 @@ class CommunicationChannel:
         correlation_id: str = "",
         timestamp: datetime | None = None,
         metadata: dict[str, Any] | None = None,
-        integration_id: str = "tui",
+        integration_id: str = "desktop",
         provider_key: str = "tui",
         provider_user_id: str = "",
         channel_target: str = "",

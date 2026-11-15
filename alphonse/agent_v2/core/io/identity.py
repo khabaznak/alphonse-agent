@@ -31,7 +31,7 @@ class V2IdentityResolver:
     """Resolve provider identities and preferred outbound addresses."""
 
     def __init__(self, integrations: tuple[IntegrationIdentity, ...] | None = None, *, user_store: Any | None = None) -> None:
-        configured = integrations or (IntegrationIdentity("tui", "tui"),)
+        configured = integrations or (IntegrationIdentity("desktop", "tui"),)
         self._by_id = {
             str(item.integration_id or "").strip(): item
             for item in configured
@@ -125,7 +125,7 @@ class V2IdentityResolver:
             return IntegrationIdentity(integration_id=integration_key, provider_key=provider or integration_key.lower())
         if provider:
             return IntegrationIdentity(integration_id=provider, provider_key=provider)
-        return IntegrationIdentity(integration_id="tui", provider_key="tui")
+        return IntegrationIdentity(integration_id="desktop", provider_key="tui")
 
 def resolve_provider_user_mapping(*, user_store: Any, alphonse_user_id: str, provider_key: str) -> str | None:
     """Return the provider user id mapped to a canonical Alphonse user."""

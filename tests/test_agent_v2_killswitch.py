@@ -40,11 +40,11 @@ def test_killswitch_cancels_active_task_and_queues_owner_notice(tmp_path) -> Non
     task = SimpleNamespace(task_id="task-1", user=owner.user_id, project_id="",)
     daemon._activate_kill_switch_task(queued, task)
 
-    result = daemon.trigger_killswitch(actor_user_id=admin.user_id, source={"integration_id": "tui"})
+    result = daemon.trigger_killswitch(actor_user_id=admin.user_id, source={"integration_id": "desktop"})
 
     assert result["status"] == "cancel_requested"
     assert daemon.kill_switch.is_cancelled(queued.message_id) is True
-    notice = daemon.runtime.outbox.claim_next(OutboundSelector(integration_id="tui", audience_user_id=owner.user_id))
+    notice = daemon.runtime.outbox.claim_next(OutboundSelector(integration_id="desktop", audience_user_id=owner.user_id))
     assert notice is not None
     assert notice.kind == "security_notice"
     assert notice.message == "Your task was eliminated for security reasons. Please try later or contact Alphonse’s Admin."

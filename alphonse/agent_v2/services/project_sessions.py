@@ -204,7 +204,7 @@ class ProjectInboundRouter:
         message_id: str | None = None,
     ) -> InboundRouteResult:
         address = ChannelAddress(
-            integration_id=str(integration_id or "tui").strip() or "tui",
+            integration_id=str(integration_id or "desktop").strip() or "desktop",
             provider_key=str(provider_key or "tui").strip().lower() or "tui",
             channel_target=str(channel_target or user).strip() or str(user).strip(),
             alphonse_user_id=str(user).strip(),

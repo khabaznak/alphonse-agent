@@ -22,7 +22,7 @@ from alphonse.agent_v2.core.tools.registry.native import SCHEDULED_TASK_TOOL_NAM
 from alphonse.agent_v2.core.tools.registry.native import build_native_tool_registry
 from alphonse.agent_v2.core.tools.registry.native import execute_scheduled_task
 from alphonse.agent_v2.core.tools.registry.native.scheduled_task_delivery import execute_scheduled_task_delivery
-from alphonse.agent_v2.interfaces.tui import _latest_tool_result_response
+from alphonse.agent_v2.core.io.outbox import _latest_tool_result_response
 
 
 
@@ -401,7 +401,7 @@ def test_runner_ignores_not_due_and_inactive_tasks() -> None:
 
 
 
-def test_tui_renders_scheduled_task_result() -> None:
+def test_scheduled_task_result_renders_for_outbox() -> None:
     task = TaskState()
     task.append_plan_call(
         {

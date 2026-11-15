@@ -178,6 +178,32 @@ class OwnerAtomicCheckpoint:
                 raise CheckpointConflict('owner_atomic_observation_bindings_invalid')
             return Checkpoint(row['version'], state, budget), deepcopy(observations)
 
+    def mark_ready_handoff(self) -> None:
+        """Record a completed cancellation handoff before exposing a draft.
+
+        The caller must hold the daemon's kill-switch handoff lock and its
+        single-instance lock. This only records a selected, unpicked draft; it
+        does not authorize pickup, settle an effect, or extend the lease.
+        """
+        with self._transaction() as conn:
+            row, raw, state, budget = self._load(conn, self.version)
+            md = raw['metadata']
+            selected = md.get('owner_read_selected_draft')
+            if (state.status not in {'completed', 'waiting_user'} or state.inflight
+                    or budget.usage()['in_flight'] or budget.usage()['unknown_usage']
+                    or 'owner_read_pending_action' in md or 'owner_read_pending_decision' in md
+                    or 'owner_read_desktop_pickup_started' in md or 'owner_read_ready_handoff' in md
+                    or not isinstance(selected, dict)
+                    or selected.get('claim_digest') != _claim_digest(self.receipt)
+                    or selected.get('answer_sha256') != hashlib.sha256(state.response.encode('utf-8')).hexdigest()):
+                raise CheckpointConflict('owner_ready_handoff_unavailable')
+            md['owner_read_ready_handoff'] = {
+                'schema_version': 1, 'claim_digest': _claim_digest(self.receipt),
+                'selected_sha256': _decision_digest(selected),
+            }
+            result = self.store._write(conn, row, raw, state, budget)
+        self.version = result.version
+
     def take_desktop_draft(self, context: Any) -> dict:
         """Start one owner-only pickup after revalidating its sources.
 
@@ -215,6 +241,7 @@ class OwnerAtomicCheckpoint:
                 'acknowledgement_sha256': hashlib.sha256(acknowledgement_token.encode('ascii')).hexdigest(),
                 'status': 'started_unconfirmed',
             }
+            metadata.pop('owner_read_ready_handoff', None)
             result = self.store._write(conn, row, raw, state, budget)
             response = {'message_id': self.task.message_id, 'message': state.response,
                         'kind': selected['kind'],

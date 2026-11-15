@@ -41,7 +41,6 @@ from alphonse.agent_v2.integrations import IntegrationRegistry
 from alphonse.agent_v2.integrations import SQLiteIntegrationStore
 from alphonse.agent_v2.integrations import build_default_integration_registry
 from alphonse.agent_v2.integrations.presence import PresenceProjector
-from alphonse.agent_v2.integrations.presence import TuiPresenceAdapter
 from alphonse.agent_v2.inference_settings import InferenceSettingsRecord
 from alphonse.agent_v2.inference_settings import SQLiteInferenceSettingsStore
 from alphonse.agent_v2.inference_settings import build_inference_router_from_settings
@@ -222,7 +221,7 @@ def build_runtime_host(
     system_one_settings_store = system_one_settings_store or SQLiteSystemOneSettingsStore()
     tools = tools or build_native_tool_registry(web_tools_settings_store.get(), asset_store, media_tools_settings_store.get(), artifact_store, user_store=user_store, skill_store=skill_store)
     inference_settings_store = inference_settings_store or SQLiteInferenceSettingsStore()
-    # Persistent daemon/TUI constructors pass `AgentConfigStore.default()`.
+    # The persistent daemon passes `AgentConfigStore.default()`.
     # Generic test and helper runtimes only need the package defaults.
     agent_config_store = agent_config_store or AgentConfigStore(packaged_agent_config_dir())
     project_session_store = project_session_store or SQLiteProjectSessionStore()
@@ -393,7 +392,6 @@ def build_runtime_host(
         register_tool(build_read_memory_source_tool_definition())
     integration_registry = integration_registry or build_default_integration_registry()
     presence_projector = PresenceProjector()
-    presence_projector.register("tui", TuiPresenceAdapter())
     identity_resolver = identity_resolver or build_identity_resolver(integration_store, user_store=user_store)
     communication_router = CommunicationRouter(users=user_store, resolver=identity_resolver, outbox=outbox, threads=communication_thread_store)
     delivery_sink = build_outbox_delivery_sink(
@@ -566,11 +564,9 @@ def _record_runtime_telemetry(events: list[dict[str, Any]], event: dict[str, Any
 
 
 def build_identity_resolver(store: SQLiteIntegrationStore, *, user_store: V2UserStore | None = None) -> V2IdentityResolver:
-    # Native clients use separate integration ids so their durable outbox
-    # deliveries cannot be consumed by another interface. Both are local
-    # first-party clients and therefore share the lightweight ``tui`` provider
-    # identity semantics.
-    identities = [IntegrationIdentity("tui", "tui"), IntegrationIdentity("desktop", "tui")]
+    # Desktop is the local interface. Keep the historic ``tui`` identity for
+    # already-stored addresses, while preferring Desktop for provider defaults.
+    identities = [IntegrationIdentity("desktop", "tui"), IntegrationIdentity("tui", "tui")]
     identities.extend(
         IntegrationIdentity(record.integration_id, record.provider_key)
         for record in store.list_enabled()

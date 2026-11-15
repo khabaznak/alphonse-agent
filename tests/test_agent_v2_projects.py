@@ -16,11 +16,6 @@ from alphonse.agent_v2.core.tools.registry.native import BASH_TOOL_NAME
 from alphonse.agent_v2.core.tools.registry.native import build_bash_tool_definition
 from alphonse.agent_v2.core.tools.registry.native import build_native_tool_registry
 from alphonse.agent_v2.core.tools.registry.native import execute_bash
-from alphonse.agent_v2.interfaces.tui import build_tui_runtime
-from alphonse.agent_v2.interfaces.tui import create_tui_project
-from alphonse.agent_v2.interfaces.tui import detect_tui_slash_command
-from alphonse.agent_v2.interfaces.tui import queue_tui_input
-from alphonse.agent_v2.interfaces.tui import select_tui_project
 
 
 def test_project_store_creates_directory_and_config_file(tmp_path: Path) -> None:
@@ -89,62 +84,12 @@ def test_project_store_archives_restores_and_updates_metadata(tmp_path: Path) ->
         store.update_project(project.project_id, name="No", description="", visibility="private", requester_user_id="gaby")
 
 
-def test_tui_project_commands_are_intercepted_and_not_queued(tmp_path: Path) -> None:
-    runtime = build_tui_runtime(user="alex", project_store=ProjectStore(":memory:"))
-    runtime.conversation_store.set_daily_ledger_projector(None)
-
-    result = queue_tui_input(runtime, "/project")
-    indented = queue_tui_input(runtime, " /project")
-
-    assert result.command == "project"
-    assert result.queued is False
-    assert runtime.queue.size() == 1
-    assert indented.queued is True
-    assert indented.command == ""
 
 
-def test_tui_project_selection_does_not_implicitly_scope_conversations(tmp_path: Path) -> None:
-    runtime = build_tui_runtime(user="alex", project_store=ProjectStore(":memory:"))
-    runtime.conversation_store.set_daily_ledger_projector(None)
-    project = create_tui_project(
-        runtime,
-        name="Alpha",
-        description="",
-        root_path=str(tmp_path / "alpha"),
-        visibility="private",
-    )
-    runtime.project_store.write_project_config(project.project_id, {"scope": "Use the alpha rules."}, requester_user_id="alex")
-
-    result = queue_tui_input(runtime, "List files")
-
-    assert runtime.active_project_id == project.project_id
-    assert result.queued is True
-    queued = runtime.queue.peek()
-    assert queued is not None
-    assert queued.message.project_id == ""
-    assert runtime.project_store.read_project_config(project.project_id, requester_user_id="alex")["scope"] == "Use the alpha rules."
 
 
-def test_select_tui_project_sets_active_project(tmp_path: Path) -> None:
-    runtime = build_tui_runtime(user="alex", project_store=ProjectStore(":memory:"))
-    runtime.conversation_store.set_daily_ledger_projector(None)
-    project = runtime.project_store.create_project(
-        name="Alpha",
-        root_path=str(tmp_path / "alpha"),
-        owner_user_id="alex",
-    )
-
-    selected = select_tui_project(runtime, project.project_id)
-
-    assert selected.project_id == project.project_id
-    assert runtime.active_project_id == project.project_id
 
 
-def test_detect_tui_slash_command_requires_first_character() -> None:
-    assert detect_tui_slash_command("/project") == "project"
-    assert detect_tui_slash_command("/project-context") == "project-context"
-    assert detect_tui_slash_command(" /project") == ""
-    assert detect_tui_slash_command("please /project") == ""
 
 
 def test_prompt_render_paths_include_project_context(tmp_path: Path) -> None:
