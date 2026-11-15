@@ -23,7 +23,11 @@ class OwnerDesktopReminders:
             raise ValueError('owner_reminders_persistent_store_required')
         self.path = str(Path(path).expanduser())
         with connect_database(self.path) as conn:
-            conn.execute('''CREATE TABLE IF NOT EXISTS owner_desktop_reminders (
+            self.ensure_table(conn)
+
+    @staticmethod
+    def ensure_table(conn):
+        conn.execute('''CREATE TABLE IF NOT EXISTS owner_desktop_reminders (
                 id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, request_id TEXT NOT NULL,
                 message TEXT NOT NULL, due_at TEXT NOT NULL,
                 state TEXT NOT NULL CHECK(state IN ('pending','offered','acknowledged','cancelled')),
@@ -38,6 +42,13 @@ class OwnerDesktopReminders:
             WHERE u.user_id=? AND u.role IN ('admin','owner') AND u.is_active=1''', (owner,)).fetchone())
 
     def create(self, owner, message, due_at, request_id, *, now=None):
+        with connect_database(self.path) as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            return self.create_locked(conn, owner, message, due_at, request_id, now=now)
+
+    @staticmethod
+    def create_locked(conn, owner, message, due_at, request_id, *, now=None):
+        """Create in the caller's transaction; caller owns commit and rollback."""
         if (not isinstance(message, str) or not message.strip() or len(message) > 500
                 or not isinstance(request_id, str) or len(request_id) != 32
                 or any(c not in '0123456789abcdef' for c in request_id)
@@ -54,23 +65,22 @@ class OwnerDesktopReminders:
         if current.tzinfo is None:
             raise ValueError('owner_reminder_time_invalid')
         due_text, text = due.isoformat(), message.strip()
-        with connect_database(self.path) as conn:
-            conn.execute('BEGIN IMMEDIATE')
-            if not self._owner(conn, owner):
-                raise PermissionError('owner_reminder_unavailable')
-            row = conn.execute('SELECT id,message,due_at,state FROM owner_desktop_reminders WHERE owner_id=? AND request_id=?',
+        if not OwnerDesktopReminders._owner(conn, owner):
+            raise PermissionError('owner_reminder_unavailable')
+        OwnerDesktopReminders.ensure_table(conn)
+        row = conn.execute('SELECT id,message,due_at,state FROM owner_desktop_reminders WHERE owner_id=? AND request_id=?',
                                (owner, request_id)).fetchone()
-            if row is not None:
-                if row[1] != text or row[2] != due_text:
-                    raise ValueError('owner_reminder_request_conflict')
-                return {'id': row[0], 'due_at': due_text, 'state': row[3]}
-            if not current < due <= current + timedelta(days=366):
-                raise ValueError('owner_reminder_time_invalid')
-            reminder_id = uuid4().hex
-            conn.execute('''INSERT INTO owner_desktop_reminders
+        if row is not None:
+            if row[1] != text or row[2] != due_text:
+                raise ValueError('owner_reminder_request_conflict')
+            return {'id': row[0], 'due_at': due_text, 'state': row[3]}
+        if not current < due <= current + timedelta(days=366):
+            raise ValueError('owner_reminder_time_invalid')
+        reminder_id = uuid4().hex
+        conn.execute('''INSERT INTO owner_desktop_reminders
                 (id,owner_id,request_id,message,due_at,state,created_at) VALUES (?,?,?,?,?,'pending',?)''',
                 (reminder_id, owner, request_id, text, due_text, current.astimezone(timezone.utc).isoformat()))
-            return {'id': reminder_id, 'due_at': due_text, 'state': 'pending'}
+        return {'id': reminder_id, 'due_at': due_text, 'state': 'pending'}
 
     def take_due(self, owner, *, now=None):
         current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).isoformat()

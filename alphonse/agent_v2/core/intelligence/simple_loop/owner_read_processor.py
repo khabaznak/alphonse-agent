@@ -29,8 +29,10 @@ from .single_loop_checkpoint import ExperimentalCheckpointStore
 from .owner_atomic_checkpoint import OwnerAtomicCheckpoint
 from .owner_read_recovery import restore_owner_read_observations
 from .owner_clock import OWNER_CLOCK_TOOL_ID, valid_clock_observation
-from .owner_gmail import OWNER_GMAIL_TOOL_ID, valid_owner_gmail
+from .owner_named_skill import OWNER_NAMED_SKILL_TOOL_ID, explicit_requested_name, validate_owner_named_skill
+from .owner_gmail import OWNER_GMAIL_TOOL_ID, valid_owner_gmail, owner_gmail_unit
 from .owner_schedules import OWNER_SCHEDULES_TOOL_ID, valid_schedules_observation
+from .owner_reminder_create import OWNER_REMINDER_CREATE_TOOL_ID, is_direct_reminder_request
 from datetime import datetime, timezone
 
 
@@ -121,12 +123,21 @@ class OwnerReadConversationProcessor:
             if (skill_descriptor is not None and skill_descriptor.read_only is True
                     and context.skill_store is not None and context.artifact_resources is not None):
                 descriptors += (skill_descriptor,)
+            named_skill_descriptor = context.tools.get(OWNER_NAMED_SKILL_TOOL_ID)
+            if (named_skill_descriptor is not None and named_skill_descriptor.read_only is True
+                    and context.skill_store is not None and context.artifact_resources is not None):
+                descriptors += (named_skill_descriptor,)
             gmail_descriptor = context.tools.get(OWNER_GMAIL_TOOL_ID)
             if (gmail_descriptor is not None and gmail_descriptor.read_only is True
                     and context.owner_gmail_service is not None):
                 descriptors += (gmail_descriptor,)
+            reminder_descriptor = context.tools.get(OWNER_REMINDER_CREATE_TOOL_ID)
+            if (reminder_descriptor is not None and reminder_descriptor.read_only is False
+                    and self.atomic_checkpoints is not None and callable(context.owner_effect_commit)):
+                descriptors += (reminder_descriptor,)
             base_chooser = RouterCandidateChooser(router=context.inference, task=task, tools=descriptors,
-                max_input_tokens=65536, cancellation_checker=context.is_cancelled)
+                max_input_tokens=65536, cancellation_checker=context.is_cancelled,
+                allow_owner_reminder=any(item.tool_id == OWNER_REMINDER_CREATE_TOOL_ID for item in descriptors))
             def chooser(projection: str, max_output_tokens: int) -> dict:
                 decision = base_chooser(projection, max_output_tokens)
                 # Owner search requires a complete page before it becomes
@@ -137,6 +148,11 @@ class OwnerReadConversationProcessor:
                     args = decision.get('arguments')
                     if isinstance(args, dict) and 'limit' not in args:
                         args['limit'] = 30
+                if decision.get('kind') == 'tool' and decision.get('tool_id') == OWNER_NAMED_SKILL_TOOL_ID:
+                    args = decision.get('arguments')
+                    name = explicit_requested_name(task.goal)
+                    if name and args == {'skill_id': name}:
+                        args['skill_id'] = 'skill:' + name
                 return decision
             vector = lambda a, m, i, o: {'actions': a, 'model_calls': m, 'input_tokens': i, 'output_tokens': o}
             budget = TaskBudget(BudgetLimits(vector(5, 8, 524288, 131072),
@@ -188,9 +204,17 @@ class OwnerReadConversationProcessor:
                 return args == {} and atomic is not None and context.schedule_store is not None
             if tool_id == SKILL_CATALOG_TOOL_ID:
                 return args == {} and atomic is not None and context.skill_store is not None and context.artifact_resources is not None
+            if tool_id == OWNER_NAMED_SKILL_TOOL_ID:
+                name = explicit_requested_name(task.goal)
+                return (bool(name) and args == {'skill_id': 'skill:' + name} and atomic is not None
+                        and context.skill_store is not None and context.artifact_resources is not None)
             if tool_id == OWNER_GMAIL_TOOL_ID:
-                return (args == {} and atomic is not None and context.owner_gmail_service is not None
-                        and not any(tool == OWNER_GMAIL_TOOL_ID for tool, _, _ in observations.values()))
+                try:
+                    owner_gmail_unit(args)
+                    return (atomic is not None and context.owner_gmail_service is not None
+                            and not any(tool == OWNER_GMAIL_TOOL_ID for tool, _, _ in observations.values()))
+                except ValueError:
+                    return False
             if tool_id == SEARCH_MEMORY_TOOL_ID:
                 if args.get('source_types') != ['conversation'] or type(args.get('offset', 0)) is not int:
                     return False
@@ -238,6 +262,9 @@ class OwnerReadConversationProcessor:
             if tool_id == SKILL_CATALOG_TOOL_ID:
                 return (actor_id == actor and self._authorized(task, context)
                         and validate_skill_catalog_observation(actor_id, tool_id, args, payload, context=execution_context))
+            if tool_id == OWNER_NAMED_SKILL_TOOL_ID:
+                return (actor_id == actor and self._authorized(task, context)
+                        and validate_owner_named_skill(actor_id, args, payload, context=execution_context))
             if tool_id == OWNER_GMAIL_TOOL_ID:
                 return (actor_id == actor and self._authorized(task, context)
                         and valid_owner_gmail(actor_id, args, payload, context=execution_context))
@@ -345,7 +372,17 @@ class OwnerReadConversationProcessor:
         # This verifies only retained source access/provenance, never the
         # semantic truth of free-form model output. The result remains a draft.
         def provenance(actor_id: str, text: str, refs: tuple[str, ...]) -> bool:
+            # A reminder success is selected only by the atomic mutation path;
+            # free-form model answers cannot establish that an effect occurred.
+            if is_direct_reminder_request(task.goal):
+                return False
             if not (text.strip() and self._authorized(task, context) and all(access(actor_id, ref) for ref in refs)):
+                return False
+            name = explicit_requested_name(task.goal)
+            if name and not any(tool == OWNER_NAMED_SKILL_TOOL_ID and args == {'skill_id': 'skill:' + name}
+                                and payload.get('status') == 'activated'
+                                and valid(actor_id, tool, args, payload)
+                                for tool, args, payload in observations.values()):
                 return False
             sequences = conversation_read_sequences(actor, observations)
             search_groups = conversation_search_sequences(actor, observations)
@@ -364,10 +401,36 @@ class OwnerReadConversationProcessor:
                         return False
             return not overflow_pending
 
+        def commit_reminder(state, decision, fingerprint):
+            if not self._authorized(task, context) or atomic is None or not callable(context.owner_effect_commit):
+                raise ValueError('owner_reminder_unavailable')
+            return context.owner_effect_commit(lambda: atomic.commit_owner_reminder(
+                context=context, decision=decision, projection_fingerprint=fingerprint, now_ms=self.now_ms()))
+
+        def allow_question(text):
+            if is_direct_reminder_request(task.goal) and text.strip() not in {
+                'What time would you like the reminder?',
+                'What would you like me to remind you about?',
+                'Could you clarify the reminder?',
+            }:
+                return False
+            name = explicit_requested_name(task.goal)
+            if not name:
+                return True
+            matching = [(tool, args, payload) for tool, args, payload in observations.values()
+                        if tool == OWNER_NAMED_SKILL_TOOL_ID and args == {'skill_id': 'skill:' + name}
+                        and valid(actor, tool, args, payload)]
+            if any(payload.get('status') == 'activated' for _, _, payload in matching):
+                return True
+            return (text.strip() == "I couldn't use the requested skill. Could you check its installation and access?"
+                    and any(payload.get('status') == 'unavailable' for _, _, payload in matching))
+
         host = CandidateHost(task, context, self.budgets, lambda snapshot: self.save_checkpoint(task, snapshot),
             chooser, access, load, allowed, lambda *_: '', provenance, self.now_ms,
             input_reservation=65536, output_reservation=16384, projection_budget=65536,
-            validate_observation=validate, record_bound_observation=record, atomic_checkpoint=atomic)
+            validate_observation=validate, record_bound_observation=record, atomic_checkpoint=atomic,
+            commit_owner_reminder=commit_reminder,
+            allow_question=allow_question)
         try:
             result = run_candidate(candidate_state, host)
         except Exception:

@@ -1,0 +1,7 @@
+{
+  "attempt": "attempt.json",
+  "automated_oracle_pass": false,
+  "assessment": "The two failed string checks incorrectly require a lowercase initial letter. The model selected 'Call the plumber' rather than 'call the plumber'. Inspection of the saved reminder and confirmation shows the requested content and timestamp are correct, and recovery retained exactly one identical reminder without another model call. The four other checks passed.",
+  "manual_functional_assessment": "pass with oracle defect",
+  "limitations": ["One synthetic explicit-UTC one-time reminder", "No real process crash or Desktop notification delivery", "No household data, real accounts, paid Jev or external side effects"]
+}

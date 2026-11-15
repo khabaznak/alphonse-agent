@@ -5,11 +5,19 @@ import { readPendingReminder, reconcilePendingReminder, submitPendingReminder } 
 import type { OwnerRequest } from "./ownerConversation";
 
 describe("owner Desktop reminders", () => {
-  it("does not take or render reminders when conversation is not visible", async () => {
+  it("does not take or render reminders when the Desktop owner is inactive", async () => {
     const request = vi.fn();
     expect(await takeVisibleReminder(request as OwnerRequest, false)).toBeNull();
     expect(renderToStaticMarkup(<OwnerReminders request={request as OwnerRequest} active={false} ownerId="owner" />)).toBe("");
     expect(request).not.toHaveBeenCalled();
+  });
+
+  it("keeps the reminder surface active outside Conversation while hiding its management form", () => {
+    const request = vi.fn();
+    const html = renderToStaticMarkup(<OwnerReminders request={request as OwnerRequest} active ownerId="owner" showManagement={false} />);
+    expect(html).toContain('aria-label="Desktop reminders"');
+    expect(html).toContain('<div hidden="">');
+    expect(html).toContain('Create a Desktop reminder');
   });
 
   it("requires explicit dismiss before acknowledging an offered reminder", async () => {

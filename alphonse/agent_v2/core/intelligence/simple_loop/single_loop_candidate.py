@@ -117,6 +117,10 @@ class CandidateHost:
     # Experimental shared-claim checkpoint protocol. Default execution keeps
     # the existing budget/checkpoint behavior and is not production enabled.
     atomic_checkpoint: Any | None = None
+    # Narrow host-owned local mutation. The callback atomically commits the
+    # effect, budget and terminal checkpoint; it never dispatches generic tools.
+    commit_owner_reminder: Callable[[Any, dict, str], Any] | None = None
+    allow_question: Callable[[str], bool] | None = None
 
 
 def _save(host: CandidateHost, state: CandidateState, *, consume_decision: bool = False,
@@ -323,6 +327,8 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
             if not isinstance(text, str) or not text.strip():
                 return _terminal(host, state, 'blocked', 'candidate_empty_communication')
             if kind == 'question':
+                if host.allow_question is not None and not host.allow_question(text):
+                    return _terminal(host, state, 'blocked', 'candidate_question_not_verified')
                 if _deadline_elapsed(host):
                     return _terminal(host, state, 'blocked', 'candidate_deadline_exceeded')
                 return _terminal(host, state, 'waiting_user', 'question_delivery_not_integrated', text,
@@ -367,6 +373,16 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
         tool_id, args = decision['tool_id'], deepcopy(decision['arguments'])
         registry = getattr(host.context, 'tools', None)
         descriptor = registry.get(tool_id) if registry is not None else None
+        if tool_id == 'native.owner_reminder_create':
+            if (host.atomic_checkpoint is None or not callable(host.commit_owner_reminder)
+                    or descriptor is None or descriptor.read_only is not False
+                    or _cancelled(host) or _deadline_elapsed(host)
+                    or not _is_fresh(host, state, fingerprint)):
+                return _terminal(host, state, 'blocked', 'owner_reminder_unavailable')
+            try:
+                return host.commit_owner_reminder(state, decision, fingerprint)
+            except Exception:
+                return _terminal(host, state, 'blocked', 'owner_reminder_unavailable')
         if descriptor is None or getattr(getattr(descriptor, 'kind', None), 'value', '') != 'native' or descriptor.read_only is not True:
             return _terminal(host, state, 'blocked', 'candidate_requires_read_only_native_tool')
         try:

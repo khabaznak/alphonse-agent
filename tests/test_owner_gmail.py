@@ -45,7 +45,7 @@ def f(tmp_path):
                            owner=AccountSession('owner'), other=AccountSession('other'), configs=configs)
 
 
-def start_worker(f, tmp_path, monkeypatch, wire, *, ask_question=False):
+def start_worker(f, tmp_path, monkeypatch, wire, *, ask_question=False, unit=None):
     monkeypatch.setattr(Path, 'home', classmethod(lambda cls: tmp_path))
     path = Path(f.accounts.users.db_path)
     monkeypatch.setenv('ALPHONSE_V2_DB_PATH', str(path))
@@ -54,7 +54,8 @@ def start_worker(f, tmp_path, monkeypatch, wire, *, ask_question=False):
         def __init__(self): self.requests = []
         def generate_json(self, request):
             self.requests.append(request)
-            action = ({'kind': 'tool', 'tool_id': 'native.owner_gmail_unread', 'arguments': {}, 'text': None}
+            action = ({'kind': 'tool', 'tool_id': 'native.owner_gmail_unread',
+                       'arguments': {} if unit is None else {'unit': unit}, 'text': None}
                       if len(self.requests) == 1 else
                       {'kind': 'question' if ask_question else 'answer', 'tool_id': None, 'arguments': None,
                        'text': 'Which mailbox?' if ask_question else 'There are 99 unread messages.'})
@@ -85,6 +86,35 @@ def start_worker(f, tmp_path, monkeypatch, wire, *, ask_question=False):
         if status not in {'pending', 'processing'}: break
         time.sleep(.01)
     return daemon, message_id, status, provider
+
+
+@pytest.mark.parametrize('unit, count, expected', [
+    ('threads', 1, 'thread'), ('threads', 3, 'threads'), ('messages', 1, 'message'),
+])
+def test_owner_unread_counts_keep_unit_and_do_not_refetch(f, tmp_path, monkeypatch, unit, count, expected):
+    connect(f); grant(f, 'one', 'grant')
+    wire = Wire({'id': 'INBOX', 'messagesUnread': count if unit == 'messages' else 99,
+                 'threadsUnread': count if unit == 'threads' else 99})
+    daemon, message_id, status, _ = start_worker(f, tmp_path, monkeypatch, wire, unit=unit)
+    try:
+        assert status == 'ready'
+        daemon._lock_file = object()
+        daemon._owner_checkpoints.pop(message_id)
+        daemon._owner_statuses.pop(message_id)
+        assert daemon._restore_owner_ready(message_id)
+        draft = daemon.take_owner_desktop_draft(message_id)
+        assert f'Gmail INBOX unread {expected}: {count}' in draft['message']
+        assert '99 unread' not in draft['message'] and len(wire.calls) == 1
+    finally:
+        daemon.stop()
+
+
+@pytest.mark.parametrize('arguments', [{'unit': 'accounts'}, {'unit': None}, {'unit': ['threads']},
+                                       {'unit': 'threads', 'connection_id': 'other'}])
+def test_owner_count_rejects_invalid_units_or_model_supplied_authority(arguments):
+    from alphonse.agent_v2.core.intelligence.simple_loop.owner_gmail import owner_gmail_unit
+    with pytest.raises(ValueError, match='owner_gmail_arguments_invalid'):
+        owner_gmail_unit(arguments)
 
 
 @pytest.mark.parametrize('restore', [False, True])

@@ -344,6 +344,7 @@ class V2Daemon:
                     artifact_resources=self.runtime.core.artifact_resources,
                     skill_bindings=self.runtime.core.skill_bindings,
                     user_timezone_provider=self.runtime.user_store.timezone,
+                    owner_effect_commit=lambda commit: self.kill_switch.commit_if_active(message_id, commit),
                     cancellation_checker=is_cancelled)
                 result = None
                 try:
@@ -770,6 +771,8 @@ class V2Daemon:
             return "Access denied: administrator privileges are required."
         if result["status"] == "no_active_task":
             return "Kill switch checked: no active task is running."
+        if result["status"] == "effect_already_committed":
+            return "The task's effect was already committed, so cancellation was too late."
         notice = "queued" if result.get("notification_outbox_id") else "could not be queued"
         return f"Kill switch engaged. Active task cancelled; owner security notice {notice}. Audit: {result['audit_id']}."
 
@@ -779,7 +782,13 @@ class V2Daemon:
         source_value = dict(source or {})
         if not self.runtime.user_store.is_admin(actor):
             return {"authorized": False, "status": "denied", "active_task": {}, "audit_id": ""}
-        active = self.kill_switch.request_cancel()
+        cancel_status, active = self.kill_switch.request_cancel_status()
+        if cancel_status == 'effect_already_committed':
+            audit_id = self.kill_switch_audit.record(actor_user_id=actor, source=source_value, active=active, status=cancel_status)
+            return {"authorized": True, "status": cancel_status, "active_task": {
+                "message_id": active.message_id, "task_id": active.task_id, "user_id": active.user_id,
+                "project_id": active.project_id,
+            }, "audit_id": audit_id}
         if active is None:
             audit_id = self.kill_switch_audit.record(actor_user_id=actor, source=source_value, active=None, status="no_active_task")
             return {"authorized": True, "status": "no_active_task", "active_task": {}, "audit_id": audit_id}

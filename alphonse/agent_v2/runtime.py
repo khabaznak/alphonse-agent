@@ -238,15 +238,23 @@ def build_runtime_host(
         from alphonse.agent_v2.core.intelligence.simple_loop.owner_clock import OWNER_CLOCK_TOOL_ID, build_owner_clock_tool_definition
         from alphonse.agent_v2.core.intelligence.simple_loop.owner_schedules import OWNER_SCHEDULES_TOOL_ID, build_owner_schedules_tool_definition
         from alphonse.agent_v2.core.intelligence.simple_loop.owner_gmail import OWNER_GMAIL_TOOL_ID, build_owner_gmail_tool_definition
+        from alphonse.agent_v2.core.intelligence.simple_loop.owner_reminder_create import OWNER_REMINDER_CREATE_TOOL_ID, build_owner_reminder_create_tool_definition
+        from alphonse.agent_v2.core.intelligence.simple_loop.owner_named_skill import OWNER_NAMED_SKILL_TOOL_ID, build_owner_named_skill_tool_definition
         if tools.get(OWNER_CLOCK_TOOL_ID) is not None:
             raise ValueError('owner_clock_tool_conflict')
         tools.register(build_owner_clock_tool_definition())
         if tools.get(OWNER_SCHEDULES_TOOL_ID) is not None:
             raise ValueError('owner_schedules_tool_conflict')
         tools.register(build_owner_schedules_tool_definition())
+        if tools.get(OWNER_REMINDER_CREATE_TOOL_ID) is not None:
+            raise ValueError('owner_reminder_tool_conflict')
+        tools.register(build_owner_reminder_create_tool_definition())
         if tools.get(OWNER_GMAIL_TOOL_ID) is not None:
             raise ValueError('owner_gmail_tool_conflict')
         tools.register(build_owner_gmail_tool_definition())
+        if tools.get(OWNER_NAMED_SKILL_TOOL_ID) is not None:
+            raise ValueError('owner_named_skill_tool_conflict')
+        tools.register(build_owner_named_skill_tool_definition())
         # Registration is an explicit dependency-injection hook, not a daemon
         # enable switch. The worker still refuses fenced processing until the
         # entire acquisition and delivery path is integrated.
@@ -536,9 +544,13 @@ def refresh_runtime_artifacts(runtime: V2RuntimeHost) -> None:
         from alphonse.agent_v2.core.intelligence.simple_loop.owner_clock import build_owner_clock_tool_definition
         from alphonse.agent_v2.core.intelligence.simple_loop.owner_schedules import build_owner_schedules_tool_definition
         from alphonse.agent_v2.core.intelligence.simple_loop.owner_gmail import build_owner_gmail_tool_definition
+        from alphonse.agent_v2.core.intelligence.simple_loop.owner_reminder_create import build_owner_reminder_create_tool_definition
+        from alphonse.agent_v2.core.intelligence.simple_loop.owner_named_skill import build_owner_named_skill_tool_definition
         registry.register(build_owner_clock_tool_definition())
         registry.register(build_owner_schedules_tool_definition())
+        registry.register(build_owner_reminder_create_tool_definition())
         registry.register(build_owner_gmail_tool_definition())
+        registry.register(build_owner_named_skill_tool_definition())
     # Artifact programs are not members of the executable tool registry.
     runtime.core.tools = registry
 

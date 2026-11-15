@@ -10,7 +10,7 @@ export function reminderStateMessage(state: ReminderState): string {
   if (state === "cancelled") return "This reminder was already cancelled; it will not appear.";
   if (state === "acknowledged") return "This reminder was already reviewed; it will not repeat.";
   if (state === "offered") return "This reminder was already offered; check unconfirmed reminders below.";
-  return "Reminder saved for this Desktop. It appears when the conversation is open.";
+  return "Reminder saved for this Desktop. It appears while Desktop is open.";
 }
 
 export async function takeVisibleReminder(request: OwnerRequest, active: boolean): Promise<Offered | null> {
@@ -41,7 +41,7 @@ export function OwnerReminderRecovery({ reminders, onResolve, onCancel }: {
 }
 
 /** Explicit local-owner reminders. Due reminders are offered only once. */
-export function OwnerReminders({ request, active, ownerId }: { request: OwnerRequest; active: boolean; ownerId: string }) {
+export function OwnerReminders({ request, active, ownerId, showManagement = true }: { request: OwnerRequest; active: boolean; ownerId: string; showManagement?: boolean }) {
   const [message, setMessage] = useState("");
   const [when, setWhen] = useState("");
   const [notice, setNotice] = useState("");
@@ -137,13 +137,13 @@ export function OwnerReminders({ request, active, ownerId }: { request: OwnerReq
 
   if (!active) return null;
   return <section className="composer-hint" aria-label="Desktop reminders">
-    <details><summary>Create a Desktop reminder</summary>
+    <div hidden={!showManagement}><details><summary>Create a Desktop reminder</summary>
       <form onSubmit={create}>
         <label>Reminder <input value={message} maxLength={500} onChange={event => setMessage(event.target.value)} disabled={busy || Boolean(pending) || pendingFault} required /></label>
         <label>When (this computer’s local time) <input type="datetime-local" value={when} onChange={event => setWhen(event.target.value)} disabled={busy || Boolean(pending) || pendingFault} required /></label>
         <button type="submit" disabled={busy || Boolean(pending) || pendingFault || !pendingLoaded}>Save reminder</button>
       </form>
-      <p>One-time reminders appear here while Desktop’s conversation is open; external delivery is unavailable.</p>
+      <p>One-time reminders appear while Desktop is open; external delivery is unavailable.</p>
     </details>
     {pending && <div role="status"><p>A reminder request may already be saved: {pending.message} — {new Date(pending.due_at).toLocaleString()}.</p>
       <button type="button" disabled={busy} onClick={() => void checkPending()}>Check saved reminder</button>
@@ -152,7 +152,7 @@ export function OwnerReminders({ request, active, ownerId }: { request: OwnerReq
         try { window.localStorage.removeItem(pendingKey); setPending(null); setNotice("Tracking stopped. If it was saved, the reminder may still appear later."); }
         catch { setNotice("The pending request could not be cleared."); }
       }}>Stop tracking; saved reminder may still appear</button>
-    </div>}
+    </div>}</div>
     {notice && <p role="status">{notice}</p>}
     {offered && <OwnerReminderOffer message={offered.message} onDismiss={() => void dismissOfferedReminder(request, offered)
         .then(() => { setOffered(null); shownRef.current = false; })

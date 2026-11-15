@@ -241,6 +241,9 @@ class CoreLoopContext:
     program_runner: Any | None = None
     identity_resolver: Any | None = None
     cancellation_checker: Callable[[], bool] | None = None
+    # Host-owned synchronization for a short local, claim-bound effect commit.
+    # This is never supplied by model output or ordinary tool arguments.
+    owner_effect_commit: Callable[[Callable[[], Any]], Any] | None = None
     telemetry_sink: Callable[[dict[str, Any]], None] | None = None
     system_one: Any | None = None
     owner_gmail_service: Any | None = None

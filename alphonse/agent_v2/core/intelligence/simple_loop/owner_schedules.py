@@ -53,7 +53,7 @@ def build_owner_schedules_tool_definition():
     schema = {'type': 'object', 'properties': {}, 'additionalProperties': False}
     return ToolDefinition(descriptor=ToolDescriptor(tool_id=OWNER_SCHEDULES_TOOL_ID, name='owner_schedules',
         kind=ToolKind.NATIVE, description='List the owner’s active or paused older schedules and new Desktop reminders. '
-        'Older schedules are paused; new Desktop reminders appear only while the Desktop conversation is open. More than 100 records are unavailable; '
+        'Older schedules are paused; new Desktop reminders appear only while Desktop is open. More than 100 records are unavailable; '
         'this tool cannot create or change schedules.', argument_schema=schema,
         capabilities=('scheduling',), read_only=True), callable=execute_owner_schedules,
         argument_schema=schema, accepts_context=True)

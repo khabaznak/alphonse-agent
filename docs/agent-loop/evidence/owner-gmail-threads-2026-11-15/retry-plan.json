@@ -1,0 +1,6 @@
+{
+  "purpose": "One preplanned retry of the synthetic Gmail thread-count worker case after source changed during the first attempt.",
+  "scope": "Identical synthetic owner, fake OAuth and mailbox; Codex subscription model only. Preserve original attempt; no real account, paid API, Desktop UI or external provider effects.",
+  "oracle": "Unchanged from plan.json: correct unit/count/as-of, single fake provider read, offline recovery, no fake secrets and fixture acknowledgment.",
+  "limits": "One tuned synthetic retry, not live account, full process restart, GUI delivery, human receipt or general qualification."
+}

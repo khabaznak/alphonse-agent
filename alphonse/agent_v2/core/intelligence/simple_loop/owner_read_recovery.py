@@ -15,9 +15,11 @@ from alphonse.agent_v2.core.tools.registry.native.memory import (
 )
 from .owner_atomic_checkpoint import OwnerAtomicCheckpoint, observation_digest
 from .owner_clock import OWNER_CLOCK_TOOL_ID, valid_clock_observation
+from .owner_reminder_create import OWNER_REMINDER_CREATE_TOOL_ID, valid_reminder_observation
 from .owner_gmail import OWNER_GMAIL_TOOL_ID, valid_owner_gmail
 from .owner_schedules import OWNER_SCHEDULES_TOOL_ID, execute_owner_schedules, valid_schedules_observation
 from alphonse.agent_v2.core.tools.registry.native.skill_catalog import SKILL_CATALOG_TOOL_ID, execute_skill_catalog, validate_skill_catalog_observation
+from .owner_named_skill import OWNER_NAMED_SKILL_TOOL_ID, execute_owner_named_skill, validate_owner_named_skill
 
 
 class OwnerRecoveryUnavailable(Exception):
@@ -79,6 +81,8 @@ def restore_owner_read_observations(checkpoint: OwnerAtomicCheckpoint, context: 
                 keys.add('clock_observation')
             if isinstance(item, dict) and item.get('tool_id') == OWNER_GMAIL_TOOL_ID:
                 keys.add('gmail_observation')
+            if isinstance(item, dict) and item.get('tool_id') == OWNER_REMINDER_CREATE_TOOL_ID:
+                keys.add('reminder_observation')
             if not isinstance(item, dict) or set(item) != keys:
                 raise OwnerRecoveryUnavailable('owner_recovery_unavailable')
             args = item['arguments']
@@ -91,6 +95,11 @@ def restore_owner_read_observations(checkpoint: OwnerAtomicCheckpoint, context: 
                 observation = item['clock_observation']
                 if not valid_clock_observation(state.actor, args, observation, context=execution):
                     raise OwnerRecoveryUnavailable('owner_recovery_unavailable')
+            elif tool == OWNER_REMINDER_CREATE_TOOL_ID:
+                recheck()
+                observation = item['reminder_observation']
+                if not valid_reminder_observation(state.actor, args, observation, context=execution):
+                    raise OwnerRecoveryUnavailable('owner_recovery_unavailable')
             elif tool == OWNER_GMAIL_TOOL_ID:
                 recheck()
                 observation = item['gmail_observation']
@@ -102,6 +111,9 @@ def restore_owner_read_observations(checkpoint: OwnerAtomicCheckpoint, context: 
             elif tool == SKILL_CATALOG_TOOL_ID:
                 recheck()
                 observation = execute_skill_catalog(args, context=execution)
+            elif tool == OWNER_NAMED_SKILL_TOOL_ID:
+                recheck()
+                observation = execute_owner_named_skill(args, context=execution)
             elif tool == SEARCH_MEMORY_TOOL_ID:
                 if args.get('source_types') != ['conversation'] or type(args.get('offset', 0)) is not int or args.get('offset', 0) < 0:
                     raise OwnerRecoveryUnavailable('owner_recovery_unavailable')
@@ -120,12 +132,16 @@ def restore_owner_read_observations(checkpoint: OwnerAtomicCheckpoint, context: 
             if (not hmac.compare_digest(observation_digest(observation), item['observation_sha256'])
                     or not (valid_clock_observation(state.actor, args, observation, context=execution)
                             if tool == OWNER_CLOCK_TOOL_ID else
+                            valid_reminder_observation(state.actor, args, observation, context=execution)
+                            if tool == OWNER_REMINDER_CREATE_TOOL_ID else
                             valid_owner_gmail(state.actor, args, observation, context=execution)
                             if tool == OWNER_GMAIL_TOOL_ID else
                             valid_schedules_observation(state.actor, args, observation, context=execution)
                             if tool == OWNER_SCHEDULES_TOOL_ID else
                             validate_skill_catalog_observation(state.actor, tool, args, observation, context=execution)
                             if tool == SKILL_CATALOG_TOOL_ID else
+                            validate_owner_named_skill(state.actor, args, observation, context=execution)
+                            if tool == OWNER_NAMED_SKILL_TOOL_ID else
                             revalidate_conversation_observation(state.actor, tool, args, observation,
                                                                context=execution, allow_excerpt_truncation=True,
                                                                allow_read_chunks=True, allow_search_overflow=True,

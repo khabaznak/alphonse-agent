@@ -15,7 +15,18 @@ from alphonse.agent_v2.integrations.gmail_unread import GmailUnreadService
 from alphonse.agent_v2.services.project_check_worker import CheckStopped
 
 OWNER_GMAIL_TOOL_ID = 'native.owner_gmail_unread'
-_SCHEMA = {'type': 'object', 'properties': {}, 'additionalProperties': False}
+_SCHEMA = {'type': 'object', 'properties': {
+    'unit': {'type': 'string', 'enum': ['messages', 'threads'], 'default': 'messages',
+             'description': 'Count unread messages by default; use threads only when asked about conversations or threads.'},
+}, 'additionalProperties': False}
+
+
+def owner_gmail_unit(arguments: Any) -> str:
+    """Validate the count unit without accepting model-supplied authority."""
+    if (not isinstance(arguments, dict) or set(arguments) - {'unit'}
+            or arguments.get('unit', 'messages') not in ('messages', 'threads')):
+        raise ValueError('owner_gmail_arguments_invalid')
+    return arguments.get('unit', 'messages')
 
 
 class _NoRefreshOAuth:
@@ -43,19 +54,20 @@ class OwnerGmailService:
                 'credential_generation': record.credential_generation,
                 'grant_id': grant['grant_id'], 'grant_revision': grant['revision'], 'resource': resource}
 
-    def observe(self, actor: str, *, guard) -> dict[str, Any]:
+    def observe(self, actor: str, *, guard, unit: str = 'messages') -> dict[str, Any]:
         before = self.binding(actor)
         def recheck():
             guard()
             if self.binding(actor) != before:
                 raise CheckStopped('blocked', 'owner_gmail_authority_changed')
         recheck()
-        result = self.reader.count(AccountSession(actor), label_id='INBOX', unit='messages', guard=recheck)
+        result = self.reader.count(AccountSession(actor), label_id='INBOX', unit=unit, guard=recheck)
         recheck()
-        if result.get('status') != 'complete' or result.get('connection_id') != before['connection_id']:
+        if (result.get('status') != 'complete' or result.get('connection_id') != before['connection_id']
+                or result.get('label_id') != 'INBOX' or result.get('unit') != unit):
             raise ValueError('owner_gmail_unavailable')
         return {'schema_version': 1, 'status': 'complete', 'provider': 'gmail', 'label_id': 'INBOX',
-                'unit': 'messages', 'count': result['count'], 'observed_at': result['observed_at'],
+                'unit': unit, 'count': result['count'], 'observed_at': result['observed_at'],
                 'authority': before}
 
 
@@ -71,7 +83,8 @@ def _authorized(actor: str, context: Any) -> bool:
 def execute_owner_gmail(arguments: dict[str, Any], *, context: Any) -> dict[str, Any]:
     actor = str(getattr(getattr(context, 'task', None), 'user', '') or '')
     service = getattr(context, 'owner_gmail_service', None)
-    if arguments != {} or not isinstance(service, OwnerGmailService) or not _authorized(actor, context):
+    unit = owner_gmail_unit(arguments)
+    if not isinstance(service, OwnerGmailService) or not _authorized(actor, context):
         raise PermissionError('owner_gmail_unavailable')
     # Refuse before provider I/O if pickup cannot later fence this exact
     # account authority within the same claim-bound database transaction.
@@ -84,19 +97,19 @@ def execute_owner_gmail(arguments: dict[str, Any], *, context: Any) -> dict[str,
     def guard():
         if not _authorized(actor, context):
             raise CheckStopped('cancelled', 'owner_gmail_claim_unavailable')
-    return service.observe(actor, guard=guard)
+    return service.observe(actor, guard=guard, unit=unit)
 
 
 def valid_owner_gmail(actor: str, arguments: dict[str, Any], payload: dict[str, Any], *, context: Any) -> bool:
     """Recheck authority and freshness without recontacting Gmail or refreshing credentials."""
     try:
         service = getattr(context, 'owner_gmail_service', None)
-        if (arguments != {} or not isinstance(service, OwnerGmailService) or not _authorized(actor, context)
+        if (not isinstance(service, OwnerGmailService) or not _authorized(actor, context)
                 or not isinstance(payload, dict) or set(payload) != {'schema_version', 'status', 'provider',
                     'label_id', 'unit', 'count', 'observed_at', 'authority'}
                 or type(payload['schema_version']) is not int or payload['schema_version'] != 1
                 or payload['status'] != 'complete' or payload['provider'] != 'gmail'
-                or payload['label_id'] != 'INBOX' or payload['unit'] != 'messages'
+                or payload['label_id'] != 'INBOX' or payload['unit'] != owner_gmail_unit(arguments)
                 or type(payload['count']) is not int or payload['count'] < 0
                 or not isinstance(payload['observed_at'], str)):
             return False
@@ -124,7 +137,7 @@ def valid_owner_gmail_locked(conn: Any, actor: str, payload: dict[str, Any], *, 
             return False
         if (not isinstance(payload, dict) or payload.get('status') != 'complete'
                 or payload.get('provider') != 'gmail' or payload.get('label_id') != 'INBOX'
-                or payload.get('unit') != 'messages' or type(payload.get('count')) is not int
+                or payload.get('unit') not in ('messages', 'threads') or type(payload.get('count')) is not int
                 or payload['count'] < 0 or not isinstance(payload.get('authority'), dict)):
             return False
         authority = payload['authority']
@@ -193,7 +206,7 @@ def valid_owner_gmail_locked(conn: Any, actor: str, payload: dict[str, Any], *, 
 
 def build_owner_gmail_tool_definition() -> ToolDefinition:
     descriptor = ToolDescriptor(OWNER_GMAIL_TOOL_ID, 'owner_gmail_unread', ToolKind.NATIVE,
-        'Read the current unread message count in the owner’s Gmail INBOX when exactly one authorized account exists. '
+        'Read the current unread message or thread count in the owner’s Gmail INBOX when exactly one authorized account exists. '
         'No message contents, new grants, account selection, credential refresh, or mailbox mutation. '
         'Report the observed time; inaccessible or ambiguous accounts are unavailable.',
         _SCHEMA, ('mail_read',), ('native', 'gmail'), read_only=True)
