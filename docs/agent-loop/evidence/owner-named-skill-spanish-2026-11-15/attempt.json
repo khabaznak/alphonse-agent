@@ -1,0 +1,73 @@
+{
+  "status": "ready",
+  "provider": "Codex CLI ChatGPT subscription",
+  "model": "gpt-6-luna",
+  "fixture": "synthetic only",
+  "uses_jev": false,
+  "start_source_sha256": {
+    "alphonse/agent_v2/core/intelligence/simple_loop/owner_named_skill.py": "8b7c9f8a26a5f1532b424815d2575d8820b10ac2ef5444a204c0922784633799",
+    "alphonse/agent_v2/core/intelligence/simple_loop/owner_read_processor.py": "2986040834ca7ea6bd78ddbd854bd0eebeb567524e517df9e226fd177c071b70",
+    "alphonse/agent_v2/core/intelligence/simple_loop/owner_read_recovery.py": "21e3202841f9e3dc3a03c84c7a887e1a46b79a09e1eec44abfe52e3bcbb783b1",
+    "alphonse/agent_v2/core/intelligence/simple_loop/owner_atomic_checkpoint.py": "69f4059ea8ee25c995d175ec006f7c6d4d0c24f52bf4b56f64b0b6a9a04f5a12",
+    "alphonse/agent_v2/core/intelligence/simple_loop/candidate_decision_policy.py": "9425069ca80461e4ebf5a5f255a02425216f6083fe8156e1a1cd509a2d74085e",
+    "alphonse/agent_v2/core/intelligence/simple_loop/single_loop_candidate.py": "786e7f840486bafc22a6ca0241342000f25cbff459635ac4f248bba1b4b7004d",
+    "alphonse/agent_v2/runtime.py": "22fb6091a6a7224c06ff7ed0bf5c68bf2ec72dfa7b63df404a7ee109bd393fc0",
+    "alphonse/agent_v2/daemon.py": "e078679c2b74768f402ede8b3f30194977289ada1cfbddd87c2844b44adaa245",
+    "/Users/alex/Code Projects/Alphonse/docs/agent-loop/evidence/owner-named-skill-spanish-2026-11-15/runner.py": "29c7a805826c7e0d8cdddae0b171d85e31a8dda653322f854b57e4f6b67a8883",
+    "docs/agent-loop/evidence/owner-named-skill-spanish-2026-11-15/plan.json": "04c8ff18a84b839ae2686a27869bba0a4054c4cde76e1233a49add41331563f9"
+  },
+  "answer": "Avena con azafrán.",
+  "checks": {
+    "named_skill_requested": true,
+    "instructions_projected": true,
+    "answer_follows_instruction": true,
+    "recovered_before_pickup": true
+  },
+  "oracle_pass": true,
+  "decisions": [
+    {
+      "kind": "tool",
+      "tool_id": "native.owner_named_skill",
+      "arguments": {
+        "skill_id": "skill:meal-planning"
+      },
+      "text": null
+    },
+    {
+      "kind": "answer",
+      "tool_id": null,
+      "arguments": null,
+      "text": "Avena con azafrán."
+    }
+  ],
+  "usage": [
+    {
+      "input_tokens": 18271,
+      "output_tokens": 39
+    },
+    {
+      "input_tokens": 17086,
+      "output_tokens": 34
+    }
+  ],
+  "provider_calls": 2,
+  "provider_attempts": 2,
+  "provider_errors": [],
+  "failure": {
+    "status": "client_acknowledged"
+  },
+  "elapsed_seconds": 9.737,
+  "end_source_sha256": {
+    "alphonse/agent_v2/core/intelligence/simple_loop/owner_named_skill.py": "8b7c9f8a26a5f1532b424815d2575d8820b10ac2ef5444a204c0922784633799",
+    "alphonse/agent_v2/core/intelligence/simple_loop/owner_read_processor.py": "2986040834ca7ea6bd78ddbd854bd0eebeb567524e517df9e226fd177c071b70",
+    "alphonse/agent_v2/core/intelligence/simple_loop/owner_read_recovery.py": "21e3202841f9e3dc3a03c84c7a887e1a46b79a09e1eec44abfe52e3bcbb783b1",
+    "alphonse/agent_v2/core/intelligence/simple_loop/owner_atomic_checkpoint.py": "69f4059ea8ee25c995d175ec006f7c6d4d0c24f52bf4b56f64b0b6a9a04f5a12",
+    "alphonse/agent_v2/core/intelligence/simple_loop/candidate_decision_policy.py": "9425069ca80461e4ebf5a5f255a02425216f6083fe8156e1a1cd509a2d74085e",
+    "alphonse/agent_v2/core/intelligence/simple_loop/single_loop_candidate.py": "786e7f840486bafc22a6ca0241342000f25cbff459635ac4f248bba1b4b7004d",
+    "alphonse/agent_v2/runtime.py": "22fb6091a6a7224c06ff7ed0bf5c68bf2ec72dfa7b63df404a7ee109bd393fc0",
+    "alphonse/agent_v2/daemon.py": "e078679c2b74768f402ede8b3f30194977289ada1cfbddd87c2844b44adaa245",
+    "/Users/alex/Code Projects/Alphonse/docs/agent-loop/evidence/owner-named-skill-spanish-2026-11-15/runner.py": "29c7a805826c7e0d8cdddae0b171d85e31a8dda653322f854b57e4f6b67a8883",
+    "docs/agent-loop/evidence/owner-named-skill-spanish-2026-11-15/plan.json": "04c8ff18a84b839ae2686a27869bba0a4054c4cde76e1233a49add41331563f9"
+  },
+  "source_changed_during_attempt": false
+}

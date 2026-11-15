@@ -166,12 +166,19 @@ class OAuthService:
         record = self._owned(session, connection_id)
         value = record.connection
         storage = 'absent'
+        access_token_status = 'unavailable'
         if record.credential_ref:
-            storage = self.store.credential_vault.health(record.credential_ref, connection_id, record.credential_generation)
+            try:
+                token = self._read(record)
+                storage = 'available'
+                access_token_status = 'current' if self._access_token_current(token) else 'refresh_required'
+            except Exception:
+                storage = 'credential_backend_unavailable'
         return dict(connection_id=connection_id, provider=record.provider_key, display_name=record.display_name,
                     status=value['status'], health_code=value['health_code'], revision=value['revision'],
                     capabilities=list(value['capabilities']), granted_scopes=list(value['granted_scopes']),
-                    credential_health=storage, provider_configured=record.provider_key in self.clients,
+                    credential_health=storage, access_token_status=access_token_status,
+                    provider_configured=record.provider_key in self.clients,
                     revocation_pending=record.revocation_pending,
                     credential_deletion_pending=record.credential_deletion_pending)
 
@@ -425,16 +432,20 @@ class OAuthService:
         with self._lease(record.integration_id):
             record, _ = self.accounts.authorize(session, **authorization)
             token = self._read(record)
-            import math
-            try:
-                expires_at = float(token.get('expires_at', 0))
-            except (TypeError, ValueError):
-                raise OAuthError('oauth_refresh_required') from None
-            if (not math.isfinite(expires_at) or expires_at <= time.time() + 60
-                    or not isinstance(token.get('access_token'), str) or not token['access_token'].strip()):
+            if not self._access_token_current(token):
                 raise OAuthError('oauth_refresh_required')
             self.accounts.authorize(session, **authorization)
             return token['access_token']
+
+    @staticmethod
+    def _access_token_current(token):
+        import math
+        try:
+            expires_at = float(token.get('expires_at', 0))
+            return (math.isfinite(expires_at) and expires_at > time.time() + 60
+                    and isinstance(token.get('access_token'), str) and bool(token['access_token'].strip()))
+        except (TypeError, ValueError, AttributeError):
+            return False
 
     def _require_reconnect(self, record):
         current = self.store.get(record.integration_id)

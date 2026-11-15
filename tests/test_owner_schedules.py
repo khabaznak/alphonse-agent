@@ -116,4 +116,4 @@ def test_oversized_catalog_does_not_return_a_partial_list(tmp_path, monkeypatch)
     monkeypatch.setattr(store, 'list_tasks', lambda **_: [row] * 101)
     context = SimpleNamespace(task=SimpleNamespace(user='owner'), schedule_store=store, cancellation_checker=lambda: False)
     assert execute_owner_schedules({}, context=context) == {'status': 'too_many', 'legacy_scheduler_running': False,
-        'desktop_requires_open_conversation': True, 'schedules': [], 'desktop_reminders': []}
+        'desktop_requires_open': True, 'schedules': [], 'desktop_reminders': []}

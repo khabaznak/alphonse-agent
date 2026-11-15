@@ -53,6 +53,22 @@ def test_user_named_request_loads_complete_authorized_instructions(setup):
 
 
 @pytest.mark.parametrize('goal', [
+    'Usa la habilidad meal-planning para sugerir un menú.',
+    'Por favor, utiliza mi habilidad de meal-planning para preparar un menú.',
+    'Aplica la skill llamada meal-planning para hacer un menú.',
+    'Puedes usar la habilidad meal-planning para sugerir un menú.',
+    'Sigue la meal-planning skill para sugerir un menú.',
+])
+def test_spanish_direct_request_activates_authorized_named_skill(setup, goal):
+    _, _, context = setup
+    context.task.goal = goal
+    payload = execute_owner_named_skill({'skill_id': 'skill:meal-planning'}, context=context)
+    assert payload['status'] == 'activated'
+    assert payload['instructions'] == 'Full meal-planning guidance.'
+    assert validate_owner_named_skill('owner', {'skill_id': 'skill:meal-planning'}, payload, context=context)
+
+
+@pytest.mark.parametrize('goal', [
     'Do not use the meal-planning skill.',
     'I heard someone say use the meal-planning skill.',
     'What is the meal-planning skill?',
@@ -62,6 +78,12 @@ def test_user_named_request_loads_complete_authorized_instructions(setup):
     'Use the meal-planning skill. Actually, skip it.',
     'Use the meal-planning skill. Forget that request.',
     'Use the meal-planning skill but disregard that request',
+    'No uses la habilidad meal-planning.',
+    '¿Puedes usar la habilidad meal-planning?',
+    'Usa la habilidad meal-planning pero ignora esa petición.',
+    'Usa la habilidad meal-planning solo si te confirmo.',
+    'Usa la habilidad meal-planning. En realidad no la uses.',
+    'Usa la habilidad meal-planning y luego olvida esa petición.',
 ])
 def test_incidental_negated_or_private_references_cannot_activate(setup, goal):
     _, _, context = setup
@@ -114,7 +136,7 @@ def test_invalid_or_oversized_package_is_generically_unavailable(setup, monkeypa
         '---\nname: meal-planning\ndescription: Example guidance\n---\n' + 'x' * (MAX_SKILL_INSTRUCTIONS_LENGTH + 1))
     assert execute_owner_named_skill(args, context=context) == {'schema_version': 1, 'status': 'unavailable'}
 
-@pytest.mark.parametrize('change', ['none', 'revoke', 'revision', 'skip', 'reversal', 'conditional', 'skip_later', 'forget_later', 'same_sentence_reversal', 'name_only', 'unavailable', 'false_question'])
+@pytest.mark.parametrize('change', ['none', 'spanish', 'revoke', 'revision', 'skip', 'reversal', 'conditional', 'skip_later', 'forget_later', 'same_sentence_reversal', 'name_only', 'unavailable', 'false_question'])
 @pytest.mark.parametrize('restore', [False, True])
 def test_owner_worker_uses_named_skill_and_checks_at_delivery(tmp_path, monkeypatch, change, restore):
     """The actual worker exposes instructions, then rechecks authorization and revision."""
@@ -183,7 +205,8 @@ def test_owner_worker_uses_named_skill_and_checks_at_delivery(tmp_path, monkeypa
     monkeypatch.setattr(daemon.ipc, 'stop', lambda: None)
     daemon.start()
     try:
-        prompt = {'reversal': 'Use the meal-planning skill? No, do not use it.',
+        prompt = {'spanish': 'Usa la habilidad meal-planning para sugerir un menú.',
+                  'reversal': 'Use the meal-planning skill? No, do not use it.',
                   'conditional': 'Use the meal-planning skill only if I confirm later.',
                   'skip_later': 'Use the meal-planning skill. Actually, skip it.',
                   'forget_later': 'Use the meal-planning skill. Forget that request.',
@@ -215,7 +238,7 @@ def test_owner_worker_uses_named_skill_and_checks_at_delivery(tmp_path, monkeypa
             access['allowed'] = False
         elif change == 'revision':
             skill_file.write_text('---\nname: meal-planning\ndescription: Meal planning\n---\nChanged guidance.\n')
-        if change in {'none', 'name_only'}:
+        if change in {'none', 'spanish', 'name_only'}:
             assert daemon.take_owner_desktop_draft(message_id)
         else:
             with pytest.raises((ValueError, RuntimeError, OwnerRecoveryUnavailable)):

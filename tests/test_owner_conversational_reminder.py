@@ -94,6 +94,21 @@ def test_owner_conversation_creates_exactly_one_reminder_and_confirms(tmp_path, 
         daemon.stop()
 
 
+def test_owner_conversation_creates_tomorrow_reminder(tmp_path, monkeypatch):
+    tomorrow = (datetime.now(timezone.utc) + timedelta(days=1)).date()
+    due = datetime(tomorrow.year, tomorrow.month, tomorrow.day, 9, tzinfo=timezone.utc).isoformat()
+    goal = 'Remind me to call the plumber tomorrow at 9 am'
+    args = {'message': 'call the plumber', 'due_at': due, 'request_quote': goal}
+    daemon, owner, message_id, status, path, _ = worker(tmp_path, monkeypatch, goal=goal, args=args)
+    try:
+        assert status == 'ready'
+        reminders = OwnerDesktopReminders(str(path)).list_open(owner.user_id)
+        assert len(reminders) == 1 and reminders[0]['due_at'] == due
+        assert daemon.take_owner_desktop_draft(message_id)['message'].startswith('Reminder saved: call the plumber')
+    finally:
+        daemon.stop()
+
+
 @pytest.mark.parametrize('mode', ['no_clock', 'negated', 'invented', 'cancel'])
 def test_reminder_rejects_missing_authority_or_clock_without_effect(tmp_path, monkeypatch, mode):
     goal = 'Do not remind me to call the plumber' if mode == 'negated' else None
@@ -259,6 +274,44 @@ def test_relative_reminder_time_must_match_owner_clock():
     args['request_quote'] = task.goal
     with pytest.raises(ValueError, match='owner_reminder_time_invalid'):
         validate_reminder_request(task, args, 'UTC', observed_at=now.isoformat())
+
+
+@pytest.mark.parametrize('goal,message,due', [
+    ('Remind me to call the plumber tomorrow at 9 am', 'call the plumber', '2026-11-16T09:00:00-06:00'),
+    ('Please remind me to check mail today at 12:30 pm.', 'check mail', '2026-11-15T12:30:00-06:00'),
+    ('Recuérdame llamar al plomero mañana a las 9 am', 'llamar al plomero', '2026-11-16T09:00:00-06:00'),
+])
+def test_owner_local_calendar_time_matches_requested_day_and_time(goal, message, due):
+    from alphonse.agent_v2.core.intelligence.simple_loop.owner_reminder_create import validate_reminder_request
+    task = SimpleNamespace(goal=goal)
+    args = {'message': message, 'request_quote': goal, 'due_at': due}
+    observed = '2026-11-15T14:00:00+00:00'
+    result = validate_reminder_request(task, args, 'America/Mexico_City', observed_at=observed)
+    assert result['due_at'] == datetime.fromisoformat(due).astimezone(timezone.utc).isoformat()
+    args['due_at'] = (datetime.fromisoformat(due) + timedelta(hours=1)).isoformat()
+    with pytest.raises(ValueError, match='owner_reminder_time_invalid'):
+        validate_reminder_request(task, args, 'America/Mexico_City', observed_at=observed)
+
+
+@pytest.mark.parametrize('goal,due,observed', [
+    ('Remind me to call the plumber after I confirm tomorrow at 9 am', '2026-11-16T09:00:00-06:00', '2026-11-15T14:00:00+00:00'),
+    ('Remind me to call the plumber tomorrow at 9 am', '2026-11-15T09:00:00-06:00', '2026-11-15T14:00:00+00:00'),
+    ('Remind me to call the plumber tomorrow at 9 am', '2026-11-16T09:00:00-06:00', None),
+    ('Remind me to call the plumber tomorrow at 13 pm', '2026-11-16T13:00:00-06:00', '2026-11-15T14:00:00+00:00'),
+])
+def test_calendar_time_rejects_conditions_or_invalid_interpretation(goal, due, observed):
+    from alphonse.agent_v2.core.intelligence.simple_loop.owner_reminder_create import validate_reminder_request
+    args = {'message': 'call the plumber', 'request_quote': goal, 'due_at': due}
+    with pytest.raises(ValueError):
+        validate_reminder_request(SimpleNamespace(goal=goal), args, 'America/Mexico_City', observed_at=observed)
+
+
+def test_calendar_time_rejects_dst_repeated_wall_time():
+    from alphonse.agent_v2.core.intelligence.simple_loop.owner_reminder_create import validate_reminder_request
+    goal = 'Remind me to call the plumber tomorrow at 1:30 am'
+    args = {'message': 'call the plumber', 'request_quote': goal, 'due_at': '2026-11-01T01:30:00-04:00'}
+    with pytest.raises(ValueError, match='owner_reminder_time_invalid'):
+        validate_reminder_request(SimpleNamespace(goal=goal), args, 'America/New_York', observed_at='2026-10-31T14:00:00+00:00')
 
 
 def test_reminder_confirmation_survives_interruption_before_handoff(tmp_path, monkeypatch):

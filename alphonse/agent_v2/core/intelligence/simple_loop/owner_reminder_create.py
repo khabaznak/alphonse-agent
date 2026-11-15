@@ -22,6 +22,9 @@ _AMBIGUOUS_SCOPE = re.compile(
     r'after|before|once|until|only|later|tomorrow|today|tonight|next|'
     r'si|cuando|despu[eé]s|antes|hasta|solo|s[oó]lo|ma[ñn]ana|hoy|quiz[aá]s?|tal\s+vez|cada|diari[oa]s?|semanal(?:mente)?|'
     r'mensual(?:mente)?|anual(?:mente)?|repetir|recurrente)(?!\w)')
+_CALENDAR_TIME = re.compile(
+    r'(?i)(?<!\w)(?:(today|tomorrow)\s+at|(hoy|ma[ñn]ana)\s+a\s+las?)\s+'
+    r'(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s*[.!]?\s*$')
 
 
 def is_direct_reminder_request(goal):
@@ -42,9 +45,13 @@ def validate_reminder_request(task, arguments, timezone_name, *, observed_at):
         raise ValueError('owner_reminder_request_invalid')
     text, due_text, quote = (arguments[k] for k in ('message', 'due_at', 'request_quote'))
     goal = getattr(task, 'goal', None)
+    calendar = _CALENDAR_TIME.search(goal) if isinstance(goal, str) else None
+    # Only the terminal, supported time expression is removed from the
+    # qualifier check; conditions elsewhere in the request remain forbidden.
+    scope = goal[:calendar.start()] if calendar else goal
     if (not isinstance(goal, str) or not isinstance(quote, str) or not quote.strip()
             or quote != goal or not _EXPLICIT.search(quote) or _NEGATED.search(goal)
-            or '?' in goal or '¿' in goal or _AMBIGUOUS_SCOPE.search(goal)
+            or '?' in goal or '¿' in goal or _AMBIGUOUS_SCOPE.search(scope)
             or not isinstance(text, str) or not text.strip() or len(text) > 500
             or text.strip().casefold() not in goal.casefold()
             or not isinstance(due_text, str) or not isinstance(timezone_name, str)):
@@ -62,7 +69,23 @@ def validate_reminder_request(task, arguments, timezone_name, *, observed_at):
         a, b = wall.replace(tzinfo=zone, fold=0), wall.replace(tzinfo=zone, fold=1)
         if a.utcoffset() != b.utcoffset():
             raise ValueError
-        if due_text in goal:
+        if calendar:
+            if not isinstance(observed_at, str):
+                raise ValueError
+            clock = datetime.fromisoformat(observed_at)
+            if clock.tzinfo is None:
+                raise ValueError
+            hour, minute = int(calendar.group(3)), int(calendar.group(4) or 0)
+            if not 1 <= hour <= 12 or minute > 59:
+                raise ValueError
+            hour = hour % 12 + (12 if calendar.group(5).lower() == 'pm' else 0)
+            day_word = (calendar.group(1) or calendar.group(2)).lower()
+            requested_day = clock.astimezone(zone).date() + timedelta(days=day_word in ('tomorrow', 'mañana', 'manana'))
+            if (local.date() != requested_day or local.hour != hour or local.minute != minute
+                    or local.second != 0 or local.microsecond != 0):
+                raise ValueError
+            time_pattern = re.escape(calendar.group(0).strip().rstrip('.!'))
+        elif due_text in goal:
             time_pattern = r'(?:at|a\s+las?)\s+' + re.escape(due_text)
         else:
             # Support an explicit numeric relative duration without trusting
@@ -99,6 +122,7 @@ def build_owner_reminder_create_tool_definition():
     descriptor = ToolDescriptor(OWNER_REMINDER_CREATE_TOOL_ID, 'owner_reminder_create', ToolKind.NATIVE,
         'Create exactly one one-time reminder for the direct owner on this Desktop only. '
         'First call owner_clock; use the observed owner timezone and current time. '
+        'Supported times include an explicit ISO timestamp, a numeric duration, or today/tomorrow at an explicit am/pm time. '
         'Use only when the owner explicitly asks to create it; quote their exact request. '
         'Ask a question if time, timezone, or reminder content is unclear. '
         'The reminder appears only while Desktop is open; no external delivery or recurrence.',

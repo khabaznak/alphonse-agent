@@ -25,12 +25,12 @@ def execute_owner_schedules(arguments, *, context):
     if context.task.user != owner or context.cancellation_checker() is not False:
         raise ValueError('owner_schedules_unavailable')
     if len(rows) + len(reminders) > MAX_SCHEDULES:
-        return {'status': 'too_many', 'legacy_scheduler_running': False, 'desktop_requires_open_conversation': True,
+        return {'status': 'too_many', 'legacy_scheduler_running': False, 'desktop_requires_open': True,
                 'schedules': [], 'desktop_reminders': []}
     if any(row.owner_user_id != owner for row in rows):
         raise ValueError('owner_schedules_unavailable')
     rows.sort(key=lambda row: (row.next_run_at is None, row.next_run_at or '', row.scheduled_task_id))
-    return {'status': 'complete', 'legacy_scheduler_running': False, 'desktop_requires_open_conversation': True,
+    return {'status': 'complete', 'legacy_scheduler_running': False, 'desktop_requires_open': True,
         'desktop_reminders': [{'id': row[0], 'message': row[1], 'due_at': row[2], 'state': row[3]}
                               for row in reminders], 'schedules': [
         {'id': row.scheduled_task_id, 'name': row.name, 'description': row.description,

@@ -111,6 +111,21 @@ def test_no_refresh_token_access_refuses_expired_credentials_without_mutation(f)
     assert f.backend.data == before and revision(f) == before_revision
 
 
+def test_account_health_reports_token_expiry_without_refreshing_or_exposing_tokens(f):
+    connect(f)
+    assert f.service.health(f.owner, 'one')['access_token_status'] == 'current'
+    expire(f)
+    before = dict(f.backend.data)
+    health = f.service.health(f.owner, 'one')
+    assert health['access_token_status'] == 'refresh_required'
+    assert health['credential_health'] == 'available'
+    assert 'disposable-access' not in json.dumps(health)
+    assert 'disposable-refresh' not in json.dumps(health)
+    assert f.service.clients['google'].refresh_count == 0 and f.backend.data == before
+    with pytest.raises(PermissionError):
+        f.service.health(f.other, 'one')
+
+
 @pytest.mark.parametrize('change', [
     {'expires_at': float('nan')}, {'expires_at': float('inf')},
     {'expires_at': 'not-a-time'}, {'access_token': ''}, {'access_token': None},
