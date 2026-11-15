@@ -20,7 +20,8 @@ OWNER_CONVERSATION_MAX_CHARS = 36000
 
 def complete_conversation_search(actor: str, tool_id: str, arguments: dict[str, Any], payload: dict[str, Any], *,
                                  allow_excerpt_truncation: bool = False,
-                                 allow_search_overflow: bool = False) -> bool:
+                                 allow_search_overflow: bool = False,
+                                 allow_search_pages: bool = False) -> bool:
     """Recognize an owner search page under the caller's coverage policy.
 
     The native tool must have run under the authenticated actor. This checks
@@ -33,7 +34,8 @@ def complete_conversation_search(actor: str, tool_id: str, arguments: dict[str, 
     if (not isinstance(actor, str) or not actor.strip() or tool_id != SEARCH_MEMORY_TOOL_ID
             or arguments.get('source_types') != ['conversation']
             or not isinstance(query, str) or not query.strip()
-            or type(arguments.get('offset', 0)) is not int or arguments.get('offset', 0) != 0
+            or type(arguments.get('offset', 0)) is not int or arguments.get('offset', 0) < 0
+            or (arguments.get('offset', 0) != 0 and not allow_search_pages)
             or type(payload.get('schema_version')) is not int or payload.get('schema_version') != 2
             or payload.get('query') != query.strip() or payload.get('status') not in ('found', 'empty')
             or payload.get('coverage') != {'conversation': 'complete'} or payload.get('backend') != 'sqlite_fts5'
@@ -44,12 +46,22 @@ def complete_conversation_search(actor: str, tool_id: str, arguments: dict[str, 
     if (not isinstance(results, list) or type(payload.get('total_matches')) is not int
             or (payload['status'] == 'found') != bool(results)):
         return False
+    offset = arguments.get('offset', 0)
+    if allow_search_pages:
+        limit = arguments.get('limit', 8)
+        if (type(limit) is not int or not 1 <= limit <= 30
+                or payload.get('offset') != offset or not isinstance(payload.get('snapshot'), str)
+                or not payload['snapshot'] or offset > payload['total_matches']
+                or len(results) != min(limit, payload['total_matches'] - offset)
+                or any(type(item.get('rank')) is not int or item['rank'] != offset + i + 1
+                       for i, item in enumerate(results) if isinstance(item, dict))):
+            return False
     next_offset = payload.get('next_offset')
     if next_offset is None:
-        if payload['total_matches'] != len(results):
+        if payload['total_matches'] != offset + len(results):
             return False
-    elif (not allow_search_overflow or type(next_offset) is not int
-          or next_offset != len(results) or next_offset < 1
+    elif (not (allow_search_overflow or allow_search_pages) or type(next_offset) is not int
+          or next_offset != offset + len(results) or next_offset <= offset
           or payload['total_matches'] <= next_offset or payload['truncated'] is not True):
         return False
     for item in results:
@@ -139,6 +151,7 @@ def revalidate_conversation_observation(
     actor: str, tool_id: str, arguments: dict[str, Any], payload: dict[str, Any], *, context: ToolExecutionContext,
     allow_excerpt_truncation: bool = False, allow_read_chunks: bool = False,
     allow_search_overflow: bool = False,
+    allow_search_pages: bool = False,
 ) -> bool:
     """Re-read an owner-scoped observation before promoting it to evidence.
 
@@ -158,12 +171,14 @@ def revalidate_conversation_observation(
         if tool_id == SEARCH_MEMORY_TOOL_ID:
             if not complete_conversation_search(actor, tool_id, arguments, payload,
                                                 allow_excerpt_truncation=allow_excerpt_truncation,
-                                                allow_search_overflow=allow_search_overflow):
+                                                allow_search_overflow=allow_search_overflow,
+                                                allow_search_pages=allow_search_pages):
                 return False
             current = execute_search_memory(arguments, context=context)
             valid = complete_conversation_search(actor, tool_id, arguments, current,
                                                   allow_excerpt_truncation=allow_excerpt_truncation,
-                                                  allow_search_overflow=allow_search_overflow)
+                                                  allow_search_overflow=allow_search_overflow,
+                                                  allow_search_pages=allow_search_pages)
         elif tool_id == READ_MEMORY_SOURCE_TOOL_ID:
             if not complete_conversation_read(actor, tool_id, arguments, payload, allow_chunks=allow_read_chunks):
                 return False
@@ -179,6 +194,33 @@ def revalidate_conversation_observation(
                     == json.dumps(current, sort_keys=True, allow_nan=False))
     except Exception:
         return False
+
+
+def conversation_search_sequences(actor: str, observations: dict[str, tuple[str, dict, dict]]) -> list[list[tuple[str, dict, dict]]]:
+    """Group sequential searches, rejecting gaps, changed snapshots and mixed filters."""
+    groups: list[list[tuple[str, dict, dict]]] = []
+    for ref, (tool, args, payload) in observations.items():
+        if tool != SEARCH_MEMORY_TOOL_ID:
+            continue
+        if not complete_conversation_search(actor, tool, args, payload, allow_excerpt_truncation=True,
+                                            allow_search_pages=True):
+            raise ValueError('owner_search_sequence_invalid')
+        offset = args.get('offset', 0)
+        if offset == 0:
+            groups.append([(ref, args, payload)])
+            continue
+        if not groups:
+            raise ValueError('owner_search_sequence_invalid')
+        pages = groups[-1]
+        first_args, first = pages[0][1:]
+        previous = pages[-1][2]
+        filters = lambda a: {k: v for k, v in a.items() if k != 'offset'}
+        if (len(pages) >= 3 or first['total_matches'] > 90
+                or previous['next_offset'] != offset or filters(args) != filters(first_args)
+                or payload['snapshot'] != first['snapshot'] or payload['total_matches'] != first['total_matches']):
+            raise ValueError('owner_search_sequence_invalid')
+        pages.append((ref, args, payload))
+    return groups
 
 
 def conversation_read_sequences(actor: str, observations: dict[str, tuple[str, dict, dict]]) -> dict[str, list[tuple[str, dict, dict]]]:

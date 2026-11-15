@@ -10,7 +10,7 @@ import pytest
 
 from alphonse.agent_v2.core.intelligence.v3.single_loop_atomic_step import run_atomic_step
 from alphonse.agent_v2.core.core import CoreLoopContext
-from alphonse.agent_v2.core.intelligence.v3.single_loop_candidate import CandidateHost
+from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_candidate import CandidateHost
 from alphonse.agent_v2.core.intelligence.v3.single_loop_checkpoint import CheckpointConflict, ExperimentalCheckpointStore
 from alphonse.agent_v2.core.intelligence.v3.single_loop_delivery_reservation import DeliveryBinding, reserve_delivery
 from alphonse.agent_v2.core.io.experimental_staged_outbox import install_experimental_staging, stage_experimental_response

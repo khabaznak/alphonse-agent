@@ -13,11 +13,11 @@ import sqlite3
 from typing import Callable
 
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
-from alphonse.agent_v2.core.intelligence.v3.single_loop_candidate import CandidateState
+from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_candidate import CandidateState
 from alphonse.agent_v2.core.intelligence.v3.single_loop_checkpoint import (
     Checkpoint, CheckpointConflict, ENGINE, SCHEMA_VERSION, STATE_KEY, ExperimentalCheckpointStore,
 )
-from alphonse.agent_v2.core.intelligence.v3.task_budget import BudgetLimits, TaskBudget
+from alphonse.agent_v2.core.intelligence.simple_loop.task_budget import BudgetLimits, TaskBudget
 from .claim_fence import ClaimFenceUnavailable, ClaimReceipt, _time, fenced_claim_transaction
 
 

@@ -17,7 +17,7 @@ from typing import Callable
 
 from alphonse.agent_v2.core.messages.claim_fence import ClaimFenceUnavailable, ClaimReceipt, fenced_claim_transaction
 from .single_loop_checkpoint import Checkpoint, CheckpointConflict, ExperimentalCheckpointStore
-from .task_budget import BudgetExhausted
+from alphonse.agent_v2.core.intelligence.simple_loop.task_budget import BudgetExhausted
 
 
 ACTION_KEY = 'single_loop_delivery_action'

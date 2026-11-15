@@ -6,7 +6,7 @@ import pytest
 
 from alphonse.agent_v2.core.core import CoreLoopContext
 from alphonse.agent_v2.core.intelligence.v3.single_loop_atomic_step import run_atomic_step
-from alphonse.agent_v2.core.intelligence.v3.single_loop_candidate import CandidateHost
+from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_candidate import CandidateHost
 from alphonse.agent_v2.core.intelligence.v3.single_loop_checkpoint import ExperimentalCheckpointStore
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
 from test_experimental_claim_checkpoint import setup

@@ -138,6 +138,21 @@ def test_explicit_owner_worker_routes_to_socket_and_saves_history(tmp_path, monk
         experimental_owner_read=True, owner_selected_draft_sink=lambda *_: None)
     daemon = V2Daemon(runtime, daemon_id='fixture', experimental_owner_only=True)
     holder['daemon'] = daemon
+    # The exclusive owner worker must retain the same protected package and
+    # account-binding services as the runtime. This alone exposes no skills:
+    # the candidate still restricts which tools and observations it accepts.
+    candidate = runtime.processor.owner_read_candidate
+    original_process = candidate.process
+    def process_with_runtime_context(task, context):
+        assert context.skill_store is runtime.core.skill_store
+        assert context.artifact_resources is runtime.core.artifact_resources
+        assert context.skill_bindings is runtime.core.skill_bindings
+        execution = context.tool_execution_context(task)
+        assert execution.skill_store is context.skill_store
+        assert execution.artifact_resources is context.artifact_resources
+        assert execution.skill_bindings is context.skill_bindings
+        return original_process(task, context)
+    monkeypatch.setattr(candidate, 'process', process_with_runtime_context)
     register_checkpoint = daemon.register_owner_checkpoint
     def register_and_check_not_yet_pickable(checkpoint, context):
         register_checkpoint(checkpoint, context)

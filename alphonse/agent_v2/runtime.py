@@ -244,7 +244,7 @@ def build_runtime_host(
             OwnerReadConversationProcessor, authorize_trusted_owner_claim,
         )
         from alphonse.agent_v2.core.intelligence.v3.single_loop_checkpoint import ExperimentalCheckpointStore
-        from alphonse.agent_v2.core.intelligence.v3.task_budget import SQLiteTaskBudgetStore
+        from alphonse.agent_v2.core.intelligence.simple_loop.task_budget import SQLiteTaskBudgetStore
         try:
             if (type(queue) is not SQLiteMessageQueue or queue.experimental_claim_fencing is not True
                     or queue.db_path == ':memory:' or user_store.db_path == ':memory:'

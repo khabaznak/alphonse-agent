@@ -334,6 +334,9 @@ class V2Daemon:
                 context = CoreLoopContext(messages=queue, claim_receipt=acquired.claim_receipt,
                     tools=self.runtime.core.tools, inference=self.runtime.core.inference,
                     conversation_store=self.runtime.conversation_store,
+                    skill_store=self.runtime.core.skill_store,
+                    artifact_resources=self.runtime.core.artifact_resources,
+                    skill_bindings=self.runtime.core.skill_bindings,
                     user_timezone_provider=self.runtime.user_store.timezone,
                     cancellation_checker=is_cancelled)
                 result = None
@@ -513,6 +516,9 @@ class V2Daemon:
                 context = CoreLoopContext(messages=queue, claim_receipt=queued.claim_receipt,
                     tools=self.runtime.core.tools, inference=self.runtime.core.inference,
                     conversation_store=self.runtime.conversation_store,
+                    skill_store=self.runtime.core.skill_store,
+                    artifact_resources=self.runtime.core.artifact_resources,
+                    skill_bindings=self.runtime.core.skill_bindings,
                     user_timezone_provider=self.runtime.user_store.timezone,
                     cancellation_checker=lambda: self._stop.is_set())
                 self._owner_checkpoints[message_id] = (checkpoint, context)

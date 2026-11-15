@@ -5,10 +5,10 @@ import pytest
 
 from alphonse.agent_v2.accounts import AccountSession
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
-from alphonse.agent_v2.core.intelligence.v3.single_loop_candidate import CandidateState
+from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_candidate import CandidateState
 from alphonse.agent_v2.core.intelligence.v3.single_loop_checkpoint import ENGINE, ExperimentalCheckpointStore
 from alphonse.agent_v2.core.intelligence.v3.single_loop_recovery_inspection import inspect_recovery
-from alphonse.agent_v2.core.intelligence.v3.task_budget import BudgetLimits, TaskBudget
+from alphonse.agent_v2.core.intelligence.simple_loop.task_budget import BudgetLimits, TaskBudget
 from alphonse.agent_v2.core.questions import SQLiteQuestionStore
 from alphonse.agent_v2.users import V2UserStore
 

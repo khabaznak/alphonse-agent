@@ -8,10 +8,10 @@ import pytest
 
 from alphonse.agent_v2.core.core import CoreMessage
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
-from alphonse.agent_v2.core.intelligence.v3.single_loop_candidate import CandidateState
+from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_candidate import CandidateState
 from alphonse.agent_v2.core.intelligence.v3.single_loop_checkpoint import ENGINE, ExperimentalCheckpointStore
 from alphonse.agent_v2.core.intelligence.v3.single_loop_delivery_reservation import ACTION_KEY, DeliveryBinding, reserve_delivery
-from alphonse.agent_v2.core.intelligence.v3.task_budget import BudgetLimits, TaskBudget
+from alphonse.agent_v2.core.intelligence.simple_loop.task_budget import BudgetLimits, TaskBudget
 from alphonse.agent_v2.core.messages.claim_fence import ClaimFenceUnavailable, ClaimSuperseded
 from alphonse.agent_v2.core.messages.sqlite_queue import SQLiteMessageQueue
 from alphonse.agent_v2.core.questions import SQLiteQuestionStore
@@ -199,7 +199,7 @@ def test_orphaned_claim_bound_model_marker_blocks_delivery_reservation(setup):
 
 
 def test_rejected_deadline_persists_clock_without_reservation(setup):
-    from alphonse.agent_v2.core.intelligence.v3.task_budget import BudgetExhausted
+    from alphonse.agent_v2.core.intelligence.simple_loop.task_budget import BudgetExhausted
     _, _, questions, store, _, version, _, _ = setup
     with pytest.raises(BudgetExhausted):
         reserve(setup, now_ms=11000)

@@ -14,9 +14,9 @@ from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.intelligence.v3.owner_atomic_checkpoint import OwnerAtomicCheckpoint
 from alphonse.agent_v2.core.intelligence.v3.owner_read_recovery import OwnerRecoveryUnavailable, restore_owner_read_observations
 from alphonse.agent_v2.core.intelligence.v3.owner_read_processor import OwnerReadConversationProcessor, authorize_trusted_owner_claim
-from alphonse.agent_v2.core.intelligence.v3.single_loop_candidate import CandidateState
+from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_candidate import CandidateState
 from alphonse.agent_v2.core.intelligence.v3.single_loop_checkpoint import ExperimentalCheckpointStore
-from alphonse.agent_v2.core.intelligence.v3.task_budget import BudgetLimits, TaskBudget, SQLiteTaskBudgetStore
+from alphonse.agent_v2.core.intelligence.simple_loop.task_budget import BudgetLimits, TaskBudget, SQLiteTaskBudgetStore
 from alphonse.agent_v2.core.messages.sqlite_queue import SQLiteMessageQueue
 from alphonse.agent_v2.core.questions import SQLiteQuestionStore
 from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry
@@ -128,7 +128,7 @@ def test_recovered_newer_search_overflow_is_not_cleared_by_older_complete_search
     class Provider:
         supports_image_input = False
         def generate_json(self, request):
-            assert 'too_many_matches' in request.prompt
+            assert 'next_offset' in request.prompt
             decision = {'kind': 'answer', 'tool_id': None, 'arguments': None, 'text': 'Synthetic answer.'}
             return InferenceResult(json_value=decision, raw_response=json.dumps(decision),
                                    usage={'input_tokens': 10, 'output_tokens': 10})
@@ -381,3 +381,58 @@ def test_real_owner_processor_resumes_after_reconstructing_source(setup, tmp_pat
     assert result.status == ProcessingStatus.WAITING, result.error
     assert result.snapshot.metadata['draft'] == 'Synthetic apples.'
     assert len(provider.requests) == 1 and 'Synthetic apples.' in provider.requests[0].prompt
+
+
+def test_recovery_reconstructs_paginated_snapshot_and_rejects_changes(setup):
+    atomic, initial, ctx, conversations, owner = setup
+    for i in range(31):
+        conversations.record(owner_user_id=owner.user_id, role='user', content=f'Synthetic apples {i}',
+                             source='test', source_message_id=f'page-{i}')
+    current = initial
+    for i, offset in enumerate((0, 30)):
+        args = {'query': 'apples', 'source_types': ['conversation'], 'limit': 30}
+        if offset:
+            args['offset'] = offset
+        decision = {'kind': 'tool', 'tool_id': SEARCH_MEMORY_TOOL_ID, 'arguments': args}
+        model = atomic.reserve(expected_version=current.version, reservation_id=f'page-model-{i}', kind='model',
+            amounts=dict(actions=0, model_calls=1, input_tokens=100, output_tokens=20), now_ms=initial.budget.started_at_ms)
+        selected = atomic.settle_model(expected_version=model.version, reservation_id=f'page-model-{i}', outcome='success',
+            input_tokens=10, output_tokens=10, decision=decision, projection_fingerprint='a' * 64)
+        pending = atomic.reserve(expected_version=selected.version, reservation_id=f'page-read-{i}', kind='tool',
+            amounts=dict(actions=1, model_calls=0, input_tokens=0, output_tokens=0), now_ms=initial.budget.started_at_ms,
+            tool_id=SEARCH_MEMORY_TOOL_ID, arguments=args, selected_decision=decision, projection_fingerprint='a' * 64)
+        observation = execute_search_memory(args, context=ctx.tool_execution_context(atomic.task))
+        current = atomic.settle_read(expected_version=pending.version, reservation_id=f'page-read-{i}',
+            tool_id=SEARCH_MEMORY_TOOL_ID, arguments=args, evidence_ref=f'owner-read:page-{i}', observation=observation)
+    saved, bindings = restore_owner_read_observations(atomic, ctx, expected_version=current.version)
+    assert saved.state.evidence_sources == ['owner-read:page-0', 'owner-read:page-1']
+    assert bindings['owner-read:page-0']['observation']['snapshot'] == bindings['owner-read:page-1']['observation']['snapshot']
+    assert bindings['owner-read:page-1']['observation']['next_offset'] is None
+    conversations.record(owner_user_id=owner.user_id, role='user', content='Another synthetic apple.',
+                         source='test', source_message_id='changed-after-pages')
+    with pytest.raises(OwnerRecoveryUnavailable):
+        restore_owner_read_observations(atomic, ctx, expected_version=current.version)
+
+
+def test_search_pages_reject_orphans_gaps_and_changed_snapshots(setup):
+    from copy import deepcopy
+    from alphonse.agent_v2.core.tools.registry.native.memory import conversation_search_sequences
+    atomic, _, ctx, conversations, owner = setup
+    for i in range(31):
+        conversations.record(owner_user_id=owner.user_id, role='user', content=f'Synthetic apples {i}',
+                             source='test', source_message_id=f'invalid-page-{i}')
+    args0 = {'query': 'apples', 'source_types': ['conversation'], 'limit': 30}
+    args1 = {**args0, 'offset': 30}
+    page0 = execute_search_memory(args0, context=ctx.tool_execution_context(atomic.task))
+    page1 = execute_search_memory(args1, context=ctx.tool_execution_context(atomic.task))
+    def item(args, page): return (SEARCH_MEMORY_TOOL_ID, args, page)
+    with pytest.raises(ValueError):
+        conversation_search_sequences(owner.user_id, {'second': item(args1, page1)})
+    wrong = deepcopy(page1)
+    wrong['snapshot'] = 'changed'
+    with pytest.raises(ValueError):
+        conversation_search_sequences(owner.user_id, {'first': item(args0, page0), 'second': item(args1, wrong)})
+    gapargs = {**args0, 'offset': 31}
+    gappage = execute_search_memory(gapargs, context=ctx.tool_execution_context(atomic.task))
+    with pytest.raises(ValueError):
+        conversation_search_sequences(owner.user_id, {'first': item(args0, page0), 'gap': item(gapargs, gappage)})

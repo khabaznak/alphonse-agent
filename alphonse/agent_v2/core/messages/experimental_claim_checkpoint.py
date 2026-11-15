@@ -19,7 +19,7 @@ from .claim_fence import ClaimFenceUnavailable, ClaimReceipt, _time, fenced_clai
 from alphonse.agent_v2.core.intelligence.v3.single_loop_checkpoint import (
     Checkpoint, CheckpointConflict, ExperimentalCheckpointStore,
 )
-from alphonse.agent_v2.core.intelligence.v3.task_budget import BudgetExhausted
+from alphonse.agent_v2.core.intelligence.simple_loop.task_budget import BudgetExhausted
 
 MODEL_CLAIM_KEY = 'single_loop_model_claim'
 

@@ -275,9 +275,9 @@ class SQLiteMessageQueue:
                 try:
                     from alphonse.agent_v2.core.messages.claim_fence import ClaimReceipt
                     from alphonse.agent_v2.core.messages.experimental_claim_checkpoint import _claim_digest
-                    from alphonse.agent_v2.core.intelligence.v3.single_loop_candidate import CandidateState
+                    from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_candidate import CandidateState
                     from alphonse.agent_v2.core.intelligence.v3.single_loop_checkpoint import STATE_KEY, ExperimentalCheckpointStore
-                    from alphonse.agent_v2.core.intelligence.v3.task_budget import TaskBudget
+                    from alphonse.agent_v2.core.intelligence.simple_loop.task_budget import TaskBudget
                     raw = ExperimentalCheckpointStore._validate_identity(checkpoint, message_id, row['user_id'], checkpoint['version'])
                     metadata = raw['metadata']
                     if (checkpoint['owner_id'] != row['user_id'] or checkpoint['status'] != 'running'

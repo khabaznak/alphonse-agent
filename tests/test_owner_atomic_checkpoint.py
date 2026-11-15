@@ -15,9 +15,9 @@ from alphonse.agent_v2.core.inference.router import InferenceRouter
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.intelligence.v3.owner_atomic_checkpoint import OwnerAtomicCheckpoint, observation_digest
 from alphonse.agent_v2.core.intelligence.v3.owner_read_processor import OwnerReadConversationProcessor, authorize_trusted_owner_claim
-from alphonse.agent_v2.core.intelligence.v3.single_loop_candidate import CandidateState
+from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_candidate import CandidateState
 from alphonse.agent_v2.core.intelligence.v3.single_loop_checkpoint import CheckpointConflict, ExperimentalCheckpointStore
-from alphonse.agent_v2.core.intelligence.v3.task_budget import BudgetExhausted, BudgetLimits, SQLiteTaskBudgetStore, TaskBudget
+from alphonse.agent_v2.core.intelligence.simple_loop.task_budget import BudgetExhausted, BudgetLimits, SQLiteTaskBudgetStore, TaskBudget
 from alphonse.agent_v2.core.messages.sqlite_queue import SQLiteMessageQueue
 from alphonse.agent_v2.core.io.outbox import SQLiteOutboundStore
 from alphonse.agent_v2.core.questions import SQLiteQuestionStore

@@ -20,9 +20,9 @@ def resolve_owner_question(conn: Any, owner: str, message_id: str) -> tuple[str,
     authenticating the current owner. Missing, deleted, changed, or unfinished
     sources must fail closed rather than silently removing reply context.
     """
-    from .single_loop_candidate import CandidateState
+    from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_candidate import CandidateState
     from .single_loop_checkpoint import STATE_KEY
-    from .task_budget import TaskBudget
+    from alphonse.agent_v2.core.intelligence.simple_loop.task_budget import TaskBudget
 
     if not isinstance(message_id, str) or re.fullmatch(r'[0-9a-f]{32}', message_id) is None:
         raise ValueError('owner_question_context_unavailable')

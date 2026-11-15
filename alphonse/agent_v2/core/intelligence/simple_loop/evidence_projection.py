@@ -12,7 +12,7 @@ from dataclasses import dataclass
 import json
 from typing import Callable, Iterable
 
-from .projections import Record, assemble
+from alphonse.agent_v2.core.intelligence.context_projection import Record, assemble
 
 # Smaller is selected first. Mandatory sources always precede optional sources.
 _KIND_ORDER = {

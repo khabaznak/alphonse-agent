@@ -14,11 +14,11 @@ import sqlite3
 from typing import Callable
 from uuid import uuid4
 
-from .single_loop_candidate import (
+from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_candidate import (
     CandidateHost, CandidateState, _cancelled, _is_fresh, _project, _projection_fingerprint,
 )
 from .single_loop_checkpoint import CheckpointConflict, ExperimentalCheckpointStore
-from .task_budget import BudgetExhausted
+from alphonse.agent_v2.core.intelligence.simple_loop.task_budget import BudgetExhausted
 from alphonse.agent_v2.core.messages.claim_fence import (
     ClaimFenceUnavailable, ClaimReceipt, ClaimSuperseded, _time, fenced_claim_transaction,
 )

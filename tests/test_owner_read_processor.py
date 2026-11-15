@@ -12,7 +12,7 @@ from alphonse.agent_v2.core.inference.router import InferenceRouter
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.intelligence.v3.owner_read_processor import OwnerReadConversationProcessor, authorize_trusted_owner_claim
 from alphonse.agent_v2.core.intelligence.engine_router import EngineRoutingProcessor
-from alphonse.agent_v2.core.intelligence.v3.task_budget import SQLiteTaskBudgetStore
+from alphonse.agent_v2.core.intelligence.simple_loop.task_budget import SQLiteTaskBudgetStore
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
 from alphonse.agent_v2.core.messages.sqlite_queue import SQLiteMessageQueue
 from alphonse.agent_v2.core.io.outbox import project_snapshot_to_outbox

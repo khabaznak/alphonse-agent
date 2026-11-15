@@ -267,7 +267,7 @@ def test_private_trace_handles_malformed_model_tool_without_affecting_result():
 
 
 def test_candidate_recovery_uses_advertised_inventory_not_hidden_required_set(monkeypatch):
-    from alphonse.agent_v2.core.intelligence.v3 import single_loop_candidate
+    from alphonse.agent_v2.core.intelligence.simple_loop import single_loop_candidate
     observed = []
     def inspect(state, host):
         # Same visible inventory and read history, different hidden requirements.

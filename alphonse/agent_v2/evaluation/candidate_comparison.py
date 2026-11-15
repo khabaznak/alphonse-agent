@@ -37,8 +37,8 @@ class SingleLoopFixtureAdapter:
     def __call__(self, case, fixture_root, emit):
         from alphonse.agent_v2.core.core import CoreLoopContext, ToolDescriptor, ToolKind
         from alphonse.agent_v2.core.intelligence.task_state import TaskState
-        from alphonse.agent_v2.core.intelligence.v3.single_loop_candidate import CandidateHost, CandidateState, run_candidate
-        from alphonse.agent_v2.core.intelligence.v3.task_budget import BudgetLimits, SQLiteTaskBudgetStore, TaskBudget
+        from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_candidate import CandidateHost, CandidateState, run_candidate
+        from alphonse.agent_v2.core.intelligence.simple_loop.task_budget import BudgetLimits, SQLiteTaskBudgetStore, TaskBudget
         from alphonse.agent_v2.core.messages import InMemoryMessageQueue
         from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry, ToolDefinition
 

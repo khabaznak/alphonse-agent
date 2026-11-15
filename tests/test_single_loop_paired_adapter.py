@@ -14,7 +14,7 @@ V3_SEEDED = Path(__file__).parent / 'fixtures/single_loop_comparison/v3_seeded_r
 
 def test_real_prototype_and_v3_run_same_frozen_read_only_fixture(monkeypatch):
     from alphonse.agent_v2.core.intelligence.v3 import HierarchicalCAPDProcessor
-    from alphonse.agent_v2.core.intelligence.v3 import single_loop_candidate
+    from alphonse.agent_v2.core.intelligence.simple_loop import single_loop_candidate
     invoked = []
     real_v3 = HierarchicalCAPDProcessor.process
     real_candidate = single_loop_candidate.run_candidate

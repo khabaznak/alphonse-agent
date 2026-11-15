@@ -19,8 +19,8 @@ from typing import Any
 from alphonse.agent_v2.core.messages.sqlite_queue import SQLiteMessageQueue
 from alphonse.agent_v2.core.messages.experimental_claim_checkpoint import _claim_digest
 from .single_loop_checkpoint import Checkpoint, CheckpointConflict, ExperimentalCheckpointStore, STATE_KEY, SCHEMA_VERSION
-from .single_loop_candidate import CandidateState
-from .task_budget import BudgetExhausted, TaskBudget
+from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_candidate import CandidateState
+from alphonse.agent_v2.core.intelligence.simple_loop.task_budget import BudgetExhausted, TaskBudget
 
 
 def observation_digest(observation: dict) -> str:

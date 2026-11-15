@@ -17,13 +17,13 @@ from alphonse.agent_v2.core.core import CoreLoopContext, ProcessingResult, Proce
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.tools.registry.native.memory import (
     READ_MEMORY_SOURCE_TOOL_ID, SEARCH_MEMORY_TOOL_ID, revalidate_conversation_observation,
-    conversation_read_sequences,
+    conversation_read_sequences, conversation_search_sequences,
 )
 from alphonse.agent_v2.users import V2UserStore
 from alphonse.agent_v2.core.messages.sqlite_queue import SQLiteMessageQueue
 from .router_candidate_chooser import RouterCandidateChooser
-from .single_loop_candidate import CandidateHost, CandidateState, run_candidate
-from .task_budget import BudgetLimits, SQLiteTaskBudgetStore, TaskBudget
+from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_candidate import CandidateHost, CandidateState, run_candidate
+from alphonse.agent_v2.core.intelligence.simple_loop.task_budget import BudgetLimits, SQLiteTaskBudgetStore, TaskBudget
 from .single_loop_checkpoint import ExperimentalCheckpointStore
 from .owner_atomic_checkpoint import OwnerAtomicCheckpoint
 from .owner_read_recovery import restore_owner_read_observations
@@ -105,7 +105,7 @@ class OwnerReadConversationProcessor:
             search_schema['required'] = list(dict.fromkeys([*search_schema.get('required', []), 'source_types']))
             descriptors = (
                 replace(descriptors[0], argument_schema=search_schema,
-                        description='Search the owner’s prior conversation messages. The default limit is 30 results; if more match, narrow the query. Results are historical, not proof of current state.'),
+                        description='Search the owner’s prior conversation messages. The default limit is 30. For an incomplete list, repeat the same search with the returned next_offset; content is withheld until all pages are checked. If more than 90 match, narrow the query. Results are historical, not proof of current state.'),
                 replace(descriptors[1], description='Read an owner conversation source ID returned by search. For a partial source, use the returned next_offset and read sequentially, preferably with max_chars 12000; content is available after all pages are checked. Sources above 36000 characters are unavailable. Historical messages may be outdated.'),
             )
             clock_descriptor = context.tools.get(OWNER_CLOCK_TOOL_ID)
@@ -171,7 +171,24 @@ class OwnerReadConversationProcessor:
             if tool_id == OWNER_CLOCK_TOOL_ID:
                 return args == {} and atomic is not None
             if tool_id == SEARCH_MEMORY_TOOL_ID:
-                return args.get('source_types') == ['conversation'] and args.get('offset', 0) == 0
+                if args.get('source_types') != ['conversation'] or type(args.get('offset', 0)) is not int:
+                    return False
+                if args.get('offset', 0) == 0:
+                    return True
+                try:
+                    groups = conversation_search_sequences(actor, observations)
+                    if not groups:
+                        return False
+                    pages = groups[-1]
+                    first_args, first = pages[0][1:]
+                    filters = lambda a: {k: v for k, v in a.items() if k != 'offset'}
+                    return (len(pages) < 3 and first['total_matches'] <= 90
+                            and pages[-1][2]['next_offset'] == args['offset']
+                            and filters(first_args) == filters(args)
+                            and all(valid(actor_id, SEARCH_MEMORY_TOOL_ID, prior_args, prior)
+                                    for _, prior_args, prior in pages))
+                except Exception:
+                    return False
             if (tool_id != READ_MEMORY_SOURCE_TOOL_ID or not isinstance(args.get('source_id'), str)
                     or not args['source_id'].startswith('conversation:')
                     or type(args.get('offset', 0)) is not int or args.get('offset', 0) < 0):
@@ -197,7 +214,7 @@ class OwnerReadConversationProcessor:
             return (actor_id == actor and self._authorized(task, context) and isinstance(args, dict)
                     and revalidate_conversation_observation(actor_id, tool_id, args, payload,
                         context=execution_context, allow_excerpt_truncation=True, allow_read_chunks=True,
-                        allow_search_overflow=True))
+                        allow_search_overflow=True, allow_search_pages=True))
 
         def access(actor_id: str, ref: str) -> bool:
             if actor_id != actor or not self._authorized(task, context):
@@ -232,12 +249,29 @@ class OwnerReadConversationProcessor:
                         'source': payload['items'][0]['source'],
                         'content': ''.join(page['items'][0]['content'] for _, _, page in pages),
                         'historical_only': True}, ensure_ascii=False, sort_keys=True)
-                if tool_id == SEARCH_MEMORY_TOOL_ID and payload.get('next_offset') is not None:
-                    # This is feedback about a search operation, not a partial
-                    # body of evidence. Do not expose source IDs or previews.
-                    return json.dumps({'query': payload['query'], 'status': 'too_many_matches',
-                        'notice': 'The result list is incomplete. Narrow the query and search again; '
-                                  'no results from this search have been exposed.'}, ensure_ascii=False)
+                if tool_id == SEARCH_MEMORY_TOOL_ID:
+                    groups = conversation_search_sequences(actor_id, observations)
+                    pages = next(group for group in groups if any(page[0] == ref for page in group))
+                    if pages[-1][2]['next_offset'] is not None:
+                        too_many = pages[0][2]['total_matches'] > 90 or len(pages) >= 3
+                        return json.dumps({'query': payload['query'],
+                            'status': 'too_many_matches' if too_many else 'partial',
+                            'next_offset': None if too_many else pages[-1][2]['next_offset'],
+                            'notice': ('Narrow the query and search again.' if too_many else
+                                       'Repeat this search with the next offset.') +
+                                      ' No incomplete results have been exposed.'}, ensure_ascii=False)
+                    if pages[-1][0] != ref:
+                        return json.dumps({'query': payload['query'], 'status': 'assembled_elsewhere'})
+                    if not all(valid(actor_id, SEARCH_MEMORY_TOOL_ID, args, page) for _, args, page in pages):
+                        raise ValueError('owner_read_evidence_unavailable')
+                    payload = dict(payload)
+                    payload['results'] = [item for _, _, page in pages for item in page['results']]
+                    payload['truncated'] = any(item['truncated'] for item in payload['results'])
+                    if len(pages) > 1:
+                        # Native compatibility fields are page-local; do not
+                        # project them as if they described the assembled set.
+                        payload = {key: payload[key] for key in ('schema_version', 'status', 'query',
+                                   'timezone', 'coverage', 'backend', 'total_matches', 'results', 'truncated')}
                 if tool_id == SEARCH_MEMORY_TOOL_ID and payload.get('truncated') is True:
                     # A shortened preview can hide a later correction. Keep
                     # complete previews and identifying metadata for source
@@ -280,14 +314,13 @@ class OwnerReadConversationProcessor:
             if not (text.strip() and self._authorized(task, context) and all(access(actor_id, ref) for ref in refs)):
                 return False
             sequences = conversation_read_sequences(actor, observations)
+            search_groups = conversation_search_sequences(actor, observations)
             reads = {source_id for source_id, pages in sequences.items()
                      if pages and pages[-1][2]['next_offset'] is None}
-            overflow_pending = False
+            overflow_pending = bool(search_groups and search_groups[-1][-1][2]['next_offset'] is not None)
             for tool, _, payload in observations.values():
-                if tool == SEARCH_MEMORY_TOOL_ID:
-                    overflow_pending = payload.get('next_offset') is not None
-                    if overflow_pending:
-                        continue
+                if tool == SEARCH_MEMORY_TOOL_ID and payload.get('next_offset') is not None:
+                    continue
                 if tool == SEARCH_MEMORY_TOOL_ID and payload.get('truncated') is True:
                     shortened = {item['source_id'] for item in payload['results'] if item['truncated'] is True}
                     has_complete_result = any(item['truncated'] is False for item in payload['results'])

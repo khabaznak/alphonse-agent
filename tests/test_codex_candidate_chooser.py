@@ -7,8 +7,8 @@ import pytest
 from alphonse.agent_v2.core.core import CoreLoopContext, ToolDescriptor, ToolKind
 from alphonse.agent_v2.core.inference import InferencePurpose, InferenceResult
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
-from alphonse.agent_v2.core.intelligence.v3.single_loop_candidate import CandidateHost, CandidateState, run_candidate
-from alphonse.agent_v2.core.intelligence.v3.task_budget import (BudgetExhausted, BudgetLimits,
+from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_candidate import CandidateHost, CandidateState, run_candidate
+from alphonse.agent_v2.core.intelligence.simple_loop.task_budget import (BudgetExhausted, BudgetLimits,
     SQLiteTaskBudgetStore, SyntheticEvaluationBudgetStore, TaskBudget)
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
 from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry, ToolDefinition

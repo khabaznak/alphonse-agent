@@ -7,9 +7,9 @@ import pytest
 from alphonse.agent_v2.core.core import CoreLoopContext
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.intelligence.v3.single_loop_atomic_step import run_atomic_step
-from alphonse.agent_v2.core.intelligence.v3.single_loop_candidate import CandidateHost, CandidateState
+from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_candidate import CandidateHost, CandidateState
 from alphonse.agent_v2.core.intelligence.v3.single_loop_checkpoint import ENGINE, ExperimentalCheckpointStore
-from alphonse.agent_v2.core.intelligence.v3.task_budget import BudgetLimits, TaskBudget
+from alphonse.agent_v2.core.intelligence.simple_loop.task_budget import BudgetLimits, TaskBudget
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
 from alphonse.agent_v2.core.questions import SQLiteQuestionStore
 

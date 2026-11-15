@@ -13,8 +13,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from .single_loop_candidate import CandidateState
-from .task_budget import BudgetExhausted, TaskBudget
+from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_candidate import CandidateState
+from alphonse.agent_v2.core.intelligence.simple_loop.task_budget import BudgetExhausted, TaskBudget
 
 ENGINE = 'single_loop_experimental'
 STATE_KEY = 'single_loop_checkpoint'

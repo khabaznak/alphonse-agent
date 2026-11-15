@@ -128,6 +128,10 @@ def test_clock_evidence_survives_ready_handoff_restore(tmp_path, monkeypatch):
         daemon._owner_checkpoints.pop(message_id)
         daemon._owner_statuses.pop(message_id)
         assert daemon._restore_owner_ready(message_id)
+        _, restored_context = daemon._owner_checkpoints[message_id]
+        assert restored_context.skill_store is daemon.runtime.core.skill_store
+        assert restored_context.artifact_resources is daemon.runtime.core.artifact_resources
+        assert restored_context.skill_bindings is daemon.runtime.core.skill_bindings
         draft = daemon.take_owner_desktop_draft(message_id)
         assert 'Host clock observed as of:' in draft['message']
         assert 'America/Mexico_City' in draft['message']

@@ -11,7 +11,7 @@ import hmac
 from alphonse.agent_v2.core.core import CoreLoopContext
 from alphonse.agent_v2.core.tools.registry.native.memory import (
     READ_MEMORY_SOURCE_TOOL_ID, SEARCH_MEMORY_TOOL_ID, revalidate_conversation_observation,
-    execute_search_memory, execute_read_memory_source, conversation_read_sequences,
+    execute_search_memory, execute_read_memory_source, conversation_read_sequences, conversation_search_sequences,
 )
 from .owner_atomic_checkpoint import OwnerAtomicCheckpoint, observation_digest
 from .owner_clock import OWNER_CLOCK_TOOL_ID, valid_clock_observation
@@ -87,7 +87,7 @@ def restore_owner_read_observations(checkpoint: OwnerAtomicCheckpoint, context: 
                 if not valid_clock_observation(state.actor, args, observation, context=execution):
                     raise OwnerRecoveryUnavailable('owner_recovery_unavailable')
             elif tool == SEARCH_MEMORY_TOOL_ID:
-                if args.get('source_types') != ['conversation'] or args.get('offset', 0) != 0:
+                if args.get('source_types') != ['conversation'] or type(args.get('offset', 0)) is not int or args.get('offset', 0) < 0:
                     raise OwnerRecoveryUnavailable('owner_recovery_unavailable')
                 recheck()
                 observation = execute_search_memory(args, context=execution)
@@ -106,12 +106,15 @@ def restore_owner_read_observations(checkpoint: OwnerAtomicCheckpoint, context: 
                             if tool == OWNER_CLOCK_TOOL_ID else
                             revalidate_conversation_observation(state.actor, tool, args, observation,
                                                                context=execution, allow_excerpt_truncation=True,
-                                                               allow_read_chunks=True, allow_search_overflow=True))):
+                                                               allow_read_chunks=True, allow_search_overflow=True,
+                                                               allow_search_pages=True))):
                 raise OwnerRecoveryUnavailable('owner_recovery_unavailable')
             recheck()
             reconstructed[ref] = {'actor': state.actor, 'tool_id': tool, 'arguments': args, 'observation': observation}
         conversation_read_sequences(state.actor, {ref: (item['tool_id'], item['arguments'], item['observation'])
                                                    for ref, item in reconstructed.items()})
+        conversation_search_sequences(state.actor, {ref: (item['tool_id'], item['arguments'], item['observation'])
+                                                     for ref, item in reconstructed.items()})
         recheck()
         return saved, reconstructed
     except Exception:

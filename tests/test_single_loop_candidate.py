@@ -2,15 +2,27 @@
 from types import SimpleNamespace
 from dataclasses import replace
 import json
+import subprocess
+import sys
 
 import pytest
 
 from alphonse.agent_v2.core.core import CoreLoopContext, ToolDescriptor, ToolKind
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
-from alphonse.agent_v2.core.intelligence.v3.single_loop_candidate import CandidateHost, CandidateState, run_candidate
-from alphonse.agent_v2.core.intelligence.v3.task_budget import BudgetLimits, SQLiteTaskBudgetStore, TaskBudget
+from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_candidate import CandidateHost, CandidateState, run_candidate
+from alphonse.agent_v2.core.intelligence.simple_loop.task_budget import BudgetLimits, SQLiteTaskBudgetStore, TaskBudget
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
 from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry, ToolDefinition
+
+
+def test_simple_loop_core_import_does_not_load_v3():
+    subprocess.run([sys.executable, '-c', '''
+import sys
+import alphonse.agent_v2.core.intelligence.simple_loop.single_loop_candidate
+assert not any(name == 'alphonse.agent_v2.core.intelligence.v3'
+               or name.startswith('alphonse.agent_v2.core.intelligence.v3.')
+               for name in sys.modules)
+'''], check=True)
 
 
 def vector(actions=0, model_calls=0, input_tokens=0, output_tokens=0):
