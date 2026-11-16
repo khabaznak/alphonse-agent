@@ -124,6 +124,16 @@ if a checkpoint with that identifier is attributed to the owner in the same
 transaction. This association, the counter and delivery status are not proof
 of an action, dispatch or receipt. Message text, targets, provider identifiers,
 errors and links to other members' checkpoints remain hidden.
+When the runtime schedule store shares the queue database, the same inspection
+lists bounded owner-owned scheduled-task identifiers and occurrence snapshot positions, stored
+status and attempt categories. It returns stored queue/outbox links only where
+the referenced row is separately attributed or addressed to the owner in the
+same transaction. It does not expose task names, prompts, execution errors or
+other members' records. Missing, split or unreadable schedule storage is
+unavailable; orphaned occurrences have no safely established owner and are
+excluded. An occurrence's position is only a temporary display number, not a
+stable identifier. Links, statuses and counters are unverified stored metadata, not
+proof of execution or delivery; no job is resumed.
 Individual protected effect inspection and independently verified reconciliation
 remain open. Older binaries and direct writers remain outside the protocol.
 
@@ -201,7 +211,11 @@ is not a claim that the current UI or an automated command supplies them.
   These are demonstrations of the gap, not passing mixed-version protection.
 - `tests/test_owner_read_recovery.py`, `test_owner_ready_restart.py` and
   `test_owner_daemon_end_to_end.py` cover selected owner-only recovery and
-  handoff cases. They do not reconcile old scheduled or externally dispatched
+  handoff cases. The process-death tests include a fake model call interrupted
+  after reservation: the accepted user message and original processing claim
+  survive restart, no draft is offered, and that call is not retried during the
+  observed interval. This is not proof about provider-side processing, arbitrary
+  crash windows or external effects. These tests do not reconcile old scheduled or externally dispatched
   tasks. A complete data inventory, effect evidence and tested recovery remain
   outstanding; the aggregate queue count cannot substitute for them.
 

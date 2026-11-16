@@ -4,7 +4,10 @@ import type { OwnerRequest } from "./ownerConversation";
 type Counts = Record<string, number>;
 type WorkItem = { id: string; status: string; engine: string; origin_marker: string };
 type OutboxItem = { id: string; status: string; attempts: string; owner_task_id: string | null };
-type WorkItems = { queue: { items: WorkItem[]; truncated: boolean }; checkpoints: { items: WorkItem[]; truncated: boolean }; outbox: { items: OutboxItem[]; truncated: boolean } };
+type ScheduleItem = { id: string; status: string };
+type OccurrenceItem = { position: number; task_id: string; status: string; attempts: string; owner_queue_id: string | null; owner_outbox_id: string | null };
+type ScheduledItems = { status: "unavailable" } | { status: "available"; tasks: { items: ScheduleItem[]; truncated: boolean }; occurrences: { items: OccurrenceItem[]; truncated: boolean } };
+type WorkItems = { queue: { items: WorkItem[]; truncated: boolean }; checkpoints: { items: WorkItem[]; truncated: boolean }; outbox: { items: OutboxItem[]; truncated: boolean }; scheduled: ScheduledItems };
 type Inventory = {
   queue_other_ingress: { statuses: Counts };
   checkpoints_other_ingress: { statuses: Counts };
@@ -47,9 +50,32 @@ export async function loadLegacyStateItems(request: OwnerRequest, actor: string)
         (item.owner_task_id !== null && (typeof item.owner_task_id !== "string" || !item.owner_task_id || item.owner_task_id.length > 256))) throw new Error("invalid item");
     return { id: item.id, status: item.status, attempts: item.attempts, owner_task_id: item.owner_task_id };
   });
+  const scheduled = response.items.scheduled;
+  if (!scheduled || !["available", "unavailable"].includes(scheduled.status)) throw new Error("invalid items");
+  let scheduleItems: ScheduledItems = { status: "unavailable" };
+  if (scheduled.status === "available") {
+    const { tasks, occurrences } = scheduled;
+    if (!tasks || !occurrences || !Array.isArray(tasks.items) || !Array.isArray(occurrences.items) ||
+        tasks.items.length > 50 || occurrences.items.length > 50 || typeof tasks.truncated !== "boolean" ||
+        typeof occurrences.truncated !== "boolean") throw new Error("invalid items");
+    const validId = (id: unknown): id is string => typeof id === "string" && id.length > 0 && id.length <= 256;
+    const taskItems = tasks.items.map(item => {
+      if (!item || !validId(item.id) || !["active", "paused", "completed", "cancelled", "failed", "other"].includes(item.status)) throw new Error("invalid item");
+      return { id: item.id, status: item.status };
+    });
+    const occurrenceItems = occurrences.items.map((item, index) => {
+      if (!item || item.position !== index + 1 || !validId(item.task_id) ||
+          !["pending", "claimed", "enqueued", "processing", "response_pending", "retry_wait", "delivered", "failed", "delivery_failed", "unconfirmed", "cancelled", "completed", "other"].includes(item.status) ||
+          !["zero", "positive", "invalid"].includes(item.attempts) ||
+          (item.owner_queue_id !== null && !validId(item.owner_queue_id)) || (item.owner_outbox_id !== null && !validId(item.owner_outbox_id))) throw new Error("invalid item");
+      return { position: item.position, task_id: item.task_id, status: item.status, attempts: item.attempts, owner_queue_id: item.owner_queue_id, owner_outbox_id: item.owner_outbox_id };
+    });
+    scheduleItems = { status: "available", tasks: { items: taskItems, truncated: tasks.truncated },
+      occurrences: { items: occurrenceItems, truncated: occurrences.truncated } };
+  }
   return { queue: checked(response.items.queue, ["pending", "processing", "retry_wait", "failed", "other"]),
     checkpoints: checked(response.items.checkpoints, ["queued", "running", "waiting_user", "done", "failed", "cancelled", "other"]),
-    outbox: { items: deliveries, truncated: outbox.truncated } };
+    outbox: { items: deliveries, truncated: outbox.truncated }, scheduled: scheduleItems };
 }
 
 export async function loadLegacyStateInventory(request: OwnerRequest, actor: string): Promise<Inventory> {
@@ -144,6 +170,16 @@ function LegacyStateInventoryForActor({ request, actor }: { request: OwnerReques
           <code>{item.id}</code> — {item.status}; stored attempts: {item.attempts}; {item.owner_task_id ? <>stored task association: <code>{item.owner_task_id}</code></> : "no owner-attributed task association"}
         </li>)}</ul>}
       </div>
+      {details.scheduled.status === "unavailable" ? <p>Scheduled records could not be checked.</p> : <div>
+        <p>Scheduled tasks{details.scheduled.tasks.truncated ? " (first 50; more records exist)" : ""}</p>
+        {details.scheduled.tasks.items.length === 0 ? <p>No records in this snapshot.</p> : <ul>{details.scheduled.tasks.items.map(item => <li key={item.id}><code>{item.id}</code> — {item.status}</li>)}</ul>}
+        <p>Scheduled occurrences{details.scheduled.occurrences.truncated ? " (first 50; more records exist)" : ""}. Stored links and statuses are unverified.</p>
+        {details.scheduled.occurrences.items.length === 0 ? <p>No records in this snapshot.</p> : <ul>{details.scheduled.occurrences.items.map(item => <li key={item.position}>
+          Snapshot item {item.position} — task <code>{item.task_id}</code>; {item.status}; stored attempts: {item.attempts};
+          {item.owner_queue_id && <> queue: <code>{item.owner_queue_id}</code>;</>}
+          {item.owner_outbox_id && <> outbound: <code>{item.owner_outbox_id}</code>;</>}
+        </li>)}</ul>}
+      </div>}
     </div>}
   </section>;
 }

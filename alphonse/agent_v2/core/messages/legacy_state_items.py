@@ -12,9 +12,12 @@ _STATUSES = {
     'checkpoint': {'queued', 'running', 'waiting_user', 'done', 'failed', 'cancelled'},
 }
 _OUTBOX_STATUSES = {'pending', 'claimed', 'retry_wait', 'delivered', 'failed', 'unconfirmed'}
+_SCHEDULE_STATUSES = {'active', 'paused', 'completed', 'cancelled', 'failed'}
+_OCCURRENCE_STATUSES = {'pending', 'claimed', 'enqueued', 'processing', 'response_pending', 'retry_wait',
+                        'delivered', 'failed', 'delivery_failed', 'unconfirmed', 'cancelled', 'completed'}
 
 
-def inspect_legacy_items(db_path: str | Path, *, expected_owner: str) -> dict | None:
+def inspect_legacy_items(db_path: str | Path, *, expected_owner: str, include_schedules: bool = False) -> dict | None:
     """Read bounded identifiers/statuses under the canonical owner transaction.
 
     This does not authenticate the caller or prove an effect, delivery, origin
@@ -87,9 +90,48 @@ def inspect_legacy_items(db_path: str | Path, *, expected_owner: str) -> dict | 
                     raise ValueError('legacy_item_identifier_invalid')
                 outbox.append({'id': identity, 'status': row['status'] if row['status'] in _OUTBOX_STATUSES else 'other',
                                'attempts': row['attempts'], 'owner_task_id': task})
-            return {'queue': group('queue', 'v2_inbound_messages', 'q', 'message_id', 'user_id', 'metadata_json'),
-                    'checkpoints': group('checkpoint', 'v2_task_checkpoints', 'c', 'task_id', 'owner_id', 'task_state_json'),
-                    'outbox': {'items': outbox, 'truncated': len(outbox_rows) > _LIMIT}}
+            result = {'queue': group('queue', 'v2_inbound_messages', 'q', 'message_id', 'user_id', 'metadata_json'),
+                      'checkpoints': group('checkpoint', 'v2_task_checkpoints', 'c', 'task_id', 'owner_id', 'task_state_json'),
+                      'outbox': {'items': outbox, 'truncated': len(outbox_rows) > _LIMIT},
+                      'scheduled': {'status': 'unavailable'}}
+            if include_schedules is True:
+                try:
+                    tasks = conn.execute('''SELECT CASE WHEN length(CAST(scheduled_task_id AS BLOB))<=256
+                        THEN scheduled_task_id END AS identifier, status FROM v2_scheduled_tasks
+                        WHERE owner_user_id=? ORDER BY scheduled_task_id LIMIT ?''', (expected_owner, _LIMIT + 1)).fetchall()
+                    occurrences = conn.execute('''SELECT
+                        CASE WHEN length(CAST(e.scheduled_task_id AS BLOB))<=256 THEN e.scheduled_task_id END AS parent,
+                        e.status, CASE WHEN typeof(e.attempt_count)!='integer' OR e.attempt_count<0 THEN 'invalid'
+                            WHEN e.attempt_count=0 THEN 'zero' ELSE 'positive' END AS attempts,
+                        CASE WHEN length(CAST(e.queued_message_id AS BLOB))<=256 AND EXISTS
+                            (SELECT 1 FROM v2_inbound_messages q WHERE q.message_id=e.queued_message_id AND q.user_id=?)
+                            THEN e.queued_message_id ELSE NULL END AS queued,
+                        CASE WHEN length(CAST(e.response_outbox_id AS BLOB))<=256 AND EXISTS
+                            (SELECT 1 FROM v2_outbox o WHERE o.outbox_message_id=e.response_outbox_id AND o.audience_user_id=?)
+                            THEN e.response_outbox_id ELSE NULL END AS outgoing
+                        FROM v2_scheduled_task_executions e JOIN v2_scheduled_tasks s ON s.scheduled_task_id=e.scheduled_task_id
+                        WHERE s.owner_user_id=? ORDER BY e.id LIMIT ?''',
+                        (expected_owner, expected_owner, expected_owner, _LIMIT + 1)).fetchall()
+                    def identifier(value):
+                        if not isinstance(value, str) or not value or not value.isprintable():
+                            raise ValueError('legacy_item_identifier_invalid')
+                        return value
+                    task_items = [{'id': identifier(row['identifier']),
+                                   'status': row['status'] if row['status'] in _SCHEDULE_STATUSES else 'other'}
+                                  for row in tasks[:_LIMIT]]
+                    occurrence_items = []
+                    for position, row in enumerate(occurrences[:_LIMIT], 1):
+                        occurrence_items.append({'position': position, 'task_id': identifier(row['parent']),
+                            'status': row['status'] if row['status'] in _OCCURRENCE_STATUSES else 'other',
+                            'attempts': row['attempts'],
+                            'owner_queue_id': identifier(row['queued']) if row['queued'] is not None else None,
+                            'owner_outbox_id': identifier(row['outgoing']) if row['outgoing'] is not None else None})
+                    result['scheduled'] = {'status': 'available',
+                        'tasks': {'items': task_items, 'truncated': len(tasks) > _LIMIT},
+                        'occurrences': {'items': occurrence_items, 'truncated': len(occurrences) > _LIMIT}}
+                except sqlite3.Error:
+                    pass  # Missing/split/corrupt schedule state is not zero.
+            return result
         finally:
             conn.close()
     except (sqlite3.Error, OSError, ValueError, TypeError, OverflowError):
