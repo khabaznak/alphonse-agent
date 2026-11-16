@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from typing import Any
 
 from alphonse.agent_v2.core.memory.contracts import ContextItem, SourceReference, AccessScope, RecallResult, conversation_item
@@ -259,12 +260,55 @@ def _identity(context):
     return str(context.task.user)
 
 
+def _current_owner_conversation_id(context: ToolExecutionContext, requester: str) -> str | None:
+    """Resolve the active owner input by its server-bound queue identity.
+
+    A submitted request is task input, not historical evidence. Do not derive
+    its identity from model arguments, text, or a caller-provided event ID.
+    Older in-flight requests may not yet have a conversation record.
+    """
+    task = context.task
+    if getattr(task, 'intelligence_engine', None) != 'single_loop_experimental':
+        return None
+    from alphonse.agent_v2.core.messages.sqlite_queue import SQLiteMessageQueue
+    from alphonse.agent_v2.conversations import SQLiteConversationStore
+    queue = context.messages
+    conversations = context.conversation_store
+    receipt = context.claim_receipt
+    # Ephemeral injected processors do not use the trusted owner ingress and
+    # do not create its durable conversation event. A fenced SQLite host must
+    # instead prove the live claim and shared database below.
+    from alphonse.agent_v2.core.messages.queue import InMemoryMessageQueue
+    if type(queue) is InMemoryMessageQueue and receipt is None:
+        return None
+    try:
+        if (type(queue) is not SQLiteMessageQueue or type(conversations) is not SQLiteConversationStore
+                or receipt is None or queue.experimental_claim_fencing is not True
+                or not os.path.samefile(queue.db_path, conversations.db_path)
+                or requester != task.user or task.message_id != receipt.message_id
+                or task.task_id != receipt.message_id or receipt.user_id != requester
+                or not queue.verify_trusted_local_owner_claim(receipt, task)):
+            raise ValueError('owner_memory_claim_unavailable')
+        event = conversations.event_for_source_message_id(
+            owner_user_id=requester, source_message_id=f'inbound:{receipt.message_id}')
+        if event is None:
+            return None
+        if (event.owner_user_id != requester or event.role != 'user'
+                or event.content != str(task.goal or '').strip()
+                or event.source_message_id != f'inbound:{receipt.message_id}'):
+            raise ValueError('owner_memory_claim_unavailable')
+        return f'conversation:{event.event_id}'
+    except (AttributeError, OSError, TypeError):
+        raise ValueError('owner_memory_claim_unavailable') from None
+
+
 def _snapshot(context, requester: str, query: str, historical: bool, selected: set[str]):
     """All source adapters run independently. Access precedes ranking and excerpts."""
     hits, coverage = [], {}
     memory = getattr(context, "memory", None)
     knowledge = getattr(memory, "knowledge", None)
     conversations = getattr(context, "conversation_store", None)
+    excluded = _current_owner_conversation_id(context, requester) if 'conversation' in selected else None
 
     def collect(kind, reader):
         if kind not in selected:
@@ -290,7 +334,8 @@ def _snapshot(context, requester: str, query: str, historical: bool, selected: s
         else:
             events = conversations.search(owner_user_id=requester, query=query, limit=8)
             items = [item for event in events if (item := conversation_item(event, requester)) is not None]
-        return [SearchHit(item.source.source_id, "conversation", item) for item in items], callable(snapshot)
+        return [SearchHit(item.source.source_id, "conversation", item) for item in items
+                if item.source.source_id != excluded], callable(snapshot)
 
     def knowledge_hits():
         records = knowledge.recall(requester, query="", historical=historical, limit=None)
@@ -425,7 +470,11 @@ def execute_read_memory_source(arguments: dict[str, Any], *, context: ToolExecut
         anchor = None
         neighbor_items = []
         supporting = []
+        excluded = None
         if kind == "conversation":
+            excluded = _current_owner_conversation_id(context, requester)
+            if source_id == excluded:
+                return {"schema_version": 2, "status": "not_found", "items": []}
             if not callable(getattr(conversation_store, "read", None)):
                 return {"schema_version": 2, "status": "unavailable", "items": []}
             event = conversation_store.read(event_id=source_id.removeprefix("conversation:"), requester_user_id=requester)
@@ -459,7 +508,7 @@ def execute_read_memory_source(arguments: dict[str, Any], *, context: ToolExecut
         for candidate in neighbor_items:
             if len(adjacent) >= 2 * neighbors:
                 break
-            if (candidate.source.source_id == source_id or not candidate.visible_to(requester)
+            if (candidate.source.source_id == source_id or candidate.source.source_id == excluded or not candidate.visible_to(requester)
                     or candidate.source.access.owner_user_id != anchor.item.source.access.owner_user_id):
                 continue
             adjacent.append({"source": candidate.source.to_dict(), "content": candidate.content[:1000],

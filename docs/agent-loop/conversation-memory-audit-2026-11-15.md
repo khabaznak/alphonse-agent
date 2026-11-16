@@ -26,14 +26,13 @@ of household data. Existing household records are not migrated by this audit.
 ## Findings and work
 
 1. **Conversation completeness:** The owner path previously recorded both the
-   user request and reply only on acknowledged pickup. Accepted requests that
-   failed, were cancelled or abandoned could be absent from the conversation
-   log. Preserve accepted requests independently from response delivery, with
-   peer/owner checks, transaction-bound identity, cancellation and deletion
-   semantics; never treat a prepared reply as delivered. The detailed
-   [ingress gap and proposed contract](owner-ingress-history-gap-2026-11.md)
-   remains unimplemented; queue, checkpoint and erasure semantics must be
-   addressed together.
+   user request and reply only on acknowledged pickup. The new path records
+   accepted requests with their trusted queue entry, independently of later
+   failure or cancellation; the assistant response remains acknowledgement
+   gated. Current-input self-retrieval is excluded and deletion is blocked
+   while associated queue or checkpoint copies remain. Pre-change pending
+   requests retain compatibility behavior, and complete erasure remains open.
+   See the [ingress record and qualification contract](owner-ingress-history-gap-2026-11.md).
 2. **Derived views:** Owner acknowledgements use a shared transaction and bypass
    the daily Markdown projector. The SQLite history is authoritative; daily
    files may be stale. Automatic daily Markdown projection is suspended in

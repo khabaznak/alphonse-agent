@@ -1,9 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
-import { OwnerConversation, ownerBusyFor, ownerUnavailableMessage, type OwnerRequest } from "./ownerConversation";
+import { OwnerConversation, ownerAcceptedAt, ownerBusyFor, ownerUnavailableMessage, type OwnerRequest } from "./ownerConversation";
 import { avatarState } from "./layoutState";
 
 const id = "a".repeat(32);
 const token = "b".repeat(32);
+
+it("uses the accepted server instant even when the response arrives after midnight", () => {
+  const beforeMidnight = "2026-11-16T05:59:59+00:00";
+  const responseTime = "2026-11-16T06:00:01Z";
+  expect(ownerAcceptedAt(beforeMidnight, responseTime)).toBe(beforeMidnight);
+  expect(ownerAcceptedAt(undefined, responseTime)).toBe(responseTime);
+  expect(ownerAcceptedAt("2026-11-16T05:59:59", responseTime)).toBe(responseTime);
+  expect(ownerAcceptedAt("invalidZ", responseTime)).toBe(responseTime);
+});
 
 describe("explicit owner conversation transport", () => {
   it("keeps a request pending through polling, scopes it to the conversation, and clears it on acknowledgement", async () => {

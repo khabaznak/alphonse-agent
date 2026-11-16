@@ -6,6 +6,13 @@ type Status = "pending" | "ready" | "started_unconfirmed" | "client_acknowledged
 export type OwnerCapability = { owner_only?: boolean; processing_ready?: boolean; blocking_reason?: string | null; paused_legacy_requests?: number };
 type StatusReply = OwnerCapability & { status?: Status; failure_code?: string };
 type Pickup = { message_id: string; message: string; acknowledgement_token: string; delivery_status: string; kind?: "answer" | "question" };
+type OwnerIngressReply = { message_id: string; accepted_at?: string };
+
+/** Prefer the daemon's durable ingress instant; older daemons may omit it. */
+export function ownerAcceptedAt(value: unknown, fallback: string): string {
+  if (typeof value === "string" && /(?:Z|[+-]\d{2}:\d{2})$/i.test(value) && Number.isFinite(Date.parse(value))) return value;
+  return fallback;
+}
 
 /** Old notifications remain untouched until their intended recipient and delivery are reconciled. */
 export function legacyNotificationReviewMessage(value: unknown): string {
@@ -75,13 +82,13 @@ export class OwnerConversation {
     if (!current) this.pending.set(messageId, { messageId, pickupStarted: false });
   }
 
-  async send(prompt: string, replyToMessageId?: string): Promise<{ message_id: string }> {
+  async send(prompt: string, replyToMessageId?: string): Promise<OwnerIngressReply> {
     if (this.hasPending()) throw new Error("Wait for the current conversation to finish or resolve its uncertain result.");
     if (replyToMessageId !== undefined && !/^[0-9a-f]{32}$/.test(replyToMessageId)) {
       throw new Error("This question could not be selected for a reply.");
     }
     this.submitting = true;
-    let queued: { message_id: string };
+    let queued: OwnerIngressReply;
     try {
       const capability = await this.request<StatusReply>("experimental_owner_status", {});
       if (capability.processing_ready !== true) throw new Error(ownerUnavailableMessage(capability.blocking_reason));

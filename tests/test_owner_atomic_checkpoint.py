@@ -34,6 +34,7 @@ def setup(tmp_path):
     queue = SQLiteMessageQueue(path, experimental_claim_fencing=True)
     SQLiteOutboundStore(path)
     questions = SQLiteQuestionStore(path)
+    SQLiteConversationStore(path)
     message_id = queue.enqueue_trusted_local_owner(prompt='Find the apples note.', peer_uid=os.getuid())
     acquired = queue.claim_next()
     task = TaskState.from_message(acquired.message, message_id=message_id)
@@ -165,12 +166,23 @@ class Provider:
         return InferenceResult(json_value=result, raw_response=json.dumps(result), usage={'input_tokens': 100, 'output_tokens': 20})
 
 
-@pytest.mark.parametrize('mode', ['acknowledged', 'source_revoked', 'owner_deactivated', 'deactivated_ack', 'expired_ack', 'reclaimed', 'history_failure', 'legacy_handoff'])
+@pytest.mark.parametrize('mode', ['acknowledged', 'legacy_origin', 'source_revoked', 'owner_deactivated', 'deactivated_ack', 'expired_ack', 'reclaimed', 'history_failure', 'legacy_handoff'])
 def test_real_owner_processor_to_peer_verified_one_time_pickup(setup, mode, tmp_path):
     from alphonse.agent_v2.daemon import V2Daemon
     from alphonse.agent_v2.ipc import V2DaemonClient, V2DaemonServer
     _, users, owner, queue, acquired, task, store, _ = setup
     conversation = SQLiteConversationStore(queue.db_path)
+    if mode == 'legacy_origin':
+        # Simulate a genuine pre-upgrade in-flight request: no ingress event,
+        # old payload digest, and version-zero origin. It remains recoverable.
+        from alphonse.agent_v2.core.messages.sqlite_queue import _owner_ingress_digest
+        with queue._connect() as conn:
+            queued = conn.execute('SELECT * FROM v2_inbound_messages WHERE message_id=?', (task.message_id,)).fetchone()
+            payload = [queued[key] for key in ('message_id', 'timestamp', 'prompt', 'user_id', 'project_id',
+                       'tag', 'correlation_id', 'memory_session_id', 'metadata_json')]
+            conn.execute('DELETE FROM v2_conversation_events WHERE source_message_id=?', (f'inbound:{task.message_id}',))
+            conn.execute("UPDATE v2_trusted_owner_ingress SET history_version=0,history_event_id='',payload_sha256=? WHERE message_id=?",
+                         (_owner_ingress_digest(payload, 0, ''), task.message_id))
     event = conversation.record(owner_user_id=owner.user_id, role='user', content='Synthetic apples.', source='test', source_message_id='one')
     registry = InMemoryToolRegistry()
     registry.register(build_search_memory_tool_definition())
@@ -227,7 +239,7 @@ def test_real_owner_processor_to_peer_verified_one_time_pickup(setup, mode, tmp_
                                      ('a' * 32, task.message_id))
                     with pytest.raises(RuntimeError, match='claim_not_current'):
                         client.request('experimental_owner_ack_draft', message_id=task.message_id, acknowledgement_token=token)
-                    assert [(item.role, item.content) for item in conversation.list(owner_user_id=owner.user_id)] == [('user', 'Synthetic apples.')]
+                    assert [(item.role, item.content) for item in conversation.list(owner_user_id=owner.user_id)] == [('user', 'Find the apples note.'), ('user', 'Synthetic apples.')]
                 elif mode == 'history_failure':
                     original = conversation.record
                     def fail_assistant(**kwargs):
@@ -237,14 +249,14 @@ def test_real_owner_processor_to_peer_verified_one_time_pickup(setup, mode, tmp_
                     conversation.record = fail_assistant
                     with pytest.raises(RuntimeError, match='fixture_history_failure'):
                         client.request('experimental_owner_ack_draft', message_id=task.message_id, acknowledgement_token=token)
-                    assert [(item.role, item.content) for item in conversation.list(owner_user_id=owner.user_id)] == [('user', 'Synthetic apples.')]
+                    assert [(item.role, item.content) for item in conversation.list(owner_user_id=owner.user_id)] == [('user', 'Find the apples note.'), ('user', 'Synthetic apples.')]
                 elif mode == 'legacy_handoff':
                     with queue._connect() as conn:
                         conn.execute('INSERT INTO v2_scheduled_handoffs(message_id,task_id,owner_id) VALUES (?,?,?)',
                                      (task.message_id, task.task_id, task.user))
                     with pytest.raises(RuntimeError, match='owner_desktop_ack_unavailable'):
                         client.request('experimental_owner_ack_draft', message_id=task.message_id, acknowledgement_token=token)
-                    assert [(item.role, item.content) for item in conversation.list(owner_user_id=owner.user_id)] == [('user', 'Synthetic apples.')]
+                    assert [(item.role, item.content) for item in conversation.list(owner_user_id=owner.user_id)] == [('user', 'Find the apples note.'), ('user', 'Synthetic apples.')]
                 else:
                     assert client.request('experimental_owner_ack_draft', message_id=task.message_id,
                                           acknowledgement_token=token) == {'status': 'client_acknowledged'}
@@ -259,9 +271,20 @@ def test_real_owner_processor_to_peer_verified_one_time_pickup(setup, mode, tmp_
                     restarted._owner_checkpoints = {}
                     restarted.acknowledge_owner_desktop_draft(task.message_id, token)
                     events = conversation.list(owner_user_id=owner.user_id)
+                    expected_users = ([('user', 'Synthetic apples.'), ('user', 'Find the apples note.')]
+                                      if mode == 'legacy_origin' else
+                                      [('user', 'Find the apples note.'), ('user', 'Synthetic apples.')])
                     assert [(event.role, event.content) for event in events] == [
-                        ('user', 'Synthetic apples.'), ('user', 'Find the apples note.'),
-                        ('assistant', 'Synthetic apples.')]
+                        *expected_users, ('assistant', 'Synthetic apples.')]
+                    if mode == 'acknowledged':
+                        with queue._connect() as conn:
+                            conn.execute("UPDATE v2_conversation_events SET speaker_id='other' WHERE source_message_id=?",
+                                         (f'inbound:{task.message_id}',))
+                        with pytest.raises(ValueError, match='owner_desktop_ack_unavailable'):
+                            restarted.acknowledge_owner_desktop_draft(task.message_id, token)
+                        with queue._connect() as conn:
+                            conn.execute('UPDATE v2_conversation_events SET speaker_id=? WHERE source_message_id=?',
+                                         (owner.user_id, f'inbound:{task.message_id}'))
                     users.update_user(owner.user_id, is_active=False)
                     with pytest.raises(RuntimeError, match='owner_desktop_ack_unavailable'):
                         client.request('experimental_owner_ack_draft', message_id=task.message_id, acknowledgement_token=token)
@@ -278,13 +301,13 @@ def test_real_owner_processor_to_peer_verified_one_time_pickup(setup, mode, tmp_
                     'started_unconfirmed' if mode in {'expired_ack', 'deactivated_ack', 'reclaimed', 'history_failure', 'legacy_handoff'} else 'client_acknowledged')
                 with queue._connect() as conn:
                     still_queued = conn.execute('SELECT 1 FROM v2_inbound_messages WHERE message_id=?', (task.message_id,)).fetchone()
-                assert (still_queued is None) == (mode == 'acknowledged')
+                assert (still_queued is None) == (mode in {'acknowledged', 'legacy_origin'})
         finally:
             server.stop()
 
 def test_real_owner_processor_uses_atomic_checkpoint_and_persists_reads(setup):
     tmp_path, users, owner, queue, acquired, task, store, _ = setup
-    conversation = SQLiteConversationStore(tmp_path / 'conversation.db')
+    conversation = SQLiteConversationStore(queue.db_path)
     event = conversation.record(owner_user_id=owner.user_id, role='user', content='Synthetic apples. Unique source 9fcb.', source='test', source_message_id='one')
     registry = InMemoryToolRegistry()
     registry.register(build_search_memory_tool_definition())

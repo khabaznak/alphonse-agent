@@ -57,6 +57,8 @@ class SQLiteMessageQueue:
                 raise ValueError("claim_fencing_generation_invalid")
             if conn.execute("SELECT 1 FROM v2_inbound_messages WHERE status='processing' AND claim_generation='' LIMIT 1").fetchone():
                 raise ValueError("claim_fencing_legacy_inflight")
+            if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_trusted_owner_ingress'").fetchone():
+                _ensure_owner_history_columns(conn)
 
     @classmethod
     def default(cls, *, lease_owner: str = "default") -> "SQLiteMessageQueue":
@@ -96,7 +98,8 @@ class SQLiteMessageQueue:
         return queued
 
     def enqueue_trusted_local_owner(self, *, prompt: str, peer_uid: int,
-                                    reply_to_message_id: str | None = None) -> str:
+                                    reply_to_message_id: str | None = None,
+                                    return_receipt: bool = False) -> str | dict[str, str]:
         """Atomically bind a local-peer ingress to its newly created queue row.
 
         The caller must independently verify the peer UID. This record is not
@@ -108,6 +111,8 @@ class SQLiteMessageQueue:
             raise PermissionError('owner_ingress_peer_denied')
         if not isinstance(prompt, str) or not prompt.strip():
             raise ValueError('prompt_required')
+        if type(return_receipt) is not bool:
+            raise ValueError('owner_ingress_receipt_invalid')
         message_id = uuid4().hex
         timestamp = _now_iso()
         with self._connect() as conn:
@@ -130,17 +135,28 @@ class SQLiteMessageQueue:
                 metadata_fields['owner_clarification'] = bind_owner_question(conn, actor, reply_to_message_id)
             metadata = json.dumps(metadata_fields, sort_keys=True)
             payload = [message_id, timestamp, prompt.strip(), actor, '', '', '', '', metadata]
-            digest = hashlib.sha256(json.dumps(payload, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
             conn.execute("""CREATE TABLE IF NOT EXISTS v2_trusted_owner_ingress (
                 message_id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, peer_uid INTEGER NOT NULL,
                 payload_sha256 TEXT NOT NULL, created_at TEXT NOT NULL) STRICT""")
+            _ensure_owner_history_columns(conn)
             conn.execute("""INSERT INTO v2_inbound_messages
                 (message_id,sequence,timestamp,prompt,user_id,project_id,tag,correlation_id,memory_session_id,
                  metadata_json,queued_at,status) VALUES (?,?,?,?,?,?,?,?,?,?,?,'pending')""",
                 (message_id, time.time_ns(), timestamp, prompt.strip(), actor, '', '', '', '', metadata, timestamp))
-            conn.execute('INSERT INTO v2_trusted_owner_ingress VALUES (?,?,?,?,?)',
-                         (message_id, actor, peer_uid, digest, timestamp))
-        return message_id
+            # Conversation schema must already be initialized by the host. A
+            # failed history write rolls back queue and origin together; never
+            # initialize a second store or project files from inside this lock.
+            from alphonse.agent_v2.conversations import SQLiteConversationStore
+            event = SQLiteConversationStore._record(conn, event_id=str(uuid4()), owner=actor,
+                project='', session='', role='user', message=prompt.strip(), source='desktop',
+                source_id=f'inbound:{message_id}', timestamp=timestamp)
+            if event is None:
+                raise ValueError('owner_ingress_history_unavailable')
+            digest = _owner_ingress_digest(payload, 1, event.event_id)
+            conn.execute('''INSERT INTO v2_trusted_owner_ingress
+                (message_id,owner_id,peer_uid,payload_sha256,created_at,history_version,history_event_id)
+                VALUES (?,?,?,?,?,?,?)''', (message_id, actor, peer_uid, digest, timestamp, 1, event.event_id))
+        return {'message_id': message_id, 'accepted_at': timestamp} if return_receipt else message_id
 
     @contextmanager
     def trusted_local_owner_claim_transaction(self, receipt: Any, task: Any, *, clock=None, _finalize=None):
@@ -167,7 +183,8 @@ class SQLiteMessageQueue:
 
         def check(conn):
             row = conn.execute("""SELECT q.message_id,q.timestamp,q.prompt,q.user_id,q.project_id,q.tag,
-                q.correlation_id,q.memory_session_id,q.metadata_json,o.owner_id,o.peer_uid,o.payload_sha256
+                q.correlation_id,q.memory_session_id,q.metadata_json,o.owner_id,o.peer_uid,o.payload_sha256,
+                o.history_version,o.history_event_id
                 FROM v2_inbound_messages q JOIN v2_trusted_owner_ingress o ON o.message_id=q.message_id
                 JOIN v2_user_settings s ON s.key='admin_user_id' AND s.value=q.user_id
                 JOIN v2_users u ON u.user_id=q.user_id AND u.role IN ('admin','owner') AND u.is_active=1
@@ -176,8 +193,7 @@ class SQLiteMessageQueue:
                 raise ClaimFenceUnavailable('owner_claim_authorization_unavailable')
             payload = [row[key] for key in ('message_id', 'timestamp', 'prompt', 'user_id', 'project_id',
                        'tag', 'correlation_id', 'memory_session_id', 'metadata_json')]
-            digest = hashlib.sha256(json.dumps(payload, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
-            if (not isinstance(row['payload_sha256'], str) or not hmac.compare_digest(row['payload_sha256'], digest)
+            if (not _owner_ingress_matches(conn, row, payload)
                     or getattr(task, 'goal', None) != row['prompt']
                     or any(getattr(task, key, None) != row[key]
                            for key in ('project_id', 'tag', 'correlation_id', 'memory_session_id'))
@@ -233,7 +249,7 @@ class SQLiteMessageQueue:
                 WHERE a.message_id=? AND o.peer_uid=?""", (message_id, os.getuid())).fetchone()
             if prior is not None:
                 return {'status': 'abandoned', 'delivery_status': prior['delivery_status']}
-            row = conn.execute("""SELECT q.*,o.owner_id,o.peer_uid,o.payload_sha256
+            row = conn.execute("""SELECT q.*,o.owner_id,o.peer_uid,o.payload_sha256,o.history_version,o.history_event_id
                 FROM v2_inbound_messages q JOIN v2_trusted_owner_ingress o ON o.message_id=q.message_id
                 JOIN v2_user_settings s ON s.key='admin_user_id' AND s.value=q.user_id
                 JOIN v2_users u ON u.user_id=q.user_id AND u.role IN ('admin','owner') AND u.is_active=1
@@ -245,10 +261,9 @@ class SQLiteMessageQueue:
                 raise ValueError('owner_abandon_unavailable')
             payload = [row[key] for key in ('message_id', 'timestamp', 'prompt', 'user_id', 'project_id',
                        'tag', 'correlation_id', 'memory_session_id', 'metadata_json')]
-            digest = hashlib.sha256(json.dumps(payload, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
             expected_metadata = {'intelligence_engine': 'single_loop_experimental',
                                  'intelligence_schema_version': 1, 'routing_disposition': 'pdca_task'}
-            if (not isinstance(row['payload_sha256'], str) or not hmac.compare_digest(row['payload_sha256'], digest)
+            if (not _owner_ingress_matches(conn, row, payload)
                     or row['metadata_json'] != json.dumps(expected_metadata, sort_keys=True)
                     or row['status'] not in {'pending', 'processing'}
                     or conn.execute('SELECT 1 FROM v2_scheduled_handoffs WHERE message_id=?', (message_id,)).fetchone()):
@@ -1053,6 +1068,88 @@ def _exclude_supersession_holds(conn: sqlite3.Connection) -> str:
     if conn.execute("SELECT 1 FROM main.sqlite_master WHERE type='table' AND name='v2_supersession_holds'").fetchone():
         return " AND NOT EXISTS (SELECT 1 FROM main.v2_supersession_holds h WHERE h.message_id=v2_inbound_messages.message_id)"
     return ""
+
+
+def _ensure_owner_history_columns(conn: sqlite3.Connection) -> None:
+    _ensure_columns(conn, 'v2_trusted_owner_ingress', {
+        'history_version': 'INTEGER NOT NULL DEFAULT 0',
+        'history_event_id': "TEXT NOT NULL DEFAULT ''",
+    })
+
+
+def _owner_ingress_digest(payload: list[Any], history_version: int, event_id: str) -> str:
+    # Old owner-origin rows retain their original digest. New rows bind the
+    # version and event identity, so dropping the new binding cannot turn a
+    # newly accepted request into an old pre-history request.
+    value = payload if history_version == 0 else ['owner-history-v1', payload, event_id]
+    return hashlib.sha256(json.dumps(value, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
+
+
+def _owner_ingress_matches(conn: sqlite3.Connection, row: sqlite3.Row, payload: list[Any]) -> bool:
+    version, event_id = row['history_version'], row['history_event_id']
+    if type(version) is not int or version not in (0, 1) or not isinstance(event_id, str):
+        return False
+    if (version == 0 and event_id) or (version == 1 and not event_id):
+        return False
+    digest = _owner_ingress_digest(payload, version, event_id)
+    if not isinstance(row['payload_sha256'], str) or not hmac.compare_digest(row['payload_sha256'], digest):
+        return False
+    if version == 0:
+        return True
+    try:
+        event = conn.execute('''SELECT * FROM v2_conversation_events WHERE event_id=?''', (event_id,)).fetchone()
+        return bool(event is not None and event['source_message_id'] == f"inbound:{row['message_id']}"
+            and event['owner_user_id'] == row['user_id'] and event['role'] == 'user'
+            and event['content'] == row['prompt'] and event['source'] == 'desktop'
+            and event['project_id'] == row['project_id'] and event['memory_session_id'] == row['memory_session_id']
+            and event['created_at'] == row['timestamp'] and event['visibility'] == 'private'
+            and event['observed_at'] == row['timestamp'] and event['speaker_id'] == row['user_id']
+            and event['schema_version'] == 1 and event['shared_with'] == '[]' and event['provenance'] == 'recorded')
+    except (sqlite3.Error, IndexError):
+        return False
+
+
+def finalized_owner_history_matches(conn: sqlite3.Connection, message_id: str, owner: str, raw: dict) -> bool:
+    """Recheck a versioned inbound binding after the queue row is finalized.
+
+    The digest is an integrity binding, not authentication against a direct DB
+    writer capable of changing all fields. Pre-upgrade origins remain version 0.
+    """
+    try:
+        columns = {item[1] for item in conn.execute('PRAGMA table_info(v2_trusted_owner_ingress)')}
+        bound_columns = {'history_version', 'history_event_id'}
+        if not columns.intersection(bound_columns):
+            return True  # Unmodified, pre-upgrade schema; caller checks old origin.
+        if not bound_columns.issubset(columns):
+            return False
+        origin = conn.execute('''SELECT owner_id,created_at,payload_sha256,history_version,history_event_id
+            FROM v2_trusted_owner_ingress WHERE message_id=?''', (message_id,)).fetchone()
+        if origin is None or origin['owner_id'] != owner:
+            return False
+        version, event_id = origin['history_version'], origin['history_event_id']
+        if type(version) is not int or not isinstance(event_id, str):
+            return False
+        if version not in (0, 1) or (version == 0 and event_id) or (version == 1 and not event_id):
+            return False
+        if not isinstance(raw, dict) or raw.get('user') != owner:
+            return False
+        metadata = raw['metadata']
+        source_metadata = {key: metadata[key] for key in ('intelligence_engine', 'intelligence_schema_version', 'routing_disposition')}
+        if 'owner_clarification' in metadata:
+            source_metadata['owner_clarification'] = metadata['owner_clarification']
+        payload = [message_id, origin['created_at'], raw['goal'], raw['user'], raw['project_id'],
+                   raw['tag'], raw['correlation_id'], raw['memory_session_id'], json.dumps(source_metadata, sort_keys=True)]
+        if version == 0:
+            return bool(isinstance(origin['payload_sha256'], str) and hmac.compare_digest(
+                origin['payload_sha256'], _owner_ingress_digest(payload, 0, '')))
+        # The common checker expects queue-shaped fields, but works with this
+        # reconstructed durable payload once the consumed queue row is gone.
+        binding = dict(zip(('message_id', 'timestamp', 'prompt', 'user_id', 'project_id',
+                            'tag', 'correlation_id', 'memory_session_id', 'metadata_json'), payload))
+        binding.update(payload_sha256=origin['payload_sha256'], history_version=version, history_event_id=event_id)
+        return _owner_ingress_matches(conn, binding, payload)
+    except (sqlite3.Error, ValueError, TypeError, KeyError, IndexError):
+        return False
 
 
 def _ensure_columns(conn: sqlite3.Connection, table: str, columns: dict[str, str]) -> None:

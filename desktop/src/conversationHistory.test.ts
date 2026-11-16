@@ -69,6 +69,14 @@ describe("mergeFreshConversationHistory", () => {
 
     expect(mergeFreshConversationHistory([historical], [live])).toEqual([historical]);
   });
+
+  it("keeps the server's accepted request when it arrives during a history reload", () => {
+    const durable: ChatMessage = { id: "a".repeat(32), role: "user", content: "Hello", sequence: 17,
+      created_at: "2026-11-16T05:59:59Z", source: "desktop" };
+    const optimistic: ChatMessage = { id: durable.id, role: "user", content: "Hello",
+      created_at: "2026-11-16T06:00:01Z" };
+    expect(mergeFreshConversationHistory([durable], [optimistic])).toEqual([durable]);
+  });
 });
 
 it("orders late unsequenced deliveries chronologically and deterministically", () => {

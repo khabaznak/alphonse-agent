@@ -1,7 +1,16 @@
 # Accepted owner requests and conversation history
 
-Source review of the current owner-only simple loop. This is a design gap and
-proposed contract, not an implemented retention or erasure guarantee.
+The implementation in the accompanying working tree records new trusted owner
+requests in conversation history in the same transaction as queue insertion.
+Assistant replies remain gated by client acknowledgement. Current-request
+memory search, reads and neighbor expansion exclude the request by its
+claim-bound source identity. Owner event deletion fails closed while the
+associated queue or checkpoint can retain the text. These are scoped
+protections, not complete deletion or mixed-version writer guarantees.
+
+The sections below record the earlier source review and qualification contract;
+references to current behavior there describe the prior revision, not the new
+ingress path. Pre-change queued requests retain their old acknowledgement path.
 
 ## Current behavior
 

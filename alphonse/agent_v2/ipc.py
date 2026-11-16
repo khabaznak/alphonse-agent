@@ -474,8 +474,8 @@ class V2DaemonServer:
         queue = self.daemon.runtime.queue
         if type(queue) is not SQLiteMessageQueue:
             raise PermissionError('owner_ingress_unavailable')
-        return {'message_id': queue.enqueue_trusted_local_owner(prompt=params['prompt'], peer_uid=uid,
-                    reply_to_message_id=params.get('reply_to_message_id'))}
+        return queue.enqueue_trusted_local_owner(prompt=params['prompt'], peer_uid=uid,
+                    reply_to_message_id=params.get('reply_to_message_id'), return_receipt=True)
 
     def _legacy_notification_review(self, connection, request):
         """Review legacy deliveries as the authenticated local owner only."""

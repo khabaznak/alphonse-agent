@@ -240,7 +240,8 @@ def test_explicit_owner_worker_routes_to_socket_and_saves_history(tmp_path, monk
                     'status': 'failed', 'failure_code': 'cancel_requested'}
                 with pytest.raises(RuntimeError, match='owner_desktop_pickup_unavailable'):
                     client.request('experimental_owner_take_draft', message_id=message_id)
-                assert len(conversation.list(owner_user_id=owner.user_id)) == 1
+                assert [(item.role, item.content) for item in conversation.list(owner_user_id=owner.user_id)] == [
+                    ('user', 'Synthetic apples.'), ('user', 'Find the apples note.')]
                 with runtime.outbox._connect() as outbox_conn:
                     assert outbox_conn.execute('SELECT COUNT(*) FROM v2_outbox').fetchone()[0] == 0
                 return
@@ -254,7 +255,8 @@ def test_explicit_owner_worker_routes_to_socket_and_saves_history(tmp_path, monk
             is_question = mode in {'question', 'question_context_changed'}
             assert draft['message'] == ('Which apples?' if is_question else 'Synthetic answer.')
             assert draft['kind'] == ('question' if is_question else 'answer')
-            assert len(conversation.list(owner_user_id=owner.user_id)) == 1
+            assert [(item.role, item.content) for item in conversation.list(owner_user_id=owner.user_id)] == [
+                ('user', 'Synthetic apples.'), ('user', 'Find the apples note.')]
             token = draft['acknowledgement_token']
             if is_question:
                 assert client.request('experimental_owner_questions')['questions'] == []
@@ -292,7 +294,8 @@ def test_explicit_owner_worker_routes_to_socket_and_saves_history(tmp_path, monk
                 assert client.request('experimental_owner_abandon', message_id=message_id) == abandoned
                 assert client.request('experimental_owner_status', message_id=message_id)['status'] == 'abandoned'
                 assert client.request('experimental_owner_recovery_list')['items'] == []
-                assert len(conversation.list(owner_user_id=owner.user_id)) == 1
+                assert [(item.role, item.content) for item in conversation.list(owner_user_id=owner.user_id)] == [
+                    ('user', 'Synthetic apples.'), ('user', 'Find the apples note.')]
                 assert not SQLiteMessageQueue(path).claim_mode_blocked()
                 return
             assert client.request('experimental_owner_ack_draft', message_id=message_id,
@@ -312,12 +315,18 @@ def test_explicit_owner_worker_routes_to_socket_and_saves_history(tmp_path, monk
                 with queue._connect() as conn:
                     baseline = json.loads(conn.execute('SELECT task_state_json FROM v2_task_checkpoints WHERE task_id=?',
                                                        (message_id,)).fetchone()[0])
-                    for tamper in ('origin', 'peer', 'digest', 'effect'):
+                    for tamper in ('origin', 'peer', 'digest', 'effect', 'history_id', 'history_speaker', 'history_downgrade'):
                         conn.execute('BEGIN')
                         if tamper == 'origin':
                             conn.execute('DELETE FROM v2_trusted_owner_ingress WHERE message_id=?', (message_id,))
                         elif tamper == 'peer':
                             conn.execute('UPDATE v2_trusted_owner_ingress SET peer_uid=-1 WHERE message_id=?', (message_id,))
+                        elif tamper == 'history_id':
+                            conn.execute("UPDATE v2_conversation_events SET event_id='replacement' WHERE source_message_id=?", (f'inbound:{message_id}',))
+                        elif tamper == 'history_speaker':
+                            conn.execute("UPDATE v2_conversation_events SET speaker_id='other' WHERE source_message_id=?", (f'inbound:{message_id}',))
+                        elif tamper == 'history_downgrade':
+                            conn.execute("UPDATE v2_trusted_owner_ingress SET history_version=0,history_event_id='' WHERE message_id=?", (message_id,))
                         else:
                             changed = json.loads(json.dumps(baseline))
                             if tamper == 'digest':

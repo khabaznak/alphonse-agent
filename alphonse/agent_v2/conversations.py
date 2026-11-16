@@ -317,6 +317,7 @@ class SQLiteConversationStore:
                                (event_id, owner_user_id)).fetchone()
             if row is None:
                 return False
+            _require_owner_copies_reconciled(conn, row)
             from alphonse.agent_v2.core.memory.knowledge import KnowledgeStore
             KnowledgeStore.erase_conversation_derivations(conn, event_id)
             if self._daily_ledger_projector is not None:
@@ -600,6 +601,38 @@ def legacy_ledger_events(content: str, *, owner_user_id: str, project_id: str, l
             if match.group(1).strip():
                 events.append({"id": f"legacy:{owner_user_id}:{project_id}:{index}:assistant:{assistant_index}", "role": "assistant", "content": match.group(1).strip(), "source": "ledger", "created_at": ""})
     return events[-max(1, min(int(limit or 100), 10_000)):]
+
+
+def _require_owner_copies_reconciled(conn: sqlite3.Connection, event: sqlite3.Row) -> None:
+    """Refuse deletion while a matching local-owner request retains its text.
+
+    Called under the same immediate write transaction as the deletion. The
+    origin alone contains an ID and digest, not message text; queue and
+    checkpoint rows can retain the request, answer or observations. A matching
+    origin with a missing queue/checkpoint schema is unknown, not proof that
+    no copy exists. This does not cover independent databases, old binaries,
+    SQLite storage remnants, exports, files or backups.
+    """
+    source_id = str(event["source_message_id"] or "")
+    match = re.fullmatch(r"(?:inbound:|outbound:owner:)([0-9a-f]{32})", source_id)
+    if match is None:
+        return
+    message_id, owner = match.group(1), str(event["owner_user_id"] or "")
+    tables = {str(row[0]) for row in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name IN "
+        "('v2_trusted_owner_ingress','v2_inbound_messages','v2_task_checkpoints')"
+    )}
+    origin = (conn.execute("SELECT owner_id FROM v2_trusted_owner_ingress WHERE message_id=?", (message_id,)).fetchone()
+              if 'v2_trusted_owner_ingress' in tables else None)
+    queue = (conn.execute("SELECT user_id FROM v2_inbound_messages WHERE message_id=?", (message_id,)).fetchone()
+             if 'v2_inbound_messages' in tables else None)
+    checkpoint = (conn.execute("SELECT owner_id FROM v2_task_checkpoints WHERE task_id=?", (message_id,)).fetchone()
+                  if 'v2_task_checkpoints' in tables else None)
+    matching_origin = origin is not None and origin[0] == owner
+    if ((matching_origin and not {'v2_inbound_messages', 'v2_task_checkpoints'}.issubset(tables))
+            or (queue is not None and (matching_origin or queue[0] == owner))
+            or (checkpoint is not None and (matching_origin or checkpoint[0] == owner))):
+        raise ValueError("owner_conversation_deletion_requires_reconciliation")
 
 
 class _Connection:

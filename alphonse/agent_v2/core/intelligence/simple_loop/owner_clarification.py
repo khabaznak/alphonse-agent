@@ -37,6 +37,9 @@ def resolve_owner_question(conn: Any, owner: str, message_id: str) -> tuple[str,
                 or re.fullmatch(r'[0-9a-f]{64}', origin['payload_sha256']) is None):
             raise ValueError('owner_question_context_unavailable')
         raw = json.loads(row['task_state_json'])
+        from alphonse.agent_v2.core.messages.sqlite_queue import finalized_owner_history_matches
+        if not finalized_owner_history_matches(conn, message_id, owner, raw):
+            raise ValueError('owner_question_context_unavailable')
         metadata = raw['metadata']
         envelope = metadata[STATE_KEY]
         state = CandidateState.restore(envelope['state'])
