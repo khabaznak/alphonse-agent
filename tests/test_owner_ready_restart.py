@@ -89,6 +89,11 @@ def test_ready_answer_survives_real_daemon_process_death(tmp_path, monkeypatch):
         users = V2UserStore(db)
         queue = SQLiteMessageQueue(db, experimental_claim_fencing=True)
         conversation = SQLiteConversationStore(db)
+        owner = users.admin_user()
+        # The accepted request survives process death before Desktop picks up
+        # the answer; a prepared draft is not yet a delivered response.
+        assert [(row.role, row.content) for row in conversation.list(owner_user_id=owner.user_id)] == [
+            ('user', 'Say hello.')]
         registry = InMemoryToolRegistry()
         registry.register(build_search_memory_tool_definition())
         registry.register(build_read_memory_source_tool_definition())

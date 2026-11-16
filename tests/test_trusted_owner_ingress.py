@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from alphonse.agent_v2.core.messages.sqlite_queue import SQLiteMessageQueue
+from alphonse.agent_v2.conversations import SQLiteConversationStore
 from alphonse.agent_v2.ipc import V2DaemonClient, V2DaemonServer
 from alphonse.agent_v2.users import V2UserStore
 
@@ -20,6 +21,7 @@ def test_peer_authenticated_owner_ingress_and_rejection(tmp_path):
     users = V2UserStore(database)
     owner = users.onboard(display_name='Fixture owner', users_root=tmp_path / 'users')
     queue = SQLiteMessageQueue(database, experimental_claim_fencing=True)
+    SQLiteConversationStore(database)
     daemon = SimpleNamespace(runtime=SimpleNamespace(queue=queue))
     with tempfile.TemporaryDirectory(dir='/tmp') as directory:
         path = Path(directory) / 'socket'
@@ -53,8 +55,14 @@ def test_peer_authenticated_owner_ingress_and_rejection(tmp_path):
                 stored = conn.execute('SELECT * FROM v2_inbound_messages WHERE message_id=?', (queued.message_id,)).fetchone()
                 payload = [stored[key] for key in ('message_id', 'timestamp', 'prompt', 'user_id',
                     'project_id', 'tag', 'correlation_id', 'memory_session_id', 'metadata_json')]
-                digest = hashlib.sha256(json.dumps(payload, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
+                digest = hashlib.sha256(json.dumps(['owner-history-v1', payload, row['history_event_id']],
+                                                   ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
                 assert row['payload_sha256'] == digest
+                assert result['accepted_at'] == stored['timestamp']
+                saved = conn.execute('SELECT * FROM v2_conversation_events WHERE event_id=?',
+                                     (row['history_event_id'],)).fetchone()
+                assert (saved['owner_user_id'], saved['role'], saved['content'], saved['source_message_id'], saved['created_at']) == (
+                    owner.user_id, 'user', 'fixture prompt', f'inbound:{queued.message_id}', stored['timestamp'])
             users.update_user(owner.user_id, is_active=False)
             with pytest.raises(RuntimeError, match='owner_ingress_admin_unavailable'):
                 client.request('experimental_owner_ingress', prompt='another')
@@ -68,6 +76,7 @@ def test_owner_ingress_transaction_rolls_back_queue_on_origin_failure(tmp_path):
     users = V2UserStore(database)
     users.onboard(display_name='Fixture owner', users_root=tmp_path / 'users')
     queue = SQLiteMessageQueue(database, experimental_claim_fencing=True)
+    SQLiteConversationStore(database)
     with queue._connect() as conn:
         conn.execute('CREATE TABLE v2_trusted_owner_ingress (message_id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, peer_uid INTEGER NOT NULL, payload_sha256 TEXT NOT NULL, created_at TEXT NOT NULL) STRICT')
         conn.execute("CREATE TRIGGER reject_origin BEFORE INSERT ON v2_trusted_owner_ingress BEGIN SELECT RAISE(ABORT, 'fixture failure'); END")
@@ -77,6 +86,54 @@ def test_owner_ingress_transaction_rolls_back_queue_on_origin_failure(tmp_path):
     with pytest.raises(PermissionError, match='owner_ingress_peer_denied'):
         queue.enqueue_trusted_local_owner(prompt='fixture', peer_uid=os.getuid() + 1)
     assert queue.size() == 0
+
+
+def test_owner_ingress_requires_history_and_rolls_back_on_history_failure(tmp_path):
+    database = tmp_path / 'local.db'
+    users = V2UserStore(database)
+    users.onboard(display_name='Fixture owner', users_root=tmp_path / 'users')
+    queue = SQLiteMessageQueue(database, experimental_claim_fencing=True)
+    with pytest.raises(Exception):
+        queue.enqueue_trusted_local_owner(prompt='fixture', peer_uid=os.getuid())
+    assert queue.size() == 0
+    SQLiteConversationStore(database)
+    with queue._connect() as conn:
+        conn.execute("CREATE TRIGGER reject_history BEFORE INSERT ON v2_conversation_events BEGIN SELECT RAISE(ABORT, 'history failure'); END")
+    with pytest.raises(Exception, match='history failure'):
+        queue.enqueue_trusted_local_owner(prompt='fixture', peer_uid=os.getuid())
+    with queue._connect() as conn:
+        assert conn.execute('SELECT COUNT(*) FROM v2_inbound_messages').fetchone()[0] == 0
+        assert conn.execute('SELECT COUNT(*) FROM v2_conversation_events').fetchone()[0] == 0
+        assert not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_trusted_owner_ingress'").fetchone()
+
+
+@pytest.mark.parametrize('tamper', ['delete_event', 'event_id', 'content', 'speaker', 'observed', 'schema', 'downgrade'])
+def test_owner_claim_rejects_missing_or_tampered_accepted_history(tmp_path, tamper):
+    from alphonse.agent_v2.core.intelligence.task_state import TaskState
+    database = tmp_path / 'local.db'
+    users = V2UserStore(database)
+    owner = users.onboard(display_name='Fixture owner', users_root=tmp_path / 'users')
+    queue = SQLiteMessageQueue(database, experimental_claim_fencing=True)
+    SQLiteConversationStore(database)
+    message_id = queue.enqueue_trusted_local_owner(prompt='fixture', peer_uid=os.getuid())
+    acquired = queue.claim_next()
+    task = TaskState.from_message(acquired.message, message_id=message_id)
+    task.task_id = message_id
+    assert queue.verify_trusted_local_owner_claim(acquired.claim_receipt, task)
+    with queue._connect() as conn:
+        if tamper == 'delete_event':
+            conn.execute('DELETE FROM v2_conversation_events WHERE source_message_id=?', (f'inbound:{message_id}',))
+        elif tamper == 'event_id':
+            conn.execute("UPDATE v2_trusted_owner_ingress SET history_event_id='replacement' WHERE message_id=?", (message_id,))
+        elif tamper == 'downgrade':
+            conn.execute("UPDATE v2_trusted_owner_ingress SET history_version=0,history_event_id='' WHERE message_id=?", (message_id,))
+        else:
+            column, value = {'content': ('content', 'altered'), 'speaker': ('speaker_id', 'someone-else'),
+                             'observed': ('observed_at', ''), 'schema': ('schema_version', 2)}[tamper]
+            conn.execute(f'UPDATE v2_conversation_events SET {column}=? WHERE source_message_id=?', (value, f'inbound:{message_id}'))
+    assert not queue.verify_trusted_local_owner_claim(acquired.claim_receipt, task)
+    with pytest.raises(ValueError, match='owner_abandon_unavailable'):
+        queue.abandon_trusted_owner_message(message_id)
 
 
 def test_owner_origin_verified_by_real_candidate_against_claim_and_payload(tmp_path):
@@ -93,6 +150,7 @@ def test_owner_origin_verified_by_real_candidate_against_claim_and_payload(tmp_p
     users = V2UserStore(database)
     owner = users.onboard(display_name='Fixture owner', users_root=tmp_path / 'users')
     queue = SQLiteMessageQueue(database, experimental_claim_fencing=True)
+    SQLiteConversationStore(database)
     message_id = queue.enqueue_trusted_local_owner(prompt='fixture', peer_uid=os.getuid())
     acquired = queue.claim_next()
     claim = acquired.claim_receipt
@@ -152,6 +210,7 @@ def test_only_active_canonical_owner_or_admin_can_create_owner_ingress(tmp_path)
     users.update_user(owner.user_id, role='owner')
     other = users.create_user(display_name='Other owner', role='owner')
     queue = SQLiteMessageQueue(database, experimental_claim_fencing=True)
+    SQLiteConversationStore(database)
     message_id = queue.enqueue_trusted_local_owner(prompt='fixture', peer_uid=os.getuid())
     acquired = queue.claim_next()
     from alphonse.agent_v2.core.intelligence.task_state import TaskState

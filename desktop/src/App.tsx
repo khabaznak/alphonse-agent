@@ -22,7 +22,7 @@ import { onAction } from "@tauri-apps/plugin-notification";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { daemonRequest, ensureDaemon, playAlertSound, showInFinder, stopDaemon } from "./api";
-import { legacyNotificationReviewMessage, OwnerConversation, ownerBusyFor, ownerUnavailableMessage, type OwnerCapability } from "./ownerConversation";
+import { legacyNotificationReviewMessage, OwnerConversation, ownerAcceptedAt, ownerBusyFor, ownerUnavailableMessage, type OwnerCapability } from "./ownerConversation";
 import { abandonOwnerRequest, listOwnerRecovery, type OwnerRecoveryItem } from "./ownerRecovery";
 import { OwnerRecovery } from "./OwnerRecoveryPanel";
 import { LegacyNotificationReview } from "./LegacyNotificationReview";
@@ -677,16 +677,18 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
           throw new Error("The selected question is no longer available. Choose it again before sending.");
         }
         setOwnerConversationBusy(true);
+        const submittedAt = new Date().toISOString();
         const queued = await ownerConversation.send(messagePrompt, ownerReplyTarget || undefined);
         setOwnerClarificationNotice("");
         setOwnerReplyTarget("");
         setOwnerConversationBusy(true);
         setPrompt("");
-        const today = localDay(timezone);
-        conversationDayRef.current = today;
-        setConversationDay(today);
+        const acceptedAt = ownerAcceptedAt(queued.accepted_at, submittedAt);
+        const acceptedDay = messageLocalDay(acceptedAt, timezone) || localDay(timezone);
+        conversationDayRef.current = acceptedDay;
+        setConversationDay(acceptedDay);
         appendMessage({ id: queued.message_id, role: "user", content: messagePrompt,
-          created_at: new Date().toISOString(), project_id: "" });
+          created_at: acceptedAt, project_id: "" });
         setActivity("doing");
         await poll();
         return;

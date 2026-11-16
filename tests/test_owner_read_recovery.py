@@ -1,5 +1,6 @@
 """Recovery never reuses stale sources or retries uncertain owner actions."""
 from datetime import datetime, timezone
+from dataclasses import replace
 import json
 import os
 
@@ -22,7 +23,8 @@ from alphonse.agent_v2.core.questions import SQLiteQuestionStore
 from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry
 from alphonse.agent_v2.core.tools.registry.native.memory import (execute_search_memory, SEARCH_MEMORY_TOOL_ID,
     execute_read_memory_source, READ_MEMORY_SOURCE_TOOL_ID,
-    build_search_memory_tool_definition, build_read_memory_source_tool_definition)
+    build_search_memory_tool_definition, build_read_memory_source_tool_definition,
+    revalidate_conversation_observation)
 from alphonse.agent_v2.users import V2UserStore
 
 
@@ -32,11 +34,12 @@ def setup(tmp_path):
     users = V2UserStore(path)
     owner = users.onboard(display_name='Fixture owner', users_root=tmp_path / 'users')
     queue = SQLiteMessageQueue(path, experimental_claim_fencing=True)
+    SQLiteConversationStore(path)
+    conversations = SQLiteConversationStore(path)
     message_id = queue.enqueue_trusted_local_owner(prompt='Find apples', peer_uid=os.getuid())
     acquired = queue.claim_next(lease_seconds=60)
     task = TaskState.from_message(acquired.message, message_id=message_id)
     task.task_id = message_id
-    conversations = SQLiteConversationStore(path)
     conversations.record(owner_user_id=owner.user_id, role='user', content='Synthetic apples.',
                          source='test', source_message_id='source-one')
     ctx = CoreLoopContext(messages=queue, claim_receipt=acquired.claim_receipt,
@@ -82,6 +85,62 @@ def test_recovery_reads_actor_bound_durable_source_and_returns_checkpoint(setup)
                               (atomic.task.task_id,)).fetchone()['task_state_json']
     assert 'Synthetic apples.' not in stored
     assert 'observation_sha256' in stored
+
+
+def test_owner_memory_excludes_current_request_from_search_read_and_neighbors(setup):
+    atomic, _, ctx, conversations, owner = setup
+    task = atomic.task
+    current = conversations.event_for_source_message_id(
+        owner_user_id=owner.user_id, source_message_id=f'inbound:{task.message_id}')
+    if current is None:
+        current = conversations.record(owner_user_id=owner.user_id, role='user', content=task.goal,
+            source='desktop', source_message_id=f'inbound:{task.message_id}')
+    older = conversations.event_for_source_message_id(owner_user_id=owner.user_id, source_message_id='source-one')
+    tool_context = ctx.tool_execution_context(task)
+    args = {'query': 'apples', 'source_types': ['conversation']}
+    page = execute_search_memory(args, context=tool_context)
+    assert page['total_matches'] == 1
+    assert [item['source_id'] for item in page['results']] == ['conversation:' + older.event_id]
+    assert 'Find apples' not in json.dumps(page)
+    assert revalidate_conversation_observation(owner.user_id, SEARCH_MEMORY_TOOL_ID, args, page,
+                                               context=tool_context)
+    # A previously captured/forged observation containing the submitted input
+    # cannot become valid evidence under the current owner claim.
+    ordinary = replace(task, intelligence_engine='unassigned')
+    unfiltered = execute_search_memory(args, context=ctx.tool_execution_context(ordinary))
+    assert unfiltered['total_matches'] == 2
+    assert not revalidate_conversation_observation(owner.user_id, SEARCH_MEMORY_TOOL_ID, args, unfiltered,
+                                                   context=tool_context)
+    hidden = execute_read_memory_source({'source_id': 'conversation:' + current.event_id}, context=tool_context)
+    assert hidden['status'] == 'not_found'
+    read = execute_read_memory_source({'source_id': 'conversation:' + older.event_id, 'neighbors': 2},
+                                      context=tool_context)
+    assert read['status'] == 'found'
+    assert all(item['source']['source_id'] != 'conversation:' + current.event_id for item in read['neighbors'])
+
+
+def test_owner_memory_refuses_forged_or_stale_claim(setup):
+    atomic, _, ctx, _, owner = setup
+    args = {'query': 'apples', 'source_types': ['conversation']}
+    ctx.claim_receipt = None
+    with pytest.raises(ValueError, match='owner_memory_claim_unavailable'):
+        execute_search_memory(args, context=ctx.tool_execution_context(atomic.task))
+    # A missing claim must not turn a hidden current request into readable memory.
+    result = execute_read_memory_source({'source_id': 'conversation:unknown'},
+                                        context=ctx.tool_execution_context(atomic.task))
+    assert result['status'] == 'failed'
+
+
+def test_owner_recovery_never_restores_current_request_as_evidence(setup):
+    atomic, _, ctx, conversations, owner = setup
+    saved = settled_read(setup)
+    _, bindings = restore_owner_read_observations(atomic, ctx, expected_version=saved.version)
+    current = conversations.event_for_source_message_id(
+        owner_user_id=owner.user_id, source_message_id=f'inbound:{atomic.task.message_id}')
+    assert current is not None
+    results = bindings['owner-read:one']['observation']['results']
+    assert all(item['source_id'] != 'conversation:' + current.event_id for item in results)
+    assert atomic.task.goal not in json.dumps(results)
 
 
 def test_recovery_revalidates_search_overflow_and_rejects_changed_results(setup):

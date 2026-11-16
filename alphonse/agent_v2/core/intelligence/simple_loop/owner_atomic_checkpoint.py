@@ -61,7 +61,8 @@ def verify_finalized_owner_ack(queue: SQLiteMessageQueue, message_id: str, token
     try:
         with queue._connect() as conn:
             conn.execute('BEGIN')
-            row = conn.execute("""SELECT o.owner_id,o.peer_uid,c.task_state_json,c.owner_id AS checkpoint_owner
+            row = conn.execute("""SELECT o.owner_id,o.peer_uid,o.payload_sha256,o.created_at,
+                    o.history_version,o.history_event_id,c.task_state_json,c.owner_id AS checkpoint_owner
                 FROM v2_trusted_owner_ingress o
                 JOIN v2_user_settings s ON s.key='admin_user_id' AND s.value=o.owner_id
                 JOIN v2_users u ON u.user_id=o.owner_id AND u.role IN ('admin','owner') AND u.is_active=1
@@ -87,11 +88,14 @@ def verify_finalized_owner_ack(queue: SQLiteMessageQueue, message_id: str, token
                     or marker.get('answer_sha256') != selected.get('answer_sha256')
                     or marker.get('answer_sha256') != hashlib.sha256(state.response.encode('utf-8')).hexdigest()):
                 return False
-            rows = conn.execute("""SELECT role,content,owner_user_id,source_message_id FROM v2_conversation_events
+            rows = conn.execute("""SELECT * FROM v2_conversation_events
                 WHERE source_message_id IN (?,?)""", (f'inbound:{message_id}', f'outbound:owner:{message_id}')).fetchall()
             entries = {item['source_message_id']: (item['role'], item['content'], item['owner_user_id']) for item in rows}
             observations = metadata['owner_read_observations']
             if not isinstance(observations, dict) or selected.get('evidence_bindings_sha256') != _decision_digest(observations):
+                return False
+            from alphonse.agent_v2.core.messages.sqlite_queue import finalized_owner_history_matches
+            if not finalized_owner_history_matches(conn, message_id, row['owner_id'], raw):
                 return False
             from .owner_clock import display_response
             return entries == {f'inbound:{message_id}': ('user', raw['goal'], row['owner_id']),
@@ -339,9 +343,23 @@ class OwnerAtomicCheckpoint:
                 raise CheckpointConflict('owner_desktop_ack_unavailable')
             if marker['status'] == 'client_acknowledged':
                 return
-            incoming = conversation.record(owner_user_id=self.task.user, role='user',
-                content=self.task.goal, source='desktop', source_message_id=f'inbound:{self.task.message_id}',
-                connection=conn)
+            origin = conn.execute('''SELECT history_version,history_event_id FROM v2_trusted_owner_ingress
+                WHERE message_id=? AND owner_id=?''', (self.task.message_id, self.task.user)).fetchone()
+            if origin is None:
+                raise CheckpointConflict('owner_desktop_history_unavailable')
+            if origin['history_version'] == 1:
+                # The claim transaction checks the version-bound event and its
+                # full payload before and after this block. Never recreate it.
+                incoming = conn.execute('SELECT 1 FROM v2_conversation_events WHERE event_id=?',
+                                        (origin['history_event_id'],)).fetchone()
+            elif origin['history_version'] == 0 and origin['history_event_id'] == '':
+                # Requests created before history-at-ingress retain their old
+                # acknowledgement behavior. Their origin uses the legacy digest.
+                incoming = conversation.record(owner_user_id=self.task.user, role='user',
+                    content=self.task.goal, source='desktop', source_message_id=f'inbound:{self.task.message_id}',
+                    connection=conn)
+            else:
+                raise CheckpointConflict('owner_desktop_history_unavailable')
             from .owner_clock import display_response
             outgoing = conversation.record(owner_user_id=self.task.user, role='assistant',
                 content=display_response(state.response, raw['metadata']['owner_read_observations']), source='desktop', source_message_id=f'outbound:owner:{self.task.message_id}',

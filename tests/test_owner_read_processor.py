@@ -293,6 +293,8 @@ def test_real_trusted_claim_is_carried_internally_and_verified(tmp_path):
     users = V2UserStore(database)
     owner = users.onboard(display_name='Fixture owner', users_root=tmp_path / 'users')
     queue = SQLiteMessageQueue(database, experimental_claim_fencing=True)
+    from alphonse.agent_v2.conversations import SQLiteConversationStore
+    SQLiteConversationStore(database)
     message_id = queue.enqueue_trusted_local_owner(prompt='Fixture', peer_uid=os.getuid())
     acquired = queue.claim_next()
     task = TaskState.from_message(acquired.message, message_id=message_id)
