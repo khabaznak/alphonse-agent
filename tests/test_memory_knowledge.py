@@ -732,6 +732,69 @@ def test_transitive_dependencies_survive_restart_and_follow_corrections(setup):
     assert {middle.memory_id, leaf.memory_id} <= {r.memory_id for r in memory.recall("alex", historical=True)}
 
 
+def test_changed_source_quote_withholds_derived_and_dependent_knowledge(setup):
+    conversations, store, memory, _, _ = setup
+    original_source, original = save(setup)
+    memory.support_selector = lambda source, existing: [original.memory_id]
+    memory.comparison_reviewer = lambda pairs: ["equivalent"] * len(pairs)
+    _, dependent = save(setup, "Remember that filter number for me.",
+                        fields={"content": "The filter part number is FX-204."})
+    assert {original.memory_id, dependent.memory_id} <= {r.memory_id for r in memory.recall("alex")}
+
+    # Same ID, owner, and access are insufficient when the original supporting
+    # words are gone. This simulates an independently changed source.
+    with conversations._connect() as conn:
+        conn.execute("UPDATE v2_conversation_events SET content=? WHERE event_id=?",
+                     ("The filter number is no longer recorded.", original_source.event_id))
+    assert memory.recall("alex") == []
+    assert memory.recall("alex", historical=True) == []
+    assert not store._sources_available(original, "alex", memory.resolve)
+
+
+def test_changed_dependency_source_withholds_a_record_even_if_own_quote_remains(setup):
+    conversations, store, memory, _, _ = setup
+    root_source, root = save(setup)
+    _, independent = save(setup, "A separate synthetic statement.",
+                          fields={"claim_key": "other.statement", "subjects": ["other"]})
+    # A recovered record can reference a dependency while its own direct
+    # evidence remains valid. Recursion must not expose a stale dependency.
+    dependent = replace(independent, memory_id="memory:dependent-test", dependencies=(root.memory_id,))
+    with store._connect() as conn:
+        conn.execute("INSERT INTO memory_knowledge VALUES (?,?,?,?,?,?)",
+                     (dependent.memory_id, "alex", dependent.claim_key,
+                      json.dumps(dependent.to_dict()), dependent.status, "[]"))
+    assert dependent.memory_id in {item.memory_id for item in memory.recall("alex")}
+    with conversations._connect() as conn:
+        conn.execute("UPDATE v2_conversation_events SET content=? WHERE event_id=?",
+                     ("The earlier detail is no longer present.", root_source.event_id))
+    remaining = {item.memory_id for item in memory.recall("alex")}
+    assert independent.memory_id in remaining
+    assert root.memory_id not in remaining and dependent.memory_id not in remaining
+
+
+def test_extended_source_that_retains_supporting_quote_remains_available(setup):
+    conversations, _, memory, _, _ = setup
+    source, record = save(setup)
+    with conversations._connect() as conn:
+        conn.execute("UPDATE v2_conversation_events SET content=? WHERE event_id=?",
+                     (source.content + " Additional context.", source.event_id))
+    assert [item.memory_id for item in memory.recall("alex")] == [record.memory_id]
+
+
+def test_malformed_source_content_is_not_exposed_as_supported_knowledge(setup):
+    conversations, store, _, _, _ = setup
+    source, record = save(setup)
+    valid = conversation_item(source, "alex")
+    malformed = replace(valid, content=None)
+    resolver = lambda _source, _requester: malformed
+    assert store.records("alex", resolver, historical=True) == []
+    assert not store._sources_available(record, "alex", resolver)
+    malformed_source = replace(valid, source=None)
+    resolver = lambda _source, _requester: malformed_source
+    assert store.records("alex", resolver, historical=True) == []
+    assert not store._sources_available(record, "alex", resolver)
+
+
 def test_shared_support_revocation_withholds_private_synthesized_record(setup):
     conversations, store, memory, outputs, _ = setup
     _, template = save(setup)

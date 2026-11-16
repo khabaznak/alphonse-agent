@@ -381,6 +381,8 @@ class V2DaemonServer:
                     result = self._owner_ack_draft(connection, request)
                 elif isinstance(request, dict) and request.get('method') == 'experimental_owner_status':
                     result = self._owner_status(connection, request)
+                elif isinstance(request, dict) and request.get('method') == 'legacy_state_inventory':
+                    result = self._legacy_state_inventory(connection, request)
                 elif isinstance(request, dict) and request.get('method') == 'experimental_owner_abandon':
                     result = self._owner_abandon(connection, request)
                 elif isinstance(request, dict) and request.get('method') == 'experimental_owner_recovery_list':
@@ -498,6 +500,33 @@ class V2DaemonServer:
         if not isinstance(params['message_id'], str) or not isinstance(params['review_token'], str):
             raise ValueError('legacy_notification_payload_denied')
         return outbox.archive_legacy_tui_owner_item(owner.user_id, params['message_id'], params['review_token'])
+
+    def _legacy_state_inventory(self, connection, request):
+        """Return bounded owner-only counts; never replay or change stored work."""
+        if not self.experimental_owner_ingress or getattr(self.daemon, 'experimental_owner_only', False) is not True:
+            raise PermissionError('legacy_state_inventory_unavailable')
+        if request.get('version') != PROTOCOL_VERSION:
+            raise ValueError('daemon_protocol_version_unsupported')
+        params = request.get('params')
+        if (not isinstance(params, dict) or set(params) != {'actor_user_id'}
+                or not isinstance(params['actor_user_id'], str) or not params['actor_user_id'].strip()):
+            raise ValueError('legacy_state_inventory_payload_denied')
+        if self._local_peer_uid(connection) != os.getuid():
+            raise PermissionError('legacy_state_inventory_unavailable')
+        from alphonse.agent_v2.core.messages.sqlite_queue import SQLiteMessageQueue
+        from alphonse.agent_v2.core.messages.legacy_state_inventory import inspect_legacy_state
+        runtime = self.daemon.runtime
+        queue = getattr(runtime, 'queue', None)
+        try:
+            if (type(queue) is not SQLiteMessageQueue or queue.experimental_claim_fencing is not True
+                    or not queue.db_path or queue.db_path == ':memory:'
+                    or any(not os.path.samefile(queue.db_path, store.db_path) for store in
+                           (runtime.user_store, runtime.question_store, runtime.outbox))):
+                raise ValueError
+        except (AttributeError, OSError, TypeError, ValueError):
+            raise PermissionError('legacy_state_inventory_unavailable') from None
+        result = inspect_legacy_state(queue.db_path, expected_owner=params['actor_user_id'])
+        return {'status': 'available', 'inventory': result} if result is not None else {'status': 'unavailable'}
 
     def _owner_status(self, connection, request):
         if not self.experimental_owner_ingress:

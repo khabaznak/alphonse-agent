@@ -245,8 +245,14 @@ class KnowledgeStore:
             if not record.access.allows(requester):
                 return None
             live = [resolver(source, requester) for source in record.sources]
-            if any(item is None or item.source.source_id != source.source_id or not item.visible_to(requester)
-                   for source, item in zip(record.sources, live)):
+            # Identity and access alone do not prove a changed source still
+            # contains the evidence used to derive this claim. Recheck each
+            # original quote before exposing the record or any dependent.
+            if any(not isinstance(item, ContextItem) or not isinstance(item.content, str)
+                   or not isinstance(item.source, SourceReference) or not isinstance(item.source.access, AccessScope)
+                   or item.source.source_id != source.source_id or not item.visible_to(requester)
+                   or quote not in item.content
+                   for source, quote, item in zip(record.sources, record.quotes, live)):
                 return None
             # A stale envelope cannot widen current audiences in extraction context either.
             try:
@@ -416,9 +422,12 @@ class KnowledgeStore:
 
     @staticmethod
     def _sources_available(record: KnowledgeRecord, requester: str, resolver: Callable) -> bool:
-        for source in record.sources:
+        for source, quote in zip(record.sources, record.quotes):
             item = resolver(source, requester)
-            if item is None or item.source.source_id != source.source_id or not item.visible_to(requester):
+            if (not isinstance(item, ContextItem) or not isinstance(item.content, str)
+                    or not isinstance(item.source, SourceReference) or not isinstance(item.source.access, AccessScope)
+                    or item.source.source_id != source.source_id or not item.visible_to(requester)
+                    or quote not in item.content):
                 return False
         return True
 
