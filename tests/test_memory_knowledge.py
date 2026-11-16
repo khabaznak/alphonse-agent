@@ -10,7 +10,7 @@ import pytest
 
 from alphonse.agent_v2.conversations import SQLiteConversationStore
 from alphonse.agent_v2.core.memory.contracts import AccessScope, ContextItem, SourceReference, conversation_item
-from alphonse.agent_v2.core.memory.knowledge import KnowledgeMemory, KnowledgeRecord, KnowledgeStore
+from alphonse.agent_v2.core.memory.knowledge import KnowledgeMemory, KnowledgeRecord, KnowledgeStore, _source_snapshot_digest
 from alphonse.agent_v2.core.memory.ledger import LedgerMemory
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.memory_settings import SQLiteMemorySettingsStore
@@ -24,6 +24,11 @@ def event(store, text="My filter is FX-204.", *, owner="alex", project="", role=
     return store.record(owner_user_id=owner, project_id=project, role=role, content=text,
                         source="test", source_message_id=f"test:{next(EVENT_IDS)}",
                         created_at=DATE, **kw)
+
+
+def bind(record, item):
+    digest = _source_snapshot_digest(item)
+    return replace(record, source_snapshot_digests=(digest,)), {item.source.source_id: digest}
 
 
 def candidate(text="My filter is FX-204.", **kw):
@@ -108,9 +113,10 @@ def test_same_claim_in_one_batch_is_disputed_and_commit_rolls_back(setup):
     judgments = {(old.memory_id, new.memory_id): "compatible" for old in [*records, good] for new in [good, bad]}
     other = event(conversations, source.content)
     reference = conversation_item(other, "alex").source
+    good, reviewed = bind(replace(good, sources=(reference,)), conversation_item(other, "alex"))
+    bad, _ = bind(replace(bad, sources=(reference,)), conversation_item(other, "alex"))
     with pytest.raises(ValueError, match="relation_missing"):
-        store.commit("alex", reference.source_id, [replace(good, sources=(reference,)),
-                                                   replace(bad, sources=(reference,))], comparisons=judgments)
+        store.commit("alex", reference.source_id, [good, bad], comparisons=judgments, reviewed_snapshots=reviewed)
     assert not store.processed("alex", reference.source_id)
     assert len(memory.recall("alex", historical=True)) == 2
 
@@ -123,7 +129,8 @@ def test_private_shared_and_current_source_revocation(setup):
     reference = conversation_item(shared_source, "alex").source
     shared = replace(private, memory_id="shared", content=shared_source.content, sources=(reference,),
                      quotes=(shared_source.content,), access=AccessScope("alex", "shared", ("gaby",)), claim_key="shared.filter")
-    store.commit("alex", reference.source_id, [shared])
+    shared, reviewed = bind(shared, conversation_item(shared_source, "alex"))
+    store.commit("alex", reference.source_id, [shared], reviewed_snapshots=reviewed)
     assert memory.recall("gaby")[0].memory_id == "shared"
     with conversations._connect() as conn:
         conn.execute("UPDATE v2_conversation_events SET visibility='private', shared_with='[]' WHERE event_id=?", (shared_source.event_id,))
@@ -141,6 +148,7 @@ def test_conversation_erasure_refuses_mixed_knowledge_and_preserves_sources(setu
     dependent = replace(linked, memory_id="dependent", claim_key="combined.claim",
                         sources=(linked.sources[0], unrelated.sources[0]),
                         quotes=(linked.quotes[0], unrelated.quotes[0]),
+                        source_snapshot_digests=(linked.source_snapshot_digests[0], unrelated.source_snapshot_digests[0]),
                         dependencies=(linked.memory_id,))
     indirect = replace(unrelated, memory_id="indirect", claim_key="indirect.claim",
                        dependencies=(dependent.memory_id,))
@@ -375,9 +383,10 @@ def test_reprocessing_from_concurrent_instances_is_atomic(setup):
     source = event(conversations, "A second filter is FX-204.")
     reference = conversation_item(source, "alex").source
     record = replace(template, memory_id="raced", sources=(reference,), quotes=(source.content,))
+    record, reviewed = bind(record, conversation_item(source, "alex"))
     # Two independent connections race the initial write of the same evidence.
     def write(_):
-        return KnowledgeStore(store.db_path).commit("alex", f"conversation:{source.event_id}", [record])
+        return KnowledgeStore(store.db_path).commit("alex", f"conversation:{source.event_id}", [record], reviewed_snapshots=reviewed)
     with ThreadPoolExecutor(max_workers=2) as executor:
         assert sorted(executor.map(write, range(2))) == [False, True]
     assert len(memory.recall("alex")) == 2
@@ -446,6 +455,7 @@ def test_no_project_and_cross_project_context_uses_knowledge_not_legacy_prose(se
     result = execute_search_memory({"query": "filter"}, context=SimpleNamespace(
         task=task, memory=ledger, conversation_store=conversations))
     assert result["knowledge"][0]["project_id"] == "repair"
+    assert "source_snapshot_digests" not in json.dumps(result)
     assert result["recall"]["status"] == "found"
     assert "historical message, not current-state evidence" in result["matches_markdown"]
 
@@ -499,7 +509,8 @@ def test_shared_claim_cannot_be_retracted_by_another_reporter(setup):
     shared_event = event(setup[0], "Gaby reports the filter is FX-204.", owner="gaby", visibility="shared", shared_with=("alex",))
     source = conversation_item(shared_event, "alex").source
     shared_report = replace(old, memory_id="other-reporter", sources=(source,), quotes=(shared_event.content,))
-    setup[1].commit("alex", source.source_id, [shared_report])
+    shared_report, reviewed = bind(shared_report, conversation_item(shared_event, "alex"))
+    setup[1].commit("alex", source.source_id, [shared_report], reviewed_snapshots=reviewed)
     text = "Correction: my filter is FX-205."
     conversations, store, memory, outputs, _ = setup
     new_source = event(conversations, text)
@@ -507,8 +518,9 @@ def test_shared_claim_cannot_be_retracted_by_another_reporter(setup):
     # Even a trusted writer cannot turn another speaker's report into a correction.
     record = replace(old, memory_id="new", content=text, sources=(conversation_item(new_source, "alex").source,),
                      quotes=(text,), supersedes=shared_report.memory_id)
+    record, reviewed = bind(record, conversation_item(new_source, "alex"))
     with pytest.raises(ValueError, match="original_reporter"):
-        store.commit("alex", record.sources[0].source_id, [record], comparisons={(old.memory_id, record.memory_id): "compatible"})
+        store.commit("alex", record.sources[0].source_id, [record], comparisons={(old.memory_id, record.memory_id): "compatible"}, reviewed_snapshots=reviewed)
 
 
 def test_memory_update_or_read_failure_does_not_fail_task(setup, tmp_path):
@@ -677,8 +689,9 @@ def test_missing_concurrent_semantic_relation_rolls_back_without_false_dispute(s
     new_source = event(setup[0], "The filter is FX-205.")
     new = replace(old, memory_id="racing-new", content=new_source.content,
                   sources=(conversation_item(new_source, "alex").source,), quotes=(new_source.content,))
+    new, reviewed = bind(new, conversation_item(new_source, "alex"))
     with pytest.raises(ValueError, match="comparison_required"):
-        store.commit("alex", new.sources[0].source_id, [new], comparisons={})
+        store.commit("alex", new.sources[0].source_id, [new], comparisons={}, reviewed_snapshots=reviewed)
     assert not store.processed("alex", new.sources[0].source_id)
     assert setup[2].recall("alex") == [old]
 
@@ -772,13 +785,13 @@ def test_changed_dependency_source_withholds_a_record_even_if_own_quote_remains(
     assert root.memory_id not in remaining and dependent.memory_id not in remaining
 
 
-def test_extended_source_that_retains_supporting_quote_remains_available(setup):
+def test_extended_source_that_retains_supporting_quote_is_withheld(setup):
     conversations, _, memory, _, _ = setup
     source, record = save(setup)
     with conversations._connect() as conn:
         conn.execute("UPDATE v2_conversation_events SET content=? WHERE event_id=?",
                      (source.content + " Additional context.", source.event_id))
-    assert [item.memory_id for item in memory.recall("alex")] == [record.memory_id]
+    assert memory.recall("alex") == []
 
 
 def test_malformed_source_content_is_not_exposed_as_supported_knowledge(setup):
@@ -803,7 +816,8 @@ def test_shared_support_revocation_withholds_private_synthesized_record(setup):
                      access=AccessScope("gaby", "shared", ("alex",)),
                      sources=(conversation_item(shared_event, "gaby").source,), quotes=(shared_event.content,),
                      claim_key="household.filter", subjects=("filter",))
-    store.commit("gaby", shared.sources[0].source_id, [shared])
+    shared, reviewed = bind(shared, conversation_item(shared_event, "gaby"))
+    store.commit("gaby", shared.sources[0].source_id, [shared], reviewed_snapshots=reviewed)
     memory.support_selector = lambda source, existing: [shared.memory_id]
     _, derived = save(setup, "Remember that household filter.", fields={"content": "Household filter AB-11.",
                          "claim_key": "household.filter", "subjects": ["filter"]})
@@ -877,3 +891,84 @@ def test_v3_payload_cannot_omit_the_dependency_declaration(setup):
     data.pop("dependencies")
     with pytest.raises(ValueError, match="dependencies_required"):
         KnowledgeRecord.from_dict(data)
+
+
+def test_snapshot_binding_storage_and_public_projection(setup):
+    _, record = save(setup)
+    digest = record.source_snapshot_digests[0]
+    assert record.public_dict()["source_version_state"] == "source_snapshot_bound"
+    assert digest not in json.dumps(record.public_dict())
+    assert digest not in repr(record)
+    with pytest.raises(ValueError, match="public_knowledge_projection_not_storage"):
+        KnowledgeRecord.from_dict(record.public_dict())
+    old = record.to_dict()
+    old.pop("source_binding_version")
+    old.pop("source_snapshot_digests")
+    assert KnowledgeRecord.from_dict(old).public_dict()["source_version_state"] == "unverified"
+    for change in ({"source_binding_version": 2}, {"source_snapshot_digests": ["malformed"]}):
+        with pytest.raises(ValueError, match="invalid_knowledge_source_binding"):
+            KnowledgeRecord.from_dict({**record.to_dict(), **change})
+
+
+@pytest.mark.parametrize("accepted", [True, False])
+def test_source_change_at_commit_rejects_even_empty_receipt(setup, accepted):
+    conversations, store, memory, outputs, _ = setup
+    source = event(conversations, "My filter is FX-204. Original context.")
+    outputs[source.content] = [candidate("My filter is FX-204.")] if accepted else []
+    original_commit = store.commit
+    def mutate_before_commit(*args, **kwargs):
+        with conversations._connect() as conn:
+            conn.execute("UPDATE v2_conversation_events SET content=? WHERE event_id=?",
+                         ("My filter is FX-204. Changed context.", source.event_id))
+        return original_commit(*args, **kwargs)
+    store.commit = mutate_before_commit
+    with pytest.raises(ValueError, match="knowledge_source_snapshot_changed"):
+        memory.process_event(source, "alex")
+    assert not store.processed("alex", f"conversation:{source.event_id}")
+    assert memory.recall("alex", historical=True) == []
+
+
+def test_legacy_record_remains_unverified_when_source_grows(setup):
+    conversations, store, memory, _, _ = setup
+    source, record = save(setup)
+    payload = record.to_dict()
+    payload.pop("source_binding_version")
+    payload.pop("source_snapshot_digests")
+    with store._connect() as conn:
+        conn.execute("UPDATE memory_knowledge SET payload=? WHERE memory_id=?", (json.dumps(payload), record.memory_id))
+        conn.execute("UPDATE v2_conversation_events SET content=? WHERE event_id=?",
+                     (source.content + " More context.", source.event_id))
+    legacy = memory.recall("alex")[0]
+    assert legacy.public_dict()["source_version_state"] == "unverified"
+    assert "source_snapshot=unverified" in memory.render(legacy, "alex")
+
+
+def test_jev_support_transport_omits_storage_digests(setup):
+    from alphonse.agent_v2.system_one import JevCriterionDecisionProvider, SystemOneSettings
+    _, record = save(setup)
+    source = conversation_item(event(setup[0], "Remember that number."), "alex")
+    captured = []
+    def transport(url, key, payload, timeout):
+        captured.append(payload)
+        return {"answers": {"support_0": {"type": "noul", "noul": 0.98}}}
+    provider = JevCriterionDecisionProvider(SystemOneSettings(api_key="fixture"), transport=transport)
+    assert provider.select_memory_support(source, [record]) == [record.memory_id]
+    assert record.source_snapshot_digests[0] not in json.dumps(captured)
+    assert "source_snapshot_digests" not in json.dumps(captured)
+    with pytest.raises(ValueError, match="projection_unavailable"):
+        provider.select_memory_support(source, [SimpleNamespace(to_dict=record.to_dict)])
+
+
+def test_source_change_during_review_is_not_committed(setup):
+    conversations, store, memory, outputs, _ = setup
+    source = event(conversations, "My filter is FX-204. Original context.")
+    outputs[source.content] = [candidate("My filter is FX-204.")]
+    def review(payload, candidates):
+        with conversations._connect() as conn:
+            conn.execute("UPDATE v2_conversation_events SET content=? WHERE event_id=?",
+                         ("My filter is FX-204. Changed context.", source.event_id))
+        return [True] * len(candidates)
+    memory.reviewer = review
+    with pytest.raises(ValueError, match="knowledge_source"):
+        memory.process_event(source, "alex")
+    assert not store.processed("alex", f"conversation:{source.event_id}")

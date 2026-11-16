@@ -352,7 +352,7 @@ def _snapshot(context, requester: str, query: str, historical: bool, selected: s
                    for item, source in zip(live, record.sources)):
                 continue
             item = ContextItem(live[0].source, record.content, "derived_knowledge")
-            candidates.append(SearchHit(record.memory_id, "knowledge", item, record.subjects, record.to_dict()))
+            candidates.append(SearchHit(record.memory_id, "knowledge", item, record.subjects, record.public_dict()))
         return candidates, True
 
     def task_hits():

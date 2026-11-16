@@ -17,7 +17,8 @@ class EngineRoutingProcessor:
 
     def processor_for(self, task: "TaskState") -> "IntelligenceProcessor":
         """Validate a task's engine stamp before task-scoped context is loaded."""
-        if (task.intelligence_engine == "single_loop_experimental" and task.intelligence_schema_version == 1
+        if (task.intelligence_engine == "single_loop_experimental"
+                and type(task.intelligence_schema_version) is int and task.intelligence_schema_version == 1
                 and self.owner_read_candidate is not None):
             return self.owner_read_candidate
         # An unregistered engine must never silently execute under a different

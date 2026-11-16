@@ -579,7 +579,7 @@ def test_memory_comparison_ambiguity_or_invalid_answer_defers_write(answer):
 def test_memory_support_selection_uses_noul_before_exposing_knowledge_to_extractor():
     from types import SimpleNamespace
     source = SimpleNamespace(to_dict=lambda: {"content": "Remember that number."})
-    prior = [SimpleNamespace(memory_id="memory:one", to_dict=lambda: {"memory_id": "memory:one", "content": "Filter FX-204."})]
+    prior = [SimpleNamespace(memory_id="memory:one", public_dict=lambda: {"memory_id": "memory:one", "content": "Filter FX-204."})]
     captured = []
     def transport(url, key, payload, timeout):
         captured.append(payload)
@@ -594,7 +594,7 @@ def test_memory_support_selection_uses_noul_before_exposing_knowledge_to_extract
 @pytest.mark.parametrize("probability", [0.5, float("nan"), None, True])
 def test_memory_support_selection_never_guesses_on_ambiguous_or_invalid_answers(probability):
     from types import SimpleNamespace
-    item = SimpleNamespace(memory_id="memory:one", to_dict=lambda: {"content": "Filter"})
+    item = SimpleNamespace(memory_id="memory:one", to_dict=lambda: {"content": "Filter"}, public_dict=lambda: {"content": "Filter"})
     provider = JevCriterionDecisionProvider(SystemOneSettings(api_key="secret"), transport=lambda *args: {
         "answers": {"support_0": {"type": "noul", "noul": probability}}})
     with pytest.raises(ValueError):

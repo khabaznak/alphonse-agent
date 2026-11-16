@@ -1,0 +1,118 @@
+"""Disposable checks for the unregistered owner knowledge snapshot."""
+import json
+import os
+from dataclasses import replace
+
+import pytest
+
+from alphonse.agent_v2.conversations import SQLiteConversationStore
+from alphonse.agent_v2.core.intelligence.simple_loop.owner_knowledge_snapshot import snapshot_owner_knowledge
+from alphonse.agent_v2.core.intelligence.task_state import TaskState
+from alphonse.agent_v2.core.memory.contracts import AccessScope, conversation_item
+from alphonse.agent_v2.core.memory.knowledge import KnowledgeRecord, KnowledgeStore, _source_snapshot_digest
+from alphonse.agent_v2.core.messages.sqlite_queue import SQLiteMessageQueue
+from alphonse.agent_v2.users import V2UserStore
+
+
+@pytest.fixture
+def fixture(tmp_path):
+    path = tmp_path / 'history.db'
+    owner = V2UserStore(path).onboard(display_name='Fixture', users_root=tmp_path / 'users')
+    conversations = SQLiteConversationStore(path)
+    KnowledgeStore(path)
+    queue = SQLiteMessageQueue(path, experimental_claim_fencing=True)
+    source = conversations.record(owner_user_id=owner.user_id, role='user', content='Apples are red',
+                                  source='fixture', source_message_id='earlier')
+    message_id = queue.enqueue_trusted_local_owner(prompt='current request', peer_uid=os.getuid())
+    acquired = queue.claim_next()
+    task = TaskState.from_message(acquired.message, message_id=message_id)
+    task.task_id = message_id
+    item = conversation_item(source, owner.user_id)
+    record = KnowledgeRecord(memory_id='m00', content='Apples are red', access=AccessScope(owner.user_id),
+                             sources=(item.source,), recorded_at=source.created_at, kind='fact', subjects=('apples',),
+                             claim_key='apple', basis='user_report', quotes=('Apples are red',),
+                             source_binding_version=1, source_snapshot_digests=(_source_snapshot_digest(item),))
+    def insert(r):
+        with queue._connect() as conn:
+            conn.execute('INSERT INTO memory_knowledge VALUES (?,?,?,?,?,?)',
+                         (r.memory_id, owner.user_id, r.claim_key, json.dumps(r.to_dict()), r.status, '[]'))
+    def snapshot(cancelled=False):
+        return snapshot_owner_knowledge(queue, acquired.claim_receipt, task, cancellation_checker=lambda: cancelled)
+    return queue, task, source, record, insert, snapshot
+
+
+def test_valid_snapshot_and_changed_source(fixture):
+    queue, _, source, record, insert, snapshot = fixture
+    insert(record)
+    result = snapshot()
+    assert result.status == 'available'
+    assert [item.content for item in result.items] == ['Apples are red']
+    with queue._connect() as conn:
+        conn.execute('UPDATE v2_conversation_events SET content=? WHERE event_id=?', ('Apples are green', source.event_id))
+    assert snapshot().status == 'incomplete'
+
+
+def test_cached_descendants_cannot_bypass_depth_limit(fixture):
+    _, _, _, record, insert, snapshot = fixture
+    for i in range(17):
+        insert(replace(record, memory_id=f'm{i:02}', dependencies=(f'm{i-1:02}',) if i else ()))
+    assert snapshot().status == 'incomplete'
+
+
+@pytest.mark.parametrize('field', ['payload', 'conflicts'])
+def test_oversized_knowledge_fields_fail_closed(fixture, field):
+    queue, _, _, record, insert, snapshot = fixture
+    insert(record)
+    with queue._connect() as conn:
+        conn.execute(f'UPDATE memory_knowledge SET {field}=?', ('x' * 65537,))
+    assert snapshot().status == 'incomplete'
+
+
+def test_oversized_conversation_fields_fail_closed(fixture):
+    queue, _, source, record, insert, snapshot = fixture
+    insert(record)
+    with queue._connect() as conn:
+        conn.execute('UPDATE v2_conversation_events SET content=? WHERE event_id=?', ('x' * 65537, source.event_id))
+    assert snapshot().status == 'incomplete'
+
+
+def test_unbound_and_non_user_source_are_incomplete(fixture):
+    queue, _, source, record, insert, snapshot = fixture
+    insert(replace(record, source_binding_version=0, source_snapshot_digests=()))
+    assert snapshot().status == 'incomplete'
+    with queue._connect() as conn:
+        conn.execute('DELETE FROM memory_knowledge')
+        conn.execute("UPDATE v2_conversation_events SET role='assistant' WHERE event_id=?", (source.event_id,))
+    insert(record)
+    assert snapshot().status == 'incomplete'
+
+
+def test_missing_inbound_and_cancellation_unavailable(fixture):
+    queue, task, _, _, _, snapshot = fixture
+    with queue._connect() as conn:
+        conn.execute('DELETE FROM v2_conversation_events WHERE source_message_id=?', (f'inbound:{task.message_id}',))
+    assert snapshot().status == 'unavailable'
+
+
+def test_current_request_and_dependent_knowledge_are_excluded(fixture):
+    queue, task, _, record, insert, snapshot = fixture
+    from alphonse.agent_v2.conversations import _event
+    with queue._connect() as conn:
+        row = conn.execute('SELECT * FROM v2_conversation_events WHERE source_message_id=?',
+                           (f'inbound:{task.message_id}',)).fetchone()
+    item = conversation_item(_event(row), task.user)
+    current = replace(record, memory_id='current', content='current request', sources=(item.source,),
+                      quotes=('current request',), source_snapshot_digests=(_source_snapshot_digest(item),))
+    insert(current)
+    insert(replace(record, memory_id='dependent', dependencies=('current',)))
+    result = snapshot()
+    assert result.status == 'available'
+    assert result.items == ()
+
+
+def test_cancelled_claim_yields_no_content(fixture):
+    _, _, _, record, insert, snapshot = fixture
+    insert(record)
+    result = snapshot(cancelled=True)
+    assert result.status == 'unavailable'
+    assert result.items == ()
