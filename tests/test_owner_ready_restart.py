@@ -29,7 +29,7 @@ from alphonse.agent_v2.runtime import build_runtime_host
 from alphonse.agent_v2.users import V2UserStore
 
 
-def _crash_fixture_daemon(root: str, socket_dir: str, signal):
+def _crash_fixture_daemon(root: str, socket_dir: str, signal, hold_model=False):
     """A standalone daemon that can be killed after durable handoff."""
     from alphonse.agent_v2 import daemon as module
     module.default_socket_path = lambda: Path(socket_dir) / 'daemon.sock'
@@ -37,6 +37,9 @@ def _crash_fixture_daemon(root: str, socket_dir: str, signal):
         supports_image_input = False
         def generate_json(self, request):
             signal.put('model_call')
+            if hold_model:
+                while True:
+                    time.sleep(1)
             value = {'kind': 'answer', 'tool_id': None, 'arguments': None, 'text': 'Synthetic answer.'}
             return InferenceResult(json_value=value, raw_response=json.dumps(value),
                                    usage={'input_tokens': 100, 'output_tokens': 20})
@@ -117,6 +120,83 @@ def test_ready_answer_survives_real_daemon_process_death(tmp_path, monkeypatch):
         owner = users.admin_user()
         assert [(row.role, row.content) for row in conversation.list(owner_user_id=owner.user_id)] == [
             ('user', 'Say hello.'), ('assistant', 'Synthetic answer.')]
+    finally:
+        if process.is_alive():
+            process.kill()
+            process.join(timeout=10)
+        if replacement is not None:
+            replacement.stop()
+        signal.close()
+        shutil.rmtree(socket_dir)
+
+
+def test_crash_during_model_call_preserves_request_without_replay(tmp_path, monkeypatch):
+    from alphonse.agent_v2 import daemon as module
+    socket_dir = Path(tempfile.mkdtemp(prefix='owner-inflight-', dir='/private/tmp'))
+    monkeypatch.setattr(module, 'default_socket_path', lambda: socket_dir / 'daemon.sock')
+    ctx = multiprocessing.get_context('spawn')
+    signal = ctx.Queue()
+    process = ctx.Process(target=_crash_fixture_daemon,
+                          args=(str(tmp_path), str(socket_dir), signal, True))
+    process.start()
+    replacement = None
+    try:
+        assert signal.get(timeout=20) == 'started'
+        client = V2DaemonClient(str(socket_dir / 'one.sock'))
+        message_id = client.request('experimental_owner_ingress', prompt='Synthetic pending request.')['message_id']
+        # The provider is entered only after its reservation was committed.
+        assert signal.get(timeout=10) == 'model_call'
+        process.kill()
+        process.join(timeout=10)
+        assert not process.is_alive()
+
+        db = tmp_path / 'fixture.sqlite'
+        users = V2UserStore(db)
+        owner = users.admin_user()
+        queue = SQLiteMessageQueue(db, experimental_claim_fencing=True)
+        conversation = SQLiteConversationStore(db)
+        assert [(row.role, row.content) for row in conversation.list(owner_user_id=owner.user_id)] == [
+            ('user', 'Synthetic pending request.')]
+        with queue._connect() as conn:
+            before = conn.execute('SELECT status, claim_generation FROM v2_inbound_messages WHERE message_id=?',
+                                  (message_id,)).fetchone()
+            checkpoint = conn.execute('SELECT task_state_json FROM v2_task_checkpoints WHERE task_id=?',
+                                      (message_id,)).fetchone()
+        assert before['status'] == 'processing' and before['claim_generation']
+        saved = json.loads(checkpoint['task_state_json'])['metadata']
+        assert saved['owner_read_pending_action']['kind'] == 'model'
+        assert 'owner_read_ready_handoff' not in saved
+
+        registry = InMemoryToolRegistry()
+        registry.register(build_search_memory_tool_definition())
+        registry.register(build_read_memory_source_tool_definition())
+        calls = []
+        class NeverProvider:
+            supports_image_input = False
+            def generate_json(self, request):
+                calls.append(True)
+                raise AssertionError('uncertain model call was repeated')
+        runtime = build_runtime_host(user_store=users, messages=queue, question_store=SQLiteQuestionStore(db),
+            conversation_store=conversation, outbox=SQLiteOutboundStore(db), tools=registry,
+            inference=InferenceRouter(provider=NeverProvider(), default_profile=ModelProfile('test', 'fixture', 'offline')),
+            coding_skill_service=object(), experimental_owner_read=True, owner_selected_draft_sink=lambda *_: None)
+        replacement = V2Daemon(runtime, daemon_id='replacement', experimental_owner_only=True)
+        replacement.ipc = V2DaemonServer(replacement, str(socket_dir / 'two.sock'))
+        replacement.start()
+        resumed = V2DaemonClient(replacement.ipc.socket_path)
+        assert resumed.request('experimental_owner_status', message_id=message_id)['status'] == 'unavailable'
+        with pytest.raises(RuntimeError, match='owner_desktop_pickup_unavailable'):
+            resumed.request('experimental_owner_take_draft', message_id=message_id)
+        # The worker has an opportunity to poll while the original uncertain
+        # processing claim remains preserved rather than being retried.
+        time.sleep(.2)
+        with queue._connect() as conn:
+            after = conn.execute('SELECT status, claim_generation FROM v2_inbound_messages WHERE message_id=?',
+                                 (message_id,)).fetchone()
+        assert tuple(after) == tuple(before)
+        assert calls == []
+        assert [(row.role, row.content) for row in conversation.list(owner_user_id=owner.user_id)] == [
+            ('user', 'Synthetic pending request.')]
     finally:
         if process.is_alive():
             process.kill()

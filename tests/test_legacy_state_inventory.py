@@ -165,6 +165,56 @@ def test_outbox_item_inspection_marks_truncation(state):
     assert 'SECRET' not in json.dumps(result)
 
 
+def test_schedule_items_show_only_owner_attributed_links_and_never_write(state):
+    path, _, owner, member, daemon = state
+    with sqlite3.connect(path) as conn:
+        conn.execute("UPDATE v2_scheduled_task_executions SET queued_message_id='old-v3', response_outbox_id='one', attempt_count=1 WHERE scheduled_task_id='owner-job'")
+        conn.execute('''INSERT INTO v2_scheduled_task_executions
+            (scheduled_task_id,run_id,status,started_at,queued_message_id,response_outbox_id)
+            VALUES ('owner-job','other','failed','fixture','member-private','private-member')''')
+        before = list(conn.iterdump())
+    result = inspect_legacy_items(path, expected_owner=owner.user_id, include_schedules=True)
+    scheduled = result['scheduled']
+    assert scheduled['status'] == 'available' and len(scheduled['tasks']['items']) == 1
+    assert scheduled['tasks']['items'][0] == {'id': 'owner-job', 'status': 'active'}
+    first, second = scheduled['occurrences']['items']
+    assert first['task_id'] == 'owner-job' and first['owner_queue_id'] == 'old-v3' and first['owner_outbox_id'] == 'one'
+    assert first['attempts'] == 'positive' and first['status'] == 'unconfirmed'
+    assert second['owner_queue_id'] is None and second['owner_outbox_id'] is None
+    assert 'member-private' not in json.dumps(result) and 'PRIVATE' not in json.dumps(result)
+    assert inspect_legacy_items(path, expected_owner=member.user_id, include_schedules=True) is None
+    with sqlite3.connect(path) as conn:
+        assert list(conn.iterdump()) == before
+        conn.execute('DROP TABLE v2_scheduled_task_executions')
+    assert inspect_legacy_items(path, expected_owner=owner.user_id, include_schedules=True)['scheduled'] == {'status': 'unavailable'}
+
+
+def test_schedule_item_ipc_refuses_split_store(state, tmp_path, monkeypatch):
+    _, _, owner, _, daemon = state
+    server = V2DaemonServer(daemon, '/private/tmp/unused-inventory.sock', experimental_owner_ingress=True)
+    monkeypatch.setattr(server, '_local_peer_uid', lambda _: os.getuid())
+    request = {'version': 1, 'method': 'legacy_state_items', 'params': {'actor_user_id': owner.user_id}}
+    assert server._legacy_state_items(None, request)['items']['scheduled']['status'] == 'available'
+    daemon.runtime.schedule_store = ScheduledTaskStore(tmp_path / 'other.sqlite')
+    assert server._legacy_state_items(None, request)['items']['scheduled'] == {'status': 'unavailable'}
+
+
+def test_schedule_item_inspection_marks_truncation(state):
+    path, _, owner, _, _ = state
+    with sqlite3.connect(path) as conn:
+        for i in range(55):
+            identity = f'job-{i:03}'
+            conn.execute('''INSERT INTO v2_scheduled_tasks
+                (scheduled_task_id,owner_user_id,name,prompt,schedule_json,timezone,status,created_at,updated_at)
+                VALUES (?,?,?,?,?,?,?,?,?)''', (identity, owner.user_id, 'PRIVATE NAME', 'PRIVATE PROMPT', '{}', 'UTC', 'active', 'x', 'x'))
+            conn.execute('''INSERT INTO v2_scheduled_task_executions
+                (scheduled_task_id,run_id,status,started_at) VALUES (?,?,?,?)''', (identity, 'private-run', 'pending', 'x'))
+    result = inspect_legacy_items(path, expected_owner=owner.user_id, include_schedules=True)['scheduled']
+    assert result['tasks']['truncated'] and len(result['tasks']['items']) == 50
+    assert result['occurrences']['truncated'] and len(result['occurrences']['items']) == 50
+    assert 'PRIVATE' not in json.dumps(result) and 'private-run' not in json.dumps(result)
+
+
 def test_item_inspection_ipc_enforces_peer_and_same_store(state, tmp_path, monkeypatch):
     path, _, owner, member, daemon = state
     server = V2DaemonServer(daemon, '/private/tmp/unused-inventory.sock', experimental_owner_ingress=True)

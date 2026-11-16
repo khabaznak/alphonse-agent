@@ -18,7 +18,9 @@ describe("earlier work inventory", () => {
   it("loads only bounded record metadata on explicit request", async () => {
     const items = { queue: { items: [{ id: "fixture-id", status: "pending", engine: "hierarchical_v3", origin_marker: "absent" }], truncated: false },
       checkpoints: { items: [], truncated: true },
-      outbox: { items: [{ id: "delivery-id", status: "unconfirmed", attempts: "positive", owner_task_id: "fixture-id" }], truncated: false } };
+      outbox: { items: [{ id: "delivery-id", status: "unconfirmed", attempts: "positive", owner_task_id: "fixture-id" }], truncated: false },
+      scheduled: { status: "available", tasks: { items: [{ id: "job", status: "active" }], truncated: false },
+        occurrences: { items: [{ position: 1, task_id: "job", status: "unconfirmed", attempts: "positive", owner_queue_id: "fixture-id", owner_outbox_id: "delivery-id" }], truncated: false } } };
     const request = vi.fn(async () => ({ status: "available", items }));
     expect(await loadLegacyStateItems(request as OwnerRequest, "fixture-owner")).toEqual(items);
     expect(request).toHaveBeenCalledExactlyOnceWith("legacy_state_items", { actor_user_id: "fixture-owner" });
@@ -27,6 +29,9 @@ describe("earlier work inventory", () => {
     const invalidOutbox = vi.fn(async () => ({ status: "available", items: { ...items, outbox: {
       items: [{ ...items.outbox.items[0], attempts: "delivered" }], truncated: false } } }));
     await expect(loadLegacyStateItems(invalidOutbox as OwnerRequest, "fixture-owner")).rejects.toThrow();
+    const invalidOccurrence = vi.fn(async () => ({ status: "available", items: { ...items, scheduled: { ...items.scheduled,
+      occurrences: { items: [{ ...items.scheduled.occurrences.items[0], position: -1 }], truncated: false } } } }));
+    await expect(loadLegacyStateItems(invalidOccurrence as OwnerRequest, "fixture-owner")).rejects.toThrow();
   });
   it("only requests the read-only owner inventory on demand", async () => {
     const request = vi.fn(async () => ({ status: "available", inventory }));

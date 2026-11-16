@@ -572,9 +572,13 @@ class V2DaemonServer:
 
     def _legacy_state_items(self, connection, request):
         """Return bounded owner-only metadata; never change or resume work."""
-        _, queue, actor = self._legacy_state_database(connection, request)
+        runtime, queue, actor = self._legacy_state_database(connection, request)
         from alphonse.agent_v2.core.messages.legacy_state_items import inspect_legacy_items
-        result = inspect_legacy_items(queue.db_path, expected_owner=actor)
+        try:
+            same_schedule_db = os.path.samefile(queue.db_path, runtime.schedule_store.db_path)
+        except (AttributeError, OSError, TypeError, ValueError):
+            same_schedule_db = False
+        result = inspect_legacy_items(queue.db_path, expected_owner=actor, include_schedules=same_schedule_db)
         return {'status': 'available', 'items': result} if result is not None else {'status': 'unavailable'}
 
     def _legacy_state_database(self, connection, request):
