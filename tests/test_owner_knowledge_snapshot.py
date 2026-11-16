@@ -6,7 +6,9 @@ from dataclasses import replace
 import pytest
 
 from alphonse.agent_v2.conversations import SQLiteConversationStore
-from alphonse.agent_v2.core.intelligence.simple_loop.owner_knowledge_snapshot import snapshot_owner_knowledge
+from alphonse.agent_v2.core.intelligence.simple_loop.owner_knowledge_snapshot import (
+    snapshot_owner_knowledge, snapshot_owner_knowledge_locked, matches_owner_knowledge_locked,
+)
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.memory.contracts import AccessScope, conversation_item
 from alphonse.agent_v2.core.memory.knowledge import KnowledgeRecord, KnowledgeStore, _source_snapshot_digest
@@ -38,6 +40,7 @@ def fixture(tmp_path):
                          (r.memory_id, owner.user_id, r.claim_key, json.dumps(r.to_dict()), r.status, '[]'))
     def snapshot(cancelled=False):
         return snapshot_owner_knowledge(queue, acquired.claim_receipt, task, cancellation_checker=lambda: cancelled)
+    snapshot.receipt = acquired.claim_receipt
     return queue, task, source, record, insert, snapshot
 
 
@@ -116,3 +119,50 @@ def test_cancelled_claim_yields_no_content(fixture):
     result = snapshot(cancelled=True)
     assert result.status == 'unavailable'
     assert result.items == ()
+
+
+def test_locked_snapshot_shares_claim_transaction_and_leaves_it_writable(fixture):
+    queue, task, source, record, insert, snapshot = fixture
+    insert(record)
+    with queue.trusted_local_owner_claim_transaction(snapshot.receipt, task) as conn:
+        before = snapshot_owner_knowledge_locked(conn, task, cancellation_checker=lambda: False)
+        assert before.status == 'available'
+        conn.execute('UPDATE v2_conversation_events SET content=? WHERE event_id=?',
+                     ('Apples are green', source.event_id))
+        after = snapshot_owner_knowledge_locked(conn, task, cancellation_checker=lambda: False)
+        assert after.status == 'incomplete'
+        assert after.items == ()
+    assert snapshot().status == 'incomplete'
+
+
+def test_locked_snapshot_requires_transaction_and_rechecks_cancellation(fixture):
+    queue, task, _, record, insert, snapshot = fixture
+    insert(record)
+    with queue._connect() as conn:
+        assert snapshot_owner_knowledge_locked(conn, task, cancellation_checker=lambda: False).status == 'unavailable'
+    with queue.trusted_local_owner_claim_transaction(snapshot.receipt, task) as conn:
+        result = snapshot_owner_knowledge_locked(conn, task, cancellation_checker=lambda: True)
+        assert result.status == 'unavailable'
+        assert result.items == ()
+
+
+def test_locked_binding_detects_rebound_sources_with_unchanged_public_claim(fixture):
+    from alphonse.agent_v2.conversations import _event
+
+    queue, task, source, record, insert, snapshot = fixture
+    insert(record)
+    previous = snapshot()
+    with queue.trusted_local_owner_claim_transaction(snapshot.receipt, task) as conn:
+        assert matches_owner_knowledge_locked(conn, task, previous.digest, cancellation_checker=lambda: False)
+        conn.execute('UPDATE v2_conversation_events SET content=? WHERE event_id=?',
+                     ('Apples are red, and taste sweet.', source.event_id))
+        row = conn.execute('SELECT * FROM v2_conversation_events WHERE event_id=?', (source.event_id,)).fetchone()
+        changed = conversation_item(_event(row), task.user)
+        rebound = replace(record, source_snapshot_digests=(_source_snapshot_digest(changed),))
+        conn.execute('UPDATE memory_knowledge SET payload=? WHERE memory_id=?',
+                     (json.dumps(rebound.to_dict()), record.memory_id))
+        current = snapshot_owner_knowledge_locked(conn, task, cancellation_checker=lambda: False)
+        assert current.items == previous.items
+        assert not matches_owner_knowledge_locked(conn, task, previous.digest, cancellation_checker=lambda: False)
+        assert matches_owner_knowledge_locked(conn, task, current.digest, cancellation_checker=lambda: False)
+        assert not matches_owner_knowledge_locked(conn, task, current.digest, cancellation_checker=lambda: True)

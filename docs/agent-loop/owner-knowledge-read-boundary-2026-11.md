@@ -79,3 +79,29 @@ not enable owner LLM retrieval or resolve provider disclosure, revocation after
 dispatch, or cancellation races between the final check and transaction. Tests
 use disposable sources and fake model transports; no household data or provider
 is involved.
+
+## Claim-bound snapshot and checkpoint groundwork
+
+The unregistered snapshot now also has a transaction-scoped entry point for a
+caller already holding the trusted owner claim. Its private digest covers the
+selected records and their source bindings; a public projection does not contain
+the digest. Experimental checkpoint settlement requires the digest and checks
+the snapshot and public projection in the same transaction. Recovery reconstructs
+and checks both, and desktop pickup compares the private binding again while
+holding the pickup transaction. These checks do not establish that a claim is
+true, and a different source binding is rejected even if displayed claim text is
+unchanged. The helper itself does not establish caller authorization.
+
+An opt-in test host can now use a dedicated private-result path; the default host
+leaves it off and no runtime registers the tool. The ordinary invocation path
+redacts the tool's result; the private path calls the pinned implementation
+without emitting the result to Desktop events, memory or telemetry. Synthetic
+provider tests exercise projection, recovery and source changes during inference.
+This is not authorization to disclose household knowledge to a configured
+provider, and it does not establish production readiness. More qualification is
+needed for recovery, cancellation and uncertain calls across the full runtime.
+Checks are point-in-time: revocation cannot retract data already dispatched to a
+provider.
+The constructor flag is a test/rollout gate, not a revocation control: turning it
+off does not invalidate an already selected draft. A production switch needs an
+independent trusted revocation check at recovery and pickup before activation.

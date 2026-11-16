@@ -257,7 +257,13 @@ class OwnerAtomicCheckpoint:
                 raise CheckpointConflict('owner_desktop_pickup_unavailable')
             from .owner_gmail import OWNER_GMAIL_TOOL_ID, valid_owner_gmail_locked
             from .owner_reminder_create import OWNER_REMINDER_CREATE_TOOL_ID, valid_reminder_locked
+            from .owner_knowledge_snapshot import OWNER_KNOWLEDGE_TOOL_ID, matches_owner_knowledge_locked
             for binding in observations.values():
+                if (binding.get('tool_id') == OWNER_KNOWLEDGE_TOOL_ID
+                        and (binding.get('arguments') != {} or not matches_owner_knowledge_locked(
+                            conn, self.task, binding.get('knowledge_snapshot_digest'),
+                            cancellation_checker=context.cancellation_checker, clock=self.clock))):
+                    raise CheckpointConflict('owner_knowledge_binding_unavailable')
                 if (binding.get('tool_id') == OWNER_GMAIL_TOOL_ID
                         and (state.status != 'completed' or not valid_owner_gmail_locked(conn, self.task.user,
                                 binding.get('gmail_observation'), context=context))):
@@ -497,7 +503,8 @@ class OwnerAtomicCheckpoint:
         return result
 
     def settle_read(self, *, expected_version: int, reservation_id: str, tool_id: str,
-                    arguments: dict, evidence_ref: str, observation: dict) -> Checkpoint:
+                    arguments: dict, evidence_ref: str, observation: dict,
+                    knowledge_snapshot_digest: str | None = None, cancellation_checker=None) -> Checkpoint:
         """Store an already-validated read result, action binding, and budget together.
 
         This deliberately cannot settle a failed or ambiguous action. Observation
@@ -520,10 +527,25 @@ class OwnerAtomicCheckpoint:
                     or not isinstance(observations, dict) or evidence_ref == state.goal_source
                     or evidence_ref in observations or evidence_ref in state.evidence_sources):
                 raise CheckpointConflict('owner_atomic_observation_binding_mismatch')
+            from .owner_knowledge_snapshot import (OWNER_KNOWLEDGE_TOOL_ID, owner_knowledge_projection,
+                                                   snapshot_owner_knowledge_locked)
+            if tool_id == OWNER_KNOWLEDGE_TOOL_ID:
+                if arguments != {} or not callable(cancellation_checker):
+                    raise CheckpointConflict('owner_knowledge_binding_unavailable')
+                snapshot = snapshot_owner_knowledge_locked(conn, self.task, cancellation_checker=cancellation_checker,
+                                                          clock=self.clock)
+                if (snapshot.status != 'available' or not isinstance(knowledge_snapshot_digest, str)
+                        or not hmac.compare_digest(snapshot.digest, knowledge_snapshot_digest)
+                        or owner_knowledge_projection(snapshot) != observation):
+                    raise CheckpointConflict('owner_knowledge_binding_unavailable')
+            elif knowledge_snapshot_digest is not None:
+                raise CheckpointConflict('owner_knowledge_binding_unavailable')
             budget.settle(reservation_id, outcome='success')
             observations[evidence_ref] = {'actor': state.actor, 'tool_id': tool_id,
                                           'arguments': deepcopy(arguments),
                                           'observation_sha256': observation_digest(observation)}
+            if tool_id == OWNER_KNOWLEDGE_TOOL_ID:
+                observations[evidence_ref]['knowledge_snapshot_digest'] = knowledge_snapshot_digest
             from .owner_clock import OWNER_CLOCK_TOOL_ID
             if tool_id == OWNER_CLOCK_TOOL_ID:
                 observations[evidence_ref]['clock_observation'] = deepcopy(observation)

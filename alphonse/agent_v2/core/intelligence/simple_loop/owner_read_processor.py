@@ -33,6 +33,9 @@ from .owner_named_skill import OWNER_NAMED_SKILL_TOOL_ID, explicit_requested_nam
 from .owner_gmail import OWNER_GMAIL_TOOL_ID, valid_owner_gmail, owner_gmail_unit
 from .owner_schedules import OWNER_SCHEDULES_TOOL_ID, valid_schedules_observation
 from .owner_reminder_create import OWNER_REMINDER_CREATE_TOOL_ID, is_direct_reminder_request
+from .owner_knowledge_snapshot import (OWNER_KNOWLEDGE_TOOL_ID, owner_knowledge_projection,
+                                        snapshot_owner_knowledge)
+from .owner_private_knowledge_read import read_private_knowledge
 from datetime import datetime, timezone
 
 
@@ -62,7 +65,8 @@ class OwnerReadConversationProcessor:
                  save_checkpoint: Callable[[TaskState, dict[str, Any]], None],
                  now_ms: Callable[[], int] | None = None,
                  atomic_checkpoints: ExperimentalCheckpointStore | None = None,
-                 selected_draft_sink: Callable[[OwnerAtomicCheckpoint, CoreLoopContext], None] | None = None):
+                 selected_draft_sink: Callable[[OwnerAtomicCheckpoint, CoreLoopContext], None] | None = None,
+                 enable_private_knowledge: bool = False):
         if (not isinstance(users, V2UserStore) or type(budgets) is not SQLiteTaskBudgetStore
                 or not callable(authorize_claim) or not callable(save_checkpoint)):
             raise ValueError('owner_read_configuration_invalid')
@@ -73,8 +77,11 @@ class OwnerReadConversationProcessor:
             raise ValueError('owner_read_atomic_checkpoint_invalid')
         if selected_draft_sink is not None and (atomic_checkpoints is None or not callable(selected_draft_sink)):
             raise ValueError('owner_read_draft_sink_invalid')
+        if type(enable_private_knowledge) is not bool:
+            raise ValueError('owner_knowledge_configuration_invalid')
         self.atomic_checkpoints = atomic_checkpoints
         self.selected_draft_sink = selected_draft_sink
+        self.enable_private_knowledge = enable_private_knowledge
 
     def _authorized(self, task: TaskState, context: CoreLoopContext) -> bool:
         try:
@@ -136,6 +143,12 @@ class OwnerReadConversationProcessor:
             if (reminder_descriptor is not None and reminder_descriptor.read_only is False
                     and self.atomic_checkpoints is not None and callable(context.owner_effect_commit)):
                 descriptors += (reminder_descriptor,)
+            knowledge_descriptor = context.tools.get(OWNER_KNOWLEDGE_TOOL_ID)
+            knowledge_enabled = (self.enable_private_knowledge and self.atomic_checkpoints is not None
+                                 and knowledge_descriptor is not None and knowledge_descriptor.read_only is True
+                                 and knowledge_descriptor.metadata.get('sensitive_content') is True)
+            if knowledge_enabled:
+                descriptors += (knowledge_descriptor,)
             base_chooser = RouterCandidateChooser(router=context.inference, task=task, tools=descriptors,
                 max_input_tokens=65536, cancellation_checker=context.is_cancelled,
                 allow_owner_reminder=any(item.tool_id == OWNER_REMINDER_CREATE_TOOL_ID for item in descriptors))
@@ -184,6 +197,8 @@ class OwnerReadConversationProcessor:
             ref: (item['tool_id'], deepcopy(item['arguments']), deepcopy(item['observation']))
             for ref, item in restored_observations.items()
         }
+        knowledge_bindings = {ref: item['knowledge_snapshot_digest'] for ref, item in restored_observations.items()
+                              if item['tool_id'] == OWNER_KNOWLEDGE_TOOL_ID}
         execution_context = context.tool_execution_context(task)
         clarification = task.metadata.get('owner_clarification') if isinstance(task.metadata, dict) else None
 
@@ -199,6 +214,9 @@ class OwnerReadConversationProcessor:
         def allowed(actor_id: str, tool_id: str, args: dict[str, Any]) -> bool:
             if actor_id != actor or not self._authorized(task, context) or not isinstance(args, dict):
                 return False
+            if tool_id == OWNER_KNOWLEDGE_TOOL_ID:
+                return knowledge_enabled and args == {} and not any(
+                    tool == OWNER_KNOWLEDGE_TOOL_ID for tool, _, _ in observations.values())
             if tool_id == OWNER_CLOCK_TOOL_ID:
                 return args == {} and atomic is not None
             if tool_id == OWNER_SCHEDULES_TOOL_ID:
@@ -254,6 +272,12 @@ class OwnerReadConversationProcessor:
                 return False
 
         def valid(actor_id: str, tool_id: str, args: dict[str, Any], payload: dict[str, Any]) -> bool:
+            if tool_id == OWNER_KNOWLEDGE_TOOL_ID:
+                if actor_id != actor or args != {} or not knowledge_enabled or not self._authorized(task, context):
+                    return False
+                current = snapshot_owner_knowledge(context.messages, context.claim_receipt, task,
+                                                    cancellation_checker=context.cancellation_checker)
+                return owner_knowledge_projection(current) == payload and current.status == 'available'
             if tool_id == OWNER_CLOCK_TOOL_ID:
                 return (actor_id == actor and self._authorized(task, context)
                         and valid_clock_observation(actor_id, args, payload, context=execution_context))
@@ -284,7 +308,13 @@ class OwnerReadConversationProcessor:
                 except Exception:
                     return False
             bound = observations.get(ref)
-            return bool(bound and valid(actor_id, bound[0], bound[1], bound[2]))
+            if not bound or not valid(actor_id, bound[0], bound[1], bound[2]):
+                return False
+            if bound[0] == OWNER_KNOWLEDGE_TOOL_ID:
+                current = snapshot_owner_knowledge(context.messages, context.claim_receipt, task,
+                                                    cancellation_checker=context.cancellation_checker)
+                return current.status == 'available' and current.digest == knowledge_bindings.get(ref)
+            return True
 
         def load(actor_id: str, ref: str) -> str:
             if not access(actor_id, ref):
@@ -370,6 +400,16 @@ class OwnerReadConversationProcessor:
         def validate(actor_id: str, tool_id: str, args: dict[str, Any], payload: dict[str, Any]) -> bool:
             return valid(actor_id, tool_id, args, payload)
 
+        def record_private(actor_id: str, tool_id: str, args: dict[str, Any], result: dict[str, Any], digest: str) -> str:
+            ref = record(actor_id, tool_id, args, result)
+            current = snapshot_owner_knowledge(context.messages, context.claim_receipt, task,
+                                                cancellation_checker=context.cancellation_checker)
+            if current.status != 'available' or current.digest != digest:
+                observations.pop(ref, None)
+                raise ValueError('owner_knowledge_binding_unavailable')
+            knowledge_bindings[ref] = digest
+            return ref
+
         # This verifies only retained source access/provenance, never the
         # semantic truth of free-form model output. The result remains a draft.
         def provenance(actor_id: str, text: str, refs: tuple[str, ...]) -> bool:
@@ -431,7 +471,9 @@ class OwnerReadConversationProcessor:
             input_reservation=65536, output_reservation=16384, projection_budget=65536,
             validate_observation=validate, record_bound_observation=record, atomic_checkpoint=atomic,
             commit_owner_reminder=commit_reminder,
-            allow_question=allow_question)
+            allow_question=allow_question,
+            read_private_knowledge=(lambda: read_private_knowledge(context, task)) if knowledge_enabled else None,
+            record_private_knowledge=record_private if knowledge_enabled else None)
         try:
             result = run_candidate(candidate_state, host)
         except Exception:

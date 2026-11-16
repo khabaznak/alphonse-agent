@@ -16,7 +16,7 @@ from alphonse.agent_v2.core.intelligence.simple_loop.owner_atomic_checkpoint imp
 from alphonse.agent_v2.core.intelligence.simple_loop.owner_read_recovery import OwnerRecoveryUnavailable, restore_owner_read_observations
 from alphonse.agent_v2.core.intelligence.simple_loop.owner_read_processor import OwnerReadConversationProcessor, authorize_trusted_owner_claim
 from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_candidate import CandidateState
-from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_checkpoint import ExperimentalCheckpointStore
+from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_checkpoint import ExperimentalCheckpointStore, CheckpointConflict
 from alphonse.agent_v2.core.intelligence.simple_loop.task_budget import BudgetLimits, TaskBudget, SQLiteTaskBudgetStore
 from alphonse.agent_v2.core.messages.sqlite_queue import SQLiteMessageQueue
 from alphonse.agent_v2.core.questions import SQLiteQuestionStore
@@ -495,3 +495,83 @@ def test_search_pages_reject_orphans_gaps_and_changed_snapshots(setup):
     gappage = execute_search_memory(gapargs, context=ctx.tool_execution_context(atomic.task))
     with pytest.raises(ValueError):
         conversation_search_sequences(owner.user_id, {'first': item(args0, page0), 'gap': item(gapargs, gappage)})
+
+
+def test_private_knowledge_binding_recovers_and_rejects_rebound_source(setup, monkeypatch):
+    from alphonse.agent_v2.conversations import _event
+    from alphonse.agent_v2.core.memory.contracts import AccessScope, conversation_item
+    from alphonse.agent_v2.core.memory.knowledge import KnowledgeRecord, KnowledgeStore, _source_snapshot_digest
+    from alphonse.agent_v2.core.intelligence.simple_loop.owner_knowledge_snapshot import (
+        OWNER_KNOWLEDGE_TOOL_ID, snapshot_owner_knowledge, owner_knowledge_projection)
+
+    atomic, initial, ctx, conversations, owner = setup
+    KnowledgeStore(atomic.queue.db_path)
+    source = conversations.event_for_source_message_id(owner_user_id=owner.user_id, source_message_id='source-one')
+    item = conversation_item(source, owner.user_id)
+    record = KnowledgeRecord(memory_id='memory:test', content='Synthetic apples.', access=AccessScope(owner.user_id),
+        sources=(item.source,), recorded_at=source.created_at, kind='fact', subjects=('apples',), claim_key='apple',
+        basis='user_report', quotes=('Synthetic apples.',), source_binding_version=1,
+        source_snapshot_digests=(_source_snapshot_digest(item),))
+    with atomic.queue._connect() as conn:
+        conn.execute('INSERT INTO memory_knowledge VALUES (?,?,?,?,?,?)',
+            (record.memory_id, owner.user_id, record.claim_key, json.dumps(record.to_dict()), record.status, '[]'))
+    snapshot = snapshot_owner_knowledge(atomic.queue, atomic.receipt, atomic.task,
+        cancellation_checker=ctx.cancellation_checker, clock=atomic.clock)
+    observation = owner_knowledge_projection(snapshot)
+    decision = {'kind': 'tool', 'tool_id': OWNER_KNOWLEDGE_TOOL_ID, 'arguments': {}}
+    model = atomic.reserve(expected_version=initial.version, reservation_id='model-knowledge', kind='model',
+        amounts=dict(actions=0, model_calls=1, input_tokens=100, output_tokens=20), now_ms=initial.budget.started_at_ms)
+    selected = atomic.settle_model(expected_version=model.version, reservation_id='model-knowledge', outcome='success',
+        input_tokens=10, output_tokens=10, decision=decision, projection_fingerprint='a' * 64)
+    pending = atomic.reserve(expected_version=selected.version, reservation_id='read-knowledge', kind='tool',
+        amounts=dict(actions=1, model_calls=0, input_tokens=0, output_tokens=0), now_ms=initial.budget.started_at_ms,
+        tool_id=OWNER_KNOWLEDGE_TOOL_ID, arguments={}, selected_decision=decision, projection_fingerprint='a' * 64)
+    with pytest.raises(CheckpointConflict, match='owner_knowledge_binding_unavailable'):
+        atomic.settle_read(expected_version=pending.version, reservation_id='read-knowledge',
+            tool_id=OWNER_KNOWLEDGE_TOOL_ID, arguments={}, evidence_ref='owner-read:knowledge', observation=observation,
+            knowledge_snapshot_digest='0' * 64, cancellation_checker=ctx.cancellation_checker)
+    with pytest.raises(CheckpointConflict, match='owner_knowledge_binding_unavailable'):
+        atomic.settle_read(expected_version=pending.version, reservation_id='read-knowledge',
+            tool_id=OWNER_KNOWLEDGE_TOOL_ID, arguments={}, evidence_ref='owner-read:knowledge', observation=observation,
+            knowledge_snapshot_digest=snapshot.digest, cancellation_checker=lambda: True)
+    settled = atomic.settle_read(expected_version=pending.version, reservation_id='read-knowledge',
+        tool_id=OWNER_KNOWLEDGE_TOOL_ID, arguments={}, evidence_ref='owner-read:knowledge', observation=observation,
+        knowledge_snapshot_digest=snapshot.digest, cancellation_checker=ctx.cancellation_checker)
+    _, recovered = restore_owner_read_observations(atomic, ctx, expected_version=settled.version)
+    assert recovered['owner-read:knowledge']['observation'] == observation
+    answer = {'kind': 'answer', 'text': 'Synthetic apples.'}
+    model = atomic.reserve(expected_version=settled.version, reservation_id='model-answer', kind='model',
+        amounts=dict(actions=0, model_calls=1, input_tokens=100, output_tokens=20), now_ms=initial.budget.started_at_ms)
+    chosen = atomic.settle_model(expected_version=model.version, reservation_id='model-answer', outcome='success',
+        input_tokens=10, output_tokens=10, decision=answer, projection_fingerprint='b' * 64)
+    state = settled.state
+    state.status = 'completed'
+    state.response = answer['text']
+    completed = atomic.save_state(state, consume_decision=True, selected_decision=answer,
+                                  projection_fingerprint='b' * 64)
+    with atomic.queue._connect() as conn:
+        raw = conn.execute('SELECT task_state_json FROM v2_task_checkpoints WHERE task_id=?', (atomic.task.task_id,)).fetchone()[0]
+        assert snapshot.digest not in json.dumps(observation)
+        assert 'knowledge_snapshot_digest' in raw
+    import alphonse.agent_v2.core.intelligence.simple_loop.owner_read_recovery as recovery
+    original_restore = recovery.restore_owner_read_observations
+    def rebind_after_restore(*args, **kwargs):
+        restored = original_restore(*args, **kwargs)
+        with atomic.queue._connect() as conn:
+            conn.execute('UPDATE v2_conversation_events SET content=? WHERE event_id=?',
+                         ('Synthetic apples. They are sweet.', source.event_id))
+            changed = conversation_item(_event(conn.execute('SELECT * FROM v2_conversation_events WHERE event_id=?',
+                                                            (source.event_id,)).fetchone()), owner.user_id)
+            rebound = replace(record, source_snapshot_digests=(_source_snapshot_digest(changed),))
+            conn.execute('UPDATE memory_knowledge SET payload=? WHERE memory_id=?', (json.dumps(rebound.to_dict()), record.memory_id))
+        return restored
+    monkeypatch.setattr(recovery, 'restore_owner_read_observations', rebind_after_restore)
+    with pytest.raises(CheckpointConflict, match='owner_knowledge_binding_unavailable'):
+        atomic.take_desktop_draft(ctx)
+    with atomic.queue._connect() as conn:
+        raw = conn.execute('SELECT task_state_json FROM v2_task_checkpoints WHERE task_id=?', (atomic.task.task_id,)).fetchone()[0]
+        assert 'owner_read_desktop_pickup_started' not in raw
+    assert owner_knowledge_projection(snapshot_owner_knowledge(atomic.queue, atomic.receipt, atomic.task,
+        cancellation_checker=ctx.cancellation_checker, clock=atomic.clock)) == observation
+    with pytest.raises(OwnerRecoveryUnavailable):
+        original_restore(atomic, ctx, expected_version=completed.version, allow_completed=True)

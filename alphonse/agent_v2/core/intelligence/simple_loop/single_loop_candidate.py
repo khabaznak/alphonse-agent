@@ -121,6 +121,9 @@ class CandidateHost:
     # effect, budget and terminal checkpoint; it never dispatches generic tools.
     commit_owner_reminder: Callable[[Any, dict, str], Any] | None = None
     allow_question: Callable[[str], bool] | None = None
+    # Trusted owner host only. Neither callback is supplied by the model.
+    read_private_knowledge: Callable[[], Any] | None = None
+    record_private_knowledge: Callable[[str, str, dict, dict, str], str] | None = None
 
 
 def _save(host: CandidateHost, state: CandidateState, *, consume_decision: bool = False,
@@ -373,6 +376,12 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
         tool_id, args = decision['tool_id'], deepcopy(decision['arguments'])
         registry = getattr(host.context, 'tools', None)
         descriptor = registry.get(tool_id) if registry is not None else None
+        from .owner_knowledge_snapshot import OWNER_KNOWLEDGE_TOOL_ID
+        if (tool_id == OWNER_KNOWLEDGE_TOOL_ID and
+                (host.atomic_checkpoint is None or args != {} or descriptor is None
+                 or descriptor.metadata.get('sensitive_content') is not True
+                 or not callable(host.read_private_knowledge) or not callable(host.record_private_knowledge))):
+            return _terminal(host, state, 'blocked', 'candidate_private_read_unavailable')
         if tool_id == 'native.owner_reminder_create':
             if (host.atomic_checkpoint is None or not callable(host.commit_owner_reminder)
                     or descriptor is None or descriptor.read_only is not False
@@ -428,7 +437,21 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
         if host.atomic_checkpoint is not None and not host.atomic_checkpoint.check_claim(
                 action_id, 'tool', tool_id=tool_id, arguments=args):
             return _terminal(host, state, 'blocked', 'candidate_claim_unavailable')
-        result = ToolInvocationService(context=host.context, task=host.task).invoke(tool_id, args, call_id=action_id)
+        private_digest = None
+        if tool_id == OWNER_KNOWLEDGE_TOOL_ID:
+            from .owner_private_knowledge_read import PrivateKnowledgeRead
+            try:
+                private = host.read_private_knowledge()
+                if (type(private) is not PrivateKnowledgeRead or not isinstance(private.observation, dict)
+                        or not isinstance(private.binding_digest, str) or len(private.binding_digest) != 64
+                        or any(ch not in '0123456789abcdef' for ch in private.binding_digest)):
+                    raise ValueError('private_read_invalid')
+                private_digest = private.binding_digest
+                result = {'status': 'success', 'result': deepcopy(private.observation)}
+            except Exception:
+                result = {'status': 'failed', 'result': None}
+        else:
+            result = ToolInvocationService(context=host.context, task=host.task).invoke(tool_id, args, call_id=action_id)
         if host.atomic_checkpoint is None:
             budget = host.budgets.load(state.task_id)
             revision = budget.revision
@@ -476,15 +499,19 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
         if not _is_fresh(host, state, fingerprint):
             return _terminal(host, state, 'blocked', 'candidate_evidence_changed_or_revoked')
         try:
-            ref = (host.record_evidence(state.actor, result) if host.record_bound_observation is None
+            ref = (host.record_private_knowledge(state.actor, tool_id, deepcopy(args), deepcopy(result), private_digest)
+                   if private_digest is not None else
+                   host.record_evidence(state.actor, result) if host.record_bound_observation is None
                    else host.record_bound_observation(state.actor, tool_id, deepcopy(args), deepcopy(result)))
         except Exception:
             return _terminal(host, state, 'blocked', 'candidate_evidence_recording_unavailable')
         if not isinstance(ref, str) or not ref.strip() or ref == state.goal_source or ref in state.evidence_sources:
             return _terminal(host, state, 'blocked', 'candidate_evidence_reference_invalid')
         if host.atomic_checkpoint is not None:
+            extra = ({'knowledge_snapshot_digest': private_digest,
+                      'cancellation_checker': host.context.cancellation_checker} if private_digest is not None else {})
             host.atomic_checkpoint.settle_read(expected_version=host.atomic_checkpoint.version,
-                reservation_id=action_id, tool_id=tool_id, arguments=args, evidence_ref=ref, observation=payload)
+                reservation_id=action_id, tool_id=tool_id, arguments=args, evidence_ref=ref, observation=payload, **extra)
         state.evidence_sources.append(ref)
         # Reading one source does not establish that the prior answer was
         # supported. Preserve the generic feedback until a terminal outcome.

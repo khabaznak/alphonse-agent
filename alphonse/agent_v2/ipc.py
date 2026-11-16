@@ -525,7 +525,12 @@ class V2DaemonServer:
                 raise ValueError
         except (AttributeError, OSError, TypeError, ValueError):
             raise PermissionError('legacy_state_inventory_unavailable') from None
-        result = inspect_legacy_state(queue.db_path, expected_owner=params['actor_user_id'])
+        try:
+            same_schedule_db = os.path.samefile(queue.db_path, runtime.schedule_store.db_path)
+        except (AttributeError, OSError, TypeError, ValueError):
+            same_schedule_db = False
+        result = inspect_legacy_state(queue.db_path, expected_owner=params['actor_user_id'],
+                                      include_schedules=same_schedule_db)
         return {'status': 'available', 'inventory': result} if result is not None else {'status': 'unavailable'}
 
     def _owner_status(self, connection, request):

@@ -12,6 +12,7 @@ from alphonse.agent_v2.core.io.outbox import SQLiteOutboundStore
 from alphonse.agent_v2.core.messages.legacy_state_inventory import inspect_legacy_state
 from alphonse.agent_v2.core.messages.sqlite_queue import SQLiteMessageQueue
 from alphonse.agent_v2.core.questions import SQLiteQuestionStore
+from alphonse.agent_v2.core.scheduled_tasks import ScheduledTaskStore
 from alphonse.agent_v2.ipc import V2DaemonClient, V2DaemonServer
 from alphonse.agent_v2.users import V2UserStore
 
@@ -25,6 +26,7 @@ def state(tmp_path):
     queue = SQLiteMessageQueue(path, experimental_claim_fencing=True)
     questions = SQLiteQuestionStore(path)
     outbox = SQLiteOutboundStore(path)
+    schedules = ScheduledTaskStore(path)
     with sqlite3.connect(path) as conn:
         conn.execute('''CREATE TABLE v2_trusted_owner_ingress
             (message_id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, peer_uid INTEGER, payload_sha256 TEXT, history_version INTEGER)''')
@@ -62,14 +64,21 @@ def state(tmp_path):
                 VALUES (?,?,?,?,?,?,?,?,?,?,?)''',
                 (identity, 'fixture', 'fixture', 'opaque-target', 'PRIVATE SYNTHETIC TEXT',
                  'message', audience, status, 'synthetic', 'synthetic', attempts))
-    runtime = SimpleNamespace(queue=queue, user_store=users, question_store=questions, outbox=outbox)
+        for identity, user, status in [('owner-job', owner.user_id, 'active'), ('member-job', member.user_id, 'paused')]:
+            conn.execute('''INSERT INTO v2_scheduled_tasks
+                (scheduled_task_id,owner_user_id,name,prompt,schedule_json,timezone,status,created_at,updated_at)
+                VALUES (?,?,?,?,?,?,?,?,?)''', (identity, user, 'PRIVATE JOB', 'PRIVATE PROMPT', '{}', 'UTC', status, 'synthetic', 'synthetic'))
+            conn.execute('''INSERT INTO v2_scheduled_task_executions
+                (scheduled_task_id,run_id,status,started_at) VALUES (?,?,?,?)''',
+                (identity, identity + '-run', 'unconfirmed', 'synthetic'))
+    runtime = SimpleNamespace(queue=queue, user_store=users, question_store=questions, outbox=outbox, schedule_store=schedules)
     daemon = SimpleNamespace(runtime=runtime, experimental_owner_only=True)
     return path, users, owner, member, daemon
 
 
 def test_inventory_is_owner_scoped_and_never_exposes_payloads(state):
     path, _, owner, member, _ = state
-    result = inspect_legacy_state(path, expected_owner=owner.user_id)
+    result = inspect_legacy_state(path, expected_owner=owner.user_id, include_schedules=True)
     assert result is not None
     queue = result['queue_other_ingress']
     assert queue['statuses']['pending'] == 1 and queue['statuses']['failed'] == 2
@@ -88,10 +97,28 @@ def test_inventory_is_owner_scoped_and_never_exposes_payloads(state):
     assert outbox['statuses']['pending'] == 1 and outbox['statuses']['unconfirmed'] == 1
     assert outbox['statuses']['failed'] == 0
     assert outbox['attempt_counter']['zero'] == 1 and outbox['attempt_counter']['positive'] == 1
+    scheduled = result['owner_scheduled_work']
+    assert scheduled['status'] == 'available'
+    assert scheduled['tasks']['active'] == 1 and scheduled['tasks']['paused'] == 0
+    assert scheduled['occurrences']['unconfirmed'] == 1
     rendered = json.dumps(result)
     for secret in ('PRIVATE', 'old-v3', 'member-private', owner.user_id, member.user_id, 'opaque-target'):
         assert secret not in rendered
     assert inspect_legacy_state(path, expected_owner=member.user_id) is None
+
+
+def test_scheduled_inventory_unavailable_for_missing_schema_or_split_store(state, tmp_path, monkeypatch):
+    path, _, owner, _, daemon = state
+    assert inspect_legacy_state(path, expected_owner=owner.user_id)['owner_scheduled_work'] == {'status': 'unavailable'}
+    server = V2DaemonServer(daemon, '/private/tmp/unused-inventory.sock', experimental_owner_ingress=True)
+    monkeypatch.setattr(server, '_local_peer_uid', lambda _: os.getuid())
+    request = {'version': 1, 'method': 'legacy_state_inventory', 'params': {'actor_user_id': owner.user_id}}
+    assert server._legacy_state_inventory(None, request)['inventory']['owner_scheduled_work']['status'] == 'available'
+    daemon.runtime.schedule_store = ScheduledTaskStore(tmp_path / 'separate.sqlite')
+    assert server._legacy_state_inventory(None, request)['inventory']['owner_scheduled_work'] == {'status': 'unavailable'}
+    with sqlite3.connect(path) as conn:
+        conn.execute('DROP TABLE v2_scheduled_task_executions')
+    assert inspect_legacy_state(path, expected_owner=owner.user_id, include_schedules=True)['owner_scheduled_work'] == {'status': 'unavailable'}
 
 
 def test_inventory_is_read_only_and_fails_closed_on_missing_or_corrupt_schema(state, tmp_path):
