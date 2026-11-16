@@ -24,9 +24,23 @@ describe("email and calendar integrations", () => {
     expect(html).not.toContain("Available to connect");
   });
   it("marks Gmail as needing attention when the conversation token has expired", () => {
-    const stale = { ...catalog, connections: [{ ...catalog.connections[0], access_token_status: "refresh_required" }] };
+    const stale = { ...catalog, owner_gmail_setup_only: true, connections: [{ ...catalog.connections[0], access_token_status: "refresh_required" }] };
     const html = renderToStaticMarkup(<AccountServiceCards catalog={stale} onChoose={() => {}} />);
     expect(html).toContain("Account needs attention");
     expect(html).not.toContain("1 account connected");
+  });
+  it("does not mark an account connected when its credentials are unavailable", () => {
+    const unavailable = { ...catalog, connections: [{ ...catalog.connections[0], credential_health: "credential_backend_unavailable", access_token_status: "unavailable" }] };
+    const html = renderToStaticMarkup(<AccountServiceCards catalog={unavailable} onChoose={() => {}} />);
+    expect(html).toContain("Account needs attention");
+    expect(html).not.toContain("1 account connected");
+  });
+  it("shows Outlook and calendar as unavailable in the owner runtime", () => {
+    const html = renderToStaticMarkup(<AccountServiceCards catalog={{ ...catalog, owner_gmail_setup_only: true }} onChoose={() => {}} />);
+    expect(html).toContain("Gmail");
+    expect(html).toContain("Google Calendar");
+    expect(html).toContain("Outlook / Hotmail");
+    expect(html).toContain("Not yet available in this version");
+    expect(html).toMatch(/disabled="" aria-label="View setup for Outlook \/ Hotmail"/);
   });
 });

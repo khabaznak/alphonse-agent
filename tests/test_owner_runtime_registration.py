@@ -26,8 +26,10 @@ def test_owner_import_does_not_load_v3_processor_in_a_fresh_interpreter():
     # the actual import boundary rather than relying on test order.
     subprocess.run([sys.executable, '-c', '''
 import sys
+import importlib.util
 import alphonse.agent_v2.runtime
 import alphonse.agent_v2.core.intelligence.simple_loop.owner_read_processor
+assert importlib.util.find_spec('alphonse.agent_v2.core.intelligence.v3') is None
 for name in ('processor', 'executor', 'planner', 'outer'):
     assert f'alphonse.agent_v2.core.intelligence.v3.{name}' not in sys.modules, name
 '''], check=True)
@@ -66,6 +68,18 @@ def test_registration_rejects_unfenced_or_split_stores(tmp_path):
             coding_skill_service=object(), experimental_owner_read=True, owner_selected_draft_sink=lambda *_: None)
     with pytest.raises(ValueError, match='owner_read_runtime_configuration_invalid'):
         build_runtime_host(owner_selected_draft_sink=lambda *_: None)
+
+
+def test_owner_runtime_rejects_injected_processor_before_constructing_stores():
+    # Embedded test hosts may inject processors, but the owner daemon must
+    # always construct its claim-bound simple-loop processor itself.
+    class AlternativeProcessor:
+        def process(self, *_args):
+            raise AssertionError('an injected processor must not run')
+
+    with pytest.raises(ValueError, match='owner_read_runtime_configuration_invalid'):
+        build_runtime_host(processor=AlternativeProcessor(), experimental_owner_read=True,
+                           owner_selected_draft_sink=lambda *_: None)
 
 
 @pytest.mark.parametrize('kind', ['answer', 'question'])

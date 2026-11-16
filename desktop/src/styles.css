@@ -1622,6 +1622,17 @@ button.mockup-member-card:not(:disabled):hover { border-color: var(--accent); }
 .integration-messaging > p { margin: 6px 0 0; font-size: 12px; color: var(--muted); }
 .integration-privacy { margin-top: 22px; }
 .integration-connect-form { margin-top: 24px; }
+.account-service-detail > p { color: var(--muted); font-size: 12px; line-height: 1.5; }
+.account-service-detail .mockup-settings-rows { margin-top: 12px; }
+.account-service-detail .mockup-settings-row { gap: 20px; align-items: flex-start; }
+.account-service-detail .mockup-settings-row h3 { margin: 0 0 5px; font-size: 13px; }
+.account-service-detail .mockup-settings-row p { margin: 4px 0; color: var(--muted); font-size: 12px; }
+.account-service-detail details summary { cursor: pointer; color: var(--accent); font-size: 12px; font-weight: 700; }
+.account-service-detail .mockup-settings-row details { margin-top: 8px; }
+.account-service-detail .integration-connect-form form { margin-top: 16px; }
+.account-service-detail .integration-connect-form .form-field { margin: 0 0 12px; }
+.account-service-detail .integration-connect-form input { width: 100%; }
+@media (max-width: 650px) { .account-service-detail .mockup-settings-row { flex-direction: column; gap: 10px; } }
 .integration-back { display: block; margin-bottom: 15px; }
 .integration-detail .settings-panel { max-width: 700px; }
 @media (max-width: 650px) { .integration-service-grid { grid-template-columns: 1fr; } }
