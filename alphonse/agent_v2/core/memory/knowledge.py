@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 import hashlib
+import hmac
 import json
 import re
 import sqlite3
@@ -16,6 +17,7 @@ from .contracts import AccessScope, ContextItem, DurableMemoryRecord, SourceRefe
 
 KNOWLEDGE_VERSION = 3
 KINDS = {"fact", "preference", "instruction", "decision", "commitment", "observation"}
+SOURCE_BINDING_VERSION = 1
 CANDIDATE_FIELDS = {
     "content", "kind", "subjects", "claim_key", "quote", "persistence", "intent_quote",
     "valid_from", "valid_until", "validity_quote", "supersedes", "conflicts_with", "relation_quote",
@@ -32,6 +34,15 @@ def instant(value: str) -> datetime:
 
 def now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _source_snapshot_digest(item: ContextItem) -> str:
+    """Bind the full stored source snapshot, not a claim of model review or truth."""
+    if not isinstance(item, ContextItem) or not isinstance(item.content, str):
+        raise ValueError("knowledge_source_snapshot_invalid")
+    payload = json.dumps(item.to_dict(), ensure_ascii=False, sort_keys=True,
+                         separators=(",", ":"), allow_nan=False).encode("utf-8")
+    return hashlib.sha256(b"alphonse-knowledge-source-v1\0" + payload).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -58,6 +69,8 @@ class KnowledgeRecord:
     schedule_id: str | None = None
     commitment_state: str | None = None
     dependencies: tuple[str, ...] = ()
+    source_binding_version: int = 0
+    source_snapshot_digests: tuple[str, ...] = field(default=(), repr=False)
     schema_version: int = KNOWLEDGE_VERSION
 
     def __post_init__(self) -> None:
@@ -85,13 +98,30 @@ class KnowledgeRecord:
         if (not isinstance(self.dependencies, tuple) or len(self.dependencies) > 8
                 or any(not isinstance(ref, str) or not ref.strip() for ref in self.dependencies)):
             raise ValueError("invalid_knowledge_dependencies")
+        if (type(self.source_binding_version) is not int or self.source_binding_version not in (0, SOURCE_BINDING_VERSION)
+                or not isinstance(self.source_snapshot_digests, tuple)
+                or (self.source_binding_version == 0 and self.source_snapshot_digests)
+                or (self.source_binding_version == SOURCE_BINDING_VERSION and (
+                    len(self.source_snapshot_digests) != len(self.sources)
+                    or any(not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+                           for digest in self.source_snapshot_digests)))):
+            raise ValueError("invalid_knowledge_source_binding")
         # The derived audience must be a subset of every supporting audience.
         audience = {self.access.owner_user_id, *self.access.shared_with}
         if any(not all(s.access.allows(user) for user in audience) for s in self.sources):
             raise ValueError("knowledge_audience_widening")
 
     def to_dict(self) -> dict[str, Any]:
+        """Return the private storage envelope; do not expose to a model or API."""
         return asdict(self)
+
+    def public_dict(self) -> dict[str, Any]:
+        """Return the public projection without source-content digests."""
+        value = asdict(self)
+        value.pop("source_snapshot_digests")
+        value.pop("source_binding_version")
+        value["source_version_state"] = "source_snapshot_bound" if self.source_binding_version == SOURCE_BINDING_VERSION else "unverified"
+        return value
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> KnowledgeRecord:
@@ -99,11 +129,14 @@ class KnowledgeRecord:
             raise ValueError("unsupported_knowledge_version")
         if not isinstance(value.get("dependencies"), (list, tuple)):
             raise ValueError("knowledge_dependencies_required")
+        if "source_version_state" in value:
+            raise ValueError("public_knowledge_projection_not_storage")
         return cls(**{**value, "access": AccessScope.from_dict(value["access"]),
                       "sources": tuple(SourceReference.from_dict(s) for s in value["sources"]),
                       "subjects": tuple(value["subjects"]), "quotes": tuple(value["quotes"]),
                       "dependencies": tuple(value["dependencies"]),
-                      "conflicts_with": tuple(value.get("conflicts_with", ()))})
+                      "conflicts_with": tuple(value.get("conflicts_with", ())),
+                      "source_snapshot_digests": tuple(value.get("source_snapshot_digests", ()))})
 
     @staticmethod
     def legacy_envelope(record: DurableMemoryRecord) -> dict[str, Any]:
@@ -254,6 +287,13 @@ class KnowledgeStore:
                    or quote not in item.content
                    for source, quote, item in zip(record.sources, record.quotes, live)):
                 return None
+            if record.source_binding_version == SOURCE_BINDING_VERSION:
+                try:
+                    if any(not hmac.compare_digest(_source_snapshot_digest(item), digest)
+                           for item, digest in zip(live, record.source_snapshot_digests)):
+                        return None
+                except (TypeError, ValueError, UnicodeError):
+                    return None
             # A stale envelope cannot widen current audiences in extraction context either.
             try:
                 record = replace(record, sources=tuple(item.source for item in live))
@@ -261,6 +301,9 @@ class KnowledgeStore:
                 return None
             dependencies = [resolve_record(ref, visiting | {memory_id}) for ref in record.dependencies]
             if any(dependency is None for dependency in dependencies):
+                return None
+            if record.source_binding_version == SOURCE_BINDING_VERSION and any(
+                    dependency.source_binding_version != SOURCE_BINDING_VERSION for dependency in dependencies):
                 return None
             if any(dependency.status == "disputed" for dependency in dependencies) and record.status != "superseded":
                 record = replace(record, status="disputed")
@@ -321,7 +364,9 @@ class KnowledgeStore:
         return True
 
     def commit(self, owner: str, source_id: str, records: list[KnowledgeRecord], *, resolver: Callable | None = None,
-               comparisons: dict[tuple[str, str], str] | None = None) -> bool:
+               comparisons: dict[tuple[str, str], str] | None = None,
+               reviewed_snapshots: dict[str, str] | None = None,
+               reviewed_primary: tuple[SourceReference, str] | None = None) -> bool:
         with self._connect() as conn:
             # Serialize receipt check and all transitions across processes as well as threads.
             conn.execute("BEGIN IMMEDIATE")
@@ -331,6 +376,12 @@ class KnowledgeStore:
             if conn.execute("SELECT 1 FROM memory_processing WHERE owner=? AND source_id=? AND version=?",
                             (owner, source_id, KNOWLEDGE_VERSION)).fetchone():
                 return False
+            if reviewed_primary is not None:
+                primary, digest = reviewed_primary
+                current = self._transaction_source(conn, primary, owner)
+                if (primary.source_id != source_id or current is None
+                        or not hmac.compare_digest(_source_snapshot_digest(current), digest)):
+                    raise ValueError("knowledge_source_snapshot_changed")
             for record in records:
                 if record.access.owner_user_id != owner or not any(s.source_id == source_id for s in record.sources):
                     raise ValueError("knowledge_write_scope")
@@ -355,6 +406,13 @@ class KnowledgeStore:
                         item = None
                     if item is None or item.source != source or quote not in item.content:
                         raise ValueError("knowledge_support_no_longer_available")
+                if record.source_binding_version == SOURCE_BINDING_VERSION:
+                    for source, digest in zip(record.sources, record.source_snapshot_digests):
+                        if not isinstance(reviewed_snapshots, dict) or reviewed_snapshots.get(source.source_id) != digest:
+                            raise ValueError("knowledge_source_snapshot_not_reviewed")
+                        current = self._transaction_source(conn, source, owner)
+                        if current is None or not hmac.compare_digest(_source_snapshot_digest(current), digest):
+                            raise ValueError("knowledge_source_snapshot_changed")
                 if resolver is not None and not self._sources_available(record, owner, resolver):
                     raise ValueError("knowledge_support_no_longer_available")
                 for dependency_id in record.dependencies:
@@ -362,6 +420,14 @@ class KnowledgeStore:
                     if row is None or dependency_id == record.memory_id:
                         raise ValueError("knowledge_dependency_missing")
                     dependency = self._record(row)
+                    if record.source_binding_version == SOURCE_BINDING_VERSION:
+                        if dependency.source_binding_version != SOURCE_BINDING_VERSION:
+                            raise ValueError("knowledge_unverified_dependency")
+                        bindings = {source.source_id: digest for source, digest in
+                                    zip(record.sources, record.source_snapshot_digests)}
+                        if any(bindings.get(source.source_id) != digest for source, digest in
+                               zip(dependency.sources, dependency.source_snapshot_digests)):
+                            raise ValueError("knowledge_dependency_snapshot_changed")
                     if (not dependency.access.allows(owner) or resolver is None
                             or not self._sources_available(dependency, owner, resolver)):
                         raise ValueError("knowledge_dependency_unavailable")
@@ -422,14 +488,39 @@ class KnowledgeStore:
 
     @staticmethod
     def _sources_available(record: KnowledgeRecord, requester: str, resolver: Callable) -> bool:
-        for source, quote in zip(record.sources, record.quotes):
+        for index, (source, quote) in enumerate(zip(record.sources, record.quotes)):
             item = resolver(source, requester)
             if (not isinstance(item, ContextItem) or not isinstance(item.content, str)
                     or not isinstance(item.source, SourceReference) or not isinstance(item.source.access, AccessScope)
                     or item.source.source_id != source.source_id or not item.visible_to(requester)
                     or quote not in item.content):
                 return False
+            if record.source_binding_version == SOURCE_BINDING_VERSION:
+                try:
+                    if not hmac.compare_digest(_source_snapshot_digest(item), record.source_snapshot_digests[index]):
+                        return False
+                except (TypeError, ValueError, UnicodeError):
+                    return False
         return True
+
+    @staticmethod
+    def _transaction_source(conn: sqlite3.Connection, source: SourceReference, owner: str) -> ContextItem | None:
+        """Resolve supported authoritative sources on the caller's locked database."""
+        try:
+            if source.kind == "conversation" and source.source_id.startswith("conversation:"):
+                from alphonse.agent_v2.conversations import _event
+                row = conn.execute("SELECT * FROM v2_conversation_events WHERE event_id=?",
+                                   (source.source_id.removeprefix("conversation:"),)).fetchone()
+                item = conversation_item(_event(row), owner) if row is not None else None
+            elif source.kind == "task_evidence":
+                row = conn.execute("SELECT payload FROM memory_task_sources WHERE source_id=? AND owner=?",
+                                   (source.source_id, owner)).fetchone()
+                item = ContextItem.from_dict(json.loads(row[0])) if row is not None else None
+            else:
+                return None
+            return item if item is not None and item.source == source and item.visible_to(owner) else None
+        except (sqlite3.Error, TypeError, ValueError, KeyError, UnicodeError):
+            return None
 
     def capture_task(self, task: Any) -> list[ContextItem]:
         owner = str(task.user or "")
@@ -552,12 +643,16 @@ class KnowledgeMemory:
             return
         if not (source.kind == "task_evidence" or (source.kind == "conversation" and source.role == "user" and source.provenance == "recorded")):
             raise ValueError("knowledge_requires_user_or_tool_evidence")
+        # Capture the full authoritative input snapshot before model/reviewer
+        # calls. The model sees bounded chunks; this binding is not a claim it
+        # reviewed every byte or that the resulting assertion is true.
+        input_digest = _source_snapshot_digest(item)
         matched = self.store.records(owner, self.resolve, historical=True, query=item.content, limit=24)
         recent = self.store.records(owner, self.resolve, historical=True, limit=8)
         existing = []
         used = 0
         for record in {r.memory_id: r for r in matched + recent}.values():
-            size = len(json.dumps(record.to_dict()))
+            size = len(json.dumps(record.public_dict()))
             if used + size <= 16000:
                 existing.append(record)
                 used += size
@@ -574,11 +669,14 @@ class KnowledgeMemory:
             if (not isinstance(supporting_ids, list) or len(supporting_ids) > 8
                     or any(ref not in {r.memory_id for r in existing} for ref in supporting_ids)):
                 raise ValueError("knowledge_dependency_not_visible")
+            if any(record.source_binding_version != SOURCE_BINDING_VERSION
+                   for record in existing if record.memory_id in supporting_ids):
+                raise ValueError("knowledge_unverified_dependency")
             payload = {"source": ContextItem(source, chunk, item.representation).to_dict(),
                        # Relation metadata is not evidence for a synthesized fact.
                        "existing": [{"memory_id": r.memory_id, "claim_key": r.claim_key,
                                      "subjects": r.subjects, "status": r.status, "kind": r.kind} for r in existing],
-                       "supporting_knowledge": [r.to_dict() for r in existing if r.memory_id in supporting_ids]}
+                       "supporting_knowledge": [r.public_dict() for r in existing if r.memory_id in supporting_ids]}
             candidates = self.extractor(payload, owner, cancel_checker=cancel_checker)
             if not isinstance(candidates, dict) or set(candidates) != {"candidates"} or not isinstance(candidates["candidates"], list) or len(candidates["candidates"]) > 8:
                 raise ValueError("invalid_knowledge_extraction")
@@ -662,12 +760,18 @@ class KnowledgeMemory:
                     raise ValueError("knowledge_commitment_state_quote_required")
             identity = json.dumps([KNOWLEDGE_VERSION, owner, source.source_id, candidate], sort_keys=True, ensure_ascii=False)
             dependencies = tuple(dict.fromkeys(candidate.get("supporting_memory_ids", [])))
-            support = {source.source_id: (source, quote)}
+            support = {source.source_id: (source, quote, input_digest)}
             observation_time = source.observed_at
             for dependency_id in dependencies:
                 dependency = related[dependency_id]
-                for reference, supporting_quote in zip(dependency.sources, dependency.quotes):
-                    support.setdefault(reference.source_id, (reference, supporting_quote))
+                if dependency.source_binding_version != SOURCE_BINDING_VERSION:
+                    raise ValueError("knowledge_unverified_dependency")
+                for reference, supporting_quote, digest in zip(dependency.sources, dependency.quotes,
+                                                                dependency.source_snapshot_digests):
+                    previous = support.get(reference.source_id)
+                    if previous is not None and (previous[0] != reference or previous[2] != digest):
+                        raise ValueError("knowledge_dependency_snapshot_changed")
+                    support.setdefault(reference.source_id, (reference, supporting_quote, digest))
                 if dependency.kind == "observation" or dependency.basis == "tool_observation":
                     kind, persistence = "observation", "contextual"
                     if dependency.basis == "tool_observation":
@@ -677,13 +781,15 @@ class KnowledgeMemory:
                 raise ValueError("knowledge_support_budget_exceeded")
             records.append(KnowledgeRecord(
                 memory_id="memory:" + hashlib.sha256(identity.encode()).hexdigest(), content=content,
-                access=access, sources=tuple(ref for ref, _ in support.values()),
-                quotes=tuple(text for _, text in support.values()), recorded_at=now(), kind=kind,
+                access=access, sources=tuple(ref for ref, _, _ in support.values()),
+                quotes=tuple(text for _, text, _ in support.values()), recorded_at=now(), kind=kind,
                 subjects=tuple(sorted({s.strip().casefold() for s in subjects})), claim_key=key.strip().casefold(), basis=basis, persistence=persistence,
                 status="disputed" if conflicts else "active", observed_at=observation_time,
                 valid_from=candidate.get("valid_from"), valid_until=candidate.get("valid_until"),
                 supersedes=supersedes, conflicts_with=conflicts, project_id=project_id,
-                task_id=linked_task, schedule_id=schedule_id, commitment_state=commitment_state, dependencies=dependencies))
+                task_id=linked_task, schedule_id=schedule_id, commitment_state=commitment_state, dependencies=dependencies,
+                source_binding_version=SOURCE_BINDING_VERSION,
+                source_snapshot_digests=tuple(digest for _, _, digest in support.values())))
         # Re-read sources before persistence, rather than treating extraction input as authority.
         current = self.resolve(source, owner)
         if current is None or current.source != source or current.content != item.content:
@@ -709,7 +815,14 @@ class KnowledgeMemory:
                 if live is None or live.source != reference or supporting_quote not in live.content:
                     raise ValueError("knowledge_support_no_longer_available")
         self._check_cancelled(cancel_checker)
-        self.store.commit(owner, source.source_id, records, resolver=self.resolve, comparisons=comparisons)
+        reviewed_snapshots = {source.source_id: input_digest}
+        for record in records:
+            for reference, digest in zip(record.sources, record.source_snapshot_digests):
+                previous = reviewed_snapshots.setdefault(reference.source_id, digest)
+                if previous != digest:
+                    raise ValueError("knowledge_dependency_snapshot_changed")
+        self.store.commit(owner, source.source_id, records, resolver=self.resolve, comparisons=comparisons,
+                          reviewed_snapshots=reviewed_snapshots, reviewed_primary=(source, input_digest))
 
     def recall(self, requester: str, *, query: str = "", historical: bool = False, limit: int | None = 16) -> list[KnowledgeRecord]:
         return self.store.records(requester, self.resolve, query=query, historical=historical, limit=limit)
@@ -721,6 +834,7 @@ class KnowledgeMemory:
             schedule = self.schedule_resolver(record.schedule_id, requester) if record.schedule_id and self.schedule_resolver else None
             task = self.store.task_status(record.task_id, requester) if record.task_id else None
             status = f"; commitment={record.commitment_state}; schedule={record.schedule_id or 'none'} state={getattr(schedule, 'status', 'unavailable')}; task={record.task_id or 'none'} last_recorded_state={task or 'unavailable'}; memory does not schedule actions"
-        return (f"- [{record.memory_id}; {record.kind}; {record.basis}; {record.status}; persistence={record.persistence}; "
+        version_state = "source_snapshot_bound" if record.source_binding_version == SOURCE_BINDING_VERSION else "unverified"
+        return (f"- [{record.memory_id}; {record.kind}; {record.basis}; {record.status}; persistence={record.persistence}; source_snapshot={version_state}; "
                 f"observed={record.observed_at or 'unknown'}; valid_from={record.valid_from or 'unknown'}; "
                 f"valid_until={record.valid_until or 'unknown'}; sources={links}{status}] " + " ".join(record.content.split()))

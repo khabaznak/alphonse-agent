@@ -51,19 +51,31 @@ not a semantic truth judgment or a source-version guarantee.
    and independently count accesses. No test should imply real delivery or
    model semantic correctness merely because a claim was retrieved.
 
-## Full source-version binding remains open
+## Source snapshot binding foundation
 
-An optional digest for **new** derived knowledge could detect changes outside a
-quoted span, but it needs an explicit versioned contract before implementation:
-identify the authoritative full source bytes and canonical encoding; bind every
-source and dependency under a consistent snapshot; decide handling of source
-edits, revocation and re-extraction; and prevent a digest from widening access or
-leaking private information through prompts, logs or exports. A digest proves
-identity of bytes, not truth, consent or semantic entailment.
+Newly extracted records use version 1 source bindings: a SHA-256 digest of a
+canonical, complete `ContextItem` snapshot, including its source metadata. The
+input snapshot is captured before extraction; extraction and Jev review operate
+on bounded chunks, and this does not mean every byte was reviewed. Supporting
+records retain their previously captured bindings, and unverified dependencies
+cannot be used to create a bound record. Before committing a record or an empty
+extraction receipt, the source snapshot is checked in the same database write
+transaction. Reads withhold bound records when a source, access metadata, or
+binding changes. Processing receipts still use source ID and extraction version;
+an edit does not trigger automatic re-extraction.
 
-Older knowledge has no such binding. It must be marked as unverified with respect
-to full-source version and either withheld or reconciled by a deliberate policy;
-it must not be retroactively labeled verified by hashing today's source. Schema
-evolution, historical records, backups, deletion and in-flight checkpoints need
-an upgrade/recovery strategy. No digest field or automatic migration is added
-in this slice.
+Older records remain readable under the existing quote checks and are explicitly
+marked `unverified`. They are not retroactively bound to today's source. Unknown
+or malformed bindings fail closed. Binding data stays in the private database
+storage envelope; public projections and model inputs omit digests, while exposing
+only the snapshot-bound or unverified state. Hashes are sensitive derived data,
+not encryption or authentication against someone able to rewrite the database.
+Older binaries may not understand new fields; mixed-version operation and
+backup/rollback recovery need a separate compatibility plan.
+
+This is an identity and staleness check, not proof of truth, consent, semantic
+entailment, or that a trusted internal caller actually invoked review. It does
+not enable owner LLM retrieval or resolve provider disclosure, revocation after
+dispatch, or cancellation races between the final check and transaction. Tests
+use disposable sources and fake model transports; no household data or provider
+is involved.

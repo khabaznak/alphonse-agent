@@ -89,7 +89,8 @@ class OwnerReadConversationProcessor:
     def process(self, task: TaskState, context: CoreLoopContext) -> ProcessingResult:
         if (not isinstance(task, TaskState) or not isinstance(context, CoreLoopContext)
                 or task.intelligence_engine != 'single_loop_experimental'
-                or task.intelligence_schema_version != 1 or not task.message_id
+                or type(task.intelligence_schema_version) is not int or task.intelligence_schema_version != 1
+                or not task.message_id
                 or task.task_id != task.message_id or not self._authorized(task, context)):
             return self._failure(task, 'owner_read_authority_unavailable')
         actor = task.user
