@@ -25,6 +25,7 @@ import { daemonRequest, ensureDaemon, playAlertSound, showInFinder, stopDaemon }
 import { legacyNotificationReviewMessage, OwnerConversation, ownerAcceptedAt, ownerBusyFor, ownerUnavailableMessage, type OwnerCapability } from "./ownerConversation";
 import { abandonOwnerRequest, listOwnerRecovery, type OwnerRecoveryItem } from "./ownerRecovery";
 import { OwnerRecovery } from "./OwnerRecoveryPanel";
+import { LegacyStateInventory } from "./LegacyStateInventory";
 import { LegacyNotificationReview } from "./LegacyNotificationReview";
 import { OwnerReminders } from "./OwnerReminders";
 import { LegacyMigrationPreview } from "./LegacyMigrationPreview";
@@ -834,6 +835,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
           {isAdmin && <p className="composer-hint">Each message starts a separate request. Choose a question below to include it as context for a reply.</p>}
           {isAdmin && ownerQuestionScope === user && <OwnerQuestionSelector questions={ownerQuestions} selectedId={ownerReplyTarget} disabled={ownerConversationBusy} onSelect={setOwnerReplyTarget} />}
           {isAdmin && <OwnerRecovery items={ownerRecoveryItems} stopping={ownerRecoveryStopping} onStop={(id) => void stopOwnerRequest(id)} onShow={(id) => void showOwnerAnswer(id)} />}
+          {isAdmin && ownerOnly && <LegacyStateInventory key={user} request={daemonRequest} actor={user} />}
           {isAdmin && ownerRecoveryNotice && <p className="composer-hint" role="status">{ownerRecoveryNotice}</p>}
           {isAdmin && ownerClarificationNotice && <p className="composer-hint" role="status">{ownerClarificationNotice}</p>}
         </section>

@@ -73,6 +73,35 @@ These observations are source-level and focused-test evidence only. They do
 not establish what binary is installed or running for a household, safe
 mixed-version operation, or a successful upgrade or rollback.
 
+## Owner-scoped status inventory
+
+The local owner-only `legacy_state_inventory` IPC method provides aggregate
+counts to support inspection; it does not reconcile or change records. It
+authenticates the local OS peer, requires the caller's current actor ID to match
+the active canonical owner, and verifies queue, question, outbox and user stores
+share the same file. The database rechecks the canonical actor while holding an
+immediate transaction; only SELECTs run in query-only mode. The short write
+reservation is released before the IPC response. Busy wait and query work have
+cooperative budgets and return unavailable on contention or exhaustion; an
+individual SQLite or OS operation can exceed the time target.
+
+The response separates owner-owned queue and checkpoint rows by whether a
+matching owner-origin marker exists. A marker is **not verified** as an
+authorized origin, and its presence does not establish safe state. Unknown and
+malformed engine stamps are counted without returning their values. A separate
+outbox section counts records explicitly addressed to the owner; it includes
+records beyond legacy work and excludes ambiguously addressed records and
+other members' records. Statuses and attempt counters are stored fields, not
+proof that an external effect occurred or did not occur. No request text,
+row IDs, recipients, timestamps, checkpoint contents or provider receipts are
+returned. A failed check reports unavailable, not an empty inventory.
+
+These counts are a point-in-time snapshot, not mixed-writer exclusion, a
+delivery receipt, or permission to retry, abandon, resume, or migrate work.
+Full actor-scoped inspection of individual protected records and independently
+verified effect reconciliation remain open. Older binaries and direct writers
+remain outside the protocol.
+
 ## Proposed transition and rollback sequence
 
 No complete, tested household migration or rollback protocol exists yet. The
