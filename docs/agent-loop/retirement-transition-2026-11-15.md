@@ -107,9 +107,14 @@ inspection neither changes nor resumes any job and does not reconcile effects.
 
 These counts are a point-in-time snapshot, not mixed-writer exclusion, a
 delivery receipt, or permission to retry, abandon, resume, or migrate work.
-Full actor-scoped inspection of individual protected records and independently
-verified effect reconciliation remain open. Older binaries and direct writers
-remain outside the protocol.
+The owner may separately request a bounded list of queue and saved-task record
+identifiers, stored status, classified engine stamp and origin-marker presence.
+It rechecks the canonical owner in the same file and read transaction, returns
+at most 50 records of each kind and explicitly marks truncation. It omits request
+text, checkpoint and effect contents, and other members' rows; markers are not
+verified. The list may include current work and is not a recovery decision.
+Individual protected effect inspection and independently verified reconciliation
+remain open. Older binaries and direct writers remain outside the protocol.
 
 ## Proposed transition and rollback sequence
 

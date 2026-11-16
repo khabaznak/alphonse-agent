@@ -415,6 +415,96 @@ def test_missing_dependency_is_opt_in_and_safe(f, monkeypatch):
     assert not f.backend.data
 
 
+def test_google_desktop_client_secret_import_and_transport(f, tmp_path, monkeypatch, caplog):
+    import logging
+    import requests
+    from urllib.parse import parse_qs
+    from alphonse.agent_v2.integrations.google_client_setup import import_desktop_client
+    pytest.importorskip('requests_oauthlib')
+    source = tmp_path / 'client.json'
+    source.write_text(json.dumps({'installed': {'client_id': 'public-app', 'client_secret': 'fixture-client-secret'}}))
+    ref = import_desktop_client(str(source), 'public-app', f.store.credential_vault)
+    assert source.exists() and 'fixture-client-secret' not in repr(ref)
+    config = ClientConfig('google', 'public-app', 'http://127.0.0.1:54321/callback', ref)
+    assert ref not in repr(config) and 'fixture-client-secret' not in repr(config)
+    service = OAuthService(f.accounts, [config])
+    client = service.clients['google']
+    sent = []
+    def send(session, request, **kwargs):
+        body = parse_qs(request.body)
+        assert body['client_id'] == ['public-app']
+        assert body['client_secret'] == ['fixture-client-secret']
+        assert 'Authorization' not in request.headers
+        sent.append(body['grant_type'][0])
+        response = requests.Response()
+        response.status_code, response.request = 200, request
+        response.headers['Content-Type'] = 'application/json'
+        response._content = json.dumps({'access_token': 'fixture-access', 'refresh_token': 'fixture-refresh',
+                                        'expires_in': 3600, 'token_type': 'Bearer'}).encode()
+        return response
+    monkeypatch.setattr(requests.Session, 'send', send)
+    caplog.set_level(logging.DEBUG)
+    client.exchange('fixture-code', 'x' * 64, [])
+    client.refresh({'refresh_token': 'fixture-refresh'}, [])
+    assert sent == ['authorization_code', 'refresh_token']
+    assert all(value not in caplog.text for value in ('fixture-client-secret', 'fixture-code', 'fixture-refresh'))
+    with pytest.raises(ValueError, match='google_client_import_unavailable'):
+        import_desktop_client(str(source), 'different-client', f.store.credential_vault)
+    link = tmp_path / 'link.json'
+    link.symlink_to(source)
+    with pytest.raises(ValueError, match='google_client_import_unavailable'):
+        import_desktop_client(str(link), 'public-app', f.store.credential_vault)
+
+
+def test_client_secret_unavailable_fails_closed_with_static_error(f):
+    from alphonse.agent_v2.integrations.oauth import ProviderClient
+    config = ClientConfig('google', 'public-app', 'http://127.0.0.1:54321/callback', 'a' * 32)
+    def fail(*_):
+        raise RuntimeError('fixture-secret-not-to-print')
+    client = ProviderClient(config, secret_resolver=fail)
+    with pytest.raises(OAuthError, match='oauth_client_credential_unavailable') as error:
+        client._client_secret()
+    assert 'fixture-secret' not in str(error.value)
+    with pytest.raises(OAuthError, match='oauth_client_configuration_invalid'):
+        ClientConfig('microsoft', 'public-app', 'http://127.0.0.1:54321/callback', 'a' * 32)
+
+
+def test_google_desktop_client_import_rejects_unsafe_files(f, tmp_path):
+    import os
+    from alphonse.agent_v2.integrations.google_client_setup import import_desktop_client
+    malformed = tmp_path / 'malformed.json'
+    malformed.write_text('{')
+    oversized = tmp_path / 'oversized.json'
+    oversized.write_text('x' * 65537)
+    fifo = tmp_path / 'pipe'
+    os.mkfifo(fifo)
+    for path in (malformed, oversized, fifo):
+        with pytest.raises(ValueError, match='google_client_import_unavailable'):
+            import_desktop_client(str(path), 'public-app', f.store.credential_vault)
+    assert not f.backend.data
+
+
+def test_google_client_import_cli_never_prints_credentials(f, tmp_path, monkeypatch, capsys):
+    import sys
+    from alphonse.agent_v2.integrations import google_client_setup
+    source = tmp_path / 'client.json'
+    source.write_text(json.dumps({'installed': {'client_id': 'public-app', 'client_secret': 'fixture-very-private'}}))
+    monkeypatch.setattr(sys, 'argv', ['google_client_setup', str(source)])
+    monkeypatch.setenv('ALPHONSE_GOOGLE_OAUTH_CLIENT_ID', 'public-app')
+    monkeypatch.setattr(google_client_setup, 'CredentialVault', lambda: f.store.credential_vault)
+    assert google_client_setup.main() == 0
+    output = capsys.readouterr()
+    assert 'fixture-very-private' not in output.out + output.err
+    class Unavailable:
+        def put(self, *_):
+            raise RuntimeError('fixture-very-private')
+    monkeypatch.setattr(google_client_setup, 'CredentialVault', Unavailable)
+    assert google_client_setup.main() == 1
+    output = capsys.readouterr()
+    assert 'fixture-very-private' not in output.out + output.err
+    assert 'Traceback' not in output.out + output.err
+
+
 def test_daemon_api_lazy_trusted_session_and_no_clients_still_allows_disconnect(f, monkeypatch):
     from alphonse.agent_v2.daemon import V2Daemon
     for provider in SCOPES:

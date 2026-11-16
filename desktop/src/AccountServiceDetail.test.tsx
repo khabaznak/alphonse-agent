@@ -60,4 +60,11 @@ describe("account service detail", () => {
     expect(html).toContain('Connected');
     expect(html).not.toContain('Reconnect required');
   });
+  it("offers visible removal and retains disconnected records for cleanup", () => {
+    const accounts = [account({ status: 'reauth_required', capabilities: [] }), account({ connection_id: 'two', status: 'disconnected', credential_deletion_pending: true })];
+    const html = renderToStaticMarkup(<AccountServiceDetail {...props({ catalog: { ...catalog, connections: accounts } })} />);
+    expect(html).toContain('Remove account…');
+    expect(html).toContain('Removed accounts (1) · cleanup needs attention');
+    expect(html).toContain('Retry credential deletion');
+  });
 });

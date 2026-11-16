@@ -12,6 +12,7 @@ import base64
 import json
 import logging
 import math
+import re
 import secrets
 import threading
 import time
@@ -22,6 +23,45 @@ from alphonse.agent_v2.accounts import AccountService, AccountSession
 
 class OAuthError(ValueError):
     """Static safe code: never include provider errors, URLs or token responses."""
+
+
+def _exchange_error_code(exc: Exception) -> str:
+    """Keep only a small allowlist of OAuth protocol error categories."""
+    try:
+        from oauthlib.oauth2 import OAuth2Error
+        if isinstance(exc, OAuth2Error):
+            category = getattr(exc, 'error', None)
+            if type(category) is str and category in {
+                    'invalid_request', 'invalid_client', 'invalid_grant',
+                    'unauthorized_client', 'access_denied', 'temporarily_unavailable'}:
+                return 'oauth_exchange_' + category
+    except ImportError:
+        pass
+    return 'oauth_exchange_failed'
+
+
+def safe_callback_message(exc: Exception) -> str:
+    """Return fixed text only; never echo an exception or provider description."""
+    generic = 'Authorization could not be completed. Return to Alphonse and reconnect.'
+    if not isinstance(exc, OAuthError) or len(exc.args) != 1 or type(exc.args[0]) is not str:
+        return generic
+    messages = {
+        'oauth_exchange_invalid_request': 'The provider rejected the token request (invalid_request). Check the OAuth client configuration, then reconnect.',
+        'oauth_exchange_invalid_client': 'The provider rejected the OAuth client (invalid_client). Check the OAuth client configuration, then reconnect.',
+        'oauth_exchange_invalid_grant': 'The provider rejected the authorization grant (invalid_grant). Start a new connection and try again.',
+        'oauth_exchange_unauthorized_client': 'The provider rejected this client for authorization (unauthorized_client). Check the OAuth client configuration.',
+        'oauth_exchange_access_denied': 'The provider declined the token request (access_denied). Start a new connection and try again.',
+        'oauth_exchange_temporarily_unavailable': 'The provider is temporarily unavailable. Start a new connection and try again.',
+        'oauth_exchange_failed': 'The token exchange failed. Check the connection and OAuth client configuration, then reconnect.',
+        'oauth_client_credential_unavailable': 'The configured Google client credential is unavailable. Check credential storage and reconnect.',
+        'oauth_identity_failed': 'The provider account identity could not be checked. Start a new connection and try again.',
+        'oauth_offline_consent_required': 'The provider did not return offline access. Start a new connection and grant the requested access.',
+        'oauth_scopes_missing': 'The provider did not grant the requested access. Start a new connection and review the requested permissions.',
+        'oauth_account_mismatch': 'This is a different provider account from the saved connection. Reconnect the original account or add another.',
+        'oauth_state_expired': 'This connection attempt expired. Start a new connection and try again.',
+        'oauth_revision_conflict': 'This connection changed during authorization. Refresh Alphonse and start a new connection.',
+    }
+    return messages.get(exc.args[0], generic)
 
 
 SCOPES = {
@@ -60,11 +100,14 @@ class ClientConfig:
     provider: str
     client_id: str
     redirect_uri: str
+    client_secret_ref: str = field(default='', repr=False)
 
     def __post_init__(self):
         uri = urlsplit(self.redirect_uri)
         if (self.provider not in SCOPES or not self.client_id.strip() or uri.query or uri.fragment
                 or uri.username or uri.password or not uri.path
+                or not isinstance(self.client_secret_ref, str)
+                or (self.client_secret_ref and (self.provider != 'google' or re.fullmatch(r'[0-9a-f]{32}', self.client_secret_ref) is None))
                 or not ((uri.scheme == 'http' and uri.hostname == '127.0.0.1' and uri.port)
                         or (uri.scheme == 'https' and uri.netloc))):
             raise OAuthError('oauth_client_configuration_invalid')
@@ -73,12 +116,26 @@ class ClientConfig:
 class ProviderClient:
     """requests-oauthlib authorization-code client with explicit S256 verifier.
 
-    No client secret, implicit flow, token-in-query or automatic refresh hooks.
+    No implicit flow, token-in-query or automatic refresh hooks. An optional
+    Google Desktop client secret is resolved from the credential vault only
+    during token exchange and refresh, and never included in the config repr.
     Identity is fetched from a fixed TLS userinfo endpoint, never decoded from an
     unverified ID token. Microsoft sub is scoped to this app's registration.
     """
-    def __init__(self, config):
+    def __init__(self, config, *, secret_resolver=None):
         self.config = config
+        self._secret_resolver = secret_resolver
+
+    def _client_secret(self):
+        if not self.config.client_secret_ref:
+            return None
+        try:
+            secret = self._secret_resolver(self.config.client_secret_ref, self.config.client_id)
+            if not isinstance(secret, str) or not secret:
+                raise ValueError()
+            return secret
+        except Exception:
+            raise OAuthError('oauth_client_credential_unavailable') from None
 
     def _session(self, scopes=None, token=None):
         try:
@@ -104,12 +161,14 @@ class ProviderClient:
     def exchange(self, code, verifier, scopes):
         with self._session() as client:
             return dict(client.fetch_token(ENDPOINTS[self.config.provider][1], code=code,
-                        code_verifier=verifier, include_client_id=True, timeout=20))
+                        code_verifier=verifier, include_client_id=True,
+                        client_secret=self._client_secret(), timeout=20))
 
     def refresh(self, token, scopes):
         with self._session() as client:
             return dict(client.refresh_token(ENDPOINTS[self.config.provider][1],
                         refresh_token=token['refresh_token'], client_id=self.config.client_id,
+                        client_secret=self._client_secret(),
                         body=urlencode({'scope': ' '.join(scopes)}), timeout=20))
 
     def subject(self, token):
@@ -156,7 +215,13 @@ class OAuthService:
         self.transaction_guard = transaction_guard
         if len({c.provider for c in clients}) != len(clients):
             raise OAuthError('oauth_client_ambiguous')
-        self.clients = {c.provider: client_factory(c) for c in clients}
+        def resolve_client_secret(reference, client_id):
+            credentials = self.store.credential_vault.get(reference, 'oauth-client:google:' + client_id, 1)
+            if set(credentials) != {'client_secret'}:
+                raise ValueError('oauth_client_credential_invalid')
+            return credentials['client_secret']
+        self.clients = {c.provider: (ProviderClient(c, secret_resolver=resolve_client_secret)
+                                     if client_factory is ProviderClient else client_factory(c)) for c in clients}
         self.pending = {}
         self.lock = threading.RLock()
         with self.store._connect() as db:
@@ -350,7 +415,13 @@ class OAuthService:
             raise OAuthError('oauth_revision_conflict')
         with self._lease(record.integration_id):
             try:
-                token, granted = self._validated(client.exchange(query['code'][0], pending.verifier, pending.scopes), pending.scopes, provider=record.provider_key)
+                raw_token = client.exchange(query['code'][0], pending.verifier, pending.scopes)
+            except OAuthError:
+                raise
+            except Exception as exc:
+                raise OAuthError(_exchange_error_code(exc)) from None
+            token, granted = self._validated(raw_token, pending.scopes, provider=record.provider_key)
+            try:
                 subject = client.subject(token)
                 if not subject or (not record.connection['provider_subject'].startswith('pending:')
                                    and subject != record.connection['provider_subject']):
@@ -358,7 +429,7 @@ class OAuthService:
             except OAuthError:
                 raise
             except Exception:
-                raise OAuthError('oauth_consent_failed') from None
+                raise OAuthError('oauth_identity_failed') from None
             self._persist(session, record, token, subject=subject, capabilities=pending.capabilities, scopes=granted)
         return self.health(session, record.integration_id)
 

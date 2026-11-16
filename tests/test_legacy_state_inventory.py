@@ -10,6 +10,7 @@ import pytest
 
 from alphonse.agent_v2.core.io.outbox import SQLiteOutboundStore
 from alphonse.agent_v2.core.messages.legacy_state_inventory import inspect_legacy_state
+from alphonse.agent_v2.core.messages.legacy_state_items import inspect_legacy_items
 from alphonse.agent_v2.core.messages.sqlite_queue import SQLiteMessageQueue
 from alphonse.agent_v2.core.questions import SQLiteQuestionStore
 from alphonse.agent_v2.core.scheduled_tasks import ScheduledTaskStore
@@ -105,6 +106,64 @@ def test_inventory_is_owner_scoped_and_never_exposes_payloads(state):
     for secret in ('PRIVATE', 'old-v3', 'member-private', owner.user_id, member.user_id, 'opaque-target'):
         assert secret not in rendered
     assert inspect_legacy_state(path, expected_owner=member.user_id) is None
+
+
+def test_item_inspection_is_bounded_owner_scoped_and_read_only(state):
+    path, _, owner, member, _ = state
+    with sqlite3.connect(path) as conn:
+        before = list(conn.iterdump())
+    result = inspect_legacy_items(path, expected_owner=owner.user_id)
+    assert result is not None
+    queue = {item['id']: item for item in result['queue']['items']}
+    assert queue['old-v3'] == {'id': 'old-v3', 'status': 'pending', 'engine': 'hierarchical_v3', 'origin_marker': 'absent'}
+    assert queue['tampered']['origin_marker'] == 'present'  # Presence is not verification.
+    assert queue['old-broken']['engine'] == 'malformed'
+    assert 'member-private' not in queue
+    assert result['queue']['truncated'] is False
+    rendered = json.dumps(result)
+    assert 'PRIVATE' not in rendered and member.user_id not in rendered and 'member-checkpoint' not in rendered
+    assert inspect_legacy_items(path, expected_owner=member.user_id) is None
+    with sqlite3.connect(path) as conn:
+        assert list(conn.iterdump()) == before
+        conn.executemany('''INSERT INTO v2_inbound_messages
+            (message_id,sequence,timestamp,prompt,user_id,metadata_json,queued_at,status)
+            VALUES (?,?,?,?,?,?,?,?)''',
+            [(f'extra-{i:03}', 100 + i, 'fixture', 'SECRET', owner.user_id, '{}', 'fixture', 'pending')
+             for i in range(55)])
+    limited = inspect_legacy_items(path, expected_owner=owner.user_id)
+    assert limited['queue']['truncated'] is True and len(limited['queue']['items']) == 50
+
+
+def test_item_inspection_ipc_enforces_peer_and_same_store(state, tmp_path, monkeypatch):
+    path, _, owner, member, daemon = state
+    server = V2DaemonServer(daemon, '/private/tmp/unused-inventory.sock', experimental_owner_ingress=True)
+    monkeypatch.setattr(server, '_local_peer_uid', lambda _: os.getuid())
+    request = {'version': 1, 'method': 'legacy_state_items', 'params': {'actor_user_id': owner.user_id}}
+    assert server._legacy_state_items(None, request)['status'] == 'available'
+    request['params']['actor_user_id'] = member.user_id
+    assert server._legacy_state_items(None, request) == {'status': 'unavailable'}
+    request['params']['actor_user_id'] = owner.user_id
+    monkeypatch.setattr(server, '_local_peer_uid', lambda _: os.getuid() + 1)
+    with pytest.raises(PermissionError):
+        server._legacy_state_items(None, request)
+    monkeypatch.setattr(server, '_local_peer_uid', lambda _: os.getuid())
+    daemon.runtime.question_store = SQLiteQuestionStore(tmp_path / 'split.sqlite')
+    with pytest.raises(PermissionError):
+        server._legacy_state_items(None, request)
+
+
+def test_item_inspection_missing_origin_and_busy_are_explicit(state):
+    path, users, owner, _, _ = state
+    with sqlite3.connect(path) as conn:
+        conn.execute('DROP TABLE v2_trusted_owner_ingress')
+    result = inspect_legacy_items(path, expected_owner=owner.user_id)
+    assert all(item['origin_marker'] == 'unavailable' for item in result['queue']['items'])
+    with sqlite3.connect(path) as writer:
+        writer.execute('BEGIN IMMEDIATE')
+        assert inspect_legacy_items(path, expected_owner=owner.user_id) is None
+        writer.rollback()
+    users.update_user(owner.user_id, is_active=False)
+    assert inspect_legacy_items(path, expected_owner=owner.user_id) is None
 
 
 def test_scheduled_inventory_unavailable_for_missing_schema_or_split_store(state, tmp_path, monkeypatch):
@@ -235,6 +294,9 @@ def test_inventory_ipc_uses_real_local_socket(state):
             result = client.request('legacy_state_inventory', actor_user_id=owner.user_id)
             assert result['status'] == 'available'
             assert result['inventory']['queue_other_ingress']['statuses']['failed'] == 2
+            records = client.request('legacy_state_items', actor_user_id=owner.user_id)
+            assert records['status'] == 'available'
+            assert any(item['id'] == 'old-v3' for item in records['items']['queue']['items'])
             with pytest.raises(RuntimeError, match='legacy_state_inventory_payload_denied'):
                 client.request('legacy_state_inventory', actor_user_id=owner.user_id, user='forged')
         finally:

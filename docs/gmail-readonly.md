@@ -14,7 +14,11 @@ Follow [managed OAuth setup](oauth-accounts.md) and install the optional
 registered public OAuth client. Use the existing authenticated account lifecycle;
 request only capability `mail_read`, mapping to
 `https://www.googleapis.com/auth/gmail.readonly`. No service account, domain-wide
-delegation, client secret in the desktop app, or Gmail write scope is required.
+delegation, or Gmail write scope is required. Some Google Desktop clients require
+their client credential at token exchange; it is not bundled with Alphonse and
+can be imported into the configured credential vault from the downloaded client
+configuration. Set `ALPHONSE_GOOGLE_OAUTH_CLIENT_SECRET_REF` to the resulting
+opaque reference; do not put the credential itself in an environment variable.
 Missing configuration/credentials remain an optional blocked capability and do
 not prevent clean startup or affect existing message integrations.
 

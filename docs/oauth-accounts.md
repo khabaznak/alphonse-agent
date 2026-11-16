@@ -10,8 +10,16 @@ Configure `ALPHONSE_GOOGLE_OAUTH_CLIENT_ID` and
 `ALPHONSE_GOOGLE_OAUTH_REDIRECT_URI`, or the corresponding `MICROSOFT` variables.
 Both values are required for each configured provider. Use a provider registration
 qualified for public desktop clients (Microsoft personal/work/school eligibility
-must match the registration). There is no client-secret setting or bundled secret.
-Configuration is fixed for the daemon lifetime; changes require a restart.
+must match the registration). Google Desktop clients may require the registered
+client secret even with PKCE. To import a downloaded Google Desktop client JSON
+directly into the configured credential vault, set the matching client ID above
+and run `python -m alphonse.agent_v2.integrations.google_client_setup PATH`.
+Set `ALPHONSE_GOOGLE_OAUTH_CLIENT_SECRET_REF` to the non-secret reference printed
+by that command; never put the secret itself in an environment variable, shell
+argument, chat, or log. The importer leaves the downloaded file untouched; manage
+that copy separately. The reference is optional and scoped to the configured
+Google client ID. Microsoft behavior is unchanged. Configuration is fixed for the
+daemon lifetime; changes require a restart.
 
 The callback is an operator-configured exact URL: an explicit port and path on
 `http://127.0.0.1`, or registered HTTPS. A native setup surface must bind its local
@@ -115,7 +123,7 @@ Primary references:
 
 `tests/test_oauth_lifecycle.py` covers both providers with synthetic transport,
 including the real optional Requests-OAuthlib client against mocked HTTP. It covers
-S256, no client secret, exact callbacks, state failures/expiry/replay/actor mismatch,
+S256, secretless and optional vault-backed Google Desktop client credentials, exact callbacks, state failures/expiry/replay/actor mismatch,
 missing scopes/refresh consent, identity mismatch and multiple accounts, refresh
 races across services, persisted rotation, reconnect after disconnect/crash,
 pause/revoke during network work, locked backend cleanup, optional dependencies,

@@ -39,13 +39,10 @@ export function AccountServiceDetail(props: AccountServiceDetailProps) {
   const service = provider === "google" ? (capability === "calendar_read" ? "Google Calendar" : "Gmail") : "Outlook / Hotmail";
   const canAdd = configured && !busy;
 
-  return <div className="account-service-detail">
-    <p>{provider === "google" && capability === "mail_read"
-      ? "Connect Gmail, then grant access to your INBOX to ask for an unread count."
-      : `Connect an account to use ${service}.`}</p>
-    <button type="button" className="integration-link" disabled={busy} onClick={props.onRefresh}>Refresh account status</button>
-    {records.length > 0 && <div className="mockup-settings-rows" aria-label={`${service} accounts`}>
-      {records.map((account, index) => {
+  const visible = records.filter(account => account.status !== "disconnected");
+  const removed = records.filter(account => account.status === "disconnected");
+  const accountRow = (account: Connection) => {
+        const index = records.indexOf(account);
         const repeated = records.filter(item => item.display_name === account.display_name).length > 1;
         const name = account.display_name || "Account";
         const title = repeated ? `${name} · account ${index + 1}` : name;
@@ -77,15 +74,21 @@ export function AccountServiceDetail(props: AccountServiceDetailProps) {
               {!catalog.owner_gmail_setup_only && availableScopes.length > 1 && <fieldset><legend>Permissions for reconnection</legend>{availableScopes.map(scope => <label key={scope}><input type="checkbox" checked={desired.includes(scope)} onChange={event => setScopeSelections(current => ({ ...current, [account.connection_id]: event.target.checked ? [...desired, scope] : desired.filter(value => value !== scope) }))} /> {scope === 'mail_read' ? 'Read mail' : scope === 'calendar_read' ? 'Read calendar events' : scope}</label>)}</fieldset>}
               {account.status === "connected" && status !== "Reconnect required" && <button type="button" disabled={busy || !reconnectable || account.credential_health === 'credential_backend_unavailable'} onClick={() => props.onReconnect(account, desired)}>Reconnect</button>}
               {account.status === "connected" && <button type="button" disabled={busy} onClick={() => props.onPause(account)}>Pause</button>}
-              {(account.credential_deletion_pending || account.revocation_pending) && <button type="button" disabled={busy} onClick={() => props.onRetryDeletion(account)}>Retry removal</button>}
-              {account.status !== "disconnected" && <button type="button" disabled={busy} onClick={() => props.onDisconnect(account)}>Disconnect…</button>}
+              {account.credential_deletion_pending && <button type="button" disabled={busy} onClick={() => props.onRetryDeletion(account)}>Retry credential deletion</button>}
             </div></details>
+            {account.status !== "disconnected" && <button type="button" className="integration-remove-account" disabled={busy} onClick={() => props.onDisconnect(account)}>Remove account…</button>}
           </div>
         </section>;
-      })}
-    </div>}
+  };
+  return <div className="account-service-detail">
+    <p>{provider === "google" && capability === "mail_read"
+      ? "Connect Gmail, then grant access to your INBOX to ask for an unread count."
+      : `Connect an account to use ${service}.`}</p>
+    <button type="button" className="integration-link" disabled={busy} onClick={props.onRefresh}>Refresh account status</button>
+    {visible.length > 0 && <div className="mockup-settings-rows" aria-label={`${service} accounts`}>{visible.map(accountRow)}</div>}
+    {removed.length > 0 && <details className="integration-removed-accounts"><summary>Removed accounts ({removed.length}){removed.some(account => account.credential_deletion_pending || account.revocation_pending) ? ' · cleanup needs attention' : ''}</summary><p>These recovery records remain available for pending cleanup or reconnection.</p><div className="mockup-settings-rows">{removed.map(accountRow)}</div></details>}
     {!configured && <p role="status">Provider setup is required before an account can be connected.</p>}
-    <details className="integration-connect-form"><summary>{records.length ? "Add another account" : "Connect an account"}</summary>
+    <details className="integration-connect-form"><summary>{visible.length ? "Add another account" : "Connect an account"}</summary>
       <form onSubmit={event => { event.preventDefault(); if (canAdd && label.trim() && newScopes.length) props.onConnect(label.trim(), newScopes); }}>
         <div className="form-field"><label htmlFor="integration-account-label">Account label</label>
           <input id="integration-account-label" required value={label} onChange={event => setLabel(event.target.value)} disabled={!canAdd} />
