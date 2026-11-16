@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { openAccountConsent, optionalManagement } from "./api";
 import { IntegrationIcon } from "./IntegrationIcon";
+import { AccountServiceDetail } from "./AccountServiceDetail";
 import { Catalog, Connection, Definition, Grant, Member, Policy, ProjectChecks, ResponseFence, days, defaultDefinition, editableDefinition, friendly, labels, sourceDefinition, validateDefinition } from "./integrationManagement";
 
 function useManaged<T>(action: string, values: Record<string, unknown>, identity: string) {
@@ -36,14 +37,18 @@ const ACCOUNT_SERVICES: AccountService[] = [
 ];
 
 export function AccountServiceCards({ catalog, unavailable = false, onChoose }: { catalog: Catalog | null; unavailable?: boolean; onChoose: (provider: string, capability: string) => void }) {
-  return <div className="integration-service-grid">{ACCOUNT_SERVICES.filter(service => !catalog?.owner_gmail_setup_only || service.name === "Gmail").map(service => {
+  return <div className="integration-service-grid">{ACCOUNT_SERVICES.map(service => {
     const provider = catalog?.providers.find(item => item.provider === service.provider);
     const configured = Boolean(provider?.capabilities.includes(service.capability));
+    const unsupported = catalog?.owner_gmail_setup_only === true && service.name !== "Gmail";
     const connections = (catalog?.connections || []).filter(item => item.provider === service.provider && item.capabilities.includes(service.capability));
-    const connected = connections.filter(item => item.status === "connected" && !(service.name === "Gmail" && item.access_token_status === "refresh_required")).length;
+    const connected = connections.filter(item => item.status === "connected"
+      && item.credential_health !== "absent" && item.credential_health !== "credential_backend_unavailable"
+      && item.access_token_status !== "unavailable"
+      && !(catalog?.owner_gmail_setup_only && service.name === "Gmail" && item.access_token_status === "refresh_required")).length;
     const existing = connections.length > 0;
-    return <article className="mockup-settings-card integration-service-card" key={service.name}><div className="integration-card-heading"><IntegrationIcon service={service.icon} /><div><h3>{service.name}</h3><p>{service.description}</p></div></div><small className="integration-card-status">{!catalog ? (unavailable ? "Account management unavailable" : "Checking availability…") : connected ? `${connected} ${connected === 1 ? "account" : "accounts"} connected` : existing ? "Account needs attention" : configured ? "Available to connect" : "Provider setup required"}</small><div className="integration-card-footer"><span>{service.capability === "mail_read" ? "Email" : "Calendar"}</span><button type="button" disabled={!catalog} aria-label={`${existing ? "Manage" : configured ? "Connect" : "View setup for"} ${service.name}`} onClick={() => onChoose(service.provider, service.capability)}>{existing ? "Manage" : configured ? "Connect" : "View setup"} →</button></div></article>;
-  })}{!catalog?.owner_gmail_setup_only && <article className="mockup-settings-card integration-service-card"><div className="integration-card-heading"><IntegrationIcon service="outlook" /><div><h3>Outlook Calendar</h3><p>Access events from a Microsoft calendar.</p></div></div><small className="integration-card-status">Not yet available</small><div className="integration-card-footer"><span>Calendar</span></div></article>}</div>;
+    return <article className="mockup-settings-card integration-service-card" key={service.name}><div className="integration-card-heading"><IntegrationIcon service={service.icon} /><div><h3>{service.name}</h3><p>{service.description}</p></div></div><small className="integration-card-status">{!catalog ? (unavailable ? "Account management unavailable" : "Checking availability…") : unsupported ? "Not yet available in this version" : connected ? `${connected} ${connected === 1 ? "account" : "accounts"} connected` : existing ? "Account needs attention" : configured ? "Available to connect" : "Provider setup required"}</small><div className="integration-card-footer"><span>{service.capability === "mail_read" ? "Email" : "Calendar"}</span><button type="button" disabled={!catalog || unsupported} aria-label={`${existing ? "Manage" : configured ? "Connect" : "View setup for"} ${service.name}`} onClick={() => onChoose(service.provider, service.capability)}>{unsupported ? "Unavailable" : existing ? "Manage →" : configured ? "Connect →" : "View setup →"}</button></div></article>;
+  })}<article className="mockup-settings-card integration-service-card"><div className="integration-card-heading"><IntegrationIcon service="outlook" /><div><h3>Outlook Calendar</h3><p>Access events from a Microsoft calendar.</p></div></div><small className="integration-card-status">Not yet available</small><div className="integration-card-footer"><span>Calendar</span></div></article></div>;
 }
 
 export function OptionalAccounts({ identity, messaging }: { identity: string; messaging?: React.ReactNode }) {
@@ -52,40 +57,44 @@ export function OptionalAccounts({ identity, messaging }: { identity: string; me
   const data = mismatch ? null : managed.data; const error = mismatch ? 'The active account session does not match the selected household member. Reconnect the correct session to manage accounts.' : managed.error; const refresh = managed.refresh;
   const [view, setView] = useState<'overview' | 'service' | 'access'>('overview');
   const [notice, setNotice] = useState(""); const [busy, setBusy] = useState(false);
-  const [accountCapabilities, setAccountCapabilities] = useState<Record<string, string[]>>({});
-  const [provider, setProvider] = useState('google'); const [serviceCapability, setServiceCapability] = useState("mail_read"); const [name, setName] = useState(""); const [capabilities, setCapabilities] = useState<string[]>([]);
+  const [provider, setProvider] = useState('google'); const [serviceCapability, setServiceCapability] = useState("mail_read");
   const [grantFor, setGrantFor] = useState<Connection | null>(null); const [editingGrant, setEditingGrant] = useState<Grant | undefined>();
   const [disconnectFor, setDisconnectFor] = useState<Connection | null>(null);
   const heading = useRef<HTMLHeadingElement>(null);
-  const connectForm = useRef<HTMLFormElement>(null);
-  const chooseService = (nextProvider: string, capability: string) => { setProvider(nextProvider); setServiceCapability(capability); setCapabilities([capability]); setName(""); setGrantFor(null); setView("service"); };
+  const chooseService = (nextProvider: string, capability: string) => { setProvider(nextProvider); setServiceCapability(capability); setGrantFor(null); setView("service"); };
   const run = async (action: string, values: Record<string, unknown>) => {
     setBusy(true); setNotice("");
     try { await optionalManagement(action, values); setNotice("Saved. Dependent checks may require review."); await refresh(); }
     catch (cause) { setNotice(cause instanceof Error ? cause.message : String(cause)); await refresh(); }
     finally { setBusy(false); }
   };
-  const begin = async (connection?: Connection) => {
+  const begin = async (label: string, capabilities: string[], connection?: Connection) => {
     setBusy(true); setNotice("");
     try {
-      const result = await optionalManagement<{ authorization_url: string }>('begin', { connection_id: connection?.connection_id || `account_${crypto.randomUUID()}`, provider: connection?.provider || provider, expected_revision: connection?.revision || 0, display_name: connection?.display_name || name, capabilities: connection ? (accountCapabilities[connection.connection_id] || connection.capabilities) : capabilities });
+      const result = await optionalManagement<{ authorization_url: string }>('begin', { connection_id: connection?.connection_id || `account_${crypto.randomUUID()}`, provider: connection?.provider || provider, expected_revision: connection?.revision || 0, display_name: connection?.display_name || label, capabilities });
       await openAccountConsent(result.authorization_url); setNotice("Complete consent in your browser, then refresh account health."); await refresh();
     } catch (cause) { setNotice(cause instanceof Error ? cause.message : String(cause)); await refresh(); }
     finally { setBusy(false); }
   };
   const service = ACCOUNT_SERVICES.find(item => item.provider === provider && item.capability === serviceCapability) || ACCOUNT_SERVICES.find(item => item.provider === provider);
-  return <section className="optional-management"><h3 tabIndex={-1} ref={heading} className="integration-context-heading">{view === "overview" ? "Personal accounts" : view === "access" ? "Account access and skills" : service?.name}</h3><StatusText>{error || notice}</StatusText>
-    {view === "overview" ? <><div className="integration-owner-note"><strong>{data ? `Managing accounts as ${data.members.find(m => m.user_id === data.actor_user_id)?.display_name || data.actor_user_id}` : "Personal accounts"}</strong><p>Each household member connects their own accounts and chooses what Alphonse can access.</p></div><AccountServiceCards catalog={data} unavailable={Boolean(error)} onChoose={chooseService} />{data && <button className="integration-link" onClick={() => setView("access")}>Review access grants and skill accounts →</button>}{messaging}<p className="integration-privacy"><strong>Personal by default.</strong> Access to an account requires explicit permission. Connecting an account does not start monitoring.</p></> : <><button className="integration-back" onClick={() => { setView("overview"); setGrantFor(null); setDisconnectFor(null); }}>← All integrations</button>{data && <>
+  return <section className="optional-management"><h3 tabIndex={-1} ref={heading} className="integration-context-heading">{view === "overview" ? "Personal accounts" : view === "access" ? (data?.owner_gmail_setup_only ? "Account access" : "Account access and skills") : service?.name}</h3><StatusText>{error || notice}</StatusText>
+    {view === "overview" ? <><div className="integration-owner-note"><strong>{data ? `Managing accounts as ${data.members.find(m => m.user_id === data.actor_user_id)?.display_name || data.actor_user_id}` : "Personal accounts"}</strong><p>Each household member connects their own accounts and chooses what Alphonse can access.</p></div><AccountServiceCards catalog={data} unavailable={Boolean(error)} onChoose={chooseService} />{data && <button className="integration-link" onClick={() => setView("access")}>{data.owner_gmail_setup_only ? "Review access grants →" : "Review access grants and skill accounts →"}</button>}{messaging}<p className="integration-privacy"><strong>Personal by default.</strong> Access to an account requires explicit permission. Connecting an account does not start monitoring.</p></> : <><button className="integration-back" onClick={() => { setView("overview"); setGrantFor(null); setDisconnectFor(null); }}>← All integrations</button>{data && <>
       <p>Managing accounts as {data.members.find(m => m.user_id === data.actor_user_id)?.display_name || data.actor_user_id}.</p>
-      {view === "service" && <><p>Connect only the capabilities you choose. A connection starts no monitoring.</p>{data.owner_gmail_setup_only ? <p>After connecting, grant yourself access to INBOX to ask Alphonse for the unread count. Gmail access currently needs reconnection when its token expires.</p> : provider === "google" && <p>Google accounts can provide both Gmail and Calendar. Changing consent, pausing, or disconnecting an account affects that connection as a whole.</p>}<button disabled={busy} onClick={() => void refresh()}>Refresh account health</button>
-      {data.connections.filter(c => c.provider === provider).map(c => <article key={c.connection_id} className="project-detail"><h4>{c.display_name} · {c.provider}</h4><p>{friendly(c.status)} · {friendly(c.health_code)} · credential storage: {c.credential_health || 'unknown'}</p>{c.provider === 'google' && c.capabilities.includes('mail_read') && c.status === 'connected' && c.access_token_status === 'refresh_required' && <p role="status">Gmail access has expired or is about to expire. Reconnect with consent to use Gmail in conversation.</p>}<p>{c.capabilities.map(k => labels[k] || friendly(k)).join(', ')}</p><fieldset disabled={busy}><legend>Capabilities for next consent</legend>{data.providers.find(p => p.provider === c.provider)?.capabilities.map(k => <label key={k}><input type="checkbox" checked={(accountCapabilities[c.connection_id] || c.capabilities).includes(k)} onChange={e => { const current = accountCapabilities[c.connection_id] || c.capabilities; setAccountCapabilities(v => ({ ...v, [c.connection_id]: e.target.checked ? [...current, k] : current.filter(c => c !== k) })); }} /> {labels[k] || friendly(k)}</label>)}</fieldset>{c.revocation_pending && <p>Provider revocation pending. Local access is stopped.</p>}{c.credential_deletion_pending && <p>Credential deletion pending.</p>}<div className="dialog-actions">
-        <button disabled={busy || c.status !== 'connected'} onClick={() => void run('pause', { connection_id: c.connection_id, expected_revision: c.revision })}>Pause account</button>
-        <button disabled={busy || c.credential_deletion_pending || !(accountCapabilities[c.connection_id] || c.capabilities).length || (data.owner_gmail_setup_only && c.capabilities.some(k => k !== 'mail_read'))} onClick={() => void begin(c)}>Reconnect with consent</button>{data.owner_gmail_setup_only && c.capabilities.some(k => k !== 'mail_read') && <p>This account includes other services. Reconnection is unavailable here until those services are supported; its existing permissions have not been changed.</p>}
-        <button disabled={busy || c.status !== 'connected'} onClick={() => { setEditingGrant(undefined); setGrantFor(c); setView("access"); }}>Grant access</button>
-        <button disabled={busy || c.status === 'disconnected'} onClick={() => setDisconnectFor(c)}>Disconnect…</button>
-        {(c.credential_deletion_pending || c.revocation_pending) && <button disabled={busy} onClick={() => void run('retry_deletion', { connection_id: c.connection_id, expected_revision: c.revision })}>Retry deletion</button>}
-      </div>{disconnectFor?.connection_id === c.connection_id && <div role="group" aria-label="Confirm disconnect"><p>Disconnect {c.display_name}, revoke local grants and stop dependent checks? Provider cleanup can remain pending.</p><button disabled={busy} onClick={() => { void run('disconnect', { connection_id: c.connection_id, expected_revision: c.revision }); setDisconnectFor(null); heading.current?.focus(); }}>Disconnect account</button><button onClick={() => { setDisconnectFor(null); heading.current?.focus(); }}>Keep account</button></div>}</article>)}
-      <form className="integration-connect-form" ref={connectForm} onSubmit={e => { e.preventDefault(); void begin(); }}><fieldset disabled={busy}><legend>Connect an account</legend><div className="form-field"><p>Provider: {provider === "google" ? "Google" : "Microsoft"}</p><label htmlFor="optional-name">Account label</label><input id="optional-name" required value={name} onChange={e => setName(e.target.value)} /></div><fieldset><legend>Capabilities to consent to</legend>{data.providers.find(p => p.provider === provider)?.capabilities.map(c => <label key={c}><input type="checkbox" checked={capabilities.includes(c)} onChange={e => setCapabilities(e.target.checked ? [...capabilities, c] : capabilities.filter(k => k !== c))} /> {labels[c] || friendly(c)}</label>)}</fieldset><button disabled={!name.trim() || !capabilities.length || !data.providers.some(p => p.provider === provider)}>Continue to provider consent</button>{!data.providers.some(p => p.provider === provider) && <p>Provider setup required. An administrator must configure this provider’s OAuth client ID and redirect URI, then restart the daemon.</p>}</fieldset></form>
+      {view === "service" && <><AccountServiceDetail catalog={data} provider={provider} capability={serviceCapability} busy={busy}
+        onRefresh={() => void refresh()} onConnect={(label, scopes) => void begin(label, scopes)}
+        onReconnect={(connection, scopes) => void begin(connection.display_name, scopes, connection)}
+        onGrant={connection => {
+          const existing = data.grants.find(grant => grant.connection_id === connection.connection_id
+            && grant.beneficiary_user_id === data.actor_user_id && !grant.revoked_at
+            && grant.project_id === null && grant.operations.length === 1 && grant.operations[0] === 'mail_read'
+            && grant.resources.length === 1 && grant.resources[0] === 'INBOX'
+            && grant.recipient_user_ids.length === 1 && grant.recipient_user_ids[0] === data.actor_user_id);
+          setEditingGrant(existing); setGrantFor(connection); setView("access");
+        }}
+        onPause={connection => void run('pause', { connection_id: connection.connection_id, expected_revision: connection.revision })}
+        onDisconnect={setDisconnectFor}
+        onRetryDeletion={connection => void run('retry_deletion', { connection_id: connection.connection_id, expected_revision: connection.revision })} />
+        {disconnectFor && <div className="project-detail" role="group" aria-label="Confirm disconnect"><p>Disconnect {disconnectFor.display_name}, revoke local grants and stop dependent checks? Provider cleanup can remain pending.</p><button disabled={busy} onClick={() => { void run('disconnect', { connection_id: disconnectFor.connection_id, expected_revision: disconnectFor.revision }); setDisconnectFor(null); heading.current?.focus(); }}>Disconnect account</button><button disabled={busy} onClick={() => { setDisconnectFor(null); heading.current?.focus(); }}>Keep account</button></div>}
       </>}{view === "access" && <>
       {grantFor && <GrantEditor key={`${grantFor.connection_id}:${editingGrant?.grant_id || "new"}`} account={grantFor} grant={editingGrant} catalog={data} onDone={() => { setGrantFor(null); heading.current?.focus(); void refresh(); }} />}
       <h4>Explicit grants</h4><p>Grants you gave or received appear here.</p>{data.grants.map(g => <GrantCard key={g.grant_id} grant={g} catalog={data} busy={busy} run={run} onEdit={() => { const c = data.connections.find(c => c.connection_id === g.connection_id); if (c) { setGrantFor(c); setEditingGrant(g); } }} />)}

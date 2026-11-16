@@ -63,7 +63,9 @@ class TaskState:
     # explicitly stamps the engine; missing stamps from stored messages are
     # handled separately by from_message/from_dict and never upgraded here.
     intelligence_engine: str = "unassigned"
-    intelligence_schema_version: int = 1
+    # Retain malformed stored values so routing can reject them without
+    # coercing a legacy or corrupted stamp into the current schema.
+    intelligence_schema_version: Any = 1
     hierarchical_state: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -80,7 +82,7 @@ class TaskState:
             correlation_id=str(message.correlation_id or "").strip(),
             goal=prompt,
             intelligence_engine=str(message.metadata.get("intelligence_engine") or "tactical_v2").strip(),
-            intelligence_schema_version=max(1, _coerce_int(message.metadata.get("intelligence_schema_version") or 2)),
+            intelligence_schema_version=message.metadata.get("intelligence_schema_version", 2),
             metadata=dict(message.metadata),
         )
         state.append_conversation_message(message.user, prompt)
@@ -142,7 +144,7 @@ class TaskState:
             check_new_message_count=max(0, _coerce_int(value.get("check_new_message_count"))),
             pdca_cycle_count=max(0, _coerce_int(value.get("pdca_cycle_count"))),
             intelligence_engine=str(value.get("intelligence_engine") or "tactical_v2").strip(),
-            intelligence_schema_version=max(1, _coerce_int(value.get("intelligence_schema_version") or 2)),
+            intelligence_schema_version=value.get("intelligence_schema_version", 2),
             hierarchical_state=dict(value.get("hierarchical_state")) if isinstance(value.get("hierarchical_state"), dict) else {},
             metadata=dict(value.get("metadata")) if isinstance(value.get("metadata"), dict) else {},
         )

@@ -70,6 +70,18 @@ def test_registration_rejects_unfenced_or_split_stores(tmp_path):
         build_runtime_host(owner_selected_draft_sink=lambda *_: None)
 
 
+def test_owner_runtime_rejects_injected_processor_before_constructing_stores():
+    # Embedded test hosts may inject processors, but the owner daemon must
+    # always construct its claim-bound simple-loop processor itself.
+    class AlternativeProcessor:
+        def process(self, *_args):
+            raise AssertionError('an injected processor must not run')
+
+    with pytest.raises(ValueError, match='owner_read_runtime_configuration_invalid'):
+        build_runtime_host(processor=AlternativeProcessor(), experimental_owner_read=True,
+                           owner_selected_draft_sink=lambda *_: None)
+
+
 @pytest.mark.parametrize('kind', ['answer', 'question'])
 def test_registered_processor_hands_server_checkpoint_to_sink_after_selection(tmp_path, kind):
     class Provider:

@@ -73,7 +73,8 @@ class CommunicationChannel:
         )
         if engine != "single_loop_experimental" or merged_metadata.get("intelligence_engine", engine) != engine:
             raise ValueError("intelligence_engine_unregistered")
-        if merged_metadata.get("intelligence_schema_version", 1) != 1:
+        schema_version = merged_metadata.get("intelligence_schema_version", 1)
+        if type(schema_version) is not int or schema_version != 1:
             raise ValueError("intelligence_schema_invalid")
         merged_metadata.setdefault("intelligence_engine", engine)
         merged_metadata.setdefault("intelligence_schema_version", 1)
