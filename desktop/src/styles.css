@@ -1709,3 +1709,10 @@ button.mockup-skill-card > p { flex: 1; }
 .skill-file-editor { display: grid; min-width: 0; gap: 10px; }
 .skill-file-editor textarea { min-height: 320px; }
 @media (max-width: 850px) { .skills-workspace .skill-section-nav { margin: -20px -20px 0; padding: 8px 20px 0; } .skill-file-browser { grid-template-columns: 1fr; } .skill-file-tree { max-height: 220px; } }
+
+/* A due reminder is an overlay, so the conversation keeps its full workspace. */
+.owner-reminder-alert { position: fixed; z-index: 100; right: 24px; bottom: 24px; max-width: min(400px, calc(100vw - 48px)); padding: 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-raised); box-shadow: 0 8px 24px var(--shadow); color: var(--text); }
+.owner-reminder-alert button { margin-left: 12px; }
+.attention-recovery { display: grid; gap: 12px; }
+.attention-recovery h2 { margin: 0; font-size: 17px; }
+.attention-recovery p { margin: 0; }

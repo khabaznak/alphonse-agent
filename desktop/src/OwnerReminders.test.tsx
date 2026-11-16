@@ -12,12 +12,10 @@ describe("owner Desktop reminders", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
-  it("keeps the reminder surface active outside Conversation while hiding its management form", () => {
+  it("does not add an empty workspace grid item or manual reminder form", () => {
     const request = vi.fn();
-    const html = renderToStaticMarkup(<OwnerReminders request={request as OwnerRequest} active ownerId="owner" showManagement={false} />);
-    expect(html).toContain('aria-label="Desktop reminders"');
-    expect(html).toContain('<div hidden="">');
-    expect(html).toContain('Create a Desktop reminder');
+    const html = renderToStaticMarkup(<OwnerReminders request={request as OwnerRequest} active ownerId="owner" />);
+    expect(html).toBe("");
   });
 
   it("requires explicit dismiss before acknowledging an offered reminder", async () => {
