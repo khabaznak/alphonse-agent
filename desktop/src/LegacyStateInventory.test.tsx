@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { LegacyStateInventory, loadLegacyStateInventory } from "./LegacyStateInventory";
+import { LegacyStateInventory, loadLegacyStateInventory, scheduledWorkSummary } from "./LegacyStateInventory";
 import type { OwnerRequest } from "./ownerConversation";
 
 const inventory = {
@@ -10,6 +10,8 @@ const inventory = {
   checkpoints_owner_origin_marked: { statuses: { queued: 0, running: 1, waiting_user: 0, done: 0, failed: 0, cancelled: 0, other: 0 } },
   owner_addressed_outbox: { statuses: { pending: 0, claimed: 0, retry_wait: 0, delivered: 1, failed: 0, unconfirmed: 1, other: 0 },
     attempt_counter: { zero: 0, positive: 2, invalid: 0, other: 0 } },
+  owner_scheduled_work: { status: "available", tasks: { active: 1, paused: 0, completed: 0, cancelled: 0, failed: 0, other: 0 },
+    occurrences: { pending: 0, claimed: 0, enqueued: 0, processing: 0, response_pending: 0, retry_wait: 0, delivered: 0, failed: 0, delivery_failed: 0, unconfirmed: 1, cancelled: 0, completed: 0, other: 0 } },
 };
 
 describe("earlier work inventory", () => {
@@ -18,7 +20,9 @@ describe("earlier work inventory", () => {
     const html = renderToStaticMarkup(<LegacyStateInventory request={request as OwnerRequest} actor="fixture-owner" />);
     expect(html).toContain("Check earlier work");
     expect(request).not.toHaveBeenCalled();
-    expect(await loadLegacyStateInventory(request as OwnerRequest, "fixture-owner")).toEqual(inventory);
+    const result = await loadLegacyStateInventory(request as OwnerRequest, "fixture-owner");
+    expect(result).toEqual(inventory);
+    expect(scheduledWorkSummary(result.owner_scheduled_work)).toBe("Scheduled task records: 1; linked occurrence records: 1 (1 marked unconfirmed; 0 marked delivery failed).");
     expect(request).toHaveBeenCalledExactlyOnceWith("legacy_state_inventory", { actor_user_id: "fixture-owner" });
   });
 
@@ -30,5 +34,13 @@ describe("earlier work inventory", () => {
     } }));
     await expect(loadLegacyStateInventory(invalid as OwnerRequest, "fixture-owner")).rejects.toThrow();
     await expect(loadLegacyStateInventory(invalid as OwnerRequest, "")).rejects.toThrow();
+    const invalidSchedules = vi.fn(async () => ({ status: "available", inventory: { ...inventory,
+      owner_scheduled_work: { status: "available", tasks: {}, occurrences: {} } } }));
+    await expect(loadLegacyStateInventory(invalidSchedules as OwnerRequest, "fixture-owner")).rejects.toThrow();
+    const unavailableSchedules = vi.fn(async () => ({ status: "available", inventory: { ...inventory,
+      owner_scheduled_work: { status: "unavailable" } } }));
+    const missing = (await loadLegacyStateInventory(unavailableSchedules as OwnerRequest, "fixture-owner")).owner_scheduled_work;
+    expect(missing).toEqual({ status: "unavailable" });
+    expect(scheduledWorkSummary(missing)).toBe("Scheduled work could not be checked.");
   });
 });

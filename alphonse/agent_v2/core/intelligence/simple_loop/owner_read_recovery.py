@@ -20,6 +20,8 @@ from .owner_gmail import OWNER_GMAIL_TOOL_ID, valid_owner_gmail
 from .owner_schedules import OWNER_SCHEDULES_TOOL_ID, execute_owner_schedules, valid_schedules_observation
 from alphonse.agent_v2.core.tools.registry.native.skill_catalog import SKILL_CATALOG_TOOL_ID, execute_skill_catalog, validate_skill_catalog_observation
 from .owner_named_skill import OWNER_NAMED_SKILL_TOOL_ID, execute_owner_named_skill, validate_owner_named_skill
+from .owner_knowledge_snapshot import (OWNER_KNOWLEDGE_TOOL_ID, snapshot_owner_knowledge,
+                                       owner_knowledge_projection)
 
 
 class OwnerRecoveryUnavailable(Exception):
@@ -83,6 +85,8 @@ def restore_owner_read_observations(checkpoint: OwnerAtomicCheckpoint, context: 
                 keys.add('gmail_observation')
             if isinstance(item, dict) and item.get('tool_id') == OWNER_REMINDER_CREATE_TOOL_ID:
                 keys.add('reminder_observation')
+            if isinstance(item, dict) and item.get('tool_id') == OWNER_KNOWLEDGE_TOOL_ID:
+                keys.add('knowledge_snapshot_digest')
             if not isinstance(item, dict) or set(item) != keys:
                 raise OwnerRecoveryUnavailable('owner_recovery_unavailable')
             args = item['arguments']
@@ -90,7 +94,16 @@ def restore_owner_read_observations(checkpoint: OwnerAtomicCheckpoint, context: 
             if (item['actor'] != state.actor or not isinstance(args, dict)
                     or not isinstance(item['observation_sha256'], str)):
                 raise OwnerRecoveryUnavailable('owner_recovery_unavailable')
-            if tool == OWNER_CLOCK_TOOL_ID:
+            if tool == OWNER_KNOWLEDGE_TOOL_ID:
+                recheck()
+                if args != {} or not isinstance(item['knowledge_snapshot_digest'], str):
+                    raise OwnerRecoveryUnavailable('owner_recovery_unavailable')
+                snapshot = snapshot_owner_knowledge(checkpoint.queue, checkpoint.receipt, checkpoint.task,
+                    cancellation_checker=context.cancellation_checker, clock=checkpoint.clock)
+                observation = owner_knowledge_projection(snapshot)
+                if (observation is None or not hmac.compare_digest(snapshot.digest, item['knowledge_snapshot_digest'])):
+                    raise OwnerRecoveryUnavailable('owner_recovery_unavailable')
+            elif tool == OWNER_CLOCK_TOOL_ID:
                 recheck()
                 observation = item['clock_observation']
                 if not valid_clock_observation(state.actor, args, observation, context=execution):
@@ -130,7 +143,8 @@ def restore_owner_read_observations(checkpoint: OwnerAtomicCheckpoint, context: 
             # separately instead of continuing after a mid-read revocation.
             recheck()
             if (not hmac.compare_digest(observation_digest(observation), item['observation_sha256'])
-                    or not (valid_clock_observation(state.actor, args, observation, context=execution)
+                    or not (True if tool == OWNER_KNOWLEDGE_TOOL_ID else
+                            valid_clock_observation(state.actor, args, observation, context=execution)
                             if tool == OWNER_CLOCK_TOOL_ID else
                             valid_reminder_observation(state.actor, args, observation, context=execution)
                             if tool == OWNER_REMINDER_CREATE_TOOL_ID else
@@ -149,6 +163,8 @@ def restore_owner_read_observations(checkpoint: OwnerAtomicCheckpoint, context: 
                 raise OwnerRecoveryUnavailable('owner_recovery_unavailable')
             recheck()
             reconstructed[ref] = {'actor': state.actor, 'tool_id': tool, 'arguments': args, 'observation': observation}
+            if tool == OWNER_KNOWLEDGE_TOOL_ID:
+                reconstructed[ref]['knowledge_snapshot_digest'] = item['knowledge_snapshot_digest']
         conversation_read_sequences(state.actor, {ref: (item['tool_id'], item['arguments'], item['observation'])
                                                    for ref, item in reconstructed.items()})
         conversation_search_sequences(state.actor, {ref: (item['tool_id'], item['arguments'], item['observation'])

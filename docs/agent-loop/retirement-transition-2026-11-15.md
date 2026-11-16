@@ -96,6 +96,15 @@ proof that an external effect occurred or did not occur. No request text,
 row IDs, recipients, timestamps, checkpoint contents or provider receipts are
 returned. A failed check reports unavailable, not an empty inventory.
 
+The same owner-only inventory also reports aggregate scheduled-task and linked
+occurrence status counts when the runtime schedule store is the same file and
+its schema is readable. A split, missing, or incompatible schedule store is
+reported as unavailable rather than zero. Occurrences are attributed through
+their owner-owned parent task, so orphaned or ambiguously owned records are
+not included. Counts may include current as well as legacy work; stored status
+does not establish whether a job ran or a notification was delivered. This
+inspection neither changes nor resumes any job and does not reconcile effects.
+
 These counts are a point-in-time snapshot, not mixed-writer exclusion, a
 delivery receipt, or permission to retry, abandon, resume, or migrate work.
 Full actor-scoped inspection of individual protected records and independently

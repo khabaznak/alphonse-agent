@@ -16,6 +16,9 @@ from typing import Any
 _QUEUE_STATUSES = ('pending', 'processing', 'retry_wait', 'failed')
 _CHECKPOINT_STATUSES = ('queued', 'running', 'waiting_user', 'done', 'failed', 'cancelled')
 _OUTBOX_STATUSES = ('pending', 'claimed', 'retry_wait', 'delivered', 'failed', 'unconfirmed')
+_SCHEDULE_STATUSES = ('active', 'paused', 'completed', 'cancelled', 'failed')
+_OCCURRENCE_STATUSES = ('pending', 'claimed', 'enqueued', 'processing', 'response_pending', 'retry_wait',
+                        'delivered', 'failed', 'delivery_failed', 'unconfirmed', 'cancelled', 'completed')
 _ENGINES = ('tactical_v2', 'hierarchical_v3', 'single_loop_experimental')
 _MAX_VM_CALLBACKS = 20_000  # With a 100-op callback interval: 2 million steps.
 _MAX_QUERY_SECONDS = 0.75
@@ -57,7 +60,8 @@ def _engines(connection: sqlite3.Connection, sql: str, parameters: tuple[Any, ..
     return _counts(rows, (*_ENGINES, 'malformed', 'missing'), 'engine')
 
 
-def inspect_legacy_state(db_path: str | Path, *, expected_owner: str | None = None) -> dict[str, Any] | None:
+def inspect_legacy_state(db_path: str | Path, *, expected_owner: str | None = None,
+                         include_schedules: bool = False) -> dict[str, Any] | None:
     """Inspect a file-backed database without changing queue or delivery state.
 
     The canonical active owner is determined and checked in the same database
@@ -71,6 +75,8 @@ def inspect_legacy_state(db_path: str | Path, *, expected_owner: str | None = No
     SQLite or OS operation can exceed the time target. Contention or budget
     exhaustion returns unavailable. This does not modify application state or
     run schema migrations, and the reservation is released before IPC response.
+    The trusted caller may request schedules only after verifying the runtime
+    schedule store uses this database. Missing schedule schema is unavailable.
     """
     if expected_owner is not None and (not isinstance(expected_owner, str) or not expected_owner.strip()):
         return None
@@ -123,6 +129,18 @@ def inspect_legacy_state(db_path: str | Path, *, expected_owner: str | None = No
                 WHEN typeof(attempt_count)!='integer' OR attempt_count<0 THEN 'invalid'
                 WHEN attempt_count=0 THEN 'zero' ELSE 'positive' END AS counter, COUNT(*) AS n
                 FROM v2_outbox WHERE audience_user_id=? GROUP BY counter''', (owner,)).fetchall()
+            scheduled: dict[str, Any] = {'status': 'unavailable'}
+            if include_schedules is True:
+                try:
+                    tasks = _statuses(connection, 'SELECT status FROM v2_scheduled_tasks WHERE owner_user_id=?',
+                                      (owner,), _SCHEDULE_STATUSES)
+                    occurrences = _statuses(connection, '''SELECT e.status FROM v2_scheduled_task_executions e
+                        JOIN v2_scheduled_tasks t ON t.scheduled_task_id=e.scheduled_task_id
+                        WHERE t.owner_user_id=?''', (owner,), _OCCURRENCE_STATUSES)
+                    scheduled = {'status': 'available', 'tasks': tasks, 'occurrences': occurrences}
+                except sqlite3.Error:
+                    # Never present an absent or incompatible schedule schema as zero.
+                    scheduled = {'status': 'unavailable'}
             return {
                 'queue_other_ingress': queue_other,
                 'queue_owner_origin_marked': queue_marked,
@@ -130,6 +148,7 @@ def inspect_legacy_state(db_path: str | Path, *, expected_owner: str | None = No
                 'checkpoints_owner_origin_marked': checkpoints_marked,
                 'owner_addressed_outbox': {'statuses': outbox,
                     'attempt_counter': _counts(counter, ('zero', 'positive', 'invalid'), 'counter')},
+                'owner_scheduled_work': scheduled,
             }
         finally:
             connection.close()
