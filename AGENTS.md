@@ -17,6 +17,25 @@ coordinated specialized agents as family needs grow.
 - `docs/` contains architecture, design decisions, operational guidance, and
   rollout plans.
 
+## Language-neutral interaction
+
+Alphonse serves people whose languages and ways of expressing themselves cannot
+be assumed from the current owner's habits. Do not hardcode Spanish phrases,
+or add language-by-language keyword lists, regular expressions, translations,
+or intent rules to make a conversational capability work. Such lists are
+incomplete, privilege the languages their authors anticipate, and create
+inconsistent behavior for everyone else.
+
+Use the LLM's multilingual understanding to interpret requests and formulate
+responses; use Jev for bounded judgments where appropriate. Keep the resulting
+structured actions subject to language-independent deterministic checks for
+actor identity, authorization, scope, time, cancellation, effects, and truthful
+completion. Model interpretation alone does not grant authority or prove that an
+action happened. Test representative languages and phrasings as examples of
+general behavior, not as a vocabulary to encode into production. When existing
+phrase-based logic cannot yet be safely replaced, identify the limitation and
+its migration rather than claiming general multilingual support.
+
 ## Agent-loop direction and gym
 
 The owner selected the simpler loop as the sole agent-loop architecture and

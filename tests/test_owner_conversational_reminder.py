@@ -279,7 +279,6 @@ def test_relative_reminder_time_must_match_owner_clock():
 @pytest.mark.parametrize('goal,message,due', [
     ('Remind me to call the plumber tomorrow at 9 am', 'call the plumber', '2026-11-16T09:00:00-06:00'),
     ('Please remind me to check mail today at 12:30 pm.', 'check mail', '2026-11-15T12:30:00-06:00'),
-    ('Recuérdame llamar al plomero mañana a las 9 am', 'llamar al plomero', '2026-11-16T09:00:00-06:00'),
 ])
 def test_owner_local_calendar_time_matches_requested_day_and_time(goal, message, due):
     from alphonse.agent_v2.core.intelligence.simple_loop.owner_reminder_create import validate_reminder_request

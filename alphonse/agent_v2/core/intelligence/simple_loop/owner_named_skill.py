@@ -25,21 +25,12 @@ _DIRECT = re.compile(
     r'(?:use|apply|follow)\s+(?:(?:the|my)\s+)?'
     r'(?:(?P<before>' + _NAME + r')\s+skill|skill\s+(?:named\s+)?(?P<after>' + _NAME + r'))'
     r'(?=$|[\s,.:;!?])', re.IGNORECASE)
-_DIRECT_SPANISH = re.compile(
-    r'^\s*(?:por\s+favor\s*,?\s+)?'
-    r'(?:(?:usa|utiliza|aplica|sigue)|(?:puedes|podr[ií]as)\s+'
-    r'(?:usar|utilizar|aplicar|seguir))\s+'
-    r'(?:(?:la|mi)\s+)?'
-    r'(?:(?P<before>' + _NAME + r')\s+(?:habilidad|skill)|'
-    r'(?:habilidad|skill)\s+(?:(?:llamada|de)\s+)?(?P<after>' + _NAME + r'))'
-    r'(?=$|[\s,.:;!?])', re.IGNORECASE)
-
 
 def explicit_requested_name(goal: str) -> str:
     """Return the exact direct-request name, or empty for unsupported wording."""
     if not isinstance(goal, str):
         return ''
-    match = _DIRECT.search(goal) or _DIRECT_SPANISH.search(goal)
+    match = _DIRECT.search(goal)
     # A later sentence or clause may revise the instruction. This narrow
     # direct-request path cannot resolve conversational corrections, so do
     # not activate from a multi-sentence or compound-punctuation request.
@@ -52,14 +43,13 @@ def explicit_requested_name(goal: str) -> str:
         return ''
     # Coordinating clauses may reverse or condition the initial request. The
     # bounded parser cannot resolve that relationship, so decline activation.
-    if re.search(r'\b(?:and|but|or|yet|so|y|pero|o|ni|aunque|sino)\b', remainder, re.IGNORECASE):
+    if re.search(r'\b(?:and|but|or|yet|so)\b', remainder, re.IGNORECASE):
         return ''
     # Do not activate on questions, reversals, or contingent future requests.
     # This deliberately fails closed on ambiguous wording; it is not a
     # general natural-language intent classifier.
     if ('?' in goal or re.search(r"\b\w+n['’]t\b", goal[match.end():], re.IGNORECASE) or re.search(
-            r'\b(?:no|not|never|unless|if|when|once|after|before|until|later|maybe|might|'
-            r'nunca|jam[aá]s|salvo|si|cuando|despu[eé]s|antes|hasta|luego|quiz[aá]s|tal\s+vez)\b',
+            r'\b(?:no|not|never|unless|if|when|once|after|before|until|later|maybe|might)\b',
             goal[match.end():], re.IGNORECASE)):
         return ''
     return (match.group('before') or match.group('after')).casefold()

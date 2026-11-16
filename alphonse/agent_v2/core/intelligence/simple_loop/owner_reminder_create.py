@@ -14,16 +14,14 @@ _SCHEMA = {'type': 'object', 'additionalProperties': False,
                    'due_at': {'type': 'string', 'description': 'One ISO 8601 datetime with explicit offset in the owner timezone.'},
                    'request_quote': {'type': 'string', 'description': 'The entire direct-owner request, verbatim.'}},
     'required': ['message', 'due_at', 'request_quote']}
-_EXPLICIT = re.compile(r'(?i)(?<!\w)(?:remind\s+me|set\s+(?:me\s+)?(?:a\s+)?reminder|recu[eé]rdame)(?!\w)')
-_NEGATED = re.compile(r"(?is)(?<!\w)(?:do\s+not|don['’]t|never|no)\b.{0,80}?(?:set\s+(?:a\s+)?reminder|remind\s+me|recu[eé]rdame)(?!\w)")
+_EXPLICIT = re.compile(r'(?i)(?<!\w)(?:remind\s+me|set\s+(?:me\s+)?(?:a\s+)?reminder)(?!\w)')
+_NEGATED = re.compile(r"(?is)(?<!\w)(?:do\s+not|don['’]t|never|no)\b.{0,80}?(?:set\s+(?:a\s+)?reminder|remind\s+me)(?!\w)")
 _AMBIGUOUS_SCOPE = re.compile(
     r'(?i)(?<!\w)(?:if|unless|whether|should|would|could|might|maybe|perhaps|'
     r'every|each|daily|weekly|monthly|yearly|hourly|recurr(?:ing|ence)|repeat(?:ed|ing)?|'
-    r'after|before|once|until|only|later|tomorrow|today|tonight|next|'
-    r'si|cuando|despu[eé]s|antes|hasta|solo|s[oó]lo|ma[ñn]ana|hoy|quiz[aá]s?|tal\s+vez|cada|diari[oa]s?|semanal(?:mente)?|'
-    r'mensual(?:mente)?|anual(?:mente)?|repetir|recurrente)(?!\w)')
+    r'after|before|once|until|only|later|tomorrow|today|tonight|next)(?!\w)')
 _CALENDAR_TIME = re.compile(
-    r'(?i)(?<!\w)(?:(today|tomorrow)\s+at|(hoy|ma[ñn]ana)\s+a\s+las?)\s+'
+    r'(?i)(?<!\w)(today|tomorrow)\s+at\s+'
     r'(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s*[.!]?\s*$')
 
 
@@ -75,31 +73,31 @@ def validate_reminder_request(task, arguments, timezone_name, *, observed_at):
             clock = datetime.fromisoformat(observed_at)
             if clock.tzinfo is None:
                 raise ValueError
-            hour, minute = int(calendar.group(3)), int(calendar.group(4) or 0)
+            hour, minute = int(calendar.group(2)), int(calendar.group(3) or 0)
             if not 1 <= hour <= 12 or minute > 59:
                 raise ValueError
-            hour = hour % 12 + (12 if calendar.group(5).lower() == 'pm' else 0)
-            day_word = (calendar.group(1) or calendar.group(2)).lower()
-            requested_day = clock.astimezone(zone).date() + timedelta(days=day_word in ('tomorrow', 'mañana', 'manana'))
+            hour = hour % 12 + (12 if calendar.group(4).lower() == 'pm' else 0)
+            day_word = calendar.group(1).lower()
+            requested_day = clock.astimezone(zone).date() + timedelta(days=day_word == 'tomorrow')
             if (local.date() != requested_day or local.hour != hour or local.minute != minute
                     or local.second != 0 or local.microsecond != 0):
                 raise ValueError
             time_pattern = re.escape(calendar.group(0).strip().rstrip('.!'))
         elif due_text in goal:
-            time_pattern = r'(?:at|a\s+las?)\s+' + re.escape(due_text)
+            time_pattern = r'at\s+' + re.escape(due_text)
         else:
             # Support an explicit numeric relative duration without trusting
             # the model to invent an unmentioned date. The host clock is the
             # reference; unsupported natural-language times must be clarified.
-            matches = list(re.finditer(r'(?i)\b(?:in|en)\s+(\d+)\s*'
-                r'(minutes?|mins?|minutos?|hours?|hrs?|horas?)\b', goal))
+            matches = list(re.finditer(r'(?i)\bin\s+(\d+)\s*'
+                r'(minutes?|mins?|hours?|hrs?)\b', goal))
             if len(matches) != 1 or not isinstance(observed_at, str):
                 raise ValueError
             value = int(matches[0].group(1))
             if not 1 <= value <= 24 * 365:
                 raise ValueError
             unit = matches[0].group(2).lower()
-            delta = timedelta(hours=value) if unit.startswith(('hour', 'hr', 'hora')) else timedelta(minutes=value)
+            delta = timedelta(hours=value) if unit.startswith(('hour', 'hr')) else timedelta(minutes=value)
             clock = datetime.fromisoformat(observed_at)
             if clock.tzinfo is None or abs((due.astimezone(timezone.utc) - (clock + delta)).total_seconds()) > 30:
                 raise ValueError
@@ -107,7 +105,7 @@ def validate_reminder_request(task, arguments, timezone_name, *, observed_at):
         # Bind content and time to one complete imperative.  The deterministic
         # grammar deliberately refuses multi-clause requests it cannot scope.
         match = re.fullmatch(
-            r'(?is)\s*(?:please\s+|por\s+favor\s+)?(?:remind\s+me\s+(?:to\s+)?|recu[eé]rdame\s+)'
+            r'(?is)\s*(?:please\s+)?remind\s+me\s+(?:to\s+)?'
             r'(?P<content>[^;,.!?\n]+?)\s+' + time_pattern + r'\s*[.!]?\s*', goal)
         if match is None or match.group('content').strip().casefold() != text.strip().casefold():
             raise ValueError
