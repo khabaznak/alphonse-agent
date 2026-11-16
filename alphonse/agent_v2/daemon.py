@@ -10,6 +10,7 @@ import mimetypes
 import os
 import re
 import sqlite3
+import stat
 import shutil
 import threading
 import time
@@ -92,10 +93,23 @@ from alphonse.agent_v2.system_one import validate_and_save_system_one_settings
 logger = logging.getLogger(__name__)
 
 
+def _open_instance_lock(lock_path: Path) -> Any:
+    """Open a regular single-link lock file without following a final symlink."""
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            raise ValueError('daemon_lock_file_invalid')
+        return os.fdopen(fd, 'r+')
+    except Exception:
+        os.close(fd)
+        raise
+
+
 def _claim_single_instance_lock(daemon_id: str) -> Any:
     lock_path = default_socket_path().with_suffix(".lock")
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    lock_file = lock_path.open("a+")
+    lock_file = _open_instance_lock(lock_path)
     try:
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
@@ -105,11 +119,39 @@ def _claim_single_instance_lock(daemon_id: str) -> Any:
         except Exception as exc:
             raise RuntimeError("alphonse_v2_daemon_lock_held") from exc
         raise RuntimeError("alphonse_v2_daemon_already_running")
-    lock_file.seek(0)
-    lock_file.truncate()
-    lock_file.write(daemon_id)
-    lock_file.flush()
+    except Exception:
+        lock_file.close()
+        raise
     return lock_file
+
+
+def _claim_database_instance_lock(db_path: str, daemon_id: str) -> Any:
+    """Exclude cooperating daemons using the same canonical database path.
+
+    This is an advisory process lock, not a fence for old binaries, direct
+    SQLite writers, hard-link aliases or other household stores.
+    """
+    if not isinstance(db_path, str) or not db_path or db_path == ':memory:':
+        raise ValueError('daemon_database_lock_path_invalid')
+    canonical = os.path.realpath(os.path.abspath(db_path))
+    lock_path = Path(canonical + '.alphonse-daemon.lock')
+    lock_file = _open_instance_lock(lock_path)
+    try:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        lock_file.close()
+        raise RuntimeError('alphonse_v2_database_lock_held') from None
+    except Exception:
+        lock_file.close()
+        raise
+    return lock_file
+
+
+def _unlock_instance_file(lock_file: Any) -> None:
+    try:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+    finally:
+        lock_file.close()
 
 
 def _owner_public_failure_code(error: object, *, cancelled: bool = False) -> str:
@@ -158,6 +200,7 @@ class V2Daemon:
         self._processor_thread: threading.Thread | None = None
         self._memory_migration_thread: threading.Thread | None = None
         self._lock_file: Any | None = None
+        self._database_lock_file: Any | None = None
         self._lifecycle_lock = threading.RLock()
         # Protect the whole daemon turn, including work done before core.step.
         # This is local exclusion, not a cross-process claim fence.
@@ -2786,10 +2829,15 @@ class V2Daemon:
                 clients = []
                 for provider in ("google", "microsoft"):
                     prefix = "ALPHONSE_" + provider.upper() + "_OAUTH_"
-                    client_id, redirect = os.environ.get(prefix + "CLIENT_ID", ""), os.environ.get(prefix + "REDIRECT_URI", "")
-                    client_secret_ref = os.environ.get(prefix + "CLIENT_SECRET_REF", "") if provider == 'google' else ''
-                    if client_id or redirect:
-                        clients.append(ClientConfig(provider, client_id, redirect, client_secret_ref))
+                    if provider == 'google':
+                        from alphonse.agent_v2.integrations.google_client_config import resolve_google_config
+                        google = resolve_google_config(self.runtime.user_store, os.environ)
+                        if google is not None:
+                            clients.append(google)
+                    else:
+                        client_id, redirect = os.environ.get(prefix + "CLIENT_ID", ""), os.environ.get(prefix + "REDIRECT_URI", "")
+                        if client_id or redirect:
+                            clients.append(ClientConfig(provider, client_id, redirect))
                 def owner_session_guard(candidate):
                     if getattr(self, 'experimental_owner_only', False) is not True:
                         return True
@@ -3692,19 +3740,32 @@ class V2Daemon:
     def _acquire_single_instance_lock(self) -> None:
         if self._lock_file is not None:
             return
-        self._lock_file = _claim_single_instance_lock(self.daemon_id)
+        lock_file = _claim_single_instance_lock(self.daemon_id)
+        try:
+            db_path = getattr(self.runtime.queue, 'db_path', None)
+            database_lock = (_claim_database_instance_lock(str(db_path), self.daemon_id)
+                             if db_path and str(db_path) != ':memory:' else None)
+        except Exception:
+            _unlock_instance_file(lock_file)
+            raise
+        self._lock_file = lock_file
+        self._database_lock_file = database_lock
 
     def _release_single_instance_lock(self) -> None:
         with self._lifecycle_lock:
             lock_file = self._lock_file
+            database_lock = getattr(self, '_database_lock_file', None)
             self._lock_file = None
-        if lock_file is None:
-            return
-        try:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-            lock_file.close()
-        finally:
-            pass
+            self._database_lock_file = None
+        failure = None
+        for item in (database_lock, lock_file):
+            if item is not None:
+                try:
+                    _unlock_instance_file(item)
+                except Exception as exc:
+                    failure = failure or exc
+        if failure is not None:
+            raise failure
 
     def _on_outbox_delivered(self, outbound: Any) -> None:
         message_id = str(getattr(outbound, "outbox_message_id", "") or "")
@@ -4046,7 +4107,9 @@ def _question_answer_text(payload: dict[str, Any] | None) -> str:
 def main() -> None:
     daemon_id = f"daemon-{uuid4().hex[:12]}"
     startup_lock = _claim_single_instance_lock(daemon_id)
+    startup_database_lock = None
     try:
+        startup_database_lock = _claim_database_instance_lock(str(default_database_path()), daemon_id)
         migration = migrate_legacy_databases()
         logger.info(
             "storage migration status=%s target=%s sources=%s",
@@ -4090,11 +4153,16 @@ def main() -> None:
         )
         logger.warning('Simple loop: owner-only read conversation; schedulers and integrations are disabled.')
         daemon._lock_file = startup_lock
+        daemon._database_lock_file = startup_database_lock
         startup_lock = None
+        startup_database_lock = None
     finally:
-        if startup_lock is not None:
-            fcntl.flock(startup_lock.fileno(), fcntl.LOCK_UN)
-            startup_lock.close()
+        try:
+            if startup_database_lock is not None:
+                _unlock_instance_file(startup_database_lock)
+        finally:
+            if startup_lock is not None:
+                _unlock_instance_file(startup_lock)
     previous = {}
 
     def _request_stop(signum: int, frame: Any) -> None:

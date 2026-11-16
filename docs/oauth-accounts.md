@@ -21,6 +21,20 @@ that copy separately. The reference is optional and scoped to the configured
 Google client ID. Microsoft behavior is unchanged. Configuration is fixed for the
 daemon lifetime; changes require a restart.
 
+For a local Desktop installation, `google_client_setup PATH --persist` imports the
+credential and saves only the owner ID, public client ID, exact loopback URL and
+opaque vault reference in the existing owner database. To migrate an already
+working complete environment configuration without copying the vault credential,
+run `google_client_setup --persist-existing` as the local owner with all three
+Google variables set. It verifies the reference belongs to that client ID. Both
+forms refuse to overwrite saved config unless `--replace` is explicitly passed.
+If any Google OAuth environment variable is present, the daemon uses that entire
+environment configuration; it never mixes it with saved values. Otherwise it
+uses the saved configuration only while its original owner remains active.
+If importing a new credential reports a save failure, the vault entry is kept:
+the database commit may have succeeded even though its outcome was not observed.
+That can leave an unused credential entry for later explicit cleanup.
+
 The callback is an operator-configured exact URL: an explicit port and path on
 `http://127.0.0.1`, or registered HTTPS. A native setup surface must bind its local
 callback receiver before opening the URL in the system browser, use the same exact

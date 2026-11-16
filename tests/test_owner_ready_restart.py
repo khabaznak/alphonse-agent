@@ -190,7 +190,10 @@ def test_exclusive_restart_restores_only_confirmed_unpicked_draft(tmp_path, monk
         # The real flock must reject another owner daemon while this one lives.
         second = V2Daemon(runtime, daemon_id='new', experimental_owner_only=True)
         second.ipc = V2DaemonServer(second, str(socket_dir / 'two.sock'))
-        with pytest.raises(RuntimeError, match='daemon_lock_held|daemon_already_running'):
+        if mode == 'ready':
+            # Different configured socket locks must still contend on the DB.
+            monkeypatch.setattr(module, 'default_socket_path', lambda: socket_dir / 'other-daemon.sock')
+        with pytest.raises(RuntimeError, match='daemon_lock_held|daemon_already_running|database_lock_held'):
             second.start()
 
         if mode == 'picked_up':
