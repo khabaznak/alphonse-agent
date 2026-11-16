@@ -23,6 +23,8 @@ from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry
 from alphonse.agent_v2.core.tools.registry.native.memory import (
     build_read_memory_source_tool_definition, build_search_memory_tool_definition,
 )
+from alphonse.agent_v2.core.tools.registry.native import build_native_tool_registry
+from alphonse.agent_v2.skills import SkillStore
 from alphonse.agent_v2.users import V2UserStore
 
 
@@ -43,6 +45,41 @@ class Provider:
             result = {'kind': 'answer', 'tool_id': None, 'arguments': None, 'text': 'Synthetic apples.'}
         return InferenceResult(json_value=result, raw_response=json.dumps(result),
                                usage={'input_tokens': 100, 'output_tokens': 20})
+
+
+@pytest.mark.parametrize('tool_id', [
+    'native.bash', 'native.scheduled_task', 'native.deliver_message',
+    'native.integration_manage', 'native.project_todo_list', 'native.skill_read', 'native.skill_maintain',
+])
+def test_default_registry_does_not_expose_or_dispatch_unsupported_tools(tmp_path, monkeypatch, tool_id):
+    """A model guessing registered legacy tools cannot activate them in the owner host."""
+    users = V2UserStore(':memory:')
+    owner = users.onboard(display_name='Synthetic owner', users_root=tmp_path / 'users')
+    conversation = SQLiteConversationStore(tmp_path / 'conversation.db')
+    registry = build_native_tool_registry(user_store=users, skill_store=SkillStore(tmp_path / 'skills'))
+    assert registry.get(tool_id) is not None
+    dispatched = []
+    monkeypatch.setattr(registry, 'execute', lambda *args, **kwargs: dispatched.append(args) or {})
+    class GuessingProvider:
+        supports_image_input = False
+        def __init__(self): self.requests = []
+        def generate_json(self, request):
+            self.requests.append(request)
+            decision = {'kind': 'tool', 'tool_id': tool_id, 'arguments': {}, 'text': None}
+            return InferenceResult(json_value=decision, raw_response=json.dumps(decision),
+                                   usage={'input_tokens': 100, 'output_tokens': 20})
+    provider = GuessingProvider()
+    router = InferenceRouter(provider=provider, default_profile=ModelProfile('test', 'fixture', 'offline'))
+    task = TaskState(task_id='message-1', message_id='message-1', user=owner.user_id, goal='Synthetic request',
+                     intelligence_engine='single_loop_experimental', intelligence_schema_version=1)
+    context = CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry, inference=router,
+                              conversation_store=conversation, cancellation_checker=lambda: False)
+    processor = OwnerReadConversationProcessor(users=users, budgets=SQLiteTaskBudgetStore(str(tmp_path / 'budget.db')),
+        authorize_claim=lambda *_: True, save_checkpoint=lambda *_: None, now_ms=lambda: 100)
+    result = processor.process(task, context)
+    assert result.status == ProcessingStatus.FAILED
+    assert provider.requests and tool_id not in provider.requests[0].prompt
+    assert dispatched == []
 
 
 def test_owner_candidate_uses_real_memory_and_blocks_replay(tmp_path):

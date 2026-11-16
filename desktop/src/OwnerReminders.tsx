@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { OwnerRequest } from "./ownerConversation";
-import { persistPendingReminder, readPendingReminder, reconcilePendingReminder, submitPendingReminder, type PendingReminder, type ReminderState } from "./ownerReminderSubmission";
-import { resolveLocalReminderTime } from "./ownerReminderTime";
+import { readPendingReminder, reconcilePendingReminder, submitPendingReminder, type PendingReminder, type ReminderState } from "./ownerReminderSubmission";
 
 type Offered = { id: string; message: string; due_at: string; acknowledgement_token: string };
 type OpenReminder = { id: string; message: string; due_at: string; state: "pending" | "offered" };
@@ -41,25 +41,20 @@ export function OwnerReminderRecovery({ reminders, onResolve, onCancel }: {
 }
 
 /** Explicit local-owner reminders. Due reminders are offered only once. */
-export function OwnerReminders({ request, active, ownerId, showManagement = true }: { request: OwnerRequest; active: boolean; ownerId: string; showManagement?: boolean }) {
-  const [message, setMessage] = useState("");
-  const [when, setWhen] = useState("");
+export function OwnerReminders({ request, active, ownerId, managementTarget, onAttentionChange }: { request: OwnerRequest; active: boolean; ownerId: string; managementTarget?: HTMLElement | null; onAttentionChange?: (needed: boolean) => void }) {
   const [notice, setNotice] = useState("");
   const [offered, setOffered] = useState<Offered | null>(null);
   const [reminders, setReminders] = useState<OpenReminder[]>([]);
   const [busy, setBusy] = useState(false);
   const [pending, setPending] = useState<PendingReminder | null>(null);
-  const [pendingLoaded, setPendingLoaded] = useState(false);
-  const [pendingFault, setPendingFault] = useState(false);
   const pendingKey = `alphonse.desktop.ownerReminder.pending.${ownerId}`;
   const polling = useRef(false);
   const shownRef = useRef(false);
 
   useEffect(() => {
     if (!active || !ownerId) return;
-    try { setPending(readPendingReminder(window.localStorage, pendingKey)); setPendingFault(false); }
-    catch { setPendingFault(true); setNotice("A pending reminder request cannot be checked. No new reminder was sent."); }
-    setPendingLoaded(true);
+    try { setPending(readPendingReminder(window.localStorage, pendingKey)); }
+    catch { setNotice("A pending reminder request cannot be checked. It may already be saved."); }
   }, [active, ownerId, pendingKey]);
 
   useEffect(() => {
@@ -85,39 +80,17 @@ export function OwnerReminders({ request, active, ownerId, showManagement = true
     return () => { mounted = false; window.clearInterval(timer); };
   }, [active, request]);
 
-  const create = async (event: React.FormEvent) => {
-    event.preventDefault();
-    if (busy || pending || pendingFault || !pendingLoaded) return;
-    if (!message.trim() || !when) {
-      setNotice("Enter a reminder and a future time."); return;
-    }
-    let dueAt: string;
-    try { dueAt = resolveLocalReminderTime(when); }
-    catch (error) {
-      const reason = error instanceof Error ? error.message : "invalid_local_time";
-      setNotice(reason === "ambiguous_local_time"
-        ? "That local time occurs twice because the clock changes. Choose a different time."
-        : reason === "nonexistent_local_time"
-          ? "That local time does not exist because the clock changes. Choose a different time."
-          : "Enter a valid reminder time.");
-      return;
-    }
-    if (Date.parse(dueAt) <= Date.now()) { setNotice("Enter a reminder and a future time."); return; }
-    const item = { message: message.trim(), due_at: dueAt, request_id: crypto.randomUUID().replaceAll("-", "") };
-    try {
-      persistPendingReminder(window.localStorage, pendingKey, item);
-    } catch {
-      setNotice("The request could not be saved safely; no reminder was sent."); return;
-    }
-    setPending(item);
-    await submit(item);
-  };
+  const needsAttention = Boolean(active && (pending || notice || reminders.some(item => item.state === "offered")));
+  useEffect(() => {
+    onAttentionChange?.(needsAttention);
+    return () => onAttentionChange?.(false);
+  }, [needsAttention, onAttentionChange]);
 
   const submit = async (item: PendingReminder) => {
     setBusy(true);
     try {
       const state = await submitPendingReminder(request, window.localStorage, pendingKey, item);
-      setPending(null); setMessage(""); setWhen("");
+      setPending(null);
       setNotice(reminderStateMessage(state));
     } catch {
       setNotice("Reminder could not be confirmed. Check it or retry the exact saved request.");
@@ -136,15 +109,7 @@ export function OwnerReminders({ request, active, ownerId, showManagement = true
   };
 
   if (!active) return null;
-  return <section className="composer-hint" aria-label="Desktop reminders">
-    <div hidden={!showManagement}><details><summary>Create a Desktop reminder</summary>
-      <form onSubmit={create}>
-        <label>Reminder <input value={message} maxLength={500} onChange={event => setMessage(event.target.value)} disabled={busy || Boolean(pending) || pendingFault} required /></label>
-        <label>When (this computer’s local time) <input type="datetime-local" value={when} onChange={event => setWhen(event.target.value)} disabled={busy || Boolean(pending) || pendingFault} required /></label>
-        <button type="submit" disabled={busy || Boolean(pending) || pendingFault || !pendingLoaded}>Save reminder</button>
-      </form>
-      <p>One-time reminders appear while Desktop is open; external delivery is unavailable.</p>
-    </details>
+  const management = <section aria-label="Desktop reminder recovery">
     {pending && <div role="status"><p>A reminder request may already be saved: {pending.message} — {new Date(pending.due_at).toLocaleString()}.</p>
       <button type="button" disabled={busy} onClick={() => void checkPending()}>Check saved reminder</button>
       <button type="button" disabled={busy} onClick={() => void submit(pending)}>Retry same request</button>
@@ -152,11 +117,8 @@ export function OwnerReminders({ request, active, ownerId, showManagement = true
         try { window.localStorage.removeItem(pendingKey); setPending(null); setNotice("Tracking stopped. If it was saved, the reminder may still appear later."); }
         catch { setNotice("The pending request could not be cleared."); }
       }}>Stop tracking; saved reminder may still appear</button>
-    </div>}</div>
+    </div>}
     {notice && <p role="status">{notice}</p>}
-    {offered && <OwnerReminderOffer message={offered.message} onDismiss={() => void dismissOfferedReminder(request, offered)
-        .then(() => { setOffered(null); shownRef.current = false; })
-        .catch(() => setNotice("Reminder acknowledgement could not be confirmed; the reminder remains visible."))} />}
     <OwnerReminderRecovery reminders={reminders}
       onResolve={id => void request("owner_reminder_resolve", { id })
         .then(() => setReminders(current => current.filter(row => row.id !== id)))
@@ -165,4 +127,13 @@ export function OwnerReminders({ request, active, ownerId, showManagement = true
         .then(() => setReminders(current => current.filter(row => row.id !== id)))
         .catch(() => setNotice("That reminder could not be cancelled; it may already be due."))} />
   </section>;
+  return <>
+    {managementTarget && createPortal(management, managementTarget)}
+    {offered && typeof document !== "undefined" && createPortal(<div className="owner-reminder-alert">
+      <OwnerReminderOffer message={offered.message} onDismiss={() => void dismissOfferedReminder(request, offered)
+        .then(() => { setOffered(null); shownRef.current = false; })
+        .catch(() => setNotice("Reminder acknowledgement could not be confirmed; the reminder remains visible."))} />
+      {notice && <p role="status">{notice}</p>}
+    </div>, document.body)}
+  </>;
 }
