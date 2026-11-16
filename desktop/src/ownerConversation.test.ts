@@ -1,10 +1,31 @@
 import { describe, expect, it, vi } from "vitest";
-import { OwnerConversation, ownerUnavailableMessage, type OwnerRequest } from "./ownerConversation";
+import { OwnerConversation, ownerBusyFor, ownerUnavailableMessage, type OwnerRequest } from "./ownerConversation";
+import { avatarState } from "./layoutState";
 
 const id = "a".repeat(32);
 const token = "b".repeat(32);
 
 describe("explicit owner conversation transport", () => {
+  it("keeps a request pending through polling, scopes it to the conversation, and clears it on acknowledgement", async () => {
+    let status = "pending";
+    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === "experimental_owner_status") return params?.message_id ? { status } : { processing_ready: true };
+      if (method === "experimental_owner_ingress") return { message_id: id };
+      if (method === "experimental_owner_take_draft") return { message_id: id, message: "answer", acknowledgement_token: token, delivery_status: "started_unconfirmed" };
+      return { status: "client_acknowledged" };
+    });
+    const client = new OwnerConversation(request as OwnerRequest);
+    const otherMember = new OwnerConversation(request as OwnerRequest);
+    await client.send("hello");
+    await client.poll(() => {});
+    const snapshot = { conversation: client, busy: client.hasPending() };
+    expect(avatarState(true, "", "idle", ownerBusyFor(snapshot, client))).toBe("pending");
+    expect(avatarState(false, "", "idle", ownerBusyFor(snapshot, client))).toBe("disconnected");
+    expect(ownerBusyFor(snapshot, otherMember)).toBe(false);
+    status = "ready";
+    await client.poll(() => {});
+    expect(avatarState(true, "", "idle", client.hasPending())).toBe("idle");
+  });
   it("binds a reply only when a question was explicitly selected", async () => {
     const request = vi.fn(async (method: string) => method === "experimental_owner_status"
       ? { processing_ready: true } : { message_id: id });

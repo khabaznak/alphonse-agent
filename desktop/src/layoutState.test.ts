@@ -17,6 +17,10 @@ describe("Desktop layout state helpers", () => {
     expect(avatarState(true, "", "checking")).toBe("checking");
     expect(avatarState(true, "", "acting")).toBe("acting");
     expect(avatarState(true, "", "unknown")).toBe("idle");
+    expect(avatarState(true, "", "idle", true)).toBe("pending");
+    expect(avatarStateLabel("pending")).toBe("Request pending");
+    expect(avatarState(false, "", "idle", true)).toBe("disconnected");
+    expect(avatarState(true, "Request uncertain", "idle", true)).toBe("error");
     expect(avatarStateLabel("checking")).toBe("Checking");
   });
 

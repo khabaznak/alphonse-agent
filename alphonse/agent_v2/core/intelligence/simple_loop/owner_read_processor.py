@@ -1,8 +1,8 @@
 """Experimental direct-owner processor for bounded conversation reads.
 
-The opt-in daemon uses claim-bound checkpoints and delivers confirmed owner
-responses. The general conversation path continues to use V3, and this host
-does not authorize external chores or correlated task resumption.
+The daemon uses claim-bound checkpoints and delivers confirmed owner responses.
+This host does not authorize general external chores or correlated task
+resumption.
 """
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ def authorize_trusted_owner_claim(task: TaskState, context: CoreLoopContext) -> 
     """Check the acquired receipt against trusted ingress and the current lease.
 
     This is point-in-time authorization, not a fence around subsequent effects.
-    The daemon and core must remain disabled until those effects are fenced.
+    Callers must fence each subsequent mutation and publication independently.
     """
     return (type(context.messages) is SQLiteMessageQueue
             and context.messages.verify_trusted_local_owner_claim(context.claim_receipt, task))

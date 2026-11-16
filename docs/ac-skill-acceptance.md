@@ -1,5 +1,8 @@
 # Ordinary AC skill acceptance (#40)
 
+**Historical V3 evidence:** The executable V3 harness has been removed. This
+scenario is not evidence of current simple-loop skill execution.
+
 This scenario verifies standard skill execution through the existing V3 harness.
 It introduces no native AC tool, script registry, artifact catalog dependency,
 or bundled household AC implementation. The disposable `ac-fixture` package in

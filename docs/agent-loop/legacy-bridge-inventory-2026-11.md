@@ -1,5 +1,9 @@
 # Legacy loop bridge inventory (2026-11-12)
 
+**Historical snapshot:** The V3 bridge was subsequently removed. For the
+current source inventory and transition constraints, see
+[Loop retirement: current state and transition constraints](retirement-transition-2026-11-15.md).
+
 ## Current surface audit — 14 November, after `4e3e6a39`
 
 This section supersedes the dated observations below where they conflict. It

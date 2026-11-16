@@ -47,6 +47,11 @@ export function ownerFailureMessage(code?: string): string {
  * In-memory tracking is intentional: a lost pickup or submission response is
  * uncertain and must not be repeated automatically.
  */
+/** Ignore a pending snapshot from a previous member's conversation instance. */
+export function ownerBusyFor(snapshot: { conversation: OwnerConversation | null; busy: boolean }, current: OwnerConversation | null): boolean {
+  return current !== null && snapshot.conversation === current && snapshot.busy;
+}
+
 export class OwnerConversation {
   private pending = new Map<string, Pending>();
   private submitting = false;

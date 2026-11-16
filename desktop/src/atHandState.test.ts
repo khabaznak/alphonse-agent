@@ -58,10 +58,11 @@ describe("At hand layout invariants", () => {
     expect(saveDrawer({ setItem: () => { throw Error(); } }, "alice", state)).toBe(false);
     expect(changeDrawer(defaultDrawer(), { type: "add", kind: "unknown" })).toEqual(defaultDrawer());
   });
-  it("treats Workload and PDCA as optional persisted widgets with the usual locks", () => {
+  it("keeps retired PDCA placements removable without allowing new ones", () => {
     expect(defaultDrawer().widgets.some(widget => ["workload", "pdca"].includes(widget.kind))).toBe(false);
     let state = changeDrawer(defaultDrawer(), { type: "add", kind: "workload" });
-    state = changeDrawer(state, { type: "add", kind: "pdca" });
+    expect(changeDrawer(state, { type: "add", kind: "pdca" })).toBe(state);
+    state = { ...state, widgets: [...state.widgets, { id: "pdca", kind: "pdca", mode: "pinned" }] };
     state = changeDrawer(state, { type: "mode", id: "workload", mode: "locked" });
     expect(changeDrawer(state, { type: "remove", id: "workload" })).toBe(state);
     expect(changeDrawer(state, { type: "add", kind: "pdca" })).toBe(state);

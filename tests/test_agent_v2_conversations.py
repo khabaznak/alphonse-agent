@@ -295,3 +295,34 @@ def test_conversation_store_searches_memory_across_projects() -> None:
     matches = store.search(owner_user_id="member-a", query="pharmacy receipt", limit=5)
 
     assert [event.content for event in matches] == ["The pharmacy receipt total was 420 pesos."]
+
+
+def test_search_checks_authoritative_owner_when_index_owner_is_wrong() -> None:
+    store = SQLiteConversationStore(":memory:")
+    private = store.record(owner_user_id="member-b", role="user", content="Private synthetic phrase",
+                           source="test", source_message_id="private-search")
+    own = store.record(owner_user_id="member-a", role="user", content="Own synthetic phrase",
+                       source="test", source_message_id="own-search")
+    with store._connect() as connection:
+        connection.execute("UPDATE v2_conversation_fts SET owner_user_id=? WHERE event_id=?",
+                           ("member-a", private.event_id))
+
+    results = store.search(owner_user_id="member-a", query="synthetic phrase")
+    assert [item.event_id for item in results] == [own.event_id]
+
+
+def test_neighbors_disappear_if_anchor_is_deleted_between_reads(monkeypatch) -> None:
+    store = SQLiteConversationStore(":memory:")
+    anchor = store.record(owner_user_id="member-a", role="user", content="Anchor",
+                          source="test", source_message_id="anchor")
+    store.record(owner_user_id="member-a", role="user", content="Neighbor",
+                 source="test", source_message_id="neighbor")
+    original_read = store.read
+
+    def delete_after_read(**kwargs):
+        result = original_read(**kwargs)
+        assert store.delete(event_id=anchor.event_id, owner_user_id="member-a")
+        return result
+
+    monkeypatch.setattr(store, "read", delete_after_read)
+    assert store.read_neighbors(event_id=anchor.event_id, requester_user_id="member-a") == []

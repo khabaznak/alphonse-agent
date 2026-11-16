@@ -30,6 +30,13 @@ is `alphonse-v2.sqlite3`; user and project files are kept in `users/`.
 The Desktop app in `desktop/` starts and connects to the daemon. Configure
 integrations, users, scheduled tasks, and settings there.
 
+The current daemon runs the owner-only simpler conversation loop. It does not
+start the legacy scheduler, event workers, integration listeners, or ordinary
+outbox dispatcher. Existing scheduled and queued work is preserved but is not
+automatically resumed. One-time Desktop reminders and limited owner Gmail reads
+have separate, narrower support. See the [transition inventory](docs/agent-loop/retirement-transition-2026-11-15.md)
+before upgrading or recovering older work.
+
 ## Repository layout
 
 - `alphonse/agent_v2/` — daemon, core and integrations

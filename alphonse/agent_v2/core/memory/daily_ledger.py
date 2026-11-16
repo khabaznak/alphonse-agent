@@ -1,178 +1,63 @@
-"""Generated per-member daily Markdown views of the canonical conversation log."""
+"""Suspended daily Markdown projection of the canonical conversation log.
 
+Existing files may be household-edited and another process may be writing them.
+Do not mutate them until an ownership and cross-writer protocol is implemented.
+"""
 from __future__ import annotations
 
-import hashlib
-import json
 import os
 import re
 import tempfile
-from functools import wraps
-from threading import RLock
-from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
+from threading import RLock
 from typing import Any, Callable
-from zoneinfo import ZoneInfo
-
-
-def _serialized_projection(method):
-    @wraps(method)
-    def wrapped(self, *args, **kwargs):
-        with self._lock:
-            return method(self, *args, **kwargs)
-    return wrapped
 
 
 class DailyLedgerProjector:
-    """Materialize daily conversation ledgers from SQLite events."""
+    """Expose the projection boundary without modifying household files."""
 
-    def __init__(
-        self,
-        *,
-        conversation_store: Any,
-        users_root: Callable[[], str | Path],
-        timezone_provider: Callable[..., str] | None = None,
-        summarizer: Callable[[str], str] | None = None,
-    ) -> None:
+    available = False
+    projection_enabled = False
+
+    def __init__(self, *, conversation_store: Any, users_root: Callable[[], str | Path],
+                 timezone_provider: Callable[..., str] | None = None,
+                 summarizer: Callable[[str], str] | None = None) -> None:
         self._lock = RLock()
-        self._conversations = conversation_store
         self._users_root = users_root
-        self._timezone_provider = timezone_provider or (lambda: "UTC")
-        self._summarizer = summarizer
 
-    @_serialized_projection
     def refresh_for_event(self, event: Any) -> Path | None:
-        """Refresh today's file and ensure the previous day's summary exists."""
-        owner = str(getattr(event, "owner_user_id", "") or "").strip()
-        if not owner:
-            return None
-        try:
-            try:
-                timezone_name = self._timezone_provider(owner)
-            except TypeError:
-                timezone_name = self._timezone_provider()
-            zone = ZoneInfo(str(timezone_name or "UTC"))
-        except Exception:
-            zone = ZoneInfo("UTC")
-        try:
-            instant = datetime.fromisoformat(str(event.observed_at).replace("Z", "+00:00"))
-            if instant.tzinfo is None:
-                instant = instant.replace(tzinfo=timezone.utc)
-        except (AttributeError, TypeError, ValueError):
-            return None
-        local_date = instant.astimezone(zone).date()
-        root = Path(self._users_root()).expanduser().resolve() / _safe_segment(owner) / "memory" / "daily"
-        previous_date = local_date - timedelta(days=1)
-        previous_events = self._events_for_date(owner, previous_date, zone)
-        previous_summary = self._summary_for(
-            root / f"{previous_date.isoformat()}.md", previous_events, previous_date, zone,
-        )
-        today_events = self._events_for_date(owner, local_date, zone)
-        target = root / f"{local_date.isoformat()}.md"
-        self._atomic_write(target, _render_ledger(local_date, previous_summary, today_events, zone))
-        return target
+        """No projection is written; canonical events remain in SQLite."""
+        return None
 
     def mutation_guard(self):
-        """Serialize in-process projection and source erasure in this runtime."""
+        """Serialize local callers; this does not fence other processes."""
         return self._lock
 
-    @_serialized_projection
+    def _daily_root(self, owner: str) -> Path:
+        base = Path(self._users_root()).expanduser().resolve()
+        current = base
+        for part in (_safe_segment(owner), "memory", "daily"):
+            current = current / part
+            if current.is_symlink():
+                raise ValueError("daily_ledger_reconciliation_required")
+        if not current.resolve().is_relative_to(base):
+            raise ValueError("daily_ledger_reconciliation_required")
+        return current
+
     def invalidate_owner(self, owner: str) -> None:
-        """Discard disposable generated content before source erasure."""
-        root = Path(self._users_root()).expanduser().resolve() / _safe_segment(owner) / "memory" / "daily"
-        for pattern in ("*.md", "*.summary.sources.json"):
-            for path in root.glob(pattern):
-                path.unlink()
+        """Refuse erasure when a daily directory could contain retained views."""
+        with self._lock:
+            root = self._daily_root(owner)
+            if root.exists():
+                raise ValueError("daily_ledger_reconciliation_required")
 
-    @_serialized_projection
     def rebuild_owner(self, owner: str) -> list[Path]:
-        """Rebuild all dated views, including empty days left by erased events."""
-        try:
-            timezone_name = self._timezone_provider(owner)
-        except TypeError:
-            timezone_name = self._timezone_provider()
-        zone = ZoneInfo(str(timezone_name or "UTC"))
-        root = Path(self._users_root()).expanduser().resolve() / _safe_segment(owner) / "memory" / "daily"
-        days = set()
-        if root.exists():
-            for path in root.glob("*.md"):
-                name = path.name.removesuffix(".summary.md").removesuffix(".md")
-                try:
-                    days.add(date.fromisoformat(name))
-                except ValueError:
-                    continue
-            # Invalidate summaries first: no stale content can survive a rebuild.
-            for pattern in ("*.summary.md", "*.summary.sources.json"):
-                for path in root.glob(pattern):
-                    path.unlink()
-        for event in self._conversations.list_all(owner_user_id=owner):
-            if event.observed_at:
-                try:
-                    days.add(datetime.fromisoformat(event.observed_at).astimezone(zone).date())
-                except ValueError:
-                    continue
-        paths = []
-        for day in sorted(days):
-            events = self._events_for_date(owner, day, zone)
-            previous = day - timedelta(days=1)
-            summary = self._summary_for(root / f"{previous.isoformat()}.md",
-                                        self._events_for_date(owner, previous, zone), previous, zone)
-            target = root / f"{day.isoformat()}.md"
-            self._atomic_write(target, _render_ledger(day, summary, events, zone))
-            paths.append(target)
-        return paths
-
-    def _events_for_date(self, owner: str, day: date, zone: ZoneInfo) -> list[Any]:
-        start = datetime.combine(day, time.min, tzinfo=zone).astimezone(timezone.utc)
-        end = datetime.combine(day + timedelta(days=1), time.min, tzinfo=zone).astimezone(timezone.utc)
-        events = self._conversations.list_between(
-            owner_user_id=owner,
-            start_utc=start.isoformat(),
-            end_utc=end.isoformat(),
-        )
-        from .contracts import conversation_item
-        return [event for event in events if conversation_item(event, owner) is not None and event.observed_at]
-
-    def _summary_for(self, path: Path, events: list[Any], day: date, zone: ZoneInfo) -> str:
-        if not events:
-            return "No conversation was recorded the previous day."
-        fingerprint = hashlib.sha256(json.dumps([event.to_dict() for event in events],
-                                                sort_keys=True).encode()).hexdigest()
-        manifest_path = path.with_suffix(".summary.sources.json")
-        try:
-            summary_path = path.with_suffix(".summary.md")
-            if summary_path.exists() and manifest_path.exists() and manifest_path.read_text() == fingerprint:
-                existing = summary_path.read_text(encoding="utf-8").strip()
-                if existing:
-                    return existing
-        except OSError:
-            pass
-        transcript_rows = [
-            f"{getattr(item, 'role', 'unknown')}: {str(getattr(item, 'content', ''))[:800]}"
-            for item in events[-60:]
-        ]
-        transcript = "\n".join(transcript_rows)[-16000:]
-        summary = ""
-        if self._summarizer is not None:
-            try:
-                summary = str(self._summarizer(transcript) or "").strip()
-            except Exception:
-                summary = ""
-        if not summary:
-            excerpts = [str(getattr(item, "content", "")).strip() for item in events]
-            excerpts = [item for item in excerpts if item]
-            summary = "The previous day included: " + "; ".join(item[:180] for item in excerpts[:5])
-            if len(excerpts) > 5:
-                summary += f"; and {len(excerpts) - 5} more conversation entries"
-            summary += "."
-        self._atomic_write(path.with_suffix(".summary.md"), summary + "\n")
-        self._atomic_write(manifest_path, fingerprint)
-        if not path.exists():
-            self._atomic_write(path, _render_ledger(day, "Summary narrative will be generated in the next day's ledger.", events, zone))
-        return summary
+        """Rebuild is unavailable while file ownership cannot be established."""
+        raise RuntimeError("daily_ledger_projection_unavailable")
 
     @staticmethod
     def _atomic_write(path: Path, content: str) -> None:
+        """Shared writer for explicit offline migration receipts, not daily views."""
         path.parent.mkdir(parents=True, exist_ok=True)
         fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
         try:
@@ -189,34 +74,9 @@ class DailyLedgerProjector:
             raise
 
 
-def _render_ledger(day: date, summary: str, events: list[Any], zone: ZoneInfo) -> str:
-    lines = [
-        f"# Memory Ledger — {day.isoformat()}",
-        "",
-        "## Summary narrative",
-        summary.strip() or "No summary is available.",
-        "",
-        "## Day session conversation",
-    ]
-    for event in events:
-        try:
-            instant = datetime.fromisoformat(str(event.observed_at).replace("Z", "+00:00"))
-            if instant.tzinfo is None:
-                instant = instant.replace(tzinfo=timezone.utc)
-            local_time = instant.astimezone(zone).strftime("%H:%M")
-        except (TypeError, ValueError):
-            local_time = "time unknown"
-        role = "Alphonse" if event.role == "assistant" else "Member"
-        project = str(getattr(event, "project_id", "") or "").strip()
-        suffix = f" · {project}" if project else ""
-        lines.extend((f"### {local_time} — {role}{suffix} [conversation:{event.event_id}]", str(event.content).strip(), ""))
-    if not events:
-        lines.extend(("No conversation entries were recorded.", ""))
-    return "\n".join(lines).rstrip() + "\n"
-
-
 def _safe_segment(value: str) -> str:
-    rendered = re.sub(r"[^A-Za-z0-9._-]+", "_", str(value or "").strip()).strip("._")
-    if not rendered or rendered in {".", ".."}:
+    rendered = str(value or "")
+    if (not rendered or len(rendered) > 120 or rendered.strip("._") != rendered
+            or re.fullmatch(r"[A-Za-z0-9._-]+", rendered) is None):
         raise ValueError("invalid_ledger_member")
-    return rendered[:120]
+    return rendered

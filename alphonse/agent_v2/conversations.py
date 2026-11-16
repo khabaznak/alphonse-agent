@@ -258,8 +258,8 @@ class SQLiteConversationStore:
                 match = " AND ".join('"' + term.replace('"', '""') + '"' for term in terms)
                 rows = conn.execute(
                     """SELECT e.* FROM v2_conversation_fts f JOIN v2_conversation_events e ON e.event_id=f.event_id
-                       WHERE f.owner_user_id=? AND v2_conversation_fts MATCH ? ORDER BY bm25(v2_conversation_fts) LIMIT ?""",
-                    (owner, match, max(1, min(int(limit or 8), 30))),
+                       WHERE f.owner_user_id=? AND e.owner_user_id=? AND v2_conversation_fts MATCH ? ORDER BY bm25(v2_conversation_fts) LIMIT ?""",
+                    (owner, owner, match, max(1, min(int(limit or 8), 30))),
                 ).fetchall()
             except sqlite3.OperationalError:
                 rows = conn.execute(
@@ -284,7 +284,11 @@ class SQLiteConversationStore:
         with self._connect() as conn:
             rows = conn.execute("SELECT * FROM v2_conversation_events WHERE owner_user_id=? ORDER BY sequence", (anchor.owner_user_id,)).fetchall()
         items = [item for row in rows if (item := conversation_item(_event(row), requester_user_id)) is not None]
-        index = next(i for i, item in enumerate(items) if item.source.source_id == f"conversation:{event_id}")
+        # The anchor can be deleted or its visibility revoked after the first
+        # read. Do not disclose neighboring records or raise in that case.
+        index = next((i for i, item in enumerate(items) if item.source.source_id == f"conversation:{event_id}"), None)
+        if index is None:
+            return []
         width = max(0, min(neighbors, 5))
         return items[max(0, index-width):index+width+1]
 
@@ -297,29 +301,35 @@ class SQLiteConversationStore:
         return event if event is not None and conversation_item(event, requester_user_id) is not None else None
 
     def delete(self, *, event_id: str, owner_user_id: str) -> bool:
-        """Owner-scoped erasure; references retain identity but no longer resolve."""
+        """Delete the scoped event and eligible local derivatives, not every copy.
+
+        Checkpoints, older ledgers, backups and SQLite storage remnants have
+        separate lifecycles; a successful return is not complete erasure.
+        """
         guard = self._daily_ledger_projector.mutation_guard() if self._daily_ledger_projector is not None else nullcontext()
         with guard:
             return self._delete(event_id=event_id, owner_user_id=owner_user_id)
 
     def _delete(self, *, event_id: str, owner_user_id: str) -> bool:
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             row = conn.execute("SELECT * FROM v2_conversation_events WHERE event_id=? AND owner_user_id=?",
                                (event_id, owner_user_id)).fetchone()
             if row is None:
                 return False
+            from alphonse.agent_v2.core.memory.knowledge import KnowledgeStore
+            KnowledgeStore.erase_conversation_derivations(conn, event_id)
             if self._daily_ledger_projector is not None:
-                # Remove cached content before committing erasure. A failed
-                # rebuild then leaves no generated copy of the deleted text.
+                # Check the file boundary before committing logical deletion.
+                # Suspended projection refuses directories needing reconciliation.
                 self._daily_ledger_projector.invalidate_owner(owner_user_id)
             conn.execute("INSERT OR IGNORE INTO v2_conversation_tombstones VALUES (?,?,?,?)",
                          (event_id, owner_user_id, _now(), hashlib.sha256(row["source_message_id"].encode()).hexdigest()))
             conn.execute("DELETE FROM v2_conversation_events WHERE event_id=?", (event_id,))
-            try:
+            if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_conversation_fts'").fetchone():
                 conn.execute("DELETE FROM v2_conversation_fts WHERE event_id=?", (event_id,))
-            except sqlite3.OperationalError:
-                pass
-        if self._daily_ledger_projector is not None:
+        if (self._daily_ledger_projector is not None
+                and getattr(self._daily_ledger_projector, "projection_enabled", True) is not False):
             self._daily_ledger_projector.rebuild_owner(owner_user_id)
         return True
 

@@ -1,5 +1,9 @@
 # Approved workflow reuse in a fresh conversation
 
+**Historical V3 evidence:** The executor and evaluation scenario described
+below were removed with V3. General conversational skill reuse is not yet
+implemented in the owner-only simple loop.
+
 [Issue #28](https://github.com/khabaznak/alphonse-agent/issues/28) is exercised by
 `alphonse.agent_v2.evaluation.skill_reuse` and `tests/test_skill_reuse_acceptance.py`.
 The scenario uses the real V3 processor, tactical executor, outer completion

@@ -1,5 +1,10 @@
 # Optional account integrations and project-directed proactive checks
 
+**Historical proposal:** References to the V3 engine and its source paths below
+describe the earlier architecture. The V3 loop has been removed, and the current
+owner-only daemon does not start scheduled or event workers. This proposal is
+not evidence that its proactive workflow is currently available.
+
 Status: proposed design and implementation plan; no runtime changes implemented  
 Date: 2026-10-30  
 Initial providers: Gmail, Microsoft Outlook/Hotmail, Google Calendar, Google Classroom

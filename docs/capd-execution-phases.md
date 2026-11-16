@@ -1,8 +1,7 @@
 # CAPD execution phases
 
-> This document describes the current V2 execution model. The proposed hierarchical
-> V3 design and staged implementation plans begin at
-> [`docs/v3-hierarchical-capd/README.md`](v3-hierarchical-capd/README.md).
+> Historical V2 execution model. Both V2 and V3 loops have since been removed;
+> this document does not describe the current simple-loop daemon.
 
 ## Implemented prompt contract
 

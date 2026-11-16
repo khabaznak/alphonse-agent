@@ -255,9 +255,8 @@ def build_runtime_host(
         if tools.get(OWNER_NAMED_SKILL_TOOL_ID) is not None:
             raise ValueError('owner_named_skill_tool_conflict')
         tools.register(build_owner_named_skill_tool_definition())
-        # Registration is an explicit dependency-injection hook, not a daemon
-        # enable switch. The worker still refuses fenced processing until the
-        # entire acquisition and delivery path is integrated.
+        # The daemon supplies the fenced owner worker and durable stores;
+        # embedded hosts must opt in and provide the selected-draft sink.
         from alphonse.agent_v2.core.messages.sqlite_queue import SQLiteMessageQueue
         from alphonse.agent_v2.core.intelligence.simple_loop.owner_read_processor import (
             OwnerReadConversationProcessor, authorize_trusted_owner_claim,
@@ -286,9 +285,7 @@ def build_runtime_host(
             atomic_checkpoints=ExperimentalCheckpointStore(question_store),
             selected_draft_sink=owner_selected_draft_sink,
         )
-        # The exclusive owner worker must not register or instantiate the old
-        # V3 loop. V3-stamped work stays queued for the normal bridge; an
-        # accidental dispatch in this mode fails as an unregistered engine.
+        # Retired-engine stamps never dispatch to the owner processor.
         processor = EngineRoutingProcessor(owner_read_candidate=candidate)
     project_store = project_store or ProjectStore()
     artifact_store.capture_legacy_roots(project_store)

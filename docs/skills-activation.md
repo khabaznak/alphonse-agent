@@ -1,5 +1,9 @@
 # Skill activation and progressive resources
 
+**Current runtime limit:** The V3 activation path described below was removed.
+The simple loop currently supports narrow explicit named-skill instruction
+loading, not general automatic skill selection or resource/script execution.
+
 Implemented for [issue #34](https://github.com/khabaznak/alphonse-agent/issues/34),
 under the [standard package contract](standard-skills-contract.md). This integrates
 with [native script execution](skill-script-execution.md) (#35) and

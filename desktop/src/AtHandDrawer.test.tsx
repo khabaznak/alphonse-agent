@@ -20,11 +20,12 @@ describe("At hand rendering boundaries", () => {
   });
   it("keeps live activity samples member-scoped and unavailable when disconnected", () => {
     const state = { ...props.state, widgets: [{ id: "workload", kind: "workload", mode: "pinned" as const }, { id: "pdca", kind: "pdca", mode: "pinned" as const }] };
-    const live = { ...props, state, activityMember: "alice", queueSamples: [{ at: Date.now(), ready: 7, processing: 2 }], pdcaSamples: [{ at: Date.now(), phase: "do" as const }] };
+    const live = { ...props, state, activityMember: "alice", queueSamples: [{ at: Date.now(), ready: 7, processing: 2 }] };
     const html = renderToStaticMarkup(<AtHandDrawer {...live} />);
     expect(html).toContain("9 total tasks");
     expect(html).toContain("7 waiting and 2 processing");
-    expect(html).toContain("PDCA activity chart");
+    expect(html).toContain("PDCA activity is unavailable in the current conversation loop");
+    expect(html).not.toContain("Add PDCA activity");
     for (const override of [{ activityMember: "bob" }, { connected: false }, { member: "bob" }]) {
       const unavailable = renderToStaticMarkup(<AtHandDrawer {...live} {...override} />);
       expect(unavailable).not.toContain("9 total tasks");

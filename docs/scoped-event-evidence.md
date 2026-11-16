@@ -1,5 +1,9 @@
 # Scoped event evidence in V3
 
+**Historical V3 implementation:** The V3 loop and its projections have been
+removed. The owner-only simple-loop daemon does not start event workers; this
+document does not establish current event processing support.
+
 Issue #108 projects triggering facts into decision inputs without promoting external
 text to instructions or execution evidence. The daemon supplies its existing event
 store to the core; no connection, monitoring job, provider read or new tool is created.

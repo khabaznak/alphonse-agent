@@ -37,15 +37,17 @@ function useAppearanceResource(user: string, descriptor: SkillAppearance | null)
 }
 
 export function MascotImage({ state, appearance = null, className = "brand-mascot" }: { state: AvatarState; appearance?: SkillAppearance | null; className?: string }) {
-  const entry = appearance?.states[state];
+  // Pending is a local request state, not a model phase or a new asset.
+  const imageState = state === "pending" ? "idle" : state;
+  const entry = appearance?.states[imageState];
   const resource = entry ? appearance?.resources?.[entry.resource] : undefined;
   const [failed, setFailed] = useState("");
   const identity = `${appearance?.revision || "base"}:${state}`;
   const useCostume = Boolean(resource?.startsWith("data:image/png;base64,") && failed !== identity);
   const frame = useCostume ? entry?.frame : undefined;
-  const label = `Alphonse is ${avatarStateLabel(state)}${useCostume ? ` · ${appearance?.label} appearance` : ""}.`;
+  const label = `Alphonse: ${avatarStateLabel(state)}${useCostume ? ` · ${appearance?.label} appearance` : ""}.`;
   return <span className={`mascot-image ${className}`} role="img" aria-label={label} title={label}>
-    <img key={`${identity}:${useCostume}`} src={useCostume ? resource : `/alphonse-states/${state}.png`} alt="" aria-hidden="true" onError={() => { if (useCostume) setFailed(identity); }} style={frame ? { width: `${frame[2] * 100}%`, height: `${frame[3] * 100}%`, maxWidth: "none", left: `${-frame[0] * 100}%`, top: `${-frame[1] * 100}%` } : undefined} />
+    <img key={`${identity}:${useCostume}`} src={useCostume ? resource : `/alphonse-states/${imageState}.png`} alt="" aria-hidden="true" onError={() => { if (useCostume) setFailed(identity); }} style={frame ? { width: `${frame[2] * 100}%`, height: `${frame[3] * 100}%`, maxWidth: "none", left: `${-frame[0] * 100}%`, top: `${-frame[1] * 100}%` } : undefined} />
   </span>;
 }
 

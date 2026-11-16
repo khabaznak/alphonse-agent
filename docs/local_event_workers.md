@@ -1,5 +1,9 @@
 # Local Event Workers
 
+**Current runtime limit:** The owner-only simple-loop daemon does not start the
+legacy event worker or integration listeners. The contract below describes the
+retained infrastructure and earlier runtime, not active background processing.
+
 Workers are same-host sidecars that publish validated facts to Alphonse through
 the v2 daemon's owner-only Unix socket. They do not access the queue database
 and cannot submit arbitrary prompts.

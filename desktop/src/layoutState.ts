@@ -1,9 +1,10 @@
 import type { ActivityEvent } from "./types";
 
 export const HOME_PROJECT_KEY = "__home__";
-export type AvatarState = "idle" | "planning" | "doing" | "checking" | "acting" | "error" | "disconnected";
+export type AvatarState = "idle" | "pending" | "planning" | "doing" | "checking" | "acting" | "error" | "disconnected";
 const AVATAR_STATE_LABELS: Record<AvatarState, string> = {
   idle: "Idle",
+  pending: "Request pending",
   planning: "Planning",
   doing: "Doing",
   checking: "Checking",
@@ -25,9 +26,10 @@ export function capdActivityLabel(event?: Pick<ActivityEvent, "phase" | "label">
   return fallback.toLowerCase().includes("work") ? "doing" : "idle";
 }
 
-export function avatarState(connected: boolean, error: string, activity: string): AvatarState {
+export function avatarState(connected: boolean, error: string, activity: string, ownerPending = false): AvatarState {
   if (!connected) return "disconnected";
   if (error.trim()) return "error";
+  if (ownerPending) return "pending";
   if (activity === "planning" || activity === "doing" || activity === "checking" || activity === "acting") return activity;
   return "idle";
 }

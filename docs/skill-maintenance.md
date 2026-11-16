@@ -1,5 +1,11 @@
 # Maintaining existing skill resources
 
+**Current runtime limit:** This document describes a native maintenance workflow
+and historical V3 test evidence. The owner-only simple loop does not yet provide
+general skill resource/script execution or the complete maintenance workflow.
+The package and data recovery rules below remain relevant to supported management
+operations; their presence does not make the conversational workflow available.
+
 Issue [#29](https://github.com/khabaznak/alphonse-agent/issues/29) extends the
 standard package lifecycle with `native.skill_maintain`. Scripts remain ordinary
 skill resources invoked by native Bash, without artifact registration.

@@ -1,5 +1,8 @@
 # PDCA Next-Step Parse Failure Contract
 
+**Historical V2 contract:** The PDCA loop has been removed. This document
+records a former failure boundary rather than current runtime behavior.
+
 Date: 2026-02-25
 Owner: task-mode
 Scope: `next_step_node` behavior when LLM proposal output is invalid/non-parseable.
