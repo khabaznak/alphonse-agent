@@ -145,8 +145,15 @@ class _Pending:
 
 
 class OAuthService:
-    def __init__(self, accounts: AccountService, clients: list[ClientConfig], *, client_factory=ProviderClient):
+    def __init__(self, accounts: AccountService, clients: list[ClientConfig], *, client_factory=ProviderClient,
+                 session_guard=None, transaction_guard=None):
         self.accounts, self.store = accounts, accounts.integrations
+        if session_guard is not None and not callable(session_guard):
+            raise ValueError('oauth_session_guard_invalid')
+        self.session_guard = session_guard
+        if transaction_guard is not None and not callable(transaction_guard):
+            raise ValueError('oauth_transaction_guard_invalid')
+        self.transaction_guard = transaction_guard
         if len({c.provider for c in clients}) != len(clients):
             raise OAuthError('oauth_client_ambiguous')
         self.clients = {c.provider: client_factory(c) for c in clients}
@@ -156,6 +163,8 @@ class OAuthService:
             db.execute('CREATE TABLE IF NOT EXISTS v2_oauth_leases (connection_id TEXT PRIMARY KEY, nonce TEXT NOT NULL)')
 
     def _owned(self, session, connection_id):
+        if self.session_guard is not None and self.session_guard(session) is not True:
+            raise PermissionError('oauth_session_unavailable')
         record = self.store.get(connection_id)
         if not record or not record.connection or record.provider_key not in SCOPES:
             raise OAuthError('oauth_connection_unavailable')
@@ -184,6 +193,8 @@ class OAuthService:
 
     def begin(self, session: AccountSession, *, connection_id: str, provider: str,
               capabilities: list[str], expected_revision: int, display_name: str = 'Account'):
+        if self.session_guard is not None and self.session_guard(session) is not True:
+            raise PermissionError('oauth_session_unavailable')
         if (provider not in self.clients or not capabilities or len(set(capabilities)) != len(capabilities)
                 or not set(capabilities) <= SCOPES[provider].keys()):
             raise OAuthError('oauth_capability_invalid')
@@ -268,15 +279,21 @@ class OAuthService:
         granted = token.get('scope', scopes)
         credentials['scope'] = granted if isinstance(granted, str) else ' '.join(granted)
         reference = self.store.credential_vault.put(record.integration_id, generation, credentials)
-        with self.store._connect() as db:
-            cursor = db.execute('''UPDATE v2_integrations SET connection_json=?, credential_ref=?,
-                credential_generation=?, enabled=1, revocation_pending=0, credential_deletion_pending=0,
-                secret_json='{}', updated_at=? WHERE integration_id=? AND connection_json=?
-                AND credential_generation=?''', (json.dumps(value, sort_keys=True), reference, generation,
-                value['updated_at'], record.integration_id, json.dumps(record.connection, sort_keys=True), record.credential_generation))
-        if cursor.rowcount != 1:
+        try:
+            with self.store._connect() as db:
+                db.execute('BEGIN IMMEDIATE')
+                if self.transaction_guard is not None and self.transaction_guard(db, session) is not True:
+                    raise PermissionError('oauth_session_unavailable')
+                cursor = db.execute('''UPDATE v2_integrations SET connection_json=?, credential_ref=?,
+                    credential_generation=?, enabled=1, revocation_pending=0, credential_deletion_pending=0,
+                    secret_json='{}', updated_at=? WHERE integration_id=? AND connection_json=?
+                    AND credential_generation=?''', (json.dumps(value, sort_keys=True), reference, generation,
+                    value['updated_at'], record.integration_id, json.dumps(record.connection, sort_keys=True), record.credential_generation))
+                if cursor.rowcount != 1:
+                    raise OAuthError('oauth_revision_conflict')
+        except Exception:
             self.store.credential_vault.delete(reference)
-            raise OAuthError('oauth_revision_conflict')
+            raise
         if record.credential_ref:
             try:
                 self.store.credential_vault.delete(record.credential_ref)

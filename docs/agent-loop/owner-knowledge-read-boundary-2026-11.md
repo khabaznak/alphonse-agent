@@ -102,6 +102,25 @@ provider, and it does not establish production readiness. More qualification is
 needed for recovery, cancellation and uncertain calls across the full runtime.
 Checks are point-in-time: revocation cannot retract data already dispatched to a
 provider.
+
+## Disclosure grant storage foundation
+
+An unregistered storage primitive can hold one explicitly issued owner grant
+for an exact provider, endpoint, account and model identity. No grant exists by
+default. Each replacement gets a new opaque grant ID, so revoke and regrant do
+not restore previously recorded authority. A locked check can compare a saved
+binding while the caller holds the same database transaction as pickup. It also
+requires the canonical owner to remain active. Changing a provider identity or
+revoking the grant fails the check.
+
+This primitive is not an authentication or consent interface: no runtime or
+Desktop entry point uses it, and its management caller must authenticate the
+owner and obtain explicit authorization. Future integration must derive a
+non-secret destination identity from trusted provider configuration, verify that
+it captures account and routing changes, and check the binding at dispatch,
+recovery and pickup. The storage check alone cannot validate a provider's actual
+network destination or retract data after a provider call starts. These gaps and
+in-flight semantics must be resolved before enabling the feature.
 The constructor flag is a test/rollout gate, not a revocation control: turning it
 off does not invalidate an already selected draft. A production switch needs an
 independent trusted revocation check at recovery and pickup before activation.

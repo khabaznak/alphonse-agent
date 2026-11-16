@@ -26,6 +26,40 @@ The broader #229 criteria for migrating shared capabilities, reconciling old or
 uncertain work, and qualifying the release remain separate from this audit.
 See #230 for simpler-loop capability and gym work.
 
+## Follow-up V3 retirement audit
+
+The follow-up source review after #239 and #240 checked the active intelligence
+package, daemon routing, engine settings, Python packaging, dependencies and
+remaining V3-named source references. The V3 implementation package is absent;
+the fresh-interpreter runtime test now checks that the package is not importable
+as well as checking that its former processor modules are not loaded. The router
+admits only `single_loop_experimental` with integer schema version 1 and a
+registered owner processor. Engine settings return only that engine, while
+preserving old settings and task stamps. These are source and disposable-test
+findings, not an inspection of an installed or running household process.
+
+No direct `core.intelligence.v3` import or LangChain/LangGraph dependency was
+found in the scoped Python source and dependency manifests. The sole packaged
+intelligence template is the shared task-state template; it includes a legacy
+PDCA field, not a runnable processor. Some remaining V3-named paths have distinct
+purposes and should not be removed just to erase the name:
+
+- Browser and question guards recognize old metadata to prevent unsafe replay
+  or disclosure. Old task and queue stamps remain recovery evidence.
+- Skill-selection metadata, resource receipts, memory continuity and outbox
+  references can describe retained state or shared behavior. They need explicit
+  data and capability migration before their persisted keys can change.
+- Historical evaluation fixtures and evidence may refer to a V3 arm or recorded
+  results without containing the retired executable loop.
+
+A focused disposable run of runtime registration, engine settings and schema
+boundaries, supersession inspection/hold, and queue identity tests passed 96
+tests. This supports the routing and preservation observations, not a complete
+V3-retirement acceptance: the owner worker still does not start general legacy
+scheduler, event, integration-listener or outbox workers; shared capability and
+old task/effect recovery are not fully migrated. See the transition inventory
+for the separate migration, effect reconciliation and rollback limitations.
+
 The combined disposable Python suite covered 151 tests across engine settings,
 runtime, migration, owner recovery and restart, daemon IPC, claim fencing, TUI
 identity compatibility and installed distributions. The migration tests were

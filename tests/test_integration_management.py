@@ -147,6 +147,91 @@ def test_peer_identity_not_payload(management, monkeypatch):
         server._optional_management(SimpleNamespace(getpeereid=lambda: (os.getuid()+1, 0)), request)
 
 
+def test_owner_gmail_setup_uses_canonical_owner_and_limits_actions(management, monkeypatch):
+    import os
+    f = management
+    f.runtime.user = 'child'  # Stale runtime identity must never choose the actor.
+    f.runtime.integration_store = f.store
+    monkeypatch.setattr(os.path, 'samefile', lambda *_: True)
+    captured = []
+    oauth = SimpleNamespace(clients={})
+    daemon = SimpleNamespace(runtime=f.runtime, experimental_owner_only=True,
+                             optional_accounts=lambda session: oauth)
+    server = V2DaemonServer(daemon)
+    peer = SimpleNamespace(getpeereid=lambda: (os.getuid(), 0))
+    def invoke(session, action, values):
+        captured.append((session.actor_user_id, action, values))
+        return {'providers': [{'provider': 'google', 'capabilities': ['mail_read', 'calendar_read']},
+                              {'provider': 'microsoft', 'capabilities': ['mail_read']}],
+                'connections': [{'provider': 'google', 'connection_id': 'g'}, {'provider': 'microsoft', 'connection_id': 'm'}],
+                'grants': []}
+    monkeypatch.setattr(f.management, 'request', invoke)
+    req = lambda action, values={}: {'version': PROTOCOL_VERSION, 'params': {'action': action, 'values': values}}
+    result = server._optional_management(peer, req('catalog'))
+    assert captured[-1][0] == 'parent'
+    assert result['owner_gmail_setup_only'] is True
+    assert result['providers'] == [{'provider': 'google', 'capabilities': ['mail_read']}]
+    assert result['connections'] == [{'provider': 'google', 'connection_id': 'g'}]
+    started = []
+    server._oauth_loopback = SimpleNamespace(start=started.append)
+    values = {'connection_id': 'new', 'provider': 'google', 'capabilities': ['mail_read'],
+              'expected_revision': 0, 'display_name': 'Fixture'}
+    server._optional_management(peer, req('begin', values))
+    assert captured[-1] == ('parent', 'begin', values)
+    assert started == ['google']
+    for action, values in [
+        ('review', {}), ('set_status', {}), ('complete', {}),
+        ('begin', {'provider': 'google', 'capabilities': ['calendar_read']}),
+        ('begin', {'provider': 'microsoft', 'capabilities': ['mail_read']}),
+        ('save_grant', {'beneficiary_user_id': 'child', 'operations': ['mail_read'],
+                        'resources': ['INBOX'], 'recipient_user_ids': ['parent'], 'project_id': None}),
+        ('pause', {'connection_id': 'one'}),  # Synthetic provider is not Gmail.
+        ('revoke_grant', {'grant_id': 'grant-one', 'expected_revision': 1}),
+    ]:
+        with pytest.raises(PermissionError):
+            server._optional_management(peer, req(action, values))
+    with pytest.raises(ValueError, match='identity_payload'):
+        server._optional_management(peer, {'version': PROTOCOL_VERSION, 'params': {'action': 'catalog', 'user': 'child'}})
+    with pytest.raises(PermissionError, match='peer_denied'):
+        server._optional_management(SimpleNamespace(getpeereid=lambda: (os.getuid()+1, 0)), req('catalog'))
+
+
+def test_owner_gmail_setup_accepts_only_narrow_self_grant(management, monkeypatch):
+    import os
+    f = management
+    f.runtime.integration_store = f.store
+    monkeypatch.setattr(os.path, 'samefile', lambda *_: True)
+    f.service.create_connection(AccountSession('parent'), connection_id='gmail', provider_key='google',
+                                provider_subject='fixture', display_name='Fixture')
+    f.store.install_credentials('gmail', {'token': 'fixture'}, expected_generation=0)
+    f.service.save_connection(AccountSession('parent'), connection_id='gmail', expected_revision=1,
+                              provider_subject='fixture', capabilities=['mail_read'], granted_scopes=['fixture'])
+    daemon = SimpleNamespace(runtime=f.runtime, experimental_owner_only=True,
+                             optional_accounts=lambda session: SimpleNamespace())
+    server = V2DaemonServer(daemon)
+    peer = SimpleNamespace(getpeereid=lambda: (os.getuid(), 0))
+    values = dict(grant_id='gmail-owner', connection_id='gmail', expected_revision=0,
+                  beneficiary_user_id='parent', operations=['mail_read'], resources=['INBOX'],
+                  recipient_user_ids=['parent'], expires_at=expiry(), project_id=None)
+    req = lambda value: {'version': PROTOCOL_VERSION, 'params': {'action': 'save_grant', 'values': value}}
+    result = server._optional_management(peer, req(values))
+    assert result['grantor_user_id'] == result['beneficiary_user_id'] == 'parent'
+    with pytest.raises(PermissionError, match='scope_unavailable'):
+        server._optional_management(peer, req({**values, 'resources': ['INBOX', 'OTHER']}))
+
+
+def test_owner_gmail_setup_rejects_split_owner_database(management):
+    import os
+    f = management
+    f.runtime.integration_store = f.store
+    daemon = SimpleNamespace(runtime=f.runtime, experimental_owner_only=True,
+                             optional_accounts=lambda session: None)
+    server = V2DaemonServer(daemon)
+    with pytest.raises(PermissionError, match='owner_database_unavailable'):
+        server._optional_management(SimpleNamespace(getpeereid=lambda: (os.getuid(), 0)),
+                                    {'version': PROTOCOL_VERSION, 'params': {'action': 'catalog'}})
+
+
 def test_real_unix_peer_is_authenticated_without_python_getpeereid(management):
     import socket
     import os

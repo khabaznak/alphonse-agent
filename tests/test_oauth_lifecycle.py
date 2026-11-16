@@ -241,6 +241,39 @@ def test_pause_during_callback_cannot_reenable(f):
     assert f.store.get('one').connection['status'] == 'paused'
 
 
+def test_guard_rechecks_before_exchange_and_before_credential_persistence(f):
+    allowed = {'value': True}
+    f.service.session_guard = lambda session: allowed['value'] and session == f.owner
+    url = begin(f)
+    allowed['value'] = False
+    with pytest.raises(PermissionError, match='oauth_session_unavailable'):
+        f.service.complete(f.owner, url)
+    assert not f.backend.data
+    allowed['value'] = True
+    url = begin(f)
+    f.service.clients['google'].on_exchange = lambda: allowed.update(value=False)
+    with pytest.raises(PermissionError, match='oauth_session_unavailable'):
+        f.service.complete(f.owner, url)
+    assert not f.backend.data
+    assert f.store.get('one').connection['status'] == 'reauth_required'
+
+
+def test_transaction_guard_rejects_owner_change_after_vault_write(f, monkeypatch):
+    url = begin(f)
+    allowed = {'value': True}
+    f.service.transaction_guard = lambda db, session: db.in_transaction and allowed['value']
+    original = f.store.credential_vault.put
+    def put_then_change(*args, **kwargs):
+        reference = original(*args, **kwargs)
+        allowed['value'] = False
+        return reference
+    monkeypatch.setattr(f.store.credential_vault, 'put', put_then_change)
+    with pytest.raises(PermissionError, match='oauth_session_unavailable'):
+        f.service.complete(f.owner, url)
+    assert not f.backend.data
+    assert not f.store.get('one').credential_ref
+
+
 def test_refresh_serialized_across_services_and_rotation_saved(f):
     connect(f)
     args = authorization(f)

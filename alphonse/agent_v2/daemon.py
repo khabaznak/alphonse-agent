@@ -271,23 +271,34 @@ class V2Daemon:
                 or not isinstance(processor, OwnerReadConversationProcessor)
                 or processor.atomic_checkpoints is None):
             raise RuntimeError('owner_worker_configuration_invalid')
+        failure = None
         with self._lifecycle_lock:
-            if self._stopped:
+            if self._stopped or getattr(self, '_owner_start_failed', False):
                 raise RuntimeError('alphonse_v2_daemon_stopped')
             if self._processor_thread is not None and self._processor_thread.is_alive():
                 return
             self._acquire_single_instance_lock()
-        try:
-            self._stop.clear()
-            processor.selected_draft_sink = self.register_owner_checkpoint
-            self.ipc.experimental_owner_ingress = True
-            self.ipc.start()
-            self._processor_thread = threading.Thread(target=self._owner_process_loop_with_release,
-                name='alphonse-owner-read', daemon=True)
-            self._processor_thread.start()
-        except Exception:
+            try:
+                # Keep the check, IPC startup and worker creation in one
+                # lifecycle critical section. Concurrent calls on this same
+                # object share the process lock and otherwise can both start
+                # an owner worker before either publishes its thread.
+                self._stop.clear()
+                processor.selected_draft_sink = self.register_owner_checkpoint
+                self.ipc.experimental_owner_ingress = True
+                self.ipc.start()
+                self._processor_thread = threading.Thread(target=self._owner_process_loop_with_release,
+                    name='alphonse-owner-read', daemon=True)
+                self._processor_thread.start()
+            except Exception as exc:
+                # Block another start before releasing the lifecycle lock,
+                # but perform stop/join after releasing it: IPC and worker
+                # cleanup may themselves need that lock.
+                self._owner_start_failed = True
+                failure = exc
+        if failure is not None:
             self.stop()
-            raise
+            raise failure
 
     def _owner_process_loop_with_release(self) -> None:
         try:
@@ -2771,7 +2782,27 @@ class V2Daemon:
                     client_id, redirect = os.environ.get(prefix + "CLIENT_ID", ""), os.environ.get(prefix + "REDIRECT_URI", "")
                     if client_id or redirect:
                         clients.append(ClientConfig(provider, client_id, redirect))
-                self._optional_account_service = OAuthService(accounts, clients)
+                def owner_session_guard(candidate):
+                    if getattr(self, 'experimental_owner_only', False) is not True:
+                        return True
+                    owner = self.runtime.user_store.admin_user()
+                    return bool(owner is not None and owner.is_active is True and owner.role in ('admin', 'owner')
+                                and self.runtime.user_store.is_admin(owner.user_id)
+                                and candidate.actor_user_id == owner.user_id)
+                def owner_transaction_guard(db, candidate):
+                    if getattr(self, 'experimental_owner_only', False) is not True:
+                        return True
+                    try:
+                        if not os.path.samefile(self.runtime.user_store.db_path, self.runtime.integration_store.db_path):
+                            return False
+                        row = db.execute('''SELECT 1 FROM v2_user_settings s JOIN v2_users u ON u.user_id=s.value
+                            WHERE s.key='admin_user_id' AND s.value=? AND u.role IN ('admin','owner') AND u.is_active=1''',
+                                         (candidate.actor_user_id,)).fetchone()
+                        return row is not None
+                    except (OSError, AttributeError, TypeError, ValueError):
+                        return False
+                self._optional_account_service = OAuthService(accounts, clients, session_guard=owner_session_guard,
+                                                               transaction_guard=owner_transaction_guard)
             return self._optional_account_service
 
     def list_integrations(self) -> list[dict[str, Any]]:

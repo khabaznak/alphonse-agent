@@ -29,4 +29,10 @@ describe("email and calendar integrations", () => {
     expect(html).toContain("Account needs attention");
     expect(html).not.toContain("1 account connected");
   });
+  it("shows only Gmail when the owner runtime exposes Gmail setup alone", () => {
+    const html = renderToStaticMarkup(<AccountServiceCards catalog={{ ...catalog, owner_gmail_setup_only: true }} onChoose={() => {}} />);
+    expect(html).toContain("Gmail");
+    expect(html).not.toContain("Google Calendar");
+    expect(html).not.toContain("Outlook");
+  });
 });

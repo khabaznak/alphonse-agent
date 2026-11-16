@@ -405,3 +405,160 @@ def test_owner_stop_retains_lock_until_inflight_worker_exits(monkeypatch):
     assert not lock_released.is_set()
     allow_exit.set()
     assert lock_released.wait(3)
+
+
+def test_concurrent_start_creates_only_one_owner_worker(tmp_path, monkeypatch):
+    """Two starts on the same object must not share one lock and start two workers."""
+    from alphonse.agent_v2.core.intelligence.simple_loop.owner_read_processor import OwnerReadConversationProcessor
+
+    daemon = V2Daemon.__new__(V2Daemon)
+    daemon.experimental_owner_only = True
+    processor = OwnerReadConversationProcessor.__new__(OwnerReadConversationProcessor)
+    processor.atomic_checkpoints = object()
+    daemon.runtime = SimpleNamespace(
+        queue=SQLiteMessageQueue(tmp_path / 'queue.sqlite', experimental_claim_fencing=True),
+        processor=SimpleNamespace(owner_read_candidate=processor))
+    daemon._lifecycle_lock = threading.RLock()
+    daemon._stopped = False
+    daemon._processor_thread = None
+    daemon._stop = threading.Event()
+    entered, release, worker_started, worker_exit, second_attempt, duplicate_ipc = (
+        threading.Event() for _ in range(6))
+    calls = []
+
+    class IPC:
+        def start(self):
+            calls.append('ipc')
+            if len(calls) > 1:
+                duplicate_ipc.set()
+            entered.set()
+            assert release.wait(3)
+
+        def stop(self):
+            pass
+
+    daemon.ipc = IPC()
+    monkeypatch.setattr(daemon, '_acquire_single_instance_lock', lambda: None)
+    monkeypatch.setattr(daemon, '_release_single_instance_lock', lambda: None)
+    def worker():
+        calls.append('worker')
+        worker_started.set()
+        assert worker_exit.wait(3)
+    monkeypatch.setattr(daemon, '_owner_process_loop_with_release', worker)
+    failures = []
+    def start(second=False):
+        try:
+            if second:
+                second_attempt.set()
+            daemon.start()
+        except Exception as exc:
+            failures.append(exc)
+
+    first = threading.Thread(target=start)
+    second = threading.Thread(target=start, args=(True,))
+    first.start()
+    assert entered.wait(3)
+    second.start()
+    try:
+        assert second_attempt.wait(3)
+        assert not duplicate_ipc.wait(0.2)
+        release.set()
+        first.join(3)
+        second.join(3)
+        assert not first.is_alive() and not second.is_alive()
+        assert worker_started.wait(3)
+        assert not failures
+        assert calls.count('ipc') == 1
+        assert calls.count('worker') == 1
+    finally:
+        release.set()
+        worker_exit.set()
+        daemon.stop()
+
+
+@pytest.mark.parametrize('failure_stage', ['ipc', 'worker'])
+def test_owner_start_failure_stops_outside_lifecycle_lock(tmp_path, monkeypatch, failure_stage):
+    from alphonse.agent_v2.core.intelligence.simple_loop.owner_read_processor import OwnerReadConversationProcessor
+
+    daemon = V2Daemon.__new__(V2Daemon)
+    daemon.experimental_owner_only = True
+    processor = OwnerReadConversationProcessor.__new__(OwnerReadConversationProcessor)
+    processor.atomic_checkpoints = object()
+    daemon.runtime = SimpleNamespace(
+        queue=SQLiteMessageQueue(tmp_path / 'queue.sqlite', experimental_claim_fencing=True),
+        processor=SimpleNamespace(owner_read_candidate=processor))
+    daemon._lifecycle_lock = threading.RLock()
+    daemon._stopped = False
+    daemon._processor_thread = None
+    daemon._stop = threading.Event()
+    cleanup_acquired = threading.Event()
+    class IPC:
+        def start(self):
+            if failure_stage == 'ipc':
+                raise RuntimeError('synthetic startup failure')
+        def stop(self):
+            def cleanup():
+                with daemon._lifecycle_lock:
+                    cleanup_acquired.set()
+            thread = threading.Thread(target=cleanup)
+            thread.start()
+            thread.join(1)
+    daemon.ipc = IPC()
+    released = []
+    monkeypatch.setattr(daemon, '_acquire_single_instance_lock', lambda: None)
+    monkeypatch.setattr(daemon, '_release_single_instance_lock', lambda: released.append(True))
+    original_start = threading.Thread.start
+    def start_thread(thread):
+        if failure_stage == 'worker' and thread.name == 'alphonse-owner-read':
+            raise RuntimeError('synthetic startup failure')
+        return original_start(thread)
+    monkeypatch.setattr(threading.Thread, 'start', start_thread)
+    with pytest.raises(RuntimeError, match='synthetic startup failure'):
+        daemon.start()
+    assert cleanup_acquired.is_set()
+    assert released == [True]
+    with pytest.raises(RuntimeError, match='daemon_stopped'):
+        daemon.start()
+
+
+def test_owner_stop_during_start_waits_then_stops_worker(tmp_path, monkeypatch):
+    from alphonse.agent_v2.core.intelligence.simple_loop.owner_read_processor import OwnerReadConversationProcessor
+
+    daemon = V2Daemon.__new__(V2Daemon)
+    daemon.experimental_owner_only = True
+    processor = OwnerReadConversationProcessor.__new__(OwnerReadConversationProcessor)
+    processor.atomic_checkpoints = object()
+    daemon.runtime = SimpleNamespace(
+        queue=SQLiteMessageQueue(tmp_path / 'queue.sqlite', experimental_claim_fencing=True),
+        processor=SimpleNamespace(owner_read_candidate=processor))
+    daemon._lifecycle_lock = threading.RLock()
+    daemon._stopped = False
+    daemon._processor_thread = None
+    daemon._stop = threading.Event()
+    entered, release, stopped = (threading.Event() for _ in range(3))
+    class IPC:
+        def start(self):
+            entered.set()
+            assert release.wait(3)
+        def stop(self):
+            stopped.set()
+    daemon.ipc = IPC()
+    monkeypatch.setattr(daemon, '_acquire_single_instance_lock', lambda: None)
+    monkeypatch.setattr(daemon, '_release_single_instance_lock', lambda: None)
+    monkeypatch.setattr(daemon, '_owner_process_loop_with_release', lambda: daemon._stop.wait(3))
+    starter = threading.Thread(target=daemon.start)
+    stopper = threading.Thread(target=daemon.stop)
+    starter.start()
+    assert entered.wait(3)
+    stopper.start()
+    try:
+        assert not stopped.wait(0.2)
+        release.set()
+        starter.join(3)
+        stopper.join(3)
+        assert not starter.is_alive() and not stopper.is_alive()
+        assert stopped.is_set() and daemon._stopped
+        assert daemon._processor_thread is not None and not daemon._processor_thread.is_alive()
+    finally:
+        release.set()
+        daemon._stop.set()

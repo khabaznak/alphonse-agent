@@ -26,8 +26,10 @@ def test_owner_import_does_not_load_v3_processor_in_a_fresh_interpreter():
     # the actual import boundary rather than relying on test order.
     subprocess.run([sys.executable, '-c', '''
 import sys
+import importlib.util
 import alphonse.agent_v2.runtime
 import alphonse.agent_v2.core.intelligence.simple_loop.owner_read_processor
+assert importlib.util.find_spec('alphonse.agent_v2.core.intelligence.v3') is None
 for name in ('processor', 'executor', 'planner', 'outer'):
     assert f'alphonse.agent_v2.core.intelligence.v3.{name}' not in sys.modules, name
 '''], check=True)

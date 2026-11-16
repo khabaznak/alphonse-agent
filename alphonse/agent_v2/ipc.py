@@ -634,28 +634,82 @@ class V2DaemonServer:
         return uid
 
     def _optional_management(self, connection, request):
-        if getattr(self.daemon, 'experimental_owner_only', False) is True:
-            raise RuntimeError('owner_only_integrations_unavailable')
         from alphonse.agent_v2.accounts import AccountSession
         self._local_peer_uid(connection)
-        session = AccountSession(self.daemon.runtime.user)
         params = request.get('params', {})
-        if set(params) - {'action', 'values'}:
+        if not isinstance(params, dict) or set(params) - {'action', 'values'}:
             raise ValueError('management_identity_payload_denied')
         if request.get('version') != PROTOCOL_VERSION:
             raise ValueError('daemon_protocol_version_unsupported')
+        owner_only = getattr(self.daemon, 'experimental_owner_only', False) is True
+        if owner_only:
+            users = self.daemon.runtime.user_store
+            try:
+                if not os.path.samefile(users.db_path, self.daemon.runtime.integration_store.db_path):
+                    raise PermissionError('management_owner_database_unavailable')
+            except (OSError, AttributeError, TypeError, ValueError):
+                raise PermissionError('management_owner_database_unavailable') from None
+            owner = users.admin_user()
+            if (owner is None or owner.is_active is not True or owner.role not in ('admin', 'owner')
+                    or not users.is_admin(owner.user_id)):
+                raise PermissionError('management_owner_unavailable')
+            session = AccountSession(owner.user_id)
+        else:
+            session = AccountSession(self.daemon.runtime.user)
+        action = params.get('action')
+        values = params.get('values', {})
+        if not isinstance(values, dict):
+            raise ValueError('management_values_invalid')
+        if owner_only:
+            if action not in {'catalog', 'begin', 'save_grant', 'revoke_grant', 'pause', 'disconnect', 'retry_deletion'}:
+                raise PermissionError('owner_only_account_action_unavailable')
+            if action == 'catalog' and values:
+                raise ValueError('management_values_invalid')
+            if action == 'begin' and (values.get('provider') != 'google' or values.get('capabilities') != ['mail_read']):
+                raise PermissionError('owner_only_account_scope_unavailable')
+            if action == 'save_grant' and (values.get('beneficiary_user_id') != owner.user_id
+                    or values.get('operations') != ['mail_read'] or values.get('resources') != ['INBOX']
+                    or values.get('recipient_user_ids') != [owner.user_id] or values.get('project_id') is not None):
+                raise PermissionError('owner_only_account_scope_unavailable')
+            if action == 'revoke_grant':
+                grant_id = values.get('grant_id')
+                with self.daemon.runtime.integration_store._connect() as db:
+                    row = db.execute('SELECT connection_id FROM v2_account_grants WHERE grant_id=?', (grant_id,)).fetchone()
+                grant_record = self.daemon.runtime.integration_store.get(row['connection_id']) if row is not None else None
+                if (grant_record is None or grant_record.provider_key != 'google'
+                        or grant_record.connection.get('owner_user_id') != owner.user_id):
+                    raise PermissionError('owner_only_account_scope_unavailable')
+            if action in {'begin', 'save_grant', 'pause', 'disconnect', 'retry_deletion'}:
+                connection_id = values.get('connection_id')
+                record = self.daemon.runtime.integration_store.get(connection_id) if isinstance(connection_id, str) else None
+                if record is not None and (record.provider_key != 'google'
+                        or record.connection.get('owner_user_id') != owner.user_id):
+                    raise PermissionError('owner_only_account_scope_unavailable')
+                if (action == 'begin' and record is not None
+                        and set(record.connection.get('capabilities', ())) - {'mail_read'}):
+                    # A narrow reconnect would silently replace broader consent.
+                    raise PermissionError('owner_only_combined_account_reconnect_unavailable')
         oauth = self.daemon.optional_accounts(session)
         management = self.daemon.runtime.integration_management
         management.oauth = oauth
-        if params.get('action') == 'begin':
+        if action == 'begin':
             from alphonse.agent_v2.integrations.oauth_loopback import OAuthLoopback
             if not hasattr(self, '_oauth_loopback'):
                 self._oauth_loopback = OAuthLoopback(oauth)
-            self._oauth_loopback.start(params['values']['provider'])
+            self._oauth_loopback.start(values['provider'])
         # Callback exchange is accepted only by the loopback listener, never raw IPC.
-        if params.get('action') == 'complete':
+        if action == 'complete':
             raise PermissionError('oauth_callback_transport_required')
-        return management.request(session, params.get('action'), params.get('values', {}))
+        result = management.request(session, action, values)
+        if owner_only and action == 'catalog':
+            result['owner_gmail_setup_only'] = True
+            result['providers'] = [dict(provider='google', capabilities=['mail_read'])
+                                   for provider in result['providers'] if provider['provider'] == 'google'
+                                   and 'mail_read' in provider['capabilities']]
+            result['connections'] = [item for item in result['connections'] if item['provider'] == 'google']
+            connection_ids = {item['connection_id'] for item in result['connections']}
+            result['grants'] = [grant for grant in result['grants'] if grant['connection_id'] in connection_ids]
+        return result
 
     def _dispatch(self, request: Any) -> dict[str, Any]:
         if not isinstance(request, dict):
