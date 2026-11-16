@@ -98,6 +98,48 @@ def expire(f):
     f.store.install_credentials('one', token, expected_generation=record.credential_generation)
 
 
+def test_no_refresh_token_access_refuses_expired_credentials_without_mutation(f):
+    connect(f)
+    args = authorization(f)
+    assert f.service.token_without_refresh(f.owner, authorization=args) == 'disposable-access'
+    expire(f)
+    before = dict(f.backend.data)
+    before_revision = revision(f)
+    with pytest.raises(OAuthError, match='oauth_refresh_required'):
+        f.service.token_without_refresh(f.owner, authorization=args)
+    assert f.service.clients['google'].refresh_count == 0
+    assert f.backend.data == before and revision(f) == before_revision
+
+
+def test_account_health_reports_token_expiry_without_refreshing_or_exposing_tokens(f):
+    connect(f)
+    assert f.service.health(f.owner, 'one')['access_token_status'] == 'current'
+    expire(f)
+    before = dict(f.backend.data)
+    health = f.service.health(f.owner, 'one')
+    assert health['access_token_status'] == 'refresh_required'
+    assert health['credential_health'] == 'available'
+    assert 'disposable-access' not in json.dumps(health)
+    assert 'disposable-refresh' not in json.dumps(health)
+    assert f.service.clients['google'].refresh_count == 0 and f.backend.data == before
+    with pytest.raises(PermissionError):
+        f.service.health(f.other, 'one')
+
+
+@pytest.mark.parametrize('change', [
+    {'expires_at': float('nan')}, {'expires_at': float('inf')},
+    {'expires_at': 'not-a-time'}, {'access_token': ''}, {'access_token': None},
+])
+def test_no_refresh_token_access_rejects_malformed_credentials(f, monkeypatch, change):
+    connect(f)
+    args = authorization(f)
+    original = f.service._read
+    monkeypatch.setattr(f.service, '_read', lambda record: {**original(record), **change})
+    with pytest.raises(OAuthError, match='oauth_refresh_required'):
+        f.service.token_without_refresh(f.owner, authorization=args)
+    assert f.service.clients['google'].refresh_count == 0
+
+
 @pytest.mark.parametrize('provider', ['google', 'microsoft'])
 def test_connect_minimal_scopes_and_secret_free_health(f, provider):
     health = connect(f, provider)

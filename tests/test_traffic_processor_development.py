@@ -14,14 +14,13 @@ from alphonse.agent_v2.evaluation.traffic_processor_development import compare_t
     ('verification-block', [{'operation': 'inspect'}, {'operation': 'search', 'field': 'plate', 'subject': 'TEST-706'}],
      {'status': 'blocked', 'blocker': 'verification_required'}),
 ])
-def test_three_processors_share_portal_observations(case, actions, answer):
+def test_simple_loop_uses_portal_observations(case, actions, answer):
     report = compare_traffic(case, actions=actions, answer=answer)
     assert report['decision_qualified'] is False
     for arm, result in report['arms'].items():
         assert result['availability'] == 'available', (arm, result)
         assert result['passed'] is True, (arm, result)
         assert result['delivery'] == 'unassessed'
-        assert result['projection_enabled'] is (arm == 'targeted_v3_projection')
         assert result['portal_audit'][-1]['event'] == 'search'
 
 
@@ -67,8 +66,8 @@ def test_processor_failure_cannot_pass_even_with_matching_portal_observation(mon
     def failed_processor(case, portal, actions, answer, emit):
         portal.search(field='plate', subject='TEST-701')
         return 'failed', json.dumps(answer)
-    monkeypatch.setattr(module, '_v3', failed_processor)
-    result = module._worker({'case': 'ticket', 'arm': 'current_v3',
+    monkeypatch.setattr(module, '_candidate', failed_processor)
+    result = module._worker({'case': 'ticket', 'arm': 'single_loop',
         'actions': [{'operation': 'search', 'field': 'plate', 'subject': 'TEST-701'}],
         'answer': {'status': 'verified', 'subject': 'TEST-701', 'ticket_ids': ['T-71']}})
     assert result['portal_oracle']['passed'] is True

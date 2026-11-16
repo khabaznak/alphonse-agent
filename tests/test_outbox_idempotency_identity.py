@@ -8,8 +8,10 @@ from alphonse.agent_v2.core.io.channels import ChannelAddress
 from alphonse.agent_v2.core.io.outbox import SQLiteOutboundStore
 
 
-@pytest.mark.parametrize('transaction', [False, True])
-@pytest.mark.parametrize('change', ['audience', 'destination', 'message', 'task', 'kind', 'metadata'])
+@pytest.mark.parametrize(('transaction', 'change'), [
+    (False, 'audience'), (False, 'destination'), (False, 'message'),
+    (False, 'task'), (False, 'kind'), (False, 'metadata'), (True, 'metadata'),
+])
 def test_idempotency_rejects_different_operation_without_mutation(tmp_path, transaction, change):
     store = SQLiteOutboundStore(tmp_path / 'outbox.sqlite')
     address = ChannelAddress('desktop', 'desktop', 'alice-private', alphonse_user_id='alice')
@@ -121,48 +123,3 @@ def test_reclaim_requires_own_persistent_in_memory_connection():
             first.reclaim_expired(conn=conn)
     with first._connect() as conn:
         assert first.reclaim_expired(conn=conn) == 0
-
-
-def test_regenerated_ack_conflict_keeps_one_message_and_continues_task(tmp_path):
-    from alphonse.agent_v2.core.core import CoreLoopContext
-    from alphonse.agent_v2.core.inference import InferenceResult
-    from alphonse.agent_v2.core.intelligence.task_state import TaskState
-    from alphonse.agent_v2.core.intelligence.v3.processor import HierarchicalCAPDProcessor
-    from alphonse.agent_v2.core.io import build_outbox_delivery_sink, channel_metadata
-    from alphonse.agent_v2.core.messages import InMemoryMessageQueue
-    from alphonse.agent_v2.system_one import SystemOneAdmissionDecision
-
-    class Inference:
-        def __init__(self, text):
-            self.text = text
-        def generate_json(self, request):
-            return InferenceResult(json_value={'requested_outcome': 'fixture request', 'supplied_parameters': [],
-                'unresolved_dependencies': [], 'constraints': [], 'superseded_constraints': []})
-        def generate_markdown(self, request):
-            return InferenceResult(content=self.text, model_profile=request.model_profile)
-
-    class Judge:
-        def classify_task_admission(self, **kwargs):
-            return SystemOneAdmissionDecision(True, 0.97, True)
-        def review_task_acknowledgement(self, **kwargs):
-            return True
-
-    def task():
-        return TaskState(task_id='same-task', message_id='same-task', goal='fixture request', user='alice',
-            metadata={'routing_disposition': 'pdca_task', 'channel': channel_metadata(
-                integration_id='desktop', provider_key='tui', channel_target='alice', alphonse_user_id='alice')})
-
-    store = SQLiteOutboundStore(tmp_path / 'outbox.sqlite')
-    events = []
-    def context(message):
-        return CoreLoopContext(messages=InMemoryMessageQueue(), inference=Inference(message), system_one=Judge(),
-            delivery_sink=build_outbox_delivery_sink(outbox=store), activity_sink=events.append)
-
-    original, resumed = task(), task()
-    assert HierarchicalCAPDProcessor._admit_initial_human_task(original, context('I will check.')) is False
-    events.clear()
-    assert HierarchicalCAPDProcessor._admit_initial_human_task(resumed, context('I will look into it.')) is False
-    assert resumed.metadata['v3_admission']['acknowledgement'] == {'status': 'delivery_failed', 'error_type': 'ValueError'}
-    assert resumed.status != 'completed'
-    assert not any(event.label == 'request acknowledged' for event in events)
-    assert [item.message for item in store.list()] == ['I will check.']

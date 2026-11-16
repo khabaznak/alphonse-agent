@@ -408,7 +408,7 @@ follow the existing restart/versioning contract. No artifact IDs enter curation.
 
 ## User surfaces and operational visibility
 
-Desktop and TUI expose the same service contracts:
+Desktop exposes these service contracts:
 
 - Connections: add account, capability consent, owner, health, pause, reconnect,
   disconnect, and explicit account grants. No credentials returned after entry.
@@ -462,10 +462,10 @@ its evidence visible and no duplicate task after restart.
   account service authorization, health, OAuth lifecycle, and redacted IPC.
 - [ ] Implement native optional provider registration without changing messaging
   channel routing or making providers mandatory at startup.
-- [ ] Add connection/grant management in Desktop and TUI.
+- [ ] Add connection/grant management in Desktop.
 
-Primary areas: `integrations/`, `daemon.py`, `ipc.py`, runtime wiring, Desktop
-settings, and TUI integrations. New modules should separate accounts/credentials
+Primary areas: `integrations/`, `daemon.py`, `ipc.py`, runtime wiring and Desktop
+settings. New modules should separate accounts/credentials
 from existing message-channel configuration.
 
 Gate: two owners/two accounts of one provider, grant narrowing/revocation,
@@ -486,7 +486,7 @@ from logs, persisted project files, IPC, and inference requests.
 
 Primary areas: project services/stores, `core/scheduled_tasks.py`,
 `services/scheduled_worker.py`, the new acquisition service, daemon/IPC,
-`desktop/src/`, and TUI. Update `docs/project-config.md` to distinguish project
+and `desktop/src/`. Update `docs/project-config.md` to distinguish project
 intent from authorized operational policies.
 
 Gate: Monday-only zero off-window reads (including retries/attachments), timezone

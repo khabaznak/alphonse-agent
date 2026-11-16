@@ -8,9 +8,10 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
-from dataclasses import dataclass, field, replace
+from dataclasses import InitVar, dataclass, field, replace
 from datetime import datetime
 from enum import Enum
+from threading import Lock
 from time import sleep
 from typing import TYPE_CHECKING, Any, Callable, Protocol
 from uuid import uuid4
@@ -33,11 +34,12 @@ if TYPE_CHECKING:
     from alphonse.agent_v2.core.inference import InferenceImage, InferenceRouter
     from alphonse.agent_v2.core.intelligence.task_state import TaskState
     from alphonse.agent_v2.core.messages.queue import MessageSelector, QueuedMessage
+    from alphonse.agent_v2.core.messages.claim_fence import ClaimReceipt
     from alphonse.agent_v2.core.tools.registry import ToolDefinition
 
 
 class ImprovementPhase(str, Enum):
-    """PDCA-inspired phases used by the intelligence processor."""
+    """Progress phases reported by intelligence processors."""
 
     PLAN = "plan"
     DO = "do"
@@ -61,6 +63,7 @@ class ProcessingStatus(str, Enum):
     WAITING = "waiting"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    SUPERSEDED = "superseded"
 
 
 class LoopStepStatus(str, Enum):
@@ -75,6 +78,7 @@ class LoopStepStatus(str, Enum):
     WAITING = "waiting"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    SUPERSEDED = "superseded"
 
 
 @dataclass(frozen=True)
@@ -204,6 +208,8 @@ class ToolExecutionContext:
     cancellation_checker: Callable[[], bool] | None = None
     skill_bindings: Any | None = None
     browser_workflow_service: Any | None = None
+    claim_receipt: Any | None = None
+    owner_gmail_service: Any | None = None
 
     def record_memory_event(self, task: TaskState, heading: str, content: Any) -> None:
         """Record an event through the task's configured memory adapter."""
@@ -235,8 +241,12 @@ class CoreLoopContext:
     program_runner: Any | None = None
     identity_resolver: Any | None = None
     cancellation_checker: Callable[[], bool] | None = None
+    # Host-owned synchronization for a short local, claim-bound effect commit.
+    # This is never supplied by model output or ordinary tool arguments.
+    owner_effect_commit: Callable[[Callable[[], Any]], Any] | None = None
     telemetry_sink: Callable[[dict[str, Any]], None] | None = None
     system_one: Any | None = None
+    owner_gmail_service: Any | None = None
     skill_store: Any | None = None
     artifact_resources: Any | None = None
     skill_bindings: Any | None = None
@@ -245,6 +255,11 @@ class CoreLoopContext:
     browser_workflow_service: Any | None = None
     consumed_message_ids: list[str] = field(default_factory=list)
     scheduled_handoff_enabled: bool = False
+    claim_receipt: InitVar[ClaimReceipt | None] = None
+
+    def __post_init__(self, claim_receipt: ClaimReceipt | None) -> None:
+        # Runtime-only capability; dataclass serialization and repr omit it.
+        self.claim_receipt = claim_receipt
 
     def image_inputs(self, task: TaskState) -> tuple[InferenceImage, ...]:
         """Resolve authorized images for a substantive System Two call."""
@@ -306,6 +321,8 @@ class CoreLoopContext:
             cancellation_checker=self.cancellation_checker,
             skill_bindings=self.skill_bindings,
             browser_workflow_service=self.browser_workflow_service,
+            claim_receipt=self.claim_receipt,
+            owner_gmail_service=self.owner_gmail_service,
         )
 
     def is_cancelled(self) -> bool:
@@ -464,7 +481,7 @@ def _progress_tool_label(tool_id: str) -> str:
 
 
 class IntelligenceProcessor(Protocol):
-    """PDCA-inspired processor boundary for the core loop."""
+    """Processor boundary used by the core loop."""
 
     def process(self, task: TaskState, context: CoreLoopContext) -> ProcessingResult:
         """Process one task state and return the resulting processing status."""
@@ -572,6 +589,7 @@ class AlphonseCore:
     active_task_callback: Callable[[QueuedMessage, TaskState], None] | None = None
     fsm: DDFSM = field(default_factory=build_default_ddfsm)
     _stop_requested: bool = field(default=False, init=False, repr=False)
+    _step_lock: Any = field(default_factory=Lock, init=False, repr=False, compare=False)
 
     def run_once(self, selector: MessageSelector | None = None) -> StateSnapshot | None:
         """Process one queued message and return its visible snapshot."""
@@ -587,6 +605,19 @@ class AlphonseCore:
 
     def step(self, selector: MessageSelector | None = None) -> LoopStepResult:
         """Run one agentic loop step."""
+        # Checking State and acquiring a queue message are separate operations.
+        # Prevent two callers of this core from both passing the availability
+        # check and consuming different messages before either transitions state.
+        # This lock is process-local; it does not replace durable claim fencing.
+        if not self._step_lock.acquire(blocking=False):
+            state = State.snapshot()
+            return LoopStepResult(status=LoopStepStatus.BUSY, state_before=state, state_after=state)
+        try:
+            return self._step_exclusive(selector)
+        finally:
+            self._step_lock.release()
+
+    def _step_exclusive(self, selector: MessageSelector | None = None) -> LoopStepResult:
         state_before = State.snapshot()
         if self._stop_requested:
             return LoopStepResult(
@@ -621,13 +652,86 @@ class AlphonseCore:
                 state_after=state_before,
             )
 
+        return self._process_acquired(queued, state_before)
+
+    def _process_acquired(self, queued: QueuedMessage, state_before: CurrentState) -> LoopStepResult:
+        """Process the exact envelope acquired by this core's exclusive step.
+
+        This private boundary prepares for a future daemon-owned acquisition;
+        callers must hold the core step lock and establish its availability.
+        Fenced processing remains unavailable until claim-aware sinks and queue
+        disposition exist. It is not an entry point for a preclaimed live task.
+        """
+        # Do not silently discard a fenced receipt supplied by a wrapper or a
+        # misconfigured queue that did not advertise the experimental mode.
+        # This claim has already been acquired: leave it untouched for expiry
+        # and reconciliation; processing or legacy ack/retry is unsafe.
+        if (getattr(self.messages, "experimental_claim_fencing", False) is True
+                or getattr(queued, "claim_receipt", None) is not None):
+            return LoopStepResult(
+                status=LoopStepStatus.BUSY,
+                state_before=state_before,
+                state_after=state_before,
+                error="claim_fencing_runtime_unavailable",
+            )
+
         working = self._transition(MESSAGE_DEQUEUED)
         from alphonse.agent_v2.core.intelligence.task_state import TaskState
 
         queued_engine = str(queued.message.metadata.get("intelligence_engine") or "").strip()
         task = None
         handoff_task_id = getattr(self.messages, "handoff_task_id", lambda *_: "")(queued.message_id, queued.message.user)
-        if handoff_task_id:
+        # The candidate is never selected implicitly. Only a router that has
+        # explicitly registered it may use the stable message identity or
+        # read its checkpoint; the default router keeps refusing this stamp.
+        registered_candidate = False
+        if queued_engine == "single_loop_experimental":
+            from alphonse.agent_v2.core.intelligence.engine_router import EngineRoutingProcessor
+            if isinstance(self.intelligence, EngineRoutingProcessor):
+                probe = TaskState.from_message(queued.message, message_id=queued.message_id)
+                # Check registration independently of untrusted schema; the
+                # original value is validated below before any dispatch.
+                probe.intelligence_schema_version = 1
+                try:
+                    registered_candidate = self.intelligence.processor_for(probe) is not None
+                except ValueError:
+                    pass
+        if registered_candidate:
+            raw_schema = queued.message.metadata.get("intelligence_schema_version")
+            candidate_invalid = (type(raw_schema) is not int or raw_schema != 1
+                or not isinstance(queued.message_id, str) or not queued.message_id.strip()
+                or not isinstance(queued.message.user, str) or not queued.message.user.strip()
+                or bool(handoff_task_id) or "task_state" in queued.message.metadata
+                or queued.message.metadata.get("routing_disposition") == "correlated_response")
+            try:
+                loader = getattr(self.question_store, "load_single_loop_task_checkpoint", None)
+                if candidate_invalid or not callable(loader):
+                    raise ValueError("candidate_checkpoint_unavailable")
+                restored = loader(queued.message_id, owner_id=queued.message.user)
+                task = TaskState.from_message(queued.message, message_id=queued.message_id)
+                task.task_id = queued.message_id
+                if restored is not None:
+                    # The queue is the authority for the original request.
+                    # Checkpoint-only metadata is validated by the candidate
+                    # store, never merged into origin authorization.
+                    for name in ('goal', 'user', 'project_id', 'tag', 'correlation_id', 'memory_session_id'):
+                        if getattr(restored, name) != getattr(task, name):
+                            raise ValueError('candidate_checkpoint_unavailable')
+                    stored_metadata = dict(restored.metadata)
+                    for key in ('single_loop_checkpoint', 'owner_read_observations', 'owner_read_pending_action',
+                                'owner_read_pending_decision'):
+                        stored_metadata.pop(key, None)
+                    if json.dumps(stored_metadata, sort_keys=True, allow_nan=False) != json.dumps(
+                            task.metadata, sort_keys=True, allow_nan=False):
+                        raise ValueError('candidate_checkpoint_unavailable')
+                    task._checkpoint_version = restored._checkpoint_version
+            except Exception:
+                snapshot = StateSnapshot(current_work="", metadata={"status": "failed", "reason": "candidate_checkpoint_unavailable"})
+                self.state.update(snapshot)
+                return LoopStepResult(status=LoopStepStatus.FAILED, state_before=state_before,
+                    state_after=self._transition(PROCESSOR_FAILED), queued_message_id=queued.message_id,
+                    error="candidate_checkpoint_unavailable")
+        elif handoff_task_id:
             task = self.question_store.load_task_checkpoint(handoff_task_id) if self.question_store is not None else None
             question_id = str(queued.message.metadata.get("answered_question_id") or "")
             question = self.question_store.get_question(question_id) if self.question_store is not None and question_id else None
@@ -643,8 +747,6 @@ class AlphonseCore:
                     state_after=self._transition(PROCESSOR_FAILED), queued_message_id=queued.message_id,
                     error="scheduled_handoff_checkpoint_unavailable",
                 )
-        elif queued_engine == "hierarchical_v3" and self.question_store is not None:
-            task = self.question_store.load_task_checkpoint(queued.message_id)
         if task is None:
             task = TaskState.from_queued_message(queued)
         routing_disposition = str(queued.message.metadata.get("routing_disposition") or "")
@@ -658,30 +760,25 @@ class AlphonseCore:
         question = self.question_store.get_question(question_id) if self.question_store is not None and question_id else None
         authoritative = (self.question_store.load_task_checkpoint(question.task_id)
                          if self.question_store is not None and question is not None else None)
-        browser_resume = (is_correlated_resume and "v3_browser_workflow" in task.metadata) or (
-            authoritative is not None and "v3_browser_workflow" in authoritative.metadata)
-        if browser_resume:
-            if (not is_correlated_resume or authoritative is None or question is None or question.status != "answered"
-                    or task.task_id != authoritative.task_id or question.task_id != authoritative.task_id
-                    or question.respondent_user_id != queued.message.user
-                    or question.originator_user_id != authoritative.user
-                    or "v3_browser_workflow" not in authoritative.metadata
-                    or not self.question_store.claim_browser_resumption(authoritative)):
-                snapshot = StateSnapshot(current_work="", metadata={"status": "failed", "reason": "browser_resumption_unavailable"})
-                self.state.update(snapshot)
-                return LoopStepResult(status=LoopStepStatus.FAILED, state_before=state_before,
-                    state_after=self._transition(PROCESSOR_FAILED), queued_message_id=queued.message_id,
-                    error="browser_resumption_unavailable")
-            task = authoritative
-            task.message_id = queued.message_id
-        if queued_engine == "hierarchical_v3" and not is_correlated_resume and not handoff_task_id:
-            # A queue delivery may be retried, but it is still the same V3 task.
-            # Using the durable message id prevents a retry from silently creating
-            # a new acceptance contract and a different execution history.
-            task.task_id = queued.message_id
+        # Never reattach a retired browser workflow to a new task. The stored
+        # checkpoint remains available for inspection, with no replay attempt.
+        if ("v3_browser_workflow" in task.metadata or
+                (authoritative is not None and "v3_browser_workflow" in authoritative.metadata)):
+            snapshot = StateSnapshot(current_work="", metadata={"status": "failed", "reason": "browser_resumption_unavailable"})
+            self.state.update(snapshot)
+            return LoopStepResult(status=LoopStepStatus.FAILED, state_before=state_before,
+                state_after=self._transition(PROCESSOR_FAILED), queued_message_id=queued.message_id,
+                error="browser_resumption_unavailable")
+        if registered_candidate:
+            # Candidate identity was either restored from the owner-bound row
+            # or set from this queue message; never replace it with a new UUID.
+            pass
         elif not task.task_id:
             task.task_id = str(uuid4())
-        if self.active_task_callback is not None:
+        # The legacy callback mutates daemon lifecycle state without the queue
+        # claim. Candidate activity needs a claim-aware publisher before it can
+        # be exposed through that callback.
+        if not registered_candidate and self.active_task_callback is not None:
             self.active_task_callback(queued, task)
 
         def _task_is_cancelled() -> bool:
@@ -725,9 +822,9 @@ class AlphonseCore:
                 tools=self.tools,
                 inference=self.inference,
                 prompts=self.prompts,
-                activity_sink=_task_activity_sink,
-                ui_event_sink=self.ui_event_sink,
-                telemetry_sink=self.telemetry_sink,
+                activity_sink=None if registered_candidate else _task_activity_sink,
+                ui_event_sink=None if registered_candidate else self.ui_event_sink,
+                telemetry_sink=None if registered_candidate else self.telemetry_sink,
                 system_one=self.system_one,
                 skill_store=self.skill_store,
                 artifact_resources=self.artifact_resources,
@@ -738,31 +835,47 @@ class AlphonseCore:
                 question_store=self.question_store,
                 project_store=self.project_store,
                 schedule_store=self.schedule_store,
-                delivery_sink=self.delivery_sink,
+                delivery_sink=None if registered_candidate else self.delivery_sink,
                 user_context_provider=self.user_context_provider,
                 user_timezone_provider=self.user_timezone_provider,
-                memory=self.memory,
+                memory=None if registered_candidate else self.memory,
                 conversation_store=self.conversation_store,
                 identity_resolver=self.identity_resolver,
                 program_runner=self.program_runner,
                 cancellation_checker=_task_is_cancelled,
                 scheduled_handoff_enabled=self.scheduled_handoff_enabled,
+                claim_receipt=queued.claim_receipt,
             )
             if context.is_cancelled():
                 raise RuntimeError("scheduled_task_cancelled")
+            # Validate the normal router's engine/schema before loading task
+            # memory or conversation history, including unknown engines and
+            # mismatched schemas. The router checks again at actual dispatch.
+            from alphonse.agent_v2.core.intelligence.engine_router import EngineRoutingProcessor
+            if isinstance(self.intelligence, EngineRoutingProcessor):
+                self.intelligence.processor_for(task)
             start_memory = getattr(self.memory, "start_task", None)
             memory_options = {"cancel_checker": context.is_cancelled} if getattr(self.memory, "supports_knowledge_cancellation", False) else {}
-            if callable(start_memory):
+            if not registered_candidate and callable(start_memory):
                 task.memory_context_md = str(start_memory(task, **memory_options) or "")
-            from alphonse.agent_v2.core.memory.transcript import conversation_transcript
-            task.conversation_history_md = conversation_transcript(task, self.conversation_store)
+            if not registered_candidate:
+                from alphonse.agent_v2.core.memory.transcript import conversation_transcript
+                task.conversation_history_md = conversation_transcript(task, self.conversation_store)
             result = self.intelligence.process(task, context)
+            if result.status == ProcessingStatus.SUPERSEDED:
+                # Do not publish the processor's stale snapshot or error, finish
+                # memory, acknowledge consumed messages, or change local state:
+                # the global FSM has no generation to prove that it still
+                # belongs to this worker. The host must reconcile before reuse.
+                state_after = State.snapshot()
+                return LoopStepResult(status=LoopStepStatus.SUPERSEDED,
+                                      state_before=state_before, state_after=state_after)
             finish_memory = getattr(self.memory, "finish_task", None)
-            if callable(finish_memory) and result.status != ProcessingStatus.YIELDED:
+            if not registered_candidate and callable(finish_memory) and result.status != ProcessingStatus.YIELDED:
                 serialized_task = result.snapshot.metadata.get("task_state") if isinstance(result.snapshot.metadata, dict) else None
                 finished_task = TaskState.from_dict(serialized_task) if isinstance(serialized_task, dict) else task
                 finish_memory(finished_task, **memory_options)
-            if result.status not in {ProcessingStatus.FAILED, ProcessingStatus.CANCELLED}:
+            if not registered_candidate and result.status not in {ProcessingStatus.FAILED, ProcessingStatus.CANCELLED}:
                 context.acknowledge_consumed_messages()
         except Exception as exc:
             cancelled = _task_is_cancelled()
@@ -802,7 +915,7 @@ class AlphonseCore:
                 return
             result = self.step()
             steps += 1
-            if result.status in {LoopStepStatus.EMPTY, LoopStepStatus.BUSY}:
+            if result.status in {LoopStepStatus.EMPTY, LoopStepStatus.BUSY, LoopStepStatus.SUPERSEDED}:
                 sleep(idle_sleep_seconds)
 
     def request_stop(self) -> None:

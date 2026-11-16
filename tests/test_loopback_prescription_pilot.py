@@ -63,6 +63,21 @@ def test_guessed_response_and_mismatched_source_cannot_pass():
     assert not evaluate(other, response=wrong_answer, expected_response=ANSWER, expected_sources=EXPECTED_SOURCES)['passed']
 
 
+def test_oracle_distinguishes_nested_json_number_and_boolean_types():
+    with LoopbackPrescriptionPilot(SOURCES) as pilot:
+        for path in ('', 'conversation', 'prescription', 'treatment-status'):
+            get(pilot.url + path)
+    expected_answer = {'schedule': [{'day': 1}]}
+    for wrong in (True, 1.0):
+        result = evaluate(pilot, response={'schedule': [{'day': wrong}]},
+                          expected_response=expected_answer, expected_sources=EXPECTED_SOURCES)
+        assert not result['answer_matches_key'] and not result['passed']
+    wrong_sources = dict(EXPECTED_SOURCES, prescription=dict(EXPECTED_SOURCES['prescription'], days=5.0))
+    result = evaluate(pilot, response=expected_answer, expected_response=expected_answer,
+                      expected_sources=wrong_sources)
+    assert result['source_mismatch'] and not result['passed']
+
+
 def test_bearer_capability_and_no_key_or_audit_route():
     with LoopbackPrescriptionPilot(SOURCES) as pilot:
         url = pilot.url

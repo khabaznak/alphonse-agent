@@ -1,0 +1,42 @@
+{
+  "status": "failed",
+  "provider": "Codex CLI ChatGPT subscription",
+  "model": "gpt-6-luna",
+  "fixture": "synthetic only",
+  "uses_jev": false,
+  "start_source_sha256": {
+    "alphonse/agent_v2/core/intelligence/simple_loop/owner_named_skill.py": "5ca54b038cfa620851f7c6e49de82bd14e6d1ba22c61941b7e788c8ddc9b6224",
+    "alphonse/agent_v2/core/intelligence/simple_loop/owner_read_processor.py": "be180d9427906b2f486fca3760d940a007f61ad2ec07637b3bdcc588b2425a9c",
+    "alphonse/agent_v2/core/intelligence/simple_loop/owner_read_recovery.py": "21e3202841f9e3dc3a03c84c7a887e1a46b79a09e1eec44abfe52e3bcbb783b1",
+    "alphonse/agent_v2/core/intelligence/simple_loop/owner_atomic_checkpoint.py": "69f4059ea8ee25c995d175ec006f7c6d4d0c24f52bf4b56f64b0b6a9a04f5a12",
+    "alphonse/agent_v2/core/intelligence/simple_loop/candidate_decision_policy.py": "b3fe4e0b7417f771887cb85ad6f868744789a074feb20fe80517a512c3139c7d",
+    "alphonse/agent_v2/core/intelligence/simple_loop/single_loop_candidate.py": "b5e454e8a05ae3b7eff4284a5bc494cfd2d4c9e0d883febfe747d64ff23224d0",
+    "alphonse/agent_v2/runtime.py": "22fb6091a6a7224c06ff7ed0bf5c68bf2ec72dfa7b63df404a7ee109bd393fc0",
+    "alphonse/agent_v2/daemon.py": "18c5cea0f06491556eb9ebde4d8a1c86699fec0b66e130b24fb54e23ab058a48",
+    "/Users/alex/Code Projects/Alphonse/docs/agent-loop/evidence/owner-named-skill-2026-11-15/runner.py": "7887e40de622288159a1d40f5fbeba90566f3191b842fc3a929eecb111d40566"
+  },
+  "answer": "",
+  "checks": {
+    "named_skill_requested": false,
+    "instructions_projected": false,
+    "answer_follows_instruction": false,
+    "recovered_before_pickup": false
+  },
+  "oracle_pass": false,
+  "decisions": [],
+  "usage": [],
+  "provider_calls": 0,
+  "elapsed_seconds": 0.269,
+  "end_source_sha256": {
+    "alphonse/agent_v2/core/intelligence/simple_loop/owner_named_skill.py": "5ca54b038cfa620851f7c6e49de82bd14e6d1ba22c61941b7e788c8ddc9b6224",
+    "alphonse/agent_v2/core/intelligence/simple_loop/owner_read_processor.py": "be180d9427906b2f486fca3760d940a007f61ad2ec07637b3bdcc588b2425a9c",
+    "alphonse/agent_v2/core/intelligence/simple_loop/owner_read_recovery.py": "21e3202841f9e3dc3a03c84c7a887e1a46b79a09e1eec44abfe52e3bcbb783b1",
+    "alphonse/agent_v2/core/intelligence/simple_loop/owner_atomic_checkpoint.py": "69f4059ea8ee25c995d175ec006f7c6d4d0c24f52bf4b56f64b0b6a9a04f5a12",
+    "alphonse/agent_v2/core/intelligence/simple_loop/candidate_decision_policy.py": "b3fe4e0b7417f771887cb85ad6f868744789a074feb20fe80517a512c3139c7d",
+    "alphonse/agent_v2/core/intelligence/simple_loop/single_loop_candidate.py": "b5e454e8a05ae3b7eff4284a5bc494cfd2d4c9e0d883febfe747d64ff23224d0",
+    "alphonse/agent_v2/runtime.py": "22fb6091a6a7224c06ff7ed0bf5c68bf2ec72dfa7b63df404a7ee109bd393fc0",
+    "alphonse/agent_v2/daemon.py": "18c5cea0f06491556eb9ebde4d8a1c86699fec0b66e130b24fb54e23ab058a48",
+    "/Users/alex/Code Projects/Alphonse/docs/agent-loop/evidence/owner-named-skill-2026-11-15/runner.py": "7887e40de622288159a1d40f5fbeba90566f3191b842fc3a929eecb111d40566"
+  },
+  "source_changed_during_attempt": false
+}

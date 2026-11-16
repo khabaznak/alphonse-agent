@@ -12,7 +12,7 @@ from alphonse.agent_v2.core.inference import InferencePurpose, InferenceRequest
 
 def authenticated_answers(task):
     """Only runtime-issued receipts bound to this requester and task qualify."""
-    from alphonse.agent_v2.core.intelligence.v3.browser_workflow import public_answer_receipt
+    from alphonse.agent_v2.core.intelligence.browser_workflow import public_answer_receipt
     answers = []
     for receipt in task.metadata.get('v3_resumption_evidence') or []:
         if not isinstance(receipt, dict):

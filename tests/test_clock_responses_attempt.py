@@ -25,6 +25,7 @@ def test_only_safe_reason_categories_are_returned():
     assert _reason_category('candidate_deadline_exceeded') == 'deadline'
     assert _reason_category('pilot_v3_deadline_or_cancelled') == 'deadline_or_cancelled'
     assert _reason_category('candidate_model_unavailable') == 'model_unavailable'
+    assert _reason_category('candidate_decision_invalid') == 'invalid_decision'
     assert _reason_category('candidate_read_denied') == 'access_denied'
     assert _reason_category('RuntimeError:private-synthetic-secret') == 'other'
     assert _reason_category(None) is None

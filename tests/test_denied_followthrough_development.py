@@ -1,17 +1,7 @@
 """Development-only denial replay with no real communications."""
-import json
-
 import pytest
 
 from alphonse.agent_v2.evaluation.denied_followthrough_development import compare_denied
-from alphonse.agent_v2.evaluation.followthrough_v3_adapter import _terminal_matches
-
-
-def test_terminal_nonquestion_handoff_is_distinct_from_question_or_success():
-    handoff = json.dumps({'kind': 'handoff', 'blocker': 'denied', 'question': None})
-    assert _terminal_matches('completed', handoff)
-    assert not _terminal_matches('waiting_user', handoff)
-    assert not _terminal_matches('completed', json.dumps({'kind': 'handoff'}))
 
 
 @pytest.mark.parametrize('bridge', [False, True])

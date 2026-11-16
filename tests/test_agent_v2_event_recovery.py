@@ -368,6 +368,14 @@ def test_daemon_event_lifecycle_callbacks(tmp_path, outcome, expected):
     daemon.publish_event(worker_id="sensor", event_id="one", event_type="sensor", event_version="1", payload={})
     queued = queue.peek()
     identity = queued.message.metadata["automation_execution_id"]
+    if outcome in {"completed", "parked", "waiting"}:
+        # Generic automation execution is not the owner-only claimed path.
+        # Its projector must refuse a simple-loop response rather than emit
+        # an unfenced outbox message or claim successful publication.
+        with pytest.raises(ValueError, match="candidate_response_publication_unavailable"):
+            daemon.run_once()
+        assert daemon.runtime.outbox.list() == []
+        return
     daemon.run_once()
     assert store.get_execution(identity)["status"] == expected
     assert queue.status_for(queued.message_id) == expected

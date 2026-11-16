@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import hmac
 import logging
 import os
 import re
@@ -118,6 +120,65 @@ def _validate_idempotent_result(request: OutboundMessage, row: sqlite3.Row) -> O
     return existing
 
 
+def _require_legacy_tui_admin(conn: sqlite3.Connection, owner: str) -> None:
+    if not owner:
+        raise ValueError('legacy_tui_recovery_unavailable')
+    row = conn.execute("""SELECT u.user_id FROM main.v2_users u
+        JOIN main.v2_user_settings s ON s.key='admin_user_id' AND s.value=u.user_id
+        WHERE u.user_id=? AND u.role IN ('admin','owner') AND u.is_active=1""", (owner,)).fetchone()
+    if row is None:
+        raise ValueError('legacy_tui_recovery_unavailable')
+
+
+def _legacy_tui_review_token(row: sqlite3.Row) -> str:
+    # A version fingerprint, not an authorization credential. It ensures the
+    # row the owner approves is the same row that is archived under the lock.
+    encoded = json.dumps(dict(row), ensure_ascii=False, sort_keys=True,
+                         separators=(',', ':'), allow_nan=False).encode('utf-8')
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _legacy_tui_unlinked_safe_row(row: sqlite3.Row, metadata: Any) -> bool:
+    """Keep findings, questions, scheduled work and unknown metadata separate."""
+    if (not isinstance(metadata, dict) or row['correlation_id'] or row['task_id']
+            or row['question_id'] or row['project_id'] or row['reply_to_provider_message_id']):
+        return False
+    if row['kind'] != 'identity_resolution':
+        return False
+    permitted = {'provider_key', 'integration_id', 'provider_user_id', 'channel_target',
+                 'reason', 'provider_raw_message'}
+    if not (set(metadata).issubset(permitted) and metadata.get('provider_key') in ('telegram', 'discord')
+            and isinstance(metadata.get('integration_id'), str) and bool(metadata['integration_id'].strip())
+            and isinstance(metadata.get('provider_user_id'), str)
+            and isinstance(metadata.get('channel_target'), str)):
+        return False
+    provider_user = metadata['provider_user_id']
+    channel = metadata['channel_target']
+    if metadata['provider_key'] == 'telegram':
+        reason = metadata.get('reason')
+        if not isinstance(reason, str):
+            return False
+        expected = ("Telegram message ignored because the sender is not mapped to an Alphonse user: "
+                    f"provider_user_id={provider_user or 'unknown'}, chat_id={channel}, reason={reason or 'unknown'}.")
+    else:
+        expected = ("Discord message ignored because the sender is not mapped to an Alphonse user: "
+                    f"provider_user_id={provider_user}, channel_id={channel}.")
+    return row['message'] == expected
+
+
+def _legacy_tui_opaque_response(row: sqlite3.Row, metadata: Any) -> bool:
+    """Identify unlinked terminal responses for an explicit no-resend choice.
+
+    This does not establish content authorization or previous delivery. Never
+    expose the message based on this classification; the owner may only elect
+    to stop attempting the specific, unchanged item while keeping the record.
+    """
+    return (row['kind'] == 'response' and row['provider_key'] == 'tui'
+            and isinstance(metadata, dict) and not metadata
+            and not any(row[key] for key in ('correlation_id', 'task_id', 'question_id',
+                                             'project_id', 'reply_to_provider_message_id')))
+
+
 class SQLiteOutboundStore:
     """SQLite-backed outbound queue for v2 integration delivery."""
 
@@ -134,6 +195,155 @@ class SQLiteOutboundStore:
     @classmethod
     def default(cls) -> "SQLiteOutboundStore":
         return cls(_default_outbox_db_path())
+
+    def migrate_untouched_tui_identity_notices(self, owner_id: str) -> int:
+        """Route provably unattempted legacy owner identity notices to Desktop.
+
+        Existing outbox IDs, content and owner are preserved. Only pending,
+        never-claimed Telegram/Discord identity notices with an unambiguous
+        canonical active admin in the same database qualify. Unknown, attempted,
+        leased, or otherwise addressed rows are never modified.
+        """
+        owner = str(owner_id or '').strip()
+        if not owner:
+            return 0
+        try:
+            with self._connect() as conn:
+                conn.execute('BEGIN IMMEDIATE')
+                admin = conn.execute("""SELECT u.user_id FROM main.v2_users u
+                    JOIN main.v2_user_settings s ON s.key='admin_user_id' AND s.value=u.user_id
+                    WHERE u.user_id=? AND u.role IN ('admin','owner') AND u.is_active=1""", (owner,)).fetchone()
+                if admin is None:
+                    return 0
+                rows = conn.execute("""SELECT * FROM main.v2_outbox
+                    WHERE integration_id='tui' AND provider_key='tui' AND kind='identity_resolution'
+                      AND audience_user_id=? AND channel_target=? AND status='pending'
+                      AND attempt_count=0 AND claimed_at='' AND delivered_at=''
+                      AND lease_owner='' AND lease_expires_at='' AND provider_message_id=''
+                      AND reply_to_provider_message_id='' AND next_attempt_at='' AND last_error=''
+                      AND correlation_id='' AND task_id='' AND question_id='' AND project_id=''
+                      AND json_valid(metadata_json) AND json_type(metadata_json)='object'
+                      AND json_extract(metadata_json, '$.provider_key') IN ('telegram', 'discord')
+                      AND typeof(json_extract(metadata_json, '$.integration_id'))='text'
+                      AND length(trim(json_extract(metadata_json, '$.integration_id')))>0
+                      AND NOT EXISTS (SELECT 1 FROM json_each(metadata_json) WHERE key NOT IN
+                          ('provider_key','integration_id','provider_user_id','channel_target','reason','provider_raw_message'))""", (owner, owner)).fetchall()
+                moved = 0
+                for row in rows:
+                    if not _legacy_tui_unlinked_safe_row(row, json.loads(row['metadata_json'])):
+                        continue
+                    moved += conn.execute("UPDATE main.v2_outbox SET integration_id='desktop' WHERE outbox_message_id=? AND integration_id='tui'",
+                                          (row['outbox_message_id'],)).rowcount
+                return moved
+        except sqlite3.Error:
+            # A separate/missing authority database must not cause a guess.
+            return 0
+
+    def legacy_tui_unresolved_summary(self, owner_id: str) -> dict[str, int] | None:
+        """Return counts, never content, for unresolved legacy terminal rows.
+
+        Only the canonical active admin in the same database can receive this
+        summary. Other members' identified messages are excluded. Ambiguous
+        rows remain unchanged and require a separate recovery decision.
+        """
+        owner = str(owner_id or '').strip()
+        if not owner:
+            return None
+        try:
+            with self._connect() as conn:
+                conn.execute('BEGIN IMMEDIATE')
+                admin = conn.execute("""SELECT u.user_id FROM main.v2_users u
+                    JOIN main.v2_user_settings s ON s.key='admin_user_id' AND s.value=u.user_id
+                    WHERE u.user_id=? AND u.role IN ('admin','owner') AND u.is_active=1""", (owner,)).fetchone()
+                if admin is None:
+                    return None
+                row = conn.execute("""SELECT
+                    COALESCE(SUM(CASE WHEN audience_user_id=? AND channel_target=? THEN 1 ELSE 0 END),0) AS owner_scoped,
+                    COALESCE(SUM(CASE WHEN (audience_user_id=? OR channel_target=?)
+                        AND NOT (audience_user_id=? AND channel_target=?) THEN 1 ELSE 0 END),0) AS ambiguous,
+                    COALESCE(SUM(CASE WHEN audience_user_id='' AND channel_target='' THEN 1 ELSE 0 END),0) AS unassigned
+                    FROM main.v2_outbox WHERE integration_id='tui'
+                    AND status IN ('pending','claimed','retry_wait','failed','unconfirmed')""",
+                    (owner, owner, owner, owner, owner, owner)).fetchone()
+                _require_legacy_tui_admin(conn, owner)
+                return {key: int(row[key]) for key in ('owner_scoped', 'ambiguous', 'unassigned')}
+        except (sqlite3.Error, ValueError):
+            return None
+
+    def list_legacy_tui_owner_items(self, owner_id: str) -> list[dict[str, Any]]:
+        """Show an active admin only rows unambiguously addressed to them."""
+        owner = str(owner_id or '').strip()
+        try:
+            with self._connect() as conn:
+                conn.execute('BEGIN IMMEDIATE')
+                _require_legacy_tui_admin(conn, owner)
+                rows = conn.execute("""SELECT * FROM main.v2_outbox
+                    WHERE integration_id='tui' AND audience_user_id=? AND channel_target=?
+                    AND status IN ('pending','claimed','retry_wait','failed','unconfirmed')
+                    ORDER BY created_at, outbox_message_id LIMIT 100""", (owner, owner)).fetchall()
+                result = []
+                for row in rows:
+                    try:
+                        metadata = json.loads(row['metadata_json'])
+                    except (TypeError, ValueError):
+                        metadata = None
+                    safe = _legacy_tui_unlinked_safe_row(row, metadata)
+                    opaque = _legacy_tui_opaque_response(row, metadata)
+                    can_archive = bool((safe or opaque) and row['status'] != 'claimed'
+                        and not row['lease_owner'] and not row['lease_expires_at'])
+                    never_attempted = (row['status'] == 'pending' and row['attempt_count'] == 0
+                        and not row['claimed_at'] and not row['delivered_at'] and not row['provider_message_id']
+                        and not row['next_attempt_at'] and not row['last_error']
+                        and not row['lease_owner'] and not row['lease_expires_at'])
+                    result.append({'outbox_message_id': row['outbox_message_id'], 'kind': row['kind'],
+                        'status': row['status'], 'message': row['message'] if safe else '',
+                        'review_restriction': '' if safe else 'opaque_response' if opaque else 'linked_or_protected',
+                        'created_at': row['created_at'],
+                        'attempt_count': row['attempt_count'],
+                        'delivery_certainty': 'not_attempted' if never_attempted else 'unknown',
+                        'review_token': _legacy_tui_review_token(row), 'can_archive': can_archive})
+                _require_legacy_tui_admin(conn, owner)
+                return result
+        except sqlite3.Error:
+            raise ValueError('legacy_tui_recovery_unavailable') from None
+
+    def archive_legacy_tui_owner_item(self, owner_id: str, message_id: str, review_token: str) -> dict[str, str]:
+        """Record the owner's explicit no-resend choice without claiming delivery."""
+        owner = str(owner_id or '').strip()
+        if (not isinstance(message_id, str) or not message_id.strip()
+                or not isinstance(review_token, str) or re.fullmatch(r'[0-9a-f]{64}', review_token) is None):
+            raise ValueError('legacy_tui_recovery_unavailable')
+        try:
+            with self._connect() as conn:
+                conn.execute('BEGIN IMMEDIATE')
+                _require_legacy_tui_admin(conn, owner)
+                row = conn.execute('SELECT * FROM main.v2_outbox WHERE outbox_message_id=?', (message_id,)).fetchone()
+                if (row is None or row['integration_id'] != 'tui' or row['audience_user_id'] != owner
+                        or row['channel_target'] != owner or row['status'] not in ('pending','retry_wait','failed','unconfirmed')
+                        or row['lease_owner'] or row['lease_expires_at']
+                        or not hmac.compare_digest(_legacy_tui_review_token(row), review_token)):
+                    raise ValueError('legacy_tui_recovery_unavailable')
+                metadata = json.loads(row['metadata_json'])
+                if not (_legacy_tui_unlinked_safe_row(row, metadata)
+                        or _legacy_tui_opaque_response(row, metadata)):
+                    raise ValueError('legacy_tui_recovery_unavailable')
+                never_attempted = (row['status'] == 'pending' and row['attempt_count'] == 0
+                    and not row['claimed_at'] and not row['delivered_at'] and not row['provider_message_id']
+                    and not row['next_attempt_at'] and not row['last_error']
+                    and not row['lease_owner'] and not row['lease_expires_at'])
+                certainty = 'not_attempted' if never_attempted else 'unknown'
+                metadata['legacy_tui_retirement'] = {'owner_id': owner, 'original_integration_id': 'tui',
+                    'action': 'owner_archived_without_resending', 'previous_status': row['status'],
+                    'delivery_certainty': certainty, 'reviewed_row_sha256': review_token, 'resolved_at': _now_iso()}
+                changed = conn.execute("""UPDATE main.v2_outbox SET integration_id='retired_tui',
+                    metadata_json=?, updated_at=? WHERE outbox_message_id=? AND integration_id='tui'
+                    AND audience_user_id=? AND channel_target=? AND status=?""",
+                    (json.dumps(metadata, ensure_ascii=False, sort_keys=True), _now_iso(), message_id, owner, owner, row['status']))
+                if changed.rowcount != 1:
+                    raise ValueError('legacy_tui_recovery_unavailable')
+                return {'status': 'archived_without_resending', 'delivery_certainty': certainty}
+        except (sqlite3.Error, TypeError, ValueError):
+            raise ValueError('legacy_tui_recovery_unavailable') from None
 
     def enqueue(
         self,
@@ -178,6 +388,8 @@ class SQLiteOutboundStore:
         )
         if not record.integration_id:
             raise ValueError("outbound_integration_id_required")
+        if record.integration_id == 'retired_tui':
+            raise ValueError('outbound_integration_id_reserved')
         if not record.provider_key:
             raise ValueError("outbound_provider_key_required")
         if not record.channel_target:
@@ -252,7 +464,12 @@ class SQLiteOutboundStore:
         )
 
     def list_pending(self, selector: OutboundSelector | None = None, *, limit: int = 100) -> list[OutboundMessage]:
-        return self.list(selector or OutboundSelector(), limit=limit)
+        where, values = _selector_where(selector or OutboundSelector())
+        where = f"{where} AND integration_id != 'retired_tui'" if where else "WHERE integration_id != 'retired_tui'"
+        values.append(max(1, min(int(limit), 1000)))
+        with self._connect() as conn:
+            rows = conn.execute(f"SELECT * FROM main.v2_outbox {where} ORDER BY created_at ASC LIMIT ?", tuple(values)).fetchall()
+        return [_message_from_row(row) for row in rows]
 
     def list_unconfirmed_scheduled(self) -> list[OutboundMessage]:
         """Return all ambiguous scheduled sends for restart reconciliation."""
@@ -285,7 +502,7 @@ class SQLiteOutboundStore:
     def status_counts(self) -> dict[str, int]:
         counts = {"pending": 0, "claimed": 0, "retry_wait": 0, "delivered": 0, "failed": 0, "unconfirmed": 0}
         with self._connect() as conn:
-            rows = conn.execute("SELECT status, COUNT(*) AS count FROM main.v2_outbox GROUP BY status").fetchall()
+            rows = conn.execute("SELECT status, COUNT(*) AS count FROM main.v2_outbox WHERE integration_id != 'retired_tui' GROUP BY status").fetchall()
         for row in rows:
             status = str(row["status"] or "")
             if status in counts:
@@ -306,7 +523,7 @@ class SQLiteOutboundStore:
                 """UPDATE main.v2_outbox SET status='unconfirmed', next_attempt_at='', lease_owner='', lease_expires_at='',
                    metadata_json=json_set(metadata_json, '$.delivery_state', 'unconfirmed', '$.unconfirmed_lease_owner', lease_owner),
                    last_error='scheduled_delivery_wait_expired', updated_at=?
-                   WHERE outbox_message_id=? AND task_id=? AND audience_user_id=?
+                   WHERE outbox_message_id=? AND integration_id != 'retired_tui' AND task_id=? AND audience_user_id=?
                      AND status IN ('pending','claimed','retry_wait') AND json_valid(metadata_json)
                      AND json_extract(metadata_json, '$.occurrence_key')=?""",
                 (_now_iso(), outbox_message_id, task_id, recipient_user_id, occurrence_key),
@@ -394,7 +611,7 @@ class SQLiteOutboundStore:
         now = _now()
         owner = str(lease_owner or "outbox").strip() or "outbox"
         lease_expires_at = (now + timedelta(seconds=max(1, int(lease_seconds)))).isoformat()
-        eligibility = "status = 'pending' OR (status = 'retry_wait' AND next_attempt_at <= ?)"
+        eligibility = "(status = 'pending' OR (status = 'retry_wait' AND next_attempt_at <= ?)) AND integration_id != 'retired_tui'"
         if self.finding_delivery_guard is None:
             eligibility = f"({eligibility}) AND kind != 'finding'"
         values = [now.isoformat(), *values]
@@ -426,7 +643,7 @@ class SQLiteOutboundStore:
                     lease_owner = ?,
                     lease_expires_at = ?,
                     next_attempt_at = ''
-                WHERE outbox_message_id = ?
+                WHERE outbox_message_id = ? AND integration_id != 'retired_tui'
                   AND (status = 'pending' OR (status = 'retry_wait' AND next_attempt_at <= ?))
                 """,
                 (now.isoformat(), now.isoformat(), owner, lease_expires_at, message_id, now.isoformat()),
@@ -454,7 +671,7 @@ class SQLiteOutboundStore:
                     lease_expires_at = '',
                     next_attempt_at = '',
                     last_error = ''
-                WHERE outbox_message_id = ?
+                WHERE outbox_message_id = ? AND integration_id != 'retired_tui'
                 """,
                 (
                     str(provider_message_id or "").strip(),
@@ -465,6 +682,63 @@ class SQLiteOutboundStore:
             )
             return cursor.rowcount == 1
 
+    def acknowledge_desktop_claim(self, delivery: OutboundMessage, *, lease_owner: str) -> bool:
+        """Confirm the exact Desktop claim observed by the caller, if unchanged.
+
+        The Desktop protocol still identifies acknowledgements by client and
+        message, not by an acquisition token. This conditional write closes the
+        read/write race, but cannot distinguish a delayed acknowledgement from
+        an earlier acquisition already reclaimed by the same client before the
+        caller read the row. Do not treat it as complete delivery fencing.
+        """
+        if (not isinstance(delivery, OutboundMessage) or delivery.integration_id != 'desktop'
+                or not isinstance(lease_owner, str) or not lease_owner.strip()
+                or type(delivery.attempt_count) is not int or delivery.attempt_count < 1
+                or delivery.status not in {'claimed', 'unconfirmed'}):
+            return False
+        late = delivery.status == 'unconfirmed'
+        if ((not late and delivery.lease_owner != lease_owner) or
+                (late and delivery.metadata.get('unconfirmed_lease_owner') != lease_owner)):
+            return False
+        with self._connect() as conn:
+            # Sample only after the write lock is held; a pre-lock timestamp
+            # could otherwise validate a lease that expired during lock wait.
+            conn.execute('BEGIN IMMEDIATE')
+            start = _now()
+            now = start.isoformat()
+            if not late:
+                try:
+                    expires = datetime.fromisoformat(delivery.lease_expires_at)
+                    if expires.tzinfo is None or expires.utcoffset() is None or expires <= start:
+                        return False
+                except (ValueError, TypeError):
+                    return False
+            cursor = conn.execute(
+                """UPDATE main.v2_outbox SET status='delivered',
+                    metadata_json=CASE WHEN kind='finding'
+                        THEN json_set(metadata_json, '$.finding_delivery_state', 'delivered')
+                        WHEN json_valid(metadata_json) AND COALESCE(json_extract(metadata_json, '$.occurrence_key'), '') != ''
+                        THEN json_set(metadata_json, '$.delivery_state', 'confirmed') ELSE metadata_json END,
+                    provider_message_id='', delivered_at=?, updated_at=?, lease_owner='', lease_expires_at='',
+                    next_attempt_at='', last_error=''
+                WHERE outbox_message_id=? AND integration_id='desktop' AND status=? AND attempt_count=?
+                    AND claimed_at=? AND updated_at=? AND lease_owner=? AND lease_expires_at=?
+                    AND (?=1 OR (lease_expires_at != '' AND lease_expires_at > ?))
+                    AND (?=0 OR (json_valid(metadata_json)
+                         AND json_extract(metadata_json, '$.unconfirmed_lease_owner')=?))""",
+                (now, now, delivery.outbox_message_id, delivery.status, delivery.attempt_count,
+                 delivery.claimed_at, delivery.updated_at, delivery.lease_owner, delivery.lease_expires_at,
+                 int(late), now, int(late), lease_owner),
+            )
+            if cursor.rowcount != 1:
+                return False
+            if not late:
+                end = _now()
+                if end < start or end >= expires:
+                    conn.rollback()
+                    return False
+            return True
+
     def mark_failed(
         self,
         outbox_message_id: str,
@@ -474,7 +748,7 @@ class SQLiteOutboundStore:
     ) -> bool:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT metadata_json, attempt_count, max_attempts FROM main.v2_outbox WHERE outbox_message_id = ?",
+                "SELECT metadata_json, attempt_count, max_attempts FROM main.v2_outbox WHERE outbox_message_id = ? AND integration_id != 'retired_tui'",
                 (str(outbox_message_id or "").strip(),),
             ).fetchone()
             if row is None:
@@ -512,7 +786,7 @@ class SQLiteOutboundStore:
                     lease_expires_at = '',
                     next_attempt_at = ?,
                     last_error = ?
-                WHERE outbox_message_id = ?
+                WHERE outbox_message_id = ? AND integration_id != 'retired_tui'
                 """,
                 (
                     "unconfirmed" if scheduled else "failed" if terminal else "retry_wait",
@@ -698,6 +972,17 @@ def build_outbox_delivery_sink(
     resolver = identity_resolver or V2IdentityResolver()
 
     def _sink(event: dict[str, Any]) -> dict[str, Any]:
+        # Candidate task events must not fall through the legacy delivery sink:
+        # it can queue acknowledgements/questions, write transcripts, or invoke
+        # a communication router without the candidate's claim or checkpoint.
+        # This is a refusal, not an authorization mechanism; event producers
+        # must carry the real task identity and the normal candidate runtime
+        # remains disabled until a claim-bound delivery protocol is available.
+        task = event.get("task") if isinstance(event.get("task"), dict) else {}
+        task_metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+        if (task.get("intelligence_engine") == "single_loop_experimental"
+                or task_metadata.get("intelligence_engine") == "single_loop_experimental"):
+            raise ValueError("candidate_delivery_unavailable")
         event_type = str(event.get("event_type") or "").strip()
         if event_type == "communication.resolve_recipient":
             if communication_router is None:
@@ -879,13 +1164,25 @@ def project_snapshot_to_outbox(
     """Project a completed task snapshot response into the outbox."""
     metadata = snapshot.metadata or {}
     task_state = metadata.get("task_state")
+    task_metadata = task_state.get("metadata") if isinstance(task_state, dict) else None
+    if (metadata.get("engine") == "single_loop_experimental"
+            or (isinstance(task_state, dict)
+                and task_state.get("intelligence_engine") == "single_loop_experimental")
+            or (isinstance(task_metadata, dict)
+                and task_metadata.get("intelligence_engine") == "single_loop_experimental")):
+        # Ordinary projection creates a dispatchable outbox row before inbound
+        # acknowledgement and has no claim-aware release or delivery fence.
+        # Fail explicitly instead of silently acknowledging an undelivered
+        # candidate answer. A future candidate publisher must bind current
+        # authority, task/checkpoint, queue claim and delivery lifecycle.
+        raise ValueError("candidate_response_publication_unavailable")
     if not isinstance(task_state, dict):
         return None
     # A prepared response is intermediate evidence, not permission to announce
     # completion. Parked tasks can retain one while awaiting a user answer.
     if task_state.get("status") != "completed":
         return None
-    task_metadata = task_state.get("metadata") if isinstance(task_state.get("metadata"), dict) else {}
+    task_metadata = task_metadata if isinstance(task_metadata, dict) else {}
     origin = channel_address_from_metadata(task_metadata)
     if origin is None:
         return None

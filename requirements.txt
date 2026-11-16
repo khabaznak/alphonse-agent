@@ -4,11 +4,8 @@ Jinja2==3.1.4
 PyYAML==6.0.2
 python-dateutil==2.9.0.post0
 python-dotenv==1.0.1
-langchain-core==0.3.76
-langgraph==0.2.69
 dateparser==1.2.1
 paramiko==3.5.1
 websocket-client==1.8.0
-textual==8.2.8
 discord.py==2.6.4
 jsonschema==4.25.1

@@ -88,7 +88,7 @@ def test_from_queued_message_preserves_queue_and_message_metadata() -> None:
         "command_args": "new",
     }
     assert state.metadata["alphonse_user_id"] == "alex"
-    assert state.metadata["channel"]["integration_id"] == "tui"
+    assert state.metadata["channel"]["integration_id"] == "desktop"
     assert state.metadata["channel"]["channel_target"] == "alex"
 
 

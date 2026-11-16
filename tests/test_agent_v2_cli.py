@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from alphonse.agent_v2.cli import format_status
 from alphonse.agent_v2.cli import format_active_work
 from alphonse.agent_v2.cli import format_unavailable_status
@@ -9,7 +11,8 @@ from alphonse.agent_v2.cli import _wait_for_shutdown
 
 def test_cli_exposes_daemon_lifecycle_commands() -> None:
     assert build_parser().parse_args(["start"]).command == "start"
-    assert build_parser().parse_args(["start", "tui"]).start_target == "tui"
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["start", "tui"])
     assert build_parser().parse_args(["status"]).command == "status"
     assert build_parser().parse_args(["stop"]).command == "stop"
     assert build_parser().parse_args(["configure-codex-sandbox", "off"]).image_id == "off"

@@ -52,7 +52,7 @@ class IntegrationConfigRecord:
 class SQLiteIntegrationStore:
     """Local integration config store.
 
-    Tests and helper runtimes default to in-memory storage. The Textual app uses
+    Tests and helper runtimes default to in-memory storage. The daemon uses
     `default()` so enabled integrations can persist across launches.
     """
 

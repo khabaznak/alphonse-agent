@@ -222,7 +222,7 @@ The following is a responsibility handoff, not permission to delete checks early
   while legacy consumers need them. Inventory exact locations and owners; report
   stale/ambiguous copies for explicit reconciliation. Never scan unrelated
   locations or move/delete programs, environments or data as a metadata upgrade.
-- Artifact Desktop/TUI/API management is replaced by skill/package, binding and
+- Legacy Artifact UI/API management is replaced by skill/package, binding and
   environment management. Removal of artifact panels/IPC/catalog tables must
   wait for verified migration and compatible handling of saved task references.
   Unregistration still never deletes files in the transition.

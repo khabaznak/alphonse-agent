@@ -47,7 +47,14 @@ class OpenAICodexProvider:
         if tactical:
             from .tactical_wire import SCHEMA, INSTRUCTIONS
             request = replace(request, output_schema=SCHEMA, prompt=request.prompt + "\n" + INSTRUCTIONS)
-        output = self._run_codex(_json_envelope(request), request)
+        # The normal Codex CLI can report token counters as JSONL events. Only
+        # the simple-loop path opts in; subclasses may implement a different
+        # transport and must not be silently switched to this one.
+        if request.purpose.value == "simple_loop_action" and type(self) is OpenAICodexProvider:
+            output, usage = self._run_codex_with_usage(_json_envelope(request), request)
+        else:
+            output = self._run_codex(_json_envelope(request), request)
+            usage = {}
         if tactical:
             try:
                 parsed = json.loads(output)
@@ -62,7 +69,7 @@ class OpenAICodexProvider:
             if parsed is None:
                 raise ValueError("openai_codex_invalid_json")
         return InferenceResult(json_value=parsed, model_profile=request.model_profile,
-                               raw_response=None if tactical else output)
+                               raw_response=None if tactical else output, usage=usage)
 
     def plan_tool_call(self, request: InferenceRequest) -> InferenceResult:
         output = self._run_codex(_tool_planning_envelope(request), request)
@@ -77,6 +84,13 @@ class OpenAICodexProvider:
         )
 
     def _run_codex(self, prompt: str, request: InferenceRequest) -> str:
+        output, _ = self._execute_codex(prompt, request, collect_usage=False)
+        return output
+
+    def _run_codex_with_usage(self, prompt: str, request: InferenceRequest) -> tuple[str, dict[str, int]]:
+        return self._execute_codex(prompt, request, collect_usage=True)
+
+    def _execute_codex(self, prompt: str, request: InferenceRequest, *, collect_usage: bool) -> tuple[str, dict[str, int]]:
         model = _model_for_request(request)
         if self.config.require_explicit_model and not model:
             raise ValueError("openai_codex_model_not_configured")
@@ -84,14 +98,46 @@ class OpenAICodexProvider:
         if not shutil.which(cli_bin):
             raise ValueError("openai_codex_cli_missing")
 
-        command = [cli_bin, "exec", "--skip-git-repo-check"]
-        if self.config.ephemeral:
+        # The owner selected subscription-backed execution for the candidate.
+        # Keep this boundary scoped to simple-loop usage so the existing V3
+        # provider behavior is unaffected. An allowlist avoids forwarding API
+        # keys or arbitrary provider overrides to either CLI subprocess.
+        env = None
+        options: list[str] = []
+        if collect_usage:
+            env = {key: os.environ[key] for key in ("HOME", "USER", "LOGNAME", "TMPDIR", "LANG", "LC_ALL", "PATH", "CODEX_HOME")
+                   if key in os.environ}
+            if not env.get("HOME") or not env.get("PATH"):
+                raise ValueError("openai_codex_subscription_auth_unverified")
+            options = ["-c", 'model_provider="openai"', "-c", 'cli_auth_credentials_store="auto"']
+        command = [cli_bin, *options, "exec", "--skip-git-repo-check"]
+        if collect_usage:
+            command.extend(["--ignore-user-config", "--ephemeral", "--sandbox", "read-only"])
+        if self.config.ephemeral and not collect_usage:
             command.append("--ephemeral")
         if model:
             command.extend(["--model", model])
 
         try:
             with tempfile.TemporaryDirectory(prefix="alphonse-codex-") as workdir:
+                if collect_usage:
+                    if request.cancel_checker is not None and request.cancel_checker():
+                        raise ValueError("inference_cancelled")
+                    try:
+                        auth = subprocess.run([cli_bin, *options, "login", "status"], cwd=workdir,
+                            env=env, capture_output=True, text=True, timeout=10, check=False)
+                    except (OSError, subprocess.TimeoutExpired):
+                        raise ValueError("openai_codex_subscription_auth_unverified") from None
+                    # Discard other diagnostics: they may include credentials.
+                    lines = (str(auth.stdout or "") + "\n" + str(auth.stderr or "")).splitlines()
+                    login_lines = [line.strip() for line in lines if line.strip().lower().startswith("logged in")]
+                    if auth.returncode != 0 or login_lines != ["Logged in using ChatGPT"]:
+                        raise ValueError("openai_codex_subscription_auth_unverified")
+                    if request.cancel_checker is not None and request.cancel_checker():
+                        raise ValueError("inference_cancelled")
+                output_path = Path(workdir) / "last-message.txt"
+                if collect_usage:
+                    command.extend(["--json", "--output-last-message", str(output_path)])
                 if request.output_schema is not None:
                     schema_path = Path(workdir) / "response-schema.json"
                     schema_path.write_text(json.dumps(request.output_schema), encoding="utf-8")
@@ -106,10 +152,9 @@ class OpenAICodexProvider:
                 if request.images:
                     command.append("-")  # Explicit stdin prompt after variadic --image.
                 if request.cancel_checker is None:
-                    completed = subprocess.run(
-                        command, input=prompt, capture_output=True, text=True,
-                        timeout=self.config.timeout_seconds, cwd=workdir, check=False,
-                    )
+                    args = {"env": env} if env is not None else {}
+                    completed = subprocess.run(command, input=prompt, capture_output=True, text=True,
+                        timeout=self.config.timeout_seconds, cwd=workdir, check=False, **args)
                 else:
                     completed = _run_interruptible(
                         command,
@@ -117,7 +162,12 @@ class OpenAICodexProvider:
                         timeout_seconds=self.config.timeout_seconds,
                         cwd=workdir,
                         cancel_checker=request.cancel_checker,
+                        **({"env": env} if env is not None else {}),
                     )
+                # Read the file while the private temporary directory exists.
+                # Never include raw event text in the result or errors.
+                last_message = (output_path.read_text(encoding="utf-8").strip()
+                                if collect_usage and output_path.is_file() else "")
         except subprocess.TimeoutExpired as exc:
             raise ValueError("openai_codex_timeout") from exc
 
@@ -151,9 +201,36 @@ class OpenAICodexProvider:
             )):
                 raise ValueError(f"openai_codex_model_image_input_unsupported: {model or 'selected model'}")
             raise ValueError(f"openai_codex_exec_failed: exit_code={completed.returncode}")
+        if collect_usage:
+            if not last_message:
+                raise ValueError("openai_codex_empty_response")
+            return last_message, _reported_codex_usage(stdout)
         if not stdout:
             raise ValueError("openai_codex_empty_response")
-        return stdout
+        return stdout, {}
+
+
+def _reported_codex_usage(jsonl: str) -> dict[str, int]:
+    """Return counters only for an unambiguous completed CLI turn.
+
+    CLI event data may contain private source content; discard it immediately.
+    Missing, malformed, duplicate, failed or partial events are unknown, not 0.
+    """
+    try:
+        events = [json.loads(line) for line in jsonl.splitlines() if line.strip()]
+    except (TypeError, ValueError):
+        return {}
+    if not events or any(not isinstance(event, dict) for event in events):
+        return {}
+    completed = [event for event in events if event.get("type") == "turn.completed"]
+    if (len(completed) != 1 or events[-1].get("type") != "turn.completed"
+            or any(event.get("type") in ("turn.failed", "error") for event in events)):
+        return {}
+    usage = completed[0].get("usage")
+    if not isinstance(usage, dict):
+        return {}
+    return {key: usage[key] for key in ("input_tokens", "output_tokens")
+            if type(usage.get(key)) is int and usage[key] >= 0}
 
 
 def _markdown_envelope(request: InferenceRequest) -> str:
@@ -248,7 +325,7 @@ def _model_for_request(request: InferenceRequest) -> str | None:
 
 def _run_interruptible(
     command: list[str], *, prompt: str, timeout_seconds: float | None, cwd: str,
-    cancel_checker: Any = None,
+    cancel_checker: Any = None, env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     # A finite file gives Codex the complete prompt and an unambiguous EOF before
     # the cancellation loop starts. Repeated timed communicate(input=...) calls
@@ -257,6 +334,7 @@ def _run_interruptible(
     with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as prompt_stream:
         prompt_stream.write(prompt)
         prompt_stream.seek(0)
+        extra = {"env": env} if env is not None else {}
         process = subprocess.Popen(
             command,
             stdin=prompt_stream,
@@ -265,6 +343,7 @@ def _run_interruptible(
             text=True,
             cwd=cwd,
             start_new_session=True,
+            **extra,
         )
         started = time.monotonic()
         while True:

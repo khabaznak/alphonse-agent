@@ -1,0 +1,84 @@
+{
+  "case": "family-memory-conversation-v1",
+  "attempt": 4,
+  "provider": "Codex CLI ChatGPT subscription",
+  "model": "gpt-6-luna",
+  "status": "waiting",
+  "provider_usage": "reported per call by CLI",
+  "delivery": "not exercised",
+  "start_source_sha256": {
+    "alphonse/agent_v2/core/intelligence/simple_loop/owner_read_processor.py": "6df7efb7516eb96a4120291c2e74749caec10fe0be669012b92bd433b5d0edbb",
+    "alphonse/agent_v2/core/intelligence/simple_loop/single_loop_candidate.py": "668f062d4cf867d36d278e45c2575649d3c5c176ee6530a8509adf91fd13d22a",
+    "alphonse/agent_v2/core/intelligence/simple_loop/router_candidate_chooser.py": "7f8545d96190e45d1bd2ebde77e9a962f7d8f4f8e7a9edb6661b20ae89b93eed",
+    "alphonse/agent_v2/core/intelligence/simple_loop/candidate_decision_policy.py": "763a6b617f5338577f2fbbcf988a92fd40687fc16dd1371a265f22ef7202b732",
+    "alphonse/agent_v2/evaluation/family_memory_gym.py": "efd1dc3c162b7e704bb95bca8a2be409efc0301df52a4d556d5b4b0f92475d71"
+  },
+  "error": null,
+  "answer": "I remember that Mira and Theo live in the household, and the family dog is named Pepper. There was also a note that the projector needs a new cable for family movie night.",
+  "decisions": [
+    {
+      "kind": "tool",
+      "tool_id": "native.search_memory",
+      "arguments": {
+        "query": "family",
+        "source_types": [
+          "conversation"
+        ],
+        "limit": 30
+      },
+      "text": null
+    },
+    {
+      "kind": "answer",
+      "tool_id": null,
+      "arguments": null,
+      "text": "I remember that Mira and Theo live in the household, and the family dog is named Pepper. There was also a note that the projector needs a new cable for family movie night."
+    }
+  ],
+  "synthetic_source_ids": {
+    "people": "conversation:807d1f04-21c5-4e97-b697-aa983a2f1cd3",
+    "pet": "conversation:3fd77b6f-509f-4d8e-8eb8-a6ed2bf1a926",
+    "unrelated": "conversation:501c63a5-7583-4604-8c10-905e094de41e"
+  },
+  "oracle": {
+    "mentions_people": true,
+    "mentions_pet": true,
+    "reads_relevant_sources": false,
+    "omits_unrelated_source": true,
+    "avoids_irrelevant_detail": false,
+    "does_not_invent_child": true
+  },
+  "oracle_pass": false,
+  "provider_calls": 2,
+  "actual_usage_per_call": [
+    {
+      "input_tokens": 34701,
+      "output_tokens": 111
+    },
+    {
+      "input_tokens": 18134,
+      "output_tokens": 63
+    }
+  ],
+  "full_synthetic_source_text_visible_before_final_decision": {
+    "people": true,
+    "pet": true,
+    "unrelated": true
+  },
+  "full_preview_oracle_pass": false,
+  "synthetic_sources": {
+    "people": "Family note: Mira and Theo live in the household.",
+    "pet": "Family note: Their dog is called Pepper.",
+    "unrelated": "Family movie night: the projector needs a new cable."
+  },
+  "oracle_interpretation": "Explicit-read oracle is stricter than the full-preview oracle. Prompt visibility shows source text was provided, not model attention or semantic grounding; irrelevant material may also have been visible.",
+  "elapsed_seconds": 11.948,
+  "end_source_sha256": {
+    "alphonse/agent_v2/core/intelligence/simple_loop/owner_read_processor.py": "6df7efb7516eb96a4120291c2e74749caec10fe0be669012b92bd433b5d0edbb",
+    "alphonse/agent_v2/core/intelligence/simple_loop/single_loop_candidate.py": "668f062d4cf867d36d278e45c2575649d3c5c176ee6530a8509adf91fd13d22a",
+    "alphonse/agent_v2/core/intelligence/simple_loop/router_candidate_chooser.py": "7f8545d96190e45d1bd2ebde77e9a962f7d8f4f8e7a9edb6661b20ae89b93eed",
+    "alphonse/agent_v2/core/intelligence/simple_loop/candidate_decision_policy.py": "763a6b617f5338577f2fbbcf988a92fd40687fc16dd1371a265f22ef7202b732",
+    "alphonse/agent_v2/evaluation/family_memory_gym.py": "efd1dc3c162b7e704bb95bca8a2be409efc0301df52a4d556d5b4b0f92475d71"
+  },
+  "source_changed_during_attempt": false
+}

@@ -407,7 +407,7 @@ class TelegramIntegrationRuntime:
     ) -> None:
         self.outbox.enqueue(
             address=ChannelAddress(
-                integration_id="tui",
+                integration_id="desktop",
                 provider_key="tui",
                 channel_target=self.owner_user_id,
                 alphonse_user_id=self.owner_user_id,

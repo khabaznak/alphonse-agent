@@ -40,7 +40,7 @@ class ChannelAddress:
 
 def channel_metadata(
     *,
-    integration_id: str = "tui",
+    integration_id: str = "desktop",
     provider_key: str = "tui",
     channel_target: str = "",
     alphonse_user_id: str = "",
@@ -50,8 +50,8 @@ def channel_metadata(
     thread_id: str = "",
 ) -> dict[str, str]:
     """Build normalized metadata suitable for `CoreMessage.metadata["channel"]`."""
-    integration = str(integration_id or "").strip() or "tui"
-    provider = str(provider_key or "").strip().lower() or integration.lower()
+    integration = str(integration_id or "").strip() or "desktop"
+    provider = str(provider_key or "").strip().lower() or ("tui" if integration == "desktop" else integration.lower())
     target = str(channel_target or "").strip()
     user = str(alphonse_user_id or "").strip()
     provider_user = str(provider_user_id or "").strip() or user

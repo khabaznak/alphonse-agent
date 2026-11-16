@@ -1,0 +1,8 @@
+{
+  "purpose": "One retry of the identical disposable named-skill scenario after canonicalizing an exact name to its skill ID and rejecting conditional requests.",
+  "previous_attempts": ["attempt.json", "retry.json", "subscription.json"],
+  "provider": "Codex CLI ChatGPT subscription, gpt-6-luna",
+  "fixture": "Disposable synthetic owner and meal-planning package; no household data, real external services, paid API or Jev.",
+  "oracle": "The model requests the explicit skill by exact name or canonical ID; its synthetic instructions reach the next model request; the delivered answer includes saffron oats; ready state is restored before pickup.",
+  "interpretation": "Exploratory same-case retry after an observed argument-format failure; not independent reliability evidence, automatic relevance, or skill script execution."
+}

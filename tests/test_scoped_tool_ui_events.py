@@ -4,7 +4,6 @@ from types import SimpleNamespace
 
 from alphonse.agent_v2.core.core import CoreLoopContext, ToolDescriptor, ToolKind
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
-from alphonse.agent_v2.core.intelligence.v3 import PhaseExecutor, PhasePlan, PhaseSubgoal, ToolRevealPolicy, new_tactical_state
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
 from alphonse.agent_v2.core.tools.invocation import ToolInvocationService
 from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry, ToolDefinition
@@ -77,57 +76,10 @@ def test_sensitive_tool_events_are_both_scoped_and_redacted():
     assert all(row['event']['payload']['task_id'] == 'a' for row in alice)
 
 
-def test_v3_reveal_event_is_scoped_and_missing_actor_is_not_broadcast():
-    context, events = setup()
-    subgoal = PhaseSubgoal('read', 'Read synthetic', 'observation', allowed_capabilities=('fixture_read',))
-    phase = PhasePlan('phase', 'Read synthetic', (subgoal,), authorized_capabilities=('fixture_read',))
-    executor = PhaseExecutor(reveal_policy=ToolRevealPolicy())
-    executor._revealed_tools(TaskState(task_id='a', user='alice'), new_tactical_state(phase), subgoal, context)
-    executor._revealed_tools(TaskState(task_id='anonymous'), new_tactical_state(phase), subgoal, context)
-    daemon = project(events)
-    alice_events, _ = daemon.ui_events_since(user='alice')
-    bob_events, _ = daemon.ui_events_since(user='bob')
-    assert len(alice_events) == 1 and alice_events[0]['event']['type'] == 'tactical_tools_revealed'
-    assert bob_events == []
 
 
-def test_v2_direct_tool_events_are_scoped_and_execution_still_succeeds():
-    from alphonse.agent_v2.core.intelligence.pdca.nodes import do_node
-    context, events = setup()
-    for actor in ('alice', 'bob', ''):
-        task = TaskState(task_id=actor or 'anonymous', user=actor)
-        task.append_plan_call({'id': actor or 'none', 'tool_id': 'native.fixture_secret',
-                               'tool_name': 'fixture_secret', 'arguments': {'secret': actor + '-private'}})
-        do_node(task, context=context)
-        assert task.get_next_planned_call() is None
-    daemon = project(events)
-    alice, _ = daemon.ui_events_since(user='alice')
-    bob, _ = daemon.ui_events_since(user='bob')
-    assert len(alice) == len(bob) == 2
-    assert 'alice-private' in str(alice) and 'bob-private' not in str(alice)
-    assert 'bob-private' in str(bob) and 'alice-private' not in str(bob)
-    assert '-private' not in str([event for event in alice if event['user'] != 'alice'])
 
 
-def test_v2_program_events_are_scoped_and_execution_still_succeeds():
-    from alphonse.agent_v2.core.intelligence.pdca.nodes import do_node
-    context, events = setup()
-    context.program_runner = SimpleNamespace(run=lambda **kwargs: {
-        'status': 'success', 'program_result': 'private-program-result', 'tool_calls': []})
-    task = TaskState(task_id='program', user='alice')
-    task.append_plan_call({'id': 'p', 'execution_mode': 'program',
-        'program': {'source': 'result = 1'}, 'tool_name': 'program'})
-    do_node(task, context=context)
-    assert task.get_next_planned_call() is None
-    daemon = project(events)
-    alice, _ = daemon.ui_events_since(user='alice')
-    bob, _ = daemon.ui_events_since(user='bob')
-    assert len(alice) == 2 and 'private-program-result' in str(alice)
-    assert bob == []
-    no_actor = TaskState(task_id='anonymous')
-    no_actor.append_plan_call({'id': 'q', 'execution_mode': 'program', 'program': {'source': 'result = 1'}})
-    do_node(no_actor, context=context)
-    assert events == []  # The previous batch was consumed by project().
 
 
 def test_real_agui_routes_delegated_run_to_owner_and_question_to_respondent():
@@ -181,22 +133,3 @@ def test_real_agui_scopes_tool_results_and_drops_unowned_sensitive_events():
                ('malformed-private', 'empty-private', 'conflicting-private'))
     assert any(row['event'].get('snapshot', {}).get('status') == 'working' for row in bob)
     assert any(row['event'].get('name') == 'public_status' for row in bob)
-
-
-def test_anonymous_v2_and_v3_processors_do_not_publish_task(monkeypatch):
-    from alphonse.agent_v2.core.intelligence.pdca.processor import PDCAIntelligenceProcessor
-    from alphonse.agent_v2.core.intelligence.v3.processor import HierarchicalCAPDProcessor
-    import alphonse.agent_v2.core.intelligence.pdca.processor as pdca_processor
-    context, events = setup()
-    anonymous = TaskState(task_id='anonymous', goal='private-anonymous-goal')
-    # Drive the real V2 processor's parked-event and terminal-emission branches
-    # with a disposable graph result; no real provider calls occur.
-    def parked(task, context):
-        task.status = 'waiting_user'
-        return task
-    monkeypatch.setattr(pdca_processor, 'run_pdca_once', parked)
-    PDCAIntelligenceProcessor().process(anonymous, context)
-    assert not events
-    other = TaskState(task_id='anonymous-v3', goal='private-anonymous-v3')
-    HierarchicalCAPDProcessor().process(other, context)
-    assert not events

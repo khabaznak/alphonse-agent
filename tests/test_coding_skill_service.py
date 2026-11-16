@@ -13,7 +13,6 @@ from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
 from alphonse.agent_v2.core.tools.invocation import ToolInvocationService
 from alphonse.agent_v2.core.tools.registry.native import build_native_tool_registry
-from alphonse.agent_v2.core.intelligence.v3 import PhaseExecutor, PhasePlan, PhaseStatus, PhaseSubgoal, SideEffectClass, new_tactical_state
 from alphonse.agent_v2.system_one import SystemOneTacticalReview
 
 
@@ -94,29 +93,6 @@ def test_native_tool_is_only_registered_for_explicitly_configured_service(tmp_pa
         build_native_tool_registry(skill_store=SkillStore(tmp_path / 'other-skills'), coding_skill_service=coordinator)
 
 
-def test_phase_builds_activates_and_uses_skill_for_original_task(tmp_path):
-    coordinator = service(tmp_path, FixtureProvider(), FixtureVerifier())
-    registry = build_native_tool_registry(skill_store=coordinator.skills, coding_skill_service=coordinator)
-    task = TaskState(user='owner', task_id='task', goal='Read the fixture')
-    phase = PhasePlan('build-and-read', 'Build skill then read fixture', (
-        PhaseSubgoal('build', 'Build fixture skill', 'skill', allowed_capabilities=('native.coding_skill_build',),
-                     allowed_side_effects=(SideEffectClass.LOCAL_SKILL_INSTALLATION,)),
-        PhaseSubgoal('read', 'Read fixture', 'reading', depends_on=('build',),
-                     allowed_capabilities=('native.bash',), allowed_side_effects=(SideEffectClass.READ_ONLY,)),
-    ), authorized_capabilities=('native.coding_skill_build', 'native.bash'))
-    state = new_tactical_state(phase)
-    actions = iter([
-        {'tool_id': 'native.coding_skill_build', 'arguments': {'name': 'fixture-reader', 'operation_id': 'one',
-            'brief': 'Build fixture reader', 'checks': ['fixture-check']}},
-        {'tool_id': 'native.bash', 'arguments': {'skill_id': 'skill:fixture-reader', 'runtime': sys.executable,
-            'command': '"$ALPHONSE_SKILL_RUNTIME" scripts/read.py'}},
-    ])
-    reviewer = SimpleNamespace(evaluate_tactical_progress=lambda **kwargs: SystemOneTacticalReview(True, .99, True))
-    context = CoreLoopContext(messages=InMemoryMessageQueue(), skill_store=coordinator.skills, tools=registry, system_one=reviewer)
-    outcome = PhaseExecutor(action_selector=lambda *_: next(actions)).run(task, state, context)
-    assert outcome.status == PhaseStatus.PHASE_COMPLETE
-    assert state.actions[-1].result['stdout'].strip() == 'FIXTURE_OK'
-    assert task.metadata['v3_skill_selection']['selected_skill_ids'] == ['skill:fixture-reader']
 
 
 def test_runtime_refresh_retains_explicitly_configured_coding_service(tmp_path):

@@ -157,25 +157,3 @@ def test_restart_oracle_requires_instrumentation_and_exact_reads(tmp_path):
     assert missing['passed'] is False
     assert missing['oracle']['checks']['source_read_counts'] is None
     assert missing['oracle']['checks']['restarts'] is None
-
-
-def test_baseline_runs_real_v3_processor_and_exposes_unsupported_cases(monkeypatch):
-    from alphonse.agent_v2.evaluation.simplified_loop import ExistingV3ReplayAdapter
-    from alphonse.agent_v2.core.intelligence.v3 import HierarchicalCAPDProcessor
-    original = HierarchicalCAPDProcessor.process
-    invoked = []
-    def observed(self, task, context):
-        invoked.append(task.goal)
-        return original(self, task, context)
-    monkeypatch.setattr(HierarchicalCAPDProcessor, 'process', observed)
-    report = compare(CORPUS, baseline=ExistingV3ReplayAdapter(), candidate=None)
-    row = next(item for item in report['cases'] if item['case_id'] == 'solar-v3-baseline')
-    assert invoked == ['Mark the solar-cell project complete']
-    assert row['baseline']['availability'] == 'available'
-    assert row['baseline']['status'] in {'completed', 'failed', 'cancelled', 'waiting_user'}
-    assert row['baseline']['oracle']['observed_effects'] == {'mejoras_hogar/backlog.md': 'Solar: complete\n'}
-    assert row['baseline']['metrics']['system_two_calls'] > 0
-    assert row['baseline']['metrics']['jev_calls'] > 0
-    assert row['baseline']['metrics']['tool_calls'] is None
-    assert row['candidate']['availability'] == 'unavailable'
-    assert next(item for item in report['cases'] if item['case_id'] == 'gmail_es')['baseline']['availability'] == 'unavailable'

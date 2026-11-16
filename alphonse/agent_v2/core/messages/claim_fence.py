@@ -9,7 +9,7 @@ or did not happen.
 from __future__ import annotations
 
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import InitVar, dataclass
 from datetime import datetime, timezone
 import re
 import secrets
@@ -30,20 +30,30 @@ def new_claim_generation() -> str:
     return secrets.token_hex(16)
 
 
-@dataclass(frozen=True, repr=False)
+@dataclass(frozen=True, repr=False, eq=False)
 class ClaimReceipt:
     """Internal queue ownership receipt; never emit or log the generation."""
     message_id: str
     user_id: str
     lease_owner: str
-    claim_generation: str
+    claim_generation: InitVar[str] = ''
 
-    def __post_init__(self) -> None:
+    def __post_init__(self, claim_generation: str) -> None:
+        object.__setattr__(self, 'claim_generation', claim_generation)
         if (any(not isinstance(value, str) or not value.strip() for value in
                 (self.message_id, self.user_id, self.lease_owner))
                 or not isinstance(self.claim_generation, str)
                 or re.fullmatch(r'[0-9a-f]{32}', self.claim_generation) is None):
             raise ValueError('claim_receipt_invalid')
+
+    def __eq__(self, other: object) -> bool:
+        if type(other) is not type(self):
+            return NotImplemented
+        return (self.message_id, self.user_id, self.lease_owner, self.claim_generation) == (
+            other.message_id, other.user_id, other.lease_owner, other.claim_generation)
+
+    def __hash__(self) -> int:
+        return hash((self.message_id, self.user_id, self.lease_owner, self.claim_generation))
 
 
 def _time(value: object) -> datetime:
@@ -72,7 +82,7 @@ def _read_claim(conn: sqlite3.Connection, receipt: ClaimReceipt, now: datetime) 
 
 @contextmanager
 def fenced_claim_transaction(conn: sqlite3.Connection, receipt: ClaimReceipt, *,
-                             clock: Callable[[], datetime]) -> Iterator[sqlite3.Connection]:
+                             clock: Callable[[], datetime], _finalize=None) -> Iterator[sqlite3.Connection]:
     """Fence DB writes against the current queue claim in one immediate transaction.
 
     Both checks read the same locked SQLite database. The callback may update
@@ -93,13 +103,36 @@ def fenced_claim_transaction(conn: sqlite3.Connection, receipt: ClaimReceipt, *,
         conn.execute('BEGIN IMMEDIATE')
         start = _time(clock())
         _read_claim(conn, receipt, start)
+        # This primitive permits writes to other same-database rows only. A
+        # second identity check alone would allow the callback to extend the
+        # lease or rewrite the queued message while keeping the token intact.
+        original_row = tuple(conn.execute(
+            'SELECT * FROM main.v2_inbound_messages WHERE message_id=?', (receipt.message_id,)
+        ).fetchone())
         yield conn
         if not conn.in_transaction:
             raise ClaimFenceUnavailable('claim_transaction_ended_by_caller')
         end = _time(clock())
         if end < start:
             raise ClaimFenceUnavailable('claim_clock_moved_backwards')
-        _read_claim(conn, receipt, end)
+        expires = _read_claim(conn, receipt, end)
+        current_row = conn.execute(
+            'SELECT * FROM main.v2_inbound_messages WHERE message_id=?', (receipt.message_id,)
+        ).fetchone()
+        if current_row is None or tuple(current_row) != original_row:
+            raise ClaimFenceUnavailable('claim_row_modified_by_caller')
+        # Reserved for narrowly scoped owner acknowledgment: the finalizer is
+        # trusted internal code and runs only after both full claim checks.
+        # It must perform no I/O and must not commit or roll back.
+        if _finalize is not None:
+            _finalize(conn)
+            if not conn.in_transaction:
+                raise ClaimFenceUnavailable('claim_transaction_ended_by_caller')
+            finalized_at = _time(clock())
+            if finalized_at < end:
+                raise ClaimFenceUnavailable('claim_clock_moved_backwards')
+            if finalized_at >= expires:
+                raise ClaimSuperseded('claim_expired')
         conn.commit()
     except BaseException:
         if conn.in_transaction:

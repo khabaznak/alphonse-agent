@@ -2,7 +2,7 @@
 
 This is a test-level, read-only fixture: it never connects to Gmail, a mailbox,
 or a household account. Model/provider and actor authorization remain separate
-from fixture access. Caller must authorize any live provider and Jev use.
+from fixture access. Caller must authorize any live provider use.
 """
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import json
 from time import monotonic
 from typing import Any, Callable
 
-from .codex_clock_comparison import _run_simple, _run_v3, _summarize_events
+from .codex_clock_comparison import _run_simple, _summarize_events
 from .codex_subscription_provider import CodexSubscriptionProvider
 from .loopback_mail_pilot import LoopbackMailPilot, evaluate
 
@@ -32,7 +32,7 @@ def run_mail_arm(*, arm: str, provider: Any, model: str, jev: Any = None,
     enabled. The evaluator cannot establish process attribution, natural-language
     response quality, real delivery or production authorization from this test.
     """
-    if arm not in {'v3', 'simple'}:
+    if arm != 'simple':
         raise ValueError('unsupported_mail_arm')
     if type(provider) is not CodexSubscriptionProvider or provider.model != model:
         raise ValueError('matching_codex_subscription_provider_required')
@@ -62,7 +62,7 @@ def run_mail_arm(*, arm: str, provider: Any, model: str, jev: Any = None,
                           cancelled=cancelled, trace=safe_trace if private_trace else None,
                           goal=GOAL, source_description=DESCRIPTION,
                           allowed_source_names=('index',), required_source_names=('index',))
-            run = _run_v3(jev=jev, **common) if arm == 'v3' else _run_simple(**common)
+            run = _run_simple(**common)
             error = None
         except Exception as exc:
             run, error = None, type(exc).__name__
@@ -79,5 +79,4 @@ def run_mail_arm(*, arm: str, provider: Any, model: str, jev: Any = None,
             'limitations': ['Synthetic count source, not Gmail or the desktop conversation path.',
                             'Subscription login checks do not prove billing mode during dispatch.',
                             'JSON response is a test constraint, not natural-language grading.',
-                            'Jev is separate and required by the V3 arm.',
                             'Timeout is cooperative; in-flight work may overrun.']}

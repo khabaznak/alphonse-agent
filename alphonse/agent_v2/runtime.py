@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sqlite3
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -20,7 +21,7 @@ from alphonse.agent_v2.core.core import StateSnapshot
 from alphonse.agent_v2.core.core import ToolDescriptor
 from alphonse.agent_v2.core.core import ToolRegistry
 from alphonse.agent_v2.core.inference import InferenceRouter
-from alphonse.agent_v2.core.intelligence.v3 import EngineRoutingProcessor, HierarchicalCAPDProcessor
+from alphonse.agent_v2.core.intelligence.engine_router import EngineRoutingProcessor
 from alphonse.agent_v2.intelligence_engine_settings import SQLiteIntelligenceEngineSettingsStore
 from alphonse.agent_v2.core.io import IntegrationIdentity
 from alphonse.agent_v2.core.io import SQLiteOutboundStore
@@ -40,7 +41,6 @@ from alphonse.agent_v2.integrations import IntegrationRegistry
 from alphonse.agent_v2.integrations import SQLiteIntegrationStore
 from alphonse.agent_v2.integrations import build_default_integration_registry
 from alphonse.agent_v2.integrations.presence import PresenceProjector
-from alphonse.agent_v2.integrations.presence import TuiPresenceAdapter
 from alphonse.agent_v2.inference_settings import InferenceSettingsRecord
 from alphonse.agent_v2.inference_settings import SQLiteInferenceSettingsStore
 from alphonse.agent_v2.inference_settings import build_inference_router_from_settings
@@ -137,6 +137,7 @@ class V2RuntimeHost:
     coding_skill_service: Any | None = None
     coding_skill_error: str = ""
     integration_management: Any | None = None
+    owner_gmail_service: Any | None = None
     # #6 installs the protected native adapter; skill selection grants no access.
     care_records: CareRecords | None = None
     integration_runtimes: list[Any] = field(default_factory=list)
@@ -180,7 +181,13 @@ def build_runtime_host(
     conversation_store: SQLiteConversationStore | None = None,
     skill_store: SkillStore | None = None,
     coding_skill_service: Any | None = None,
+    experimental_owner_read: bool = False,
+    owner_selected_draft_sink: Callable[[Any], None] | None = None,
 ) -> V2RuntimeHost:
+    if type(experimental_owner_read) is not bool or (not experimental_owner_read and owner_selected_draft_sink is not None):
+        raise ValueError('owner_read_runtime_configuration_invalid')
+    if experimental_owner_read and (processor is not None or not callable(owner_selected_draft_sink)):
+        raise ValueError('owner_read_runtime_configuration_invalid')
     reset_state()
     provided_tools = tools is not None
     queue = messages or InMemoryMessageQueue()
@@ -203,7 +210,11 @@ def build_runtime_host(
         intelligence_engine_provider=lambda project_id: intelligence_engine_settings_store.get().engine_for(project_id),
     )
     visible_state = InMemoryInternalState()
-    processor = processor or EngineRoutingProcessor(v3=HierarchicalCAPDProcessor())
+    if processor is None and not experimental_owner_read:
+        # An embedded host must register a processor explicitly. The daemon
+        # installs the claim-bound owner worker below; legacy stamps never
+        # silently run as new simple-loop work.
+        processor = EngineRoutingProcessor()
     web_tools_settings_store = web_tools_settings_store or SQLiteWebToolsSettingsStore()
     code_mode_settings_store = code_mode_settings_store or SQLiteCodeModeSettingsStore()
     media_tools_settings_store = media_tools_settings_store or SQLiteMediaToolsSettingsStore()
@@ -215,13 +226,70 @@ def build_runtime_host(
     system_one_settings_store = system_one_settings_store or SQLiteSystemOneSettingsStore()
     tools = tools or build_native_tool_registry(web_tools_settings_store.get(), asset_store, media_tools_settings_store.get(), artifact_store, user_store=user_store, skill_store=skill_store)
     inference_settings_store = inference_settings_store or SQLiteInferenceSettingsStore()
-    # Persistent daemon/TUI constructors pass `AgentConfigStore.default()`.
+    # The persistent daemon passes `AgentConfigStore.default()`.
     # Generic test and helper runtimes only need the package defaults.
     agent_config_store = agent_config_store or AgentConfigStore(packaged_agent_config_dir())
     project_session_store = project_session_store or SQLiteProjectSessionStore()
     memory_session_store = memory_session_store or SQLiteMemorySessionStore()
     inference = inference or build_inference_router_from_settings(inference_settings_store.get())
     question_store = question_store or SQLiteQuestionStore()
+    outbox = outbox or SQLiteOutboundStore()
+    if experimental_owner_read:
+        from alphonse.agent_v2.core.intelligence.simple_loop.owner_clock import OWNER_CLOCK_TOOL_ID, build_owner_clock_tool_definition
+        from alphonse.agent_v2.core.intelligence.simple_loop.owner_schedules import OWNER_SCHEDULES_TOOL_ID, build_owner_schedules_tool_definition
+        from alphonse.agent_v2.core.intelligence.simple_loop.owner_gmail import OWNER_GMAIL_TOOL_ID, build_owner_gmail_tool_definition
+        from alphonse.agent_v2.core.intelligence.simple_loop.owner_reminder_create import OWNER_REMINDER_CREATE_TOOL_ID, build_owner_reminder_create_tool_definition
+        from alphonse.agent_v2.core.intelligence.simple_loop.owner_named_skill import OWNER_NAMED_SKILL_TOOL_ID, build_owner_named_skill_tool_definition
+        if tools.get(OWNER_CLOCK_TOOL_ID) is not None:
+            raise ValueError('owner_clock_tool_conflict')
+        tools.register(build_owner_clock_tool_definition())
+        if tools.get(OWNER_SCHEDULES_TOOL_ID) is not None:
+            raise ValueError('owner_schedules_tool_conflict')
+        tools.register(build_owner_schedules_tool_definition())
+        if tools.get(OWNER_REMINDER_CREATE_TOOL_ID) is not None:
+            raise ValueError('owner_reminder_tool_conflict')
+        tools.register(build_owner_reminder_create_tool_definition())
+        if tools.get(OWNER_GMAIL_TOOL_ID) is not None:
+            raise ValueError('owner_gmail_tool_conflict')
+        tools.register(build_owner_gmail_tool_definition())
+        if tools.get(OWNER_NAMED_SKILL_TOOL_ID) is not None:
+            raise ValueError('owner_named_skill_tool_conflict')
+        tools.register(build_owner_named_skill_tool_definition())
+        # Registration is an explicit dependency-injection hook, not a daemon
+        # enable switch. The worker still refuses fenced processing until the
+        # entire acquisition and delivery path is integrated.
+        from alphonse.agent_v2.core.messages.sqlite_queue import SQLiteMessageQueue
+        from alphonse.agent_v2.core.intelligence.simple_loop.owner_read_processor import (
+            OwnerReadConversationProcessor, authorize_trusted_owner_claim,
+        )
+        from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_checkpoint import ExperimentalCheckpointStore
+        from alphonse.agent_v2.core.intelligence.simple_loop.task_budget import SQLiteTaskBudgetStore
+        try:
+            if (type(queue) is not SQLiteMessageQueue or queue.experimental_claim_fencing is not True
+                    or queue.db_path == ':memory:' or user_store.db_path == ':memory:'
+                    or question_store.db_path == ':memory:' or conversation_store.db_path == ':memory:'
+                    or type(outbox) is not SQLiteOutboundStore or outbox.db_path == ':memory:'
+                    or not os.path.samefile(queue.db_path, user_store.db_path)
+                    or not os.path.samefile(queue.db_path, question_store.db_path)
+                    or not os.path.samefile(queue.db_path, conversation_store.db_path)
+                    or not os.path.samefile(queue.db_path, outbox.db_path)):
+                raise ValueError('owner_read_runtime_store_mismatch')
+        except (AttributeError, OSError):
+            raise ValueError('owner_read_runtime_store_mismatch') from None
+
+        def _atomic_only_checkpoint(*_args: Any) -> None:
+            raise RuntimeError('owner_read_unfenced_checkpoint_forbidden')
+
+        candidate = OwnerReadConversationProcessor(
+            users=user_store, budgets=SQLiteTaskBudgetStore(queue.db_path),
+            authorize_claim=authorize_trusted_owner_claim, save_checkpoint=_atomic_only_checkpoint,
+            atomic_checkpoints=ExperimentalCheckpointStore(question_store),
+            selected_draft_sink=owner_selected_draft_sink,
+        )
+        # The exclusive owner worker must not register or instantiate the old
+        # V3 loop. V3-stamped work stays queued for the normal bridge; an
+        # accidental dispatch in this mode fails as an unregistered engine.
+        processor = EngineRoutingProcessor(owner_read_candidate=candidate)
     project_store = project_store or ProjectStore()
     artifact_store.capture_legacy_roots(project_store)
     artifact_resources = ArtifactResources(artifact_store, skill_store, project_store, repository_root=user_store.artifacts_root, is_admin=user_store.is_admin)
@@ -229,7 +297,6 @@ def build_runtime_host(
         artifact_resources.ensure_repository()
     # Legacy rows remain solely for migration/provenance and privacy guards.
     schedule_store = schedule_store or ScheduledTaskStore()
-    outbox = outbox or SQLiteOutboundStore()
     def _scheduled_delivery_allowed(message: Any) -> bool:
         metadata = message.metadata
         scheduled = schedule_store.get_task(str(metadata.get("scheduled_task_id") or ""))
@@ -353,7 +420,6 @@ def build_runtime_host(
         register_tool(build_read_memory_source_tool_definition())
     integration_registry = integration_registry or build_default_integration_registry()
     presence_projector = PresenceProjector()
-    presence_projector.register("tui", TuiPresenceAdapter())
     identity_resolver = identity_resolver or build_identity_resolver(integration_store, user_store=user_store)
     communication_router = CommunicationRouter(users=user_store, resolver=identity_resolver, outbox=outbox, threads=communication_thread_store)
     delivery_sink = build_outbox_delivery_sink(
@@ -473,6 +539,18 @@ def refresh_runtime_media_tools(runtime: V2RuntimeHost) -> None:
 def refresh_runtime_artifacts(runtime: V2RuntimeHost) -> None:
     """Refresh native management tools after artifact catalog or skill changes."""
     registry = build_native_tool_registry(runtime.web_tools_settings_store.get(), runtime.asset_store, runtime.media_tools_settings_store.get(), runtime.artifact_store, lambda: refresh_runtime_artifacts(runtime), runtime.user_store, runtime.skill_store, management_runtime=runtime, coding_skill_service=runtime.coding_skill_service)
+    # Preserve the opt-in owner's native capability across catalog refreshes.
+    if isinstance(runtime.processor, EngineRoutingProcessor) and runtime.processor.owner_read_candidate is not None:
+        from alphonse.agent_v2.core.intelligence.simple_loop.owner_clock import build_owner_clock_tool_definition
+        from alphonse.agent_v2.core.intelligence.simple_loop.owner_schedules import build_owner_schedules_tool_definition
+        from alphonse.agent_v2.core.intelligence.simple_loop.owner_gmail import build_owner_gmail_tool_definition
+        from alphonse.agent_v2.core.intelligence.simple_loop.owner_reminder_create import build_owner_reminder_create_tool_definition
+        from alphonse.agent_v2.core.intelligence.simple_loop.owner_named_skill import build_owner_named_skill_tool_definition
+        registry.register(build_owner_clock_tool_definition())
+        registry.register(build_owner_schedules_tool_definition())
+        registry.register(build_owner_reminder_create_tool_definition())
+        registry.register(build_owner_gmail_tool_definition())
+        registry.register(build_owner_named_skill_tool_definition())
     # Artifact programs are not members of the executable tool registry.
     runtime.core.tools = registry
 
@@ -526,11 +604,9 @@ def _record_runtime_telemetry(events: list[dict[str, Any]], event: dict[str, Any
 
 
 def build_identity_resolver(store: SQLiteIntegrationStore, *, user_store: V2UserStore | None = None) -> V2IdentityResolver:
-    # Native clients use separate integration ids so their durable outbox
-    # deliveries cannot be consumed by another interface. Both are local
-    # first-party clients and therefore share the lightweight ``tui`` provider
-    # identity semantics.
-    identities = [IntegrationIdentity("tui", "tui"), IntegrationIdentity("desktop", "tui")]
+    # Desktop is the local interface. Keep the historic ``tui`` identity for
+    # already-stored addresses, while preferring Desktop for provider defaults.
+    identities = [IntegrationIdentity("desktop", "tui"), IntegrationIdentity("tui", "tui")]
     identities.extend(
         IntegrationIdentity(record.integration_id, record.provider_key)
         for record in store.list_enabled()

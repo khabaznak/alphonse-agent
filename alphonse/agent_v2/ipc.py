@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import socket
 import sys
 import threading
-import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -97,8 +97,12 @@ class V2DaemonClient:
             limit=limit,
         )
 
-    def acknowledge_desktop_delivery(self, *, client_id: str, outbox_message_id: str) -> dict[str, Any]:
-        return self.request("desktop_ack_delivery", client_id=client_id, outbox_message_id=outbox_message_id)
+    def acknowledge_desktop_delivery(self, *, client_id: str, outbox_message_id: str,
+                                     attempt_count: int | None = None) -> dict[str, Any]:
+        params = {"client_id": client_id, "outbox_message_id": outbox_message_id}
+        if attempt_count is not None:
+            params["attempt_count"] = attempt_count
+        return self.request("desktop_ack_delivery", **params)
 
     def desktop_conversation_history(self, *, user: str, project_id: str = "", local_date: str = "", limit: int = 100) -> dict[str, Any]:
         return self.request("desktop_conversation_history", user=user, project_id=project_id, local_date=local_date, limit=limit)
@@ -297,7 +301,10 @@ class V2DaemonClient:
 
 
 class V2DaemonServer:
-    def __init__(self, daemon: Any, socket_path: str | Path | None = None) -> None:
+    def __init__(self, daemon: Any, socket_path: str | Path | None = None, *, experimental_owner_ingress: bool = False) -> None:
+        if type(experimental_owner_ingress) is not bool:
+            raise ValueError('owner_ingress_configuration_invalid')
+        self.experimental_owner_ingress = experimental_owner_ingress
         self.daemon = daemon
         self.socket_path = Path(socket_path) if socket_path is not None else default_socket_path()
         self._server: socket.socket | None = None
@@ -366,24 +373,210 @@ class V2DaemonServer:
                 request = json.loads(_read_line(connection))
                 if isinstance(request, dict) and request.get('method') == 'optional_management':
                     result = self._optional_management(connection, request)
+                elif isinstance(request, dict) and request.get('method') == 'experimental_owner_ingress':
+                    result = self._owner_ingress(connection, request)
+                elif isinstance(request, dict) and request.get('method') == 'experimental_owner_take_draft':
+                    result = self._owner_take_draft(connection, request)
+                elif isinstance(request, dict) and request.get('method') == 'experimental_owner_ack_draft':
+                    result = self._owner_ack_draft(connection, request)
+                elif isinstance(request, dict) and request.get('method') == 'experimental_owner_status':
+                    result = self._owner_status(connection, request)
+                elif isinstance(request, dict) and request.get('method') == 'experimental_owner_abandon':
+                    result = self._owner_abandon(connection, request)
+                elif isinstance(request, dict) and request.get('method') == 'experimental_owner_recovery_list':
+                    result = self._owner_recovery_list(connection, request)
+                elif isinstance(request, dict) and request.get('method') == 'experimental_owner_questions':
+                    result = self._owner_questions(connection, request)
+                elif isinstance(request, dict) and request.get('method') in {
+                        'owner_reminder_create', 'owner_reminder_take', 'owner_reminder_ack',
+                        'owner_reminder_list', 'owner_reminder_cancel', 'owner_reminder_resolve', 'owner_reminder_lookup'}:
+                    result = self._owner_reminders(connection, request)
+                elif isinstance(request, dict) and request.get('method') in {'legacy_notification_list', 'legacy_notification_archive'}:
+                    result = self._legacy_notification_review(connection, request)
                 else:
                     result = self._dispatch(request)
                 response = {"version": PROTOCOL_VERSION, "request_id": _request_id(request), "ok": True, "result": result}
             except Exception as exc:
-                traceback.print_exc()
                 response = {
                     "version": PROTOCOL_VERSION,
                     "request_id": _request_id(request),
                     "ok": False,
                     "error": f"{type(exc).__name__}: {exc}",
                 }
-            connection.sendall((json.dumps(response, sort_keys=True) + "\n").encode("utf-8"))
+            try:
+                encoded = (json.dumps(response, sort_keys=True) + "\n").encode("utf-8")
+            except (TypeError, ValueError, UnicodeError):
+                # A malformed service result must not close the connection
+                # without a protocol response or leak the malformed value.
+                encoded = (json.dumps({"version": PROTOCOL_VERSION, "request_id": _request_id(request),
+                    "ok": False, "error": "daemon_response_unavailable"}) + "\n").encode("utf-8")
+            connection.sendall(encoded)
 
-    def _optional_management(self, connection, request):
+    def _owner_reminders(self, connection, request):
+        """Restrict reminder mutation and pickup to the trusted local owner."""
+        if not self.experimental_owner_ingress or getattr(self.daemon, 'experimental_owner_only', False) is not True:
+            raise PermissionError('owner_reminder_unavailable')
+        if request.get('version') != PROTOCOL_VERSION:
+            raise ValueError('daemon_protocol_version_unsupported')
+        method, params = request.get('method'), request.get('params')
+        expected = {'owner_reminder_create': {'message', 'due_at', 'request_id'},
+                    'owner_reminder_take': set(), 'owner_reminder_ack': {'id', 'token'},
+                    'owner_reminder_list': set(),
+                    'owner_reminder_cancel': {'id'}, 'owner_reminder_resolve': {'id'},
+                    'owner_reminder_lookup': {'request_id'}}[method]
+        if not isinstance(params, dict) or set(params) != expected:
+            raise ValueError('owner_reminder_payload_denied')
+        self._local_peer_uid(connection)
+        users = self.daemon.runtime.user_store
+        owner = users.admin_user()
+        if owner is None or owner.is_active is not True or owner.role not in ('admin', 'owner') or not users.is_admin(owner.user_id):
+            raise PermissionError('owner_reminder_unavailable')
+        from alphonse.agent_v2.core.messages.sqlite_queue import SQLiteMessageQueue
+        queue = self.daemon.runtime.queue
+        if (type(queue) is not SQLiteMessageQueue or queue.experimental_claim_fencing is not True
+                or not users.db_path or users.db_path == ':memory:'
+                or os.path.realpath(str(users.db_path)) != os.path.realpath(str(queue.db_path))):
+            raise PermissionError('owner_reminder_unavailable')
+        from alphonse.agent_v2.owner_desktop_reminders import OwnerDesktopReminders
+        reminders = OwnerDesktopReminders(str(users.db_path))
+        if method == 'owner_reminder_create':
+            return reminders.create(owner.user_id, params['message'], params['due_at'], params['request_id'])
+        if method == 'owner_reminder_take':
+            return reminders.take_due(owner.user_id)
+        if method == 'owner_reminder_list':
+            return {'reminders': reminders.list_open(owner.user_id)}
+        if method == 'owner_reminder_cancel':
+            return reminders.cancel(owner.user_id, params['id'])
+        if method == 'owner_reminder_resolve':
+            return reminders.resolve_unconfirmed(owner.user_id, params['id'])
+        if method == 'owner_reminder_lookup':
+            return reminders.lookup(owner.user_id, params['request_id'])
+        return reminders.acknowledge(owner.user_id, params['id'], params['token'])
+
+    def _owner_ingress(self, connection, request):
+        if not self.experimental_owner_ingress:
+            raise PermissionError('owner_ingress_unavailable')
+        if request.get('version') != PROTOCOL_VERSION:
+            raise ValueError('daemon_protocol_version_unsupported')
+        params = request.get('params')
+        if (not isinstance(params, dict) or 'prompt' not in params
+                or set(params) - {'prompt', 'reply_to_message_id'}):
+            raise ValueError('owner_ingress_payload_denied')
+        if ('reply_to_message_id' in params and
+                (not isinstance(params['reply_to_message_id'], str)
+                 or re.fullmatch(r'[0-9a-f]{32}', params['reply_to_message_id']) is None)):
+            raise ValueError('owner_question_context_unavailable')
+        uid = self._local_peer_uid(connection)
+        if (getattr(self.daemon, 'experimental_owner_only', False) is True
+                and not self.daemon.owner_processing_ready()):
+            raise RuntimeError('owner_worker_unavailable')
+        from alphonse.agent_v2.core.messages.sqlite_queue import SQLiteMessageQueue
+        queue = self.daemon.runtime.queue
+        if type(queue) is not SQLiteMessageQueue:
+            raise PermissionError('owner_ingress_unavailable')
+        return {'message_id': queue.enqueue_trusted_local_owner(prompt=params['prompt'], peer_uid=uid,
+                    reply_to_message_id=params.get('reply_to_message_id'))}
+
+    def _legacy_notification_review(self, connection, request):
+        """Review legacy deliveries as the authenticated local owner only."""
+        if request.get('version') != PROTOCOL_VERSION:
+            raise ValueError('daemon_protocol_version_unsupported')
+        params = request.get('params')
+        method = request.get('method')
+        expected = set() if method == 'legacy_notification_list' else {'message_id', 'review_token'}
+        if not isinstance(params, dict) or set(params) != expected:
+            raise ValueError('legacy_notification_payload_denied')
+        self._local_peer_uid(connection)
+        users = self.daemon.runtime.user_store
+        owner = users.admin_user()
+        if (owner is None or owner.is_active is not True or owner.role not in ('admin', 'owner')
+                or not users.is_admin(owner.user_id)):
+            raise PermissionError('legacy_notification_owner_unavailable')
+        outbox = self.daemon.runtime.outbox
+        if method == 'legacy_notification_list':
+            return {'items': outbox.list_legacy_tui_owner_items(owner.user_id)}
+        if not isinstance(params['message_id'], str) or not isinstance(params['review_token'], str):
+            raise ValueError('legacy_notification_payload_denied')
+        return outbox.archive_legacy_tui_owner_item(owner.user_id, params['message_id'], params['review_token'])
+
+    def _owner_status(self, connection, request):
+        if not self.experimental_owner_ingress:
+            raise PermissionError('owner_status_unavailable')
+        if request.get('version') != PROTOCOL_VERSION:
+            raise ValueError('daemon_protocol_version_unsupported')
+        params = request.get('params')
+        if not isinstance(params, dict) or set(params) not in (set(), {'message_id'}):
+            raise ValueError('owner_status_payload_denied')
+        self._local_peer_uid(connection)
+        if not params:
+            reason = self.daemon.owner_processing_blocking_reason()
+            return {'owner_only': getattr(self.daemon, 'experimental_owner_only', False) is True,
+                    'processing_ready': reason is None,
+                    'blocking_reason': reason,
+                    'paused_legacy_requests': self.daemon.owner_paused_legacy_requests()}
+        return self.daemon.owner_message_status_payload(params['message_id'])
+
+    def _owner_recovery_list(self, connection, request):
+        if not self.experimental_owner_ingress:
+            raise PermissionError('owner_recovery_unavailable')
+        if request.get('version') != PROTOCOL_VERSION:
+            raise ValueError('daemon_protocol_version_unsupported')
+        if request.get('params') != {}:
+            raise ValueError('owner_recovery_payload_denied')
+        self._local_peer_uid(connection)
+        return {'items': self.daemon.owner_recovery_list()}
+
+    def _owner_abandon(self, connection, request):
+        if not self.experimental_owner_ingress:
+            raise PermissionError('owner_abandon_unavailable')
+        if request.get('version') != PROTOCOL_VERSION:
+            raise ValueError('daemon_protocol_version_unsupported')
+        params = request.get('params')
+        if not isinstance(params, dict) or set(params) != {'message_id'}:
+            raise ValueError('owner_abandon_payload_denied')
+        self._local_peer_uid(connection)
+        return self.daemon.abandon_owner_message(params['message_id'])
+
+    def _owner_take_draft(self, connection, request):
+        # The OS peer and server-held checkpoint identify authority; a client
+        # cannot supply an actor, claim receipt, destination, or draft bytes.
+        if not self.experimental_owner_ingress:
+            raise PermissionError('owner_desktop_pickup_unavailable')
+        if request.get('version') != PROTOCOL_VERSION:
+            raise ValueError('daemon_protocol_version_unsupported')
+        params = request.get('params')
+        if not isinstance(params, dict) or set(params) != {'message_id'}:
+            raise ValueError('owner_desktop_pickup_payload_denied')
+        self._local_peer_uid(connection)
+        return self.daemon.take_owner_desktop_draft(params['message_id'])
+
+    def _owner_questions(self, connection, request):
+        if not self.experimental_owner_ingress:
+            raise PermissionError('owner_question_context_unavailable')
+        if request.get('version') != PROTOCOL_VERSION:
+            raise ValueError('daemon_protocol_version_unsupported')
+        if request.get('params') != {}:
+            raise ValueError('owner_question_context_unavailable')
+        self._local_peer_uid(connection)
+        return {'questions': self.daemon.owner_delivered_questions()}
+
+    def _owner_ack_draft(self, connection, request):
+        if not self.experimental_owner_ingress:
+            raise PermissionError('owner_desktop_ack_unavailable')
+        if request.get('version') != PROTOCOL_VERSION:
+            raise ValueError('daemon_protocol_version_unsupported')
+        params = request.get('params')
+        if not isinstance(params, dict) or set(params) != {'message_id', 'acknowledgement_token'}:
+            raise ValueError('owner_desktop_ack_payload_denied')
+        self._local_peer_uid(connection)
+        self.daemon.acknowledge_owner_desktop_draft(params['message_id'], params['acknowledgement_token'])
+        return {'status': 'client_acknowledged'}
+
+    @staticmethod
+    def _local_peer_uid(connection):
         # The owner-only Unix socket and kernel peer identity authenticate the
         # local OS principal. Payload user/actor fields are never credentials.
         import struct
-        from alphonse.agent_v2.accounts import AccountSession
         if hasattr(connection, 'getpeereid'):
             uid, _ = connection.getpeereid()
         elif sys.platform == 'darwin':
@@ -404,6 +597,13 @@ class V2DaemonServer:
             raise PermissionError('management_peer_auth_unavailable')
         if uid != os.getuid():
             raise PermissionError('management_peer_denied')
+        return uid
+
+    def _optional_management(self, connection, request):
+        if getattr(self.daemon, 'experimental_owner_only', False) is True:
+            raise RuntimeError('owner_only_integrations_unavailable')
+        from alphonse.agent_v2.accounts import AccountSession
+        self._local_peer_uid(connection)
         session = AccountSession(self.daemon.runtime.user)
         params = request.get('params', {})
         if set(params) - {'action', 'values'}:
@@ -431,6 +631,12 @@ class V2DaemonServer:
             raise ValueError(f"daemon_protocol_version_unsupported: {version}")
         method = str(request.get("method") or "").strip()
         params = request.get("params") if isinstance(request.get("params"), dict) else {}
+        if (getattr(self.daemon, 'experimental_owner_only', False) is True
+                and method in {'desktop_ack_delivery', 'answer_question', 'cancel_question', 'a2ui_action',
+                               'publish_event', 'register_event_worker', 'create_event_automation',
+                               'retry_occurrence', 'resume_schedule', 'approve_access_request',
+                               'save_telegram_integration', 'save_discord_integration'}):
+            raise RuntimeError('owner_only_operation_unavailable')
         if method == "ping":
             return {"service": "alphonse-v2-daemon", "status": "ready"}
         if method == "status":
@@ -479,7 +685,7 @@ class V2DaemonServer:
         if method == "trigger_killswitch":
             return self.daemon.trigger_killswitch(
                 actor_user_id=str(params.get("actor_user_id") or ""),
-                source={"integration_id": "desktop", "provider_key": "tui"},
+                source={"integration_id": "desktop", "provider_key": "desktop"},
             )
         if method == "decision_context":
             return self.daemon.decision_context(
@@ -507,6 +713,7 @@ class V2DaemonServer:
                 "acknowledged": self.daemon.acknowledge_desktop_delivery(
                     client_id=str(params.get("client_id") or "desktop"),
                     outbox_message_id=str(params.get("outbox_message_id") or ""),
+                    **({"attempt_count": params["attempt_count"]} if "attempt_count" in params else {}),
                 )
             }
         if method == "desktop_conversation_history":
@@ -795,7 +1002,7 @@ class V2DaemonServer:
             return {
                 "session": self.daemon.select_project_session(
                     user=str(params.get("user") or "local"),
-                    integration_id=str(params.get("integration_id") or "tui"),
+                    integration_id=str(params.get("integration_id") or "desktop"),
                     channel_target=str(params.get("channel_target") or params.get("user") or "local"),
                     thread_id=str(params.get("thread_id") or ""),
                     project_id=str(params.get("project_id") or ""),
@@ -805,7 +1012,7 @@ class V2DaemonServer:
             return {
                 "session": self.daemon.active_project_session(
                     user=str(params.get("user") or "local"),
-                    integration_id=str(params.get("integration_id") or "tui"),
+                    integration_id=str(params.get("integration_id") or "desktop"),
                     channel_target=str(params.get("channel_target") or params.get("user") or "local"),
                     thread_id=str(params.get("thread_id") or ""),
                 )
@@ -824,7 +1031,7 @@ class V2DaemonServer:
         if method in {"create_memory_session", "select_memory_session", "close_memory_session"}:
             common = {
                 "user": str(params.get("user") or "local"), "project_id": str(params.get("project_id") or ""),
-                "integration_id": str(params.get("integration_id") or "tui"),
+                "integration_id": str(params.get("integration_id") or "desktop"),
                 "channel_target": str(params.get("channel_target") or params.get("user") or "local"),
                 "thread_id": str(params.get("thread_id") or ""),
             }
@@ -875,8 +1082,10 @@ class V2DaemonServer:
                 )
             }
         if method == "queue_message":
-            integration_id = str(params.get("integration_id") or "tui")
-            provider_key = str(params.get("provider_key") or "tui")
+            if getattr(self.daemon, 'experimental_owner_only', False) is True:
+                raise RuntimeError('owner_only_use_owner_conversation')
+            integration_id = str(params.get("integration_id") or "desktop")
+            provider_key = str(params.get("provider_key") or "desktop")
             user = str(params.get("user") or "")
             if provider_key == "tui" or integration_id in {"tui", "desktop"}:
                 current = self.daemon.current_user().get("user")

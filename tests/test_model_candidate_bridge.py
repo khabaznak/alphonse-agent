@@ -131,8 +131,8 @@ def test_failure_records_unknown_without_error_or_prompt():
 def test_actual_candidate_refuses_to_finish_when_usage_is_unknown(tmp_path):
     from alphonse.agent_v2.core.core import CoreLoopContext
     from alphonse.agent_v2.core.intelligence.task_state import TaskState
-    from alphonse.agent_v2.core.intelligence.v3.single_loop_candidate import CandidateHost, CandidateState, run_candidate
-    from alphonse.agent_v2.core.intelligence.v3.task_budget import BudgetLimits, SQLiteTaskBudgetStore, TaskBudget
+    from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_candidate import CandidateHost, CandidateState, run_candidate
+    from alphonse.agent_v2.core.intelligence.simple_loop.task_budget import BudgetLimits, SQLiteTaskBudgetStore, TaskBudget
     from alphonse.agent_v2.core.messages import InMemoryMessageQueue
     from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry
 
@@ -159,8 +159,8 @@ def test_actual_candidate_refuses_to_finish_when_usage_is_unknown(tmp_path):
 def test_candidate_rejects_bridge_cap_exceeding_durable_reservation_before_dispatch(tmp_path):
     from alphonse.agent_v2.core.core import CoreLoopContext
     from alphonse.agent_v2.core.intelligence.task_state import TaskState
-    from alphonse.agent_v2.core.intelligence.v3.single_loop_candidate import CandidateHost, CandidateState, run_candidate
-    from alphonse.agent_v2.core.intelligence.v3.task_budget import BudgetLimits, SQLiteTaskBudgetStore, TaskBudget
+    from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_candidate import CandidateHost, CandidateState, run_candidate
+    from alphonse.agent_v2.core.intelligence.simple_loop.task_budget import BudgetLimits, SQLiteTaskBudgetStore, TaskBudget
     from alphonse.agent_v2.core.messages import InMemoryMessageQueue
     from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry
     def units(actions=0, calls=0, inp=0, out=0):
@@ -187,8 +187,8 @@ def test_candidate_rejects_bridge_cap_exceeding_durable_reservation_before_dispa
 def test_candidate_honors_cancellation_around_provider_dispatch(tmp_path, cancel_stage):
     from alphonse.agent_v2.core.core import CoreLoopContext
     from alphonse.agent_v2.core.intelligence.task_state import TaskState
-    from alphonse.agent_v2.core.intelligence.v3.single_loop_candidate import CandidateHost, CandidateState, run_candidate
-    from alphonse.agent_v2.core.intelligence.v3.task_budget import BudgetLimits, SQLiteTaskBudgetStore, TaskBudget
+    from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_candidate import CandidateHost, CandidateState, run_candidate
+    from alphonse.agent_v2.core.intelligence.simple_loop.task_budget import BudgetLimits, SQLiteTaskBudgetStore, TaskBudget
     from alphonse.agent_v2.core.messages import InMemoryMessageQueue
     from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry
     def units(actions=0, calls=0, inp=0, out=0):

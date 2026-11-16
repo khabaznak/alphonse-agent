@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from alphonse.agent_v2.evaluation.candidate_comparison import SingleLoopFixtureAdapter, V3ReadFixtureAdapter
+from alphonse.agent_v2.evaluation.candidate_comparison import SingleLoopFixtureAdapter
 from alphonse.agent_v2.evaluation.simplified_loop import Run, compare, load_frozen
 
 CORPUS = Path(__file__).parent / 'fixtures/single_loop_comparison/prescription_schedule_development_v1.json'
@@ -51,7 +51,7 @@ def test_duration_boundaries_and_new_cases_are_not_claimed_supported():
         'development-prescription-morning-final-day',
         'development-prescription-morning-after-course',
     ]
-    report = compare(CORPUS, baseline=V3ReadFixtureAdapter(), candidate=SingleLoopFixtureAdapter())
+    report = compare(CORPUS, baseline=None, candidate=SingleLoopFixtureAdapter())
     for row in report['cases']:
         for side in ('baseline', 'candidate'):
             assert row[side]['availability'] == 'unavailable'

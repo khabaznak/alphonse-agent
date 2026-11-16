@@ -1,0 +1,62 @@
+{
+  "status": "failed",
+  "provider": "Codex CLI ChatGPT subscription",
+  "model": "gpt-6-luna",
+  "fixture": "synthetic only",
+  "uses_jev": false,
+  "start_source_sha256": {
+    "alphonse/agent_v2/core/intelligence/simple_loop/owner_named_skill.py": "5ca54b038cfa620851f7c6e49de82bd14e6d1ba22c61941b7e788c8ddc9b6224",
+    "alphonse/agent_v2/core/intelligence/simple_loop/owner_read_processor.py": "be180d9427906b2f486fca3760d940a007f61ad2ec07637b3bdcc588b2425a9c",
+    "alphonse/agent_v2/core/intelligence/simple_loop/owner_read_recovery.py": "21e3202841f9e3dc3a03c84c7a887e1a46b79a09e1eec44abfe52e3bcbb783b1",
+    "alphonse/agent_v2/core/intelligence/simple_loop/owner_atomic_checkpoint.py": "69f4059ea8ee25c995d175ec006f7c6d4d0c24f52bf4b56f64b0b6a9a04f5a12",
+    "alphonse/agent_v2/core/intelligence/simple_loop/candidate_decision_policy.py": "94d1c1c96424b7384d367c5842e7ec56a5b0a866e223f25e92dfbbec328012d0",
+    "alphonse/agent_v2/core/intelligence/simple_loop/single_loop_candidate.py": "b5e454e8a05ae3b7eff4284a5bc494cfd2d4c9e0d883febfe747d64ff23224d0",
+    "alphonse/agent_v2/runtime.py": "22fb6091a6a7224c06ff7ed0bf5c68bf2ec72dfa7b63df404a7ee109bd393fc0",
+    "alphonse/agent_v2/daemon.py": "e078679c2b74768f402ede8b3f30194977289ada1cfbddd87c2844b44adaa245",
+    "/Users/alex/Code Projects/Alphonse/docs/agent-loop/evidence/owner-named-skill-2026-11-15/subscription-runner.py": "36ede1c18f2c890efc476af0406f6b5e102b1bc0d5a5995d127f7a13bc10cd3b"
+  },
+  "answer": "",
+  "checks": {
+    "named_skill_requested": false,
+    "instructions_projected": false,
+    "answer_follows_instruction": false,
+    "recovered_before_pickup": false
+  },
+  "oracle_pass": false,
+  "decisions": [
+    {
+      "kind": "tool",
+      "tool_id": "native.owner_named_skill",
+      "arguments": {
+        "skill_id": "meal-planning"
+      },
+      "text": null
+    }
+  ],
+  "usage": [
+    {
+      "input_tokens": 16873,
+      "output_tokens": 81
+    }
+  ],
+  "provider_calls": 1,
+  "provider_attempts": 1,
+  "provider_errors": [],
+  "failure": {
+    "status": "failed",
+    "failure_code": "source_unavailable"
+  },
+  "elapsed_seconds": 5.715,
+  "end_source_sha256": {
+    "alphonse/agent_v2/core/intelligence/simple_loop/owner_named_skill.py": "5ca54b038cfa620851f7c6e49de82bd14e6d1ba22c61941b7e788c8ddc9b6224",
+    "alphonse/agent_v2/core/intelligence/simple_loop/owner_read_processor.py": "be180d9427906b2f486fca3760d940a007f61ad2ec07637b3bdcc588b2425a9c",
+    "alphonse/agent_v2/core/intelligence/simple_loop/owner_read_recovery.py": "21e3202841f9e3dc3a03c84c7a887e1a46b79a09e1eec44abfe52e3bcbb783b1",
+    "alphonse/agent_v2/core/intelligence/simple_loop/owner_atomic_checkpoint.py": "69f4059ea8ee25c995d175ec006f7c6d4d0c24f52bf4b56f64b0b6a9a04f5a12",
+    "alphonse/agent_v2/core/intelligence/simple_loop/candidate_decision_policy.py": "94d1c1c96424b7384d367c5842e7ec56a5b0a866e223f25e92dfbbec328012d0",
+    "alphonse/agent_v2/core/intelligence/simple_loop/single_loop_candidate.py": "b5e454e8a05ae3b7eff4284a5bc494cfd2d4c9e0d883febfe747d64ff23224d0",
+    "alphonse/agent_v2/runtime.py": "22fb6091a6a7224c06ff7ed0bf5c68bf2ec72dfa7b63df404a7ee109bd393fc0",
+    "alphonse/agent_v2/daemon.py": "e078679c2b74768f402ede8b3f30194977289ada1cfbddd87c2844b44adaa245",
+    "/Users/alex/Code Projects/Alphonse/docs/agent-loop/evidence/owner-named-skill-2026-11-15/subscription-runner.py": "36ede1c18f2c890efc476af0406f6b5e102b1bc0d5a5995d127f7a13bc10cd3b"
+  },
+  "source_changed_during_attempt": false
+}

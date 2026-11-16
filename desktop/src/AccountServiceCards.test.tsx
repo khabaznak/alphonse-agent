@@ -23,4 +23,10 @@ describe("email and calendar integrations", () => {
     expect(html).toContain("Account management unavailable");
     expect(html).not.toContain("Available to connect");
   });
+  it("marks Gmail as needing attention when the conversation token has expired", () => {
+    const stale = { ...catalog, connections: [{ ...catalog.connections[0], access_token_status: "refresh_required" }] };
+    const html = renderToStaticMarkup(<AccountServiceCards catalog={stale} onChoose={() => {}} />);
+    expect(html).toContain("Account needs attention");
+    expect(html).not.toContain("1 account connected");
+  });
 });

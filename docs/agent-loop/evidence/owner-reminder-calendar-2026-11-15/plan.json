@@ -1,0 +1,8 @@
+{
+  "scenario": "One-time tomorrow reminder in owner local timezone, synthetic household",
+  "prompt": "Please remind me to call the plumber tomorrow at 9 am",
+  "timezone": "America/Mexico_City",
+  "provider": "Codex subscription via gpt-6-luna; no Jev or paid API",
+  "oracle": ["model selects owner clock and reminder creation", "exactly one reminder with case-insensitively matched content and 9 am on the next owner-local calendar day is saved", "confirmation names the saved reminder", "restore ready draft without another model call or duplicate", "acknowledge confirmation into conversation history"],
+  "limits": "One unambiguous tomorrow time; disposable owner and SQLite only; no actual Desktop delivery, process crash, live accounts, or household effects. The host clock sets the local day."
+}

@@ -12,9 +12,6 @@ from alphonse.agent_v2.agent_config import packaged_agent_config_dir
 from alphonse.agent_v2.core.intelligence import TaskState
 from alphonse.agent_v2.core.core import CoreLoopContext
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
-from alphonse.agent_v2.core.intelligence.pdca.nodes.plan_node import plan_node
-from alphonse.agent_v2.core.intelligence.acceptance_planning import _render_acceptance_criteria_prompt
-from alphonse.agent_v2.core.intelligence.pdca.nodes.plan_node import _render_tool_call_plan_prompt
 
 
 def test_agent_config_store_seeds_defaults_and_persists_edits(tmp_path) -> None:
@@ -64,38 +61,3 @@ def test_global_context_parser_keeps_section_bodies_intact() -> None:
     )
 
     assert sections == {"Family definition": "- Member A", "Household norms": "- Norm A"}
-
-
-def test_capd_prompt_templates_accept_agent_configuration() -> None:
-    task = TaskState(goal="Respond", acceptance_criteria_md="1.- [ ] Reply")
-    common = {
-        "philosophy_md": "Act with care.",
-        "global_context_md": "Global context.",
-        "user_context_md": "User context.",
-        "project_context_md": "Project context.",
-    }
-
-    for prompt in (
-        _render_tool_call_plan_prompt(task, (), **common),
-        _render_acceptance_criteria_prompt(task, **common),
-    ):
-        assert prompt.index("## Philosophy.md") < prompt.index("## GlobalContext.md")
-        assert prompt.index("## GlobalContext.md") < prompt.index("## User Context")
-        assert prompt.index("## User Context") < prompt.index("## Project Context")
-        for sentinel in common.values():
-            assert sentinel in prompt
-
-
-def test_plan_node_reads_context_from_the_runtime_prompt_snapshot(tmp_path) -> None:
-    store = AgentConfigStore(tmp_path / "agent-config")
-    store.save(PHILOSOPHY_FILE, "Snapshot philosophy")
-    store.save(GLOBAL_CONTEXT_FILE, "Snapshot global context")
-    task = TaskState(goal="Respond", acceptance_criteria_md="1.- [ ] Reply")
-
-    plan_node(
-        task,
-        CoreLoopContext(messages=InMemoryMessageQueue(), prompts=AgentConfigPromptLoader.from_store(store)),
-    )
-
-    assert "Snapshot philosophy" in task.metadata["tool_call_plan_prompt"]
-    assert "Snapshot global context" in task.metadata["tool_call_plan_prompt"]

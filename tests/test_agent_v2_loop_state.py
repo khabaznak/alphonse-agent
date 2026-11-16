@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from threading import Thread
+from threading import Event, Thread
+
+import pytest
 
 from alphonse.agent_v2.core.core import AlphonseCore
 from alphonse.agent_v2.core.core import CoreLoopContext
@@ -53,59 +55,113 @@ def test_available_state_consumes_message_and_returns_available_on_completion() 
     assert queue.size() == 0
 
 
-def test_v3_retry_restores_checkpoint_and_keeps_acceptance_contract(tmp_path) -> None:
-    reset_state()
-    queue = InMemoryMessageQueue()
-    message_id = "stable-v3-message"
-    queue.enqueue(
-        CoreMessage(
-            timestamp=datetime.now().astimezone(),
-            prompt="Change exactly one record",
-            user="alex",
-            metadata={"intelligence_engine": "hierarchical_v3", "intelligence_schema_version": 3},
-        ),
-        message_id=message_id,
-    )
-    questions = SQLiteQuestionStore(tmp_path / "questions.sqlite3")
-    checkpoint = TaskState(
-        task_id=message_id,
-        message_id=message_id,
-        user="alex",
-        goal="Change exactly one record",
-        intelligence_engine="hierarchical_v3",
-        intelligence_schema_version=3,
-        acceptance_criteria_md="1.- [ ] The exact record is updated",
-        acceptance_contract=contract_from_markdown(
-            "1.- [ ] The exact record is updated", source_message_id=message_id
-        ),
-    )
-    questions.save_task_checkpoint(checkpoint, status="running")
+def test_superseded_processor_does_not_publish_snapshot_finish_memory_or_ack(monkeypatch) -> None:
+    class SupersededProcessor:
+        def process(self, task, context):
+            assert context.consume_message(MessageSelector(user='gaby')) is not None
+            return ProcessingResult(snapshot=StateSnapshot(current_work='stale secret', metadata={'response': 'stale'}),
+                                    status=ProcessingStatus.SUPERSEDED, error='private stale error')
 
-    class CaptureProcessor:
-        received = None
+    class Memory:
+        finished = []
+        def start_task(self, task):
+            return ''
+        def finish_task(self, task):
+            self.finished.append(task)
+
+    core, queue, _ = _core(SupersededProcessor())
+    core.memory = Memory()
+    acknowledged = []
+    monkeypatch.setattr(queue, 'ack', lambda *args, **kwargs: acknowledged.append(args), raising=False)
+    queue.enqueue(_message('main'))
+    queue.enqueue(_message('steering', user='gaby'))
+    result = core.step()
+    assert result.status is LoopStepStatus.SUPERSEDED
+    assert result.queued_message_id is None and result.error is None
+    assert result.state_after.key == WORKING
+    assert core.state.value is None
+    assert not core.memory.finished and not acknowledged
+
+
+def test_superseded_worker_does_not_change_newer_local_state() -> None:
+    class Processor:
+        def process(self, task, context):
+            State.set(core.fsm.current_state_for_key(WAITING))
+            return ProcessingResult(snapshot=StateSnapshot(current_work='stale'), status=ProcessingStatus.SUPERSEDED)
+
+    core, queue, _ = _core(Processor())
+    queue.enqueue(_message('main'))
+    result = core.step()
+    assert result.status is LoopStepStatus.SUPERSEDED
+    assert result.state_after.key == WAITING and State.snapshot().key == WAITING
+    assert core.state.value is None
+
+
+def test_concurrent_steps_do_not_claim_a_second_message_before_state_transition(monkeypatch) -> None:
+    core, queue, processor = _core(_Processor(ProcessingStatus.COMPLETED))
+    queue.enqueue(_message("first"))
+    queue.enqueue(_message("second"))
+    entered, release = Event(), Event()
+    original = queue.dequeue
+
+    def blocked_dequeue(selector=None):
+        entered.set()
+        assert release.wait(5)
+        return original(selector)
+
+    monkeypatch.setattr(queue, "dequeue", blocked_dequeue)
+    results = []
+    thread = Thread(target=lambda: results.append(core.step()))
+    thread.start()
+    try:
+        assert entered.wait(5)
+        result = core.step()
+        assert result.status is LoopStepStatus.BUSY
+        assert result.queued_message_id is None
+        assert result.state_before == result.state_after
+        assert queue.size() == 2
+    finally:
+        release.set()
+        thread.join(5)
+    assert not thread.is_alive()
+    assert results[0].status is LoopStepStatus.PROCESSED
+    assert processor.processed == ["first"]
+    assert queue.size() == 1
+
+
+def test_step_lock_is_released_after_acquisition_raises(monkeypatch) -> None:
+    core, queue, processor = _core(_Processor(ProcessingStatus.COMPLETED))
+    queue.enqueue(_message("first"))
+    original = queue.dequeue
+    monkeypatch.setattr(queue, "dequeue", lambda *_: (_ for _ in ()).throw(RuntimeError("unavailable")))
+    with pytest.raises(RuntimeError, match="unavailable"):
+        core.step()
+    assert State.snapshot().key == AVAILABLE
+    monkeypatch.setattr(queue, "dequeue", original)
+    assert core.step().status is LoopStepStatus.PROCESSED
+    assert processor.processed == ["first"]
+
+
+def test_recursive_step_returns_busy_without_consuming_another_message() -> None:
+    class RecursiveProcessor:
+        core = None
+        nested = None
 
         def process(self, task, context):
-            self.received = task
+            self.nested = self.core.step()
             return ProcessingResult(snapshot=StateSnapshot(current_work=task.goal))
 
-    processor = CaptureProcessor()
-    core = AlphonseCore(
-        intelligence=processor,
-        messages=queue,
-        tools=_NullTools(),
-        prompts=_NullPrompts(),
-        state=_RecordingState(),
-        memory=_NullMemory(),
-        question_store=questions,
-    )
+    processor = RecursiveProcessor()
+    core, queue, _ = _core(processor)
+    processor.core = core
+    queue.enqueue(_message("first"))
+    queue.enqueue(_message("second"))
+    assert core.step().status is LoopStepStatus.PROCESSED
+    assert processor.nested.status is LoopStepStatus.BUSY
+    assert processor.nested.queued_message_id is None
+    assert queue.size() == 1
 
-    result = core.step()
 
-    assert result.status == LoopStepStatus.PROCESSED
-    assert processor.received is not None
-    assert processor.received.task_id == message_id
-    assert processor.received.acceptance_contract == checkpoint.acceptance_contract
-    assert processor.received.acceptance_criteria_md == checkpoint.acceptance_criteria_md
 
 
 def test_v3_correlated_answer_preserves_original_task_identity() -> None:

@@ -5,7 +5,6 @@ import json
 
 from .decision_followthrough_development import Case
 from .followthrough_candidate_adapter import run_candidate_fixture
-from .followthrough_v3_adapter import run_v3_fixture
 
 
 def compare_denied(*, simulate_delivery: bool = False) -> dict:
@@ -35,10 +34,6 @@ def compare_denied(*, simulate_delivery: bool = False) -> dict:
         return result
 
     arms = {
-        'current_v3': run_v3_fixture(case, projection_enabled=False, scripted_sources=['primary'],
-                                     scripted_response=response, simulate_delivery=simulate_delivery),
-        'targeted_v3_projection': run_v3_fixture(case, projection_enabled=True, scripted_sources=['primary'],
-                                     scripted_response=response, simulate_delivery=simulate_delivery),
         'single_loop': candidate(),
     }
     return {'arms': arms, 'decision_qualified': False,

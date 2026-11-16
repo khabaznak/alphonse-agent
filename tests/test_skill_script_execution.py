@@ -13,11 +13,6 @@ from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
 from alphonse.agent_v2.core.tools.invocation import ToolInvocationService
 from alphonse.agent_v2.core.tools.registry.native import build_native_tool_registry
-from alphonse.agent_v2.core.intelligence.v3.context import selected_skill_guidance
-from alphonse.agent_v2.core.intelligence.v3 import (
-    CompletionCondition, MutationScope, PhaseExecutor, PhasePlan, PhaseStatus,
-    PhaseSubgoal, SideEffectClass, TacticalAction, TacticalState, new_tactical_state,
-)
 from alphonse.agent_v2.system_one import SystemOneTacticalReview
 
 
@@ -50,21 +45,6 @@ def invoke(task, context, **arguments):
     return ToolInvocationService(context=context, task=task).invoke("native.bash", {"skill_id": "skill:sample", **arguments})
 
 
-def test_standard_script_runtime_spaces_project_and_daemon_cwd_independence(package, tmp_path, monkeypatch):
-    root, task, context = package
-    monkeypatch.chdir(tmp_path)
-    target = tmp_path / "household data.txt"
-    command = '"$ALPHONSE_SKILL_RUNTIME" "scripts/read write.py" write ' + shlex.quote(str(target))
-    outcome = invoke(task, context, command=command, runtime=sys.executable)
-    assert outcome["status"] == "success"
-    assert outcome["result"]["cwd"] == str(root)
-    assert outcome["result"]["stdout"] == "once\n"
-    assert target.read_text() == "once\n"
-    readback = invoke(task, context, command='"$ALPHONSE_SKILL_RUNTIME" "scripts/read write.py" read ' + shlex.quote(str(target)), runtime=sys.executable)
-    assert readback["result"]["stdout"] == "once\n"
-    guidance, ids = selected_skill_guidance(task, context)
-    assert str(root) in guidance and "no registration" in guidance
-    assert ids == ["skill:sample"]
 
 
 def test_ordinary_executable_and_relative_cwd(package):
@@ -140,67 +120,12 @@ def question():
     return [{"question_id": "verified", "type": "noul", "instructions": "Does output prove this subgoal?", "criteria": {"true": "Direct evidence", "false": "Missing or failed"}}]
 
 
-def phase():
-    return PhasePlan("scripts", "Write once then verify", (
-        PhaseSubgoal("write", "Write", "command_result", allowed_capabilities=("native.bash",), allowed_side_effects=(SideEffectClass.PROJECT_MUTATION,), completion=CompletionCondition("field_equals", field="exit_code", expected=0)),
-        PhaseSubgoal("read", "Read back", "readback", depends_on=("write",), allowed_capabilities=("native.bash",), completion=CompletionCondition("field_equals", field="exit_code", expected=0)),
-    ), authorized_capabilities=("native.bash",), mutation_scope=MutationScope(("output.txt",)))
 
 
-def test_phase_write_resume_readback_does_not_duplicate_mutation(package):
-    root, task, context = package
-    # Household output is live task data, outside the pinned reusable package.
-    target = Path(context.project_store.get_project(task.project_id).root_path) / "output.txt"
-    state = new_tactical_state(phase())
-    state.revealed_tool_ids = ["native.bash"]
-    def review(**values):
-        # Simulate restart after the write's completed subgoal was checkpointed.
-        if values["subgoal"]["subgoal_id"] == "write":
-            context.cancellation_checker = lambda: True
-        return SystemOneTacticalReview(complete=True, confident=True, confidence=.99, answers={}, retry_approved=False)
-    context.system_one = SimpleNamespace(evaluate_tactical_progress=review)
-    write = {"tool_id": "native.bash", "arguments": {"skill_id": "skill:sample", "command": "printf once >> " + shlex.quote(str(target))}, "acceptance_questions": question()}
-    PhaseExecutor(action_selector=lambda *a: write).run(task, state, context)
-    assert target.read_text() == "once"
-    restored = TacticalState.from_dict(state.to_dict())
-    restored.status = PhaseStatus.RUNNING
-    restored.cancellation_pending = False
-    context.cancellation_checker = None
-    read = {"tool_id": "native.bash", "arguments": {"skill_id": "skill:sample", "command": "cat " + shlex.quote(str(target))}, "acceptance_questions": question()}
-    outcome = PhaseExecutor(action_selector=lambda *a: read).run(task, restored, context)
-    assert outcome.status == PhaseStatus.PHASE_COMPLETE
-    assert restored.actions[-1].result["stdout"] == "once"
-    assert target.read_text() == "once"
 
 
-@pytest.mark.parametrize("status", ["planned", "running", "success", "failed"])
-def test_uncertain_or_prior_mutation_cannot_be_blindly_replayed(package, status):
-    root, task, context = package
-    state = new_tactical_state(phase())
-    arguments = {"skill_id": "skill:sample", "command": "printf once >> output.txt"}
-    state.actions = [TacticalAction("prior-write", "write", "native.bash", arguments, status=status)]
-    state.revealed_tool_ids = ["native.bash"]
-    selected = {"tool_id": "native.bash", "arguments": arguments, "acceptance_questions": question()}
-    outcome = PhaseExecutor(action_selector=lambda *a: selected).run(task, state, context)
-    assert outcome.status == PhaseStatus.BLOCKED
-    assert "reconciliation" in outcome.blockers[0]
-    assert not (root / "output.txt").exists()
 
 
-def test_failed_command_cannot_complete_or_retry_even_if_jev_approves(package):
-    root, task, context = package
-    state = new_tactical_state(phase())
-    state.revealed_tool_ids = ["native.bash"]
-    context.system_one = SimpleNamespace(evaluate_tactical_progress=lambda **k: SystemOneTacticalReview(complete=True, confident=True, confidence=.99, answers={}, retry_approved=True))
-    selected = {"tool_id": "native.bash", "arguments": {"skill_id": "skill:sample", "command": "printf partial; printf failure >&2; exit 7"}, "acceptance_questions": question()}
-    outcome = PhaseExecutor(action_selector=lambda *a: selected).run(task, state, context)
-    assert outcome.status == PhaseStatus.BLOCKED and not state.completed_subgoal_ids
-    assert len(state.actions) == 1
-    evidence = state.evidence.entries[-1]
-    assert evidence["status"] == "failed"
-    assert evidence["result"]["exit_code"] == 7
-    assert evidence["result"]["stdout"] == "partial" and evidence["result"]["stderr"] == "failure"
-    assert evidence["progress_review"]["complete"] is False
 
 
 def test_package_execution_without_project_and_authenticated_actor(package):

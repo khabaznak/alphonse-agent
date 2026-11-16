@@ -1,0 +1,8 @@
+{
+  "name": "family-memory-contrast-v1",
+  "purpose": "Measure whether general answer-scope guidance omits an incidental repair in a broad family summary while retaining it when explicitly requested.",
+  "design": "One development attempt each for family summary, projector repair, and dog questions using the same three synthetic conversation records and independent deterministic case-specific checks. No retry, adaptive selection, paid API, household data, external effects, or delivery.",
+  "provider": "Codex CLI ChatGPT subscription",
+  "model": "gpt-6-luna",
+  "limits": "A small tuned development contrast set, not held-out evidence or a semantic guarantee. Checks are literal and limited. Source text visible in prompt does not prove model attention. In-process owner processor only; no daemon claim, restart, UI or delivery."
+}

@@ -128,7 +128,7 @@ def rescore(corpus: dict[str, Any], report: dict[str, Any], rubric: dict[str, An
 
 
 def main() -> None:
-    from alphonse.agent_v2.evaluation.memory_replay import load_corpus
+    from alphonse.agent_v2.evaluation.memory_corpus import load_corpus
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--corpus", type=Path, required=True)

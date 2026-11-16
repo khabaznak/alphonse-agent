@@ -71,18 +71,6 @@ def test_steering_amendment_adds_without_changing_existing_definition() -> None:
     assert updated["amendments"][0]["source_message_id"] == "steering-1"
 
 
-def test_interactive_completion_requires_prepared_response(v2_decisions) -> None:
-    task = TaskState(check_verdict="wip", acceptance_criteria_md="1.- [x] Medicine identified")
-
-    from alphonse.agent_v2.core.intelligence.pdca.nodes.act_node import act_node
-
-    from alphonse.agent_v2.core.core import CoreLoopContext
-    from alphonse.agent_v2.core.messages import InMemoryMessageQueue
-    act_node(task, context=CoreLoopContext(messages=InMemoryMessageQueue(), system_one=v2_decisions()))
-
-    assert task.status == "running"
-    assert task.metadata["pending_user_response"] is True
-    assert task.metadata["act_route"] == "plan"
 
 
 def test_bash_stdout_is_evidence_not_an_outbound_response() -> None:

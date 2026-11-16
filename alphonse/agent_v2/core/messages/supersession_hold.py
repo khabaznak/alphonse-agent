@@ -41,6 +41,18 @@ _INSERT_TRIGGER = '''CREATE TRIGGER IF NOT EXISTS v2_supersession_hold_prevent_i
     BEGIN SELECT RAISE(ABORT, 'supersession_hold_requires_reconciliation'); END'''
 
 
+def _require_hold_schema(conn: sqlite3.Connection) -> None:
+    """Validate the owned guards while the caller holds a write transaction."""
+    normalize = lambda text: ' '.join(text.replace('IF NOT EXISTS ', '').split()).casefold()
+    for kind, name, definition in [('table', 'v2_supersession_holds', _TABLE),
+                                   ('trigger', 'v2_supersession_hold_prevent_insert', _INSERT_TRIGGER),
+                                   ('trigger', 'v2_supersession_hold_prevent_update', _UPDATE_TRIGGER),
+                                   ('trigger', 'v2_supersession_hold_prevent_delete', _DELETE_TRIGGER)]:
+        schema = conn.execute('SELECT type,sql FROM main.sqlite_master WHERE name=?', (name,)).fetchone()
+        if schema is None or schema[0] != kind or not isinstance(schema[1], str) or normalize(schema[1]) != normalize(definition):
+            raise ClaimFenceUnavailable('hold_schema_unavailable')
+
+
 @dataclass(frozen=True)
 class HoldResult:
     status: str
@@ -75,14 +87,7 @@ def inspect_owned_hold(conn: sqlite3.Connection, session: object, *, message_id:
         if main is None or not main[2]:
             raise ClaimFenceUnavailable('hold_shared_file_required')
         # A lookalike or partially installed hold cannot confer recovery state.
-        normalize = lambda text: ' '.join(text.replace('IF NOT EXISTS ', '').split()).casefold()
-        for kind, name, definition in [('table', 'v2_supersession_holds', _TABLE),
-                                       ('trigger', 'v2_supersession_hold_prevent_insert', _INSERT_TRIGGER),
-                                       ('trigger', 'v2_supersession_hold_prevent_update', _UPDATE_TRIGGER),
-                                       ('trigger', 'v2_supersession_hold_prevent_delete', _DELETE_TRIGGER)]:
-            schema = conn.execute('SELECT type,sql FROM main.sqlite_master WHERE name=?', (name,)).fetchone()
-            if schema is None or schema[0] != kind or not isinstance(schema[1], str) or normalize(schema[1]) != normalize(definition):
-                raise ClaimFenceUnavailable('hold_schema_unavailable')
+        _require_hold_schema(conn)
         actor = session.actor_user_id
         if conn.execute('SELECT 1 FROM main.v2_users WHERE user_id=? AND is_active=1', (actor,)).fetchone() is None:
             conn.rollback()
@@ -190,6 +195,9 @@ def park_superseded(conn: sqlite3.Connection, claim: ClaimReceipt, *, task_id: s
         if main is None or not main[2]:
             raise ClaimFenceUnavailable('hold_shared_file_required')
         with fenced_claim_transaction(conn, claim, clock=clock):
+            # Installation may have been altered since startup. Never claim a
+            # message is protected without its table and all queue guards.
+            _require_hold_schema(conn)
             existing = conn.execute('''SELECT user_id,claim_generation,task_id,engine,observed_version
                 FROM main.v2_supersession_holds WHERE message_id=?''', (claim.message_id,)).fetchone()
             if existing is not None:

@@ -207,18 +207,18 @@ def test_bash_redacts_literal_json_and_timeout_output_before_truncation(fixture)
 
 def test_bash_denies_unselected_or_unauthorized_bindings(fixture):
     args = {'command': 'exit 0', 'skill_id': 'skill:synthetic', 'binding_names': ['account']}
+    core = CoreLoopContext(messages=InMemoryMessageQueue(), skill_bindings=fixture.bindings)
+    selected_task = context(fixture).task
+    result = execute_bash({**args, 'command': 'printf "%s" "$ALPHONSE_SKILL_BINDINGS"'},
+                          context=core.tool_execution_context(selected_task))
+    assert '[REDACTED]' in result['stdout']
     with pytest.raises(PermissionError, match='not_selected'):
-        execute_bash(args, context=context(fixture, selected=False))
+        execute_bash(args, context=core.tool_execution_context(context(fixture, selected=False).task))
     with pytest.raises(ValueError, match='choice_missing'):
         execute_bash(args, context=context(fixture, actor='other'))
     fixture.bindings.set_access('test-binding', actor_id='member', enabled=False)
     with pytest.raises(PermissionError, match='revoked'):
         execute_bash(args, context=context(fixture))
-
-
-def test_loop_context_propagates_binding_service(fixture):
-    ctx = CoreLoopContext(messages=InMemoryMessageQueue(), skill_bindings=fixture.bindings)
-    assert ctx.tool_execution_context(TaskState(goal='test')).skill_bindings is fixture.bindings
 
 
 def test_account_delivers_only_explicit_credential_keys_and_rotation(fixture):

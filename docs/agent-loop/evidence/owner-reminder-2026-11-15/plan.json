@@ -1,0 +1,7 @@
+{
+  "scenario": "One-time owner conversation reminder, synthetic disposable household",
+  "prompt": "Please remind me to call the plumber at a UTC time one hour ahead, inserted as an explicit ISO timestamp.",
+  "provider": "Codex subscription via gpt-6-luna; no Jev or paid API",
+  "oracle": ["model selects owner clock and reminder create", "exactly one matching reminder saved with requested UTC due time", "confirmation truthfully identifies saved reminder", "recover saved draft without another model call or duplicate reminder", "acknowledge confirmation into conversation history"],
+  "limits": "One explicit timestamp only; simulated owner and SQLite database; no Desktop notification delivery, process crash, live accounts, or household effects."
+}

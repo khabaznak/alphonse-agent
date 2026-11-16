@@ -3,6 +3,12 @@ import type { A2uiSurface } from "./a2ui";
 
 export type QueueStatus = { ready: number; processing: number };
 
+/** Do not send an unauthenticated placeholder while current_user is loading. */
+export async function pollForKnownUser<T>(user: string, poll: () => Promise<T>): Promise<T | null> {
+  if (!user.trim()) return null;
+  return poll();
+}
+
 export function reuseQuestions(current: Question[], next: Question[]): Question[] {
   if (current.length !== next.length) return next;
   const unchanged = current.every((question, index) => {

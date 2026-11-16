@@ -10,6 +10,9 @@ use tokio::net::UnixStream;
 use tokio::time::{sleep, Duration, Instant};
 
 const PROTOCOL_VERSION: u8 = 1;
+// React may request readiness again while a cold sidecar is still starting.
+// Serialize those attempts so only one child daemon is launched.
+static ENSURE_DAEMON_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[tauri::command]
 fn desktop_diagnostic_mode() -> String {
@@ -23,6 +26,7 @@ fn desktop_diagnostic_project_id() -> String {
 
 #[tauri::command]
 async fn ensure_daemon(app: AppHandle) -> Result<(), String> {
+    let _guard = ENSURE_DAEMON_LOCK.lock().await;
     if ipc_request("ping", json!({})).await.is_ok() {
         return Ok(());
     }
@@ -44,7 +48,8 @@ async fn ensure_daemon(app: AppHandle) -> Result<(), String> {
             .map_err(|error| format!("could not start bundled daemon: {error}"))?;
     }
 
-    let deadline = Instant::now() + Duration::from_secs(8);
+    // A bundled one-file Python daemon may need time to unpack on cold start.
+    let deadline = Instant::now() + Duration::from_secs(45);
     while Instant::now() < deadline {
         if ipc_request("ping", json!({})).await.is_ok() {
             return Ok(());

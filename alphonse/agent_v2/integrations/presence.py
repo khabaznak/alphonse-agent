@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from threading import RLock
 from time import monotonic
-from typing import Callable, Iterator, Protocol
+from typing import Iterator, Protocol
 
 from alphonse.agent_v2.core.core import CoreActivityEvent
 from alphonse.agent_v2.core.io import ChannelAddress
@@ -146,6 +146,17 @@ class PresenceProjector:
             self._last_heartbeat.pop(current.key, None)
             self._current.set(None)
 
+    def discard(self) -> None:
+        """Drop local presence without publishing a stale terminal update."""
+        with self._lock:
+            current = self._current.get()
+            if current is None:
+                return
+            if self._active.get(current.key) is current:
+                self._active.pop(current.key, None)
+                self._last_heartbeat.pop(current.key, None)
+            self._current.set(None)
+
     def heartbeat(self, *, now: float | None = None) -> None:
         current_time = monotonic() if now is None else float(now)
         with self._lock:
@@ -167,29 +178,6 @@ class PresenceProjector:
             return
 
 
-class TuiPresenceAdapter:
-    capabilities = PresenceCapabilities(transient_activity=True)
-
-    def __init__(self, sink: Callable[[str], None] | None = None) -> None:
-        self.sink = sink
-
-    def start(self, presence: PresenceState) -> None:
-        self._emit(presence)
-
-    def update(self, presence: PresenceState) -> None:
-        self._emit(presence)
-
-    def heartbeat(self, presence: PresenceState) -> None:
-        return
-
-    def stop(self, presence: PresenceState) -> None:
-        return
-
-    def _emit(self, presence: PresenceState) -> None:
-        if self.sink is not None:
-            self.sink(presence.phase.value.capitalize())
-
-
 def _address_from_queued(queued: QueuedMessage | None) -> ChannelAddress | None:
     if queued is None:
         return None
@@ -197,7 +185,7 @@ def _address_from_queued(queued: QueuedMessage | None) -> ChannelAddress | None:
     if address is not None:
         return address
     return ChannelAddress(
-        integration_id="tui",
+        integration_id="desktop",
         provider_key="tui",
         channel_target=queued.message.user,
         alphonse_user_id=queued.message.user,

@@ -4,50 +4,16 @@ import json
 from typing import Any
 
 from alphonse.agent_v2.core.core import CoreLoopContext, ToolDescriptor, ToolKind
-from alphonse.agent_v2.core.intelligence.pdca.nodes import do_node, plan_node
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
 from alphonse.agent_v2.core.programs import ProgramRunner
 from alphonse.agent_v2.core.tools.invocation import ToolInvocationService
 
 
-def test_plan_node_accepts_python_program_execution(monkeypatch) -> None:
-    import importlib
-
-    module = importlib.import_module("alphonse.agent_v2.core.intelligence.pdca.nodes.plan_node")
-    monkeypatch.setattr(
-        module,
-        "_call_tool_planning_llm",
-        lambda _prompt: {
-            "execution_mode": "program",
-            "program": {"language": "python", "source": "async def main(tools):\n    return {'ok': True}"},
-            "internal_state": "Comparing the available information.",
-        },
-    )
-    task = TaskState(goal="Compare options", acceptance_criteria_md="1.- [ ] Compared")
-    plan_node(task, context=CoreLoopContext(messages=InMemoryMessageQueue(), tools=_Registry(), program_runner=_Runner("success")))
-    planned = json.loads(task.plan_json)[0]
-    assert planned["execution_mode"] == "program"
-    assert planned["program"]["language"] == "python"
 
 
-def test_program_mode_records_child_tool_calls_and_final_json() -> None:
-    task = _program_task()
-    registry = _Registry()
-    runner = _Runner("success")
-    do_node(task, context=CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry, program_runner=runner))
-    execution = json.loads(task.plan_json)[0]["execution"]
-    assert execution["status"] == "success"
-    assert execution["result"]["program_result"] == {"answer": 42}
-    assert execution["result"]["tool_calls"][0]["tool_id"] == "native.read"
-    assert registry.calls == [("native.read", {"value": 42})]
 
 
-def test_program_mode_waiting_result_parks_task() -> None:
-    task = _program_task()
-    do_node(task, context=CoreLoopContext(messages=InMemoryMessageQueue(), tools=_Registry(), program_runner=_Runner("waiting")))
-    assert task.status == "waiting_user"
-    assert json.loads(task.plan_json)[0]["execution"]["status"] == "waiting"
 
 
 def test_programmatic_parallel_call_rejects_non_read_only_tool() -> None:
@@ -58,38 +24,8 @@ def test_programmatic_parallel_call_rejects_non_read_only_tool() -> None:
     assert result["error"]["code"] == "tool_not_parallel_safe"
 
 
-def test_plan_node_rejects_program_mode_when_docker_runner_is_unavailable(monkeypatch) -> None:
-    import importlib
-
-    module = importlib.import_module("alphonse.agent_v2.core.intelligence.pdca.nodes.plan_node")
-    monkeypatch.setattr(module, "_call_tool_planning_llm", lambda _prompt: _program_value())
-    task = TaskState(goal="Compare", acceptance_criteria_md="1.- [ ] Compared")
-    plan_node(task, context=CoreLoopContext(messages=InMemoryMessageQueue(), tools=_Registry(), program_runner=_UnavailableRunner()))
-    assert "planned_tool_call" not in task.metadata
-    assert "Program mode is unavailable" in task.metadata["tool_call_plan_prompt"]
 
 
-def test_planner_receives_program_availability_and_tool_parallel_eligibility(monkeypatch) -> None:
-    import importlib
-
-    module = importlib.import_module("alphonse.agent_v2.core.intelligence.pdca.nodes.plan_node")
-    captured = {}
-
-    def plan(prompt):
-        captured["prompt"] = prompt
-        return _program_value()
-
-    monkeypatch.setattr(module, "_call_tool_planning_llm", plan)
-    task = TaskState(goal="Compare", acceptance_criteria_md="1.- [ ] Compared")
-    plan_node(task, context=CoreLoopContext(messages=InMemoryMessageQueue(), tools=_Registry(), program_runner=_Runner("success")))
-
-    prompt = captured["prompt"]
-    assert "Program mode is available" in prompt
-    read_line = next(line for line in prompt.splitlines() if line.startswith("- native.read |"))
-    write_line = next(line for line in prompt.splitlines() if line.startswith("- native.write |"))
-    assert "read_only=true" in read_line
-    assert "read_only=false" in write_line
-    assert "tools.gather` only for independent tools explicitly marked `read_only=true" in prompt
 
 
 def test_docker_runner_reports_unavailability_without_local_fallback(monkeypatch) -> None:

@@ -7,9 +7,6 @@ import pytest
 from alphonse.agent_v2.skills import SkillStore
 from alphonse.agent_v2.core.core import CoreLoopContext, ToolExecutionContext
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
-from alphonse.agent_v2.core.intelligence.v3.context import (
-    selected_skill_guidance, skill_candidates_for_curation,
-)
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
 from alphonse.agent_v2.skill_resources import read_resource
 
@@ -39,47 +36,6 @@ def test_clean_store_validates_starters_and_linked_resources(tmp_path):
             assert store.read_file(record.skill_id, relative)
 
 
-@pytest.mark.parametrize('prompt,names', [
-    ('Plan next week\'s school pickups.', ['family-coordination']),
-    ('Three quick dinners for four using rice.', ['meals-groceries']),
-    ('Prepare an AC visit and track its warranty.', ['home-care', 'household-administration']),
-    ('Plan dinners around late practices.', ['meals-groceries', 'family-coordination']),
-    ('Plan our kitchen renovation.', ['project-management', 'home-care']),
-    ('Improve this upkeep skill with CSV import.', ['skill-authoring', 'home-care']),
-    ('Read our actual calendars before planning pickups.', ['family-calendar', 'family-coordination']),
-    ('What is 2 + 2?', []),
-])
-def test_representative_selections_load_complete_composed_guidance(tmp_path, prompt, names):
-    """Exercise activation with reviewed selection inputs, not a fake Jev classifier."""
-    store = SkillStore(tmp_path / 'skills')
-    context = CoreLoopContext(messages=InMemoryMessageQueue(), skill_store=store)
-    task = TaskState(user='synthetic-member', project_id=None, goal=prompt)
-    candidates = skill_candidates_for_curation(context, task=task)
-    assert {candidate['id'] for candidate in candidates} == {
-        f'skill:{name}' for name in STARTER_NAMES
-    }
-    # Discovery provides concise activation descriptions, not full bodies/resources.
-    assert all(c['description'] == store.get(c['id']).description for c in candidates)
-    ids = [f'skill:{name}' for name in names]
-    task.metadata['v3_skill_selection'] = {'selected_skill_ids': ids, 'primary_skill_ids': ids[:1]}
-    guidance, loaded = selected_skill_guidance(task, context)
-    assert loaded == ids
-    for skill_id in ids:
-        record = store.get(skill_id)
-        assert record.instructions in guidance  # No truncated completion constraints.
-        assert record.directory in guidance
-    if not ids:
-        assert guidance == ''
-    if 'skill:skill-authoring' in ids:
-        relative = 'references/resource-authoring.md'
-        content = store.read_file('skill:skill-authoring', relative)
-        assert content not in guidance  # Supporting material is loaded on demand.
-        resource = read_resource(
-            {'skill_id': 'skill:skill-authoring', 'path': relative},
-            context=ToolExecutionContext(task=task, messages=context.messages), store=store,
-        )
-        assert resource['content'] == content
-        assert task.metadata['v3_skill_resource_reads']
 
 
 def test_third_party_package_roundtrip_without_registry_changes(tmp_path):

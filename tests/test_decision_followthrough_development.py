@@ -23,6 +23,39 @@ def test_recoverable_fault_requires_source_observation_and_alternate_route():
     assert evaluate(CASE['fallback'], fixture)['passed'] is True
 
 
+def test_conflicting_times_require_both_sources_then_specific_clarification():
+    case = CASE['conflicting']
+    question = handoff('conflicting_sources', 'appointment_time_confirmation')
+    fixture = FollowThroughFixture(case)
+    fixture.read('primary')
+    fixture.send('actor_private', question)
+    fixture.read('backup')  # A later read cannot justify an earlier question.
+    assert not evaluate(case, fixture)['passed']
+
+    fixture = FollowThroughFixture(case)
+    fixture.read('primary')
+    fixture.read('backup')
+    fixture.send('actor_private', {'kind': 'result', 'value': '09:30'})
+    assert not evaluate(case, fixture)['passed']
+
+    fixture = FollowThroughFixture(case)
+    fixture.read('primary')
+    fixture.read('backup')
+    fixture.send('actor_private', question)
+    assert evaluate(case, fixture)['passed']
+
+
+def test_conflict_clarification_deadline_starts_at_first_observed_pair():
+    case = CASE['conflicting']
+    fixture = FollowThroughFixture(case)
+    fixture.read('primary')
+    fixture.read('backup')
+    fixture.advance(31)
+    fixture.read('backup')  # Re-reading cannot reset the handoff deadline.
+    fixture.send('actor_private', handoff('conflicting_sources', 'appointment_time_confirmation'))
+    assert not evaluate(case, fixture)['passed']
+
+
 def test_early_handoff_or_guessed_result_do_not_pass():
     case = CASE['fallback']
     fixture = FollowThroughFixture(case)

@@ -1,0 +1,13 @@
+{
+  "purpose": "One preregistered owner-worker Gmail unread-thread count attempt, distinguish thread counts from message counts.",
+  "scope": "Codex CLI subscription for model decisions; synthetic owner with role owner, fake authorized account, unexpired fake OAuth and fake Gmail provider response. No real account, paid API, Desktop UI or external provider effect.",
+  "oracle": [
+    "model calls native.owner_gmail_unread with threads unit",
+    "one fake Gmail call",
+    "answer reports seven unread threads rather than 99 unread messages, with source time",
+    "offline recovery causes no additional Gmail call",
+    "fake secrets and authority IDs excluded from prompts and answer",
+    "fixture acknowledgement persisted"
+  ],
+  "limits": "One tuned synthetic in-process attempt; not live mailbox, full process restart, GUI delivery, human receipt or general reliability."
+}

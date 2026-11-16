@@ -1,0 +1,7 @@
+{
+  "purpose": "One exploratory direct named-skill owner conversation through the actual worker and pickup path.",
+  "provider": "Codex CLI ChatGPT subscription, gpt-6-luna",
+  "fixture": "Disposable synthetic owner and synthetic meal-planning package; no household data, real external services, paid API or Jev.",
+  "oracle": "The native named-skill tool was selected for skill:meal-planning; the synthetic instructions reached the next model request; the delivered answer includes saffron oats; ready state was restored before pickup.",
+  "limits": "A single development case is not reliability evidence; exact named English requests only; no automatic relevance or scripts."
+}

@@ -187,7 +187,7 @@ def test_answer_returned_after_deadline_is_not_accepted(monkeypatch):
 
 @pytest.mark.parametrize(('expire_on', 'expects_read'), [(2, False), (5, True)])
 def test_deadline_expiry_during_last_freshness_check_fails_closed(monkeypatch, expire_on, expects_read):
-    from alphonse.agent_v2.core.intelligence.v3 import single_loop_candidate
+    from alphonse.agent_v2.core.intelligence.simple_loop import single_loop_candidate
     monkeypatch.setattr('alphonse.agent_v2.evaluation.prescription_http_processors.LocalSource', FakeSource)
     state = {'now': 0.0, 'fresh_checks': 0}
     monkeypatch.setattr('alphonse.agent_v2.evaluation.candidate_clock_responses.monotonic', lambda: state['now'])

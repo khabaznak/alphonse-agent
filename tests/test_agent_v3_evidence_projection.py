@@ -1,9 +1,9 @@
 import pytest
 
-from alphonse.agent_v2.core.intelligence.v3.evidence_projection import (
+from alphonse.agent_v2.core.intelligence.simple_loop.evidence_projection import (
     EvidenceAccessError, EvidenceSource, project_evidence,
 )
-from alphonse.agent_v2.core.intelligence.v3.projections import ContextBudgetExceeded
+from alphonse.agent_v2.core.intelligence.context_projection import ContextBudgetExceeded
 
 
 def make_projection(sources, data, *, budget=1500, authorize=None):

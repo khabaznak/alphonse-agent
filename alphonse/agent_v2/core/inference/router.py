@@ -80,7 +80,15 @@ class InferenceRouter:
         except Exception as exc:
             finish_decision(manifest, failed=True)
             # Provider exception strings can contain the raw model response.
-            error = "tactical_provider_error" if resolved.purpose.value == "tactical_action" else f"{type(exc).__name__}: {exc}"
+            if resolved.purpose.value == "tactical_action":
+                error = "tactical_provider_error"
+            elif resolved.purpose.value == "simple_loop_action":
+                # A provider exception may contain model output or source data.
+                # The simple-loop chooser sanitizes what it returns, but router
+                # telemetry is emitted before that outer handler runs.
+                error = "simple_loop_provider_error"
+            else:
+                error = f"{type(exc).__name__}: {exc}"
             self._emit(resolved, None, started, status="failed", error=error)
             raise
         normalized = self._with_result_profile(result, resolved.model_profile)
@@ -131,7 +139,7 @@ class InferenceRouter:
         self.telemetry_sink(event.to_dict())
 
     def _with_profile(self, request: InferenceRequest) -> InferenceRequest:
-        # Callers cannot override the Desktop/TUI selection per project, node,
+        # Callers cannot override the Desktop selection per project, node,
         # purpose, or request.
         return replace(request, model_profile=self.select_profile(request))
 

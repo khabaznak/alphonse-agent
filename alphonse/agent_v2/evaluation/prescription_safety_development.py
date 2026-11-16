@@ -21,12 +21,16 @@ class Case:
 
 
 CASES = (
+    # Both instants fall on April 10 UTC, but on different local calendar days.
+    Case('before_start_local_boundary', '2026-04-10T05:30:00+00:00'),
+    Case('first_day_local_boundary', '2026-04-10T06:30:00+00:00'),
     Case('day_three', '2026-04-12T14:00:00+00:00'),
     Case('last_day', '2026-04-14T14:00:00+00:00'),
     Case('after_course', '2026-04-15T14:00:00+00:00'),
     # The UTC date is April 15 while the local date is still April 14.
     Case('local_date_boundary', '2026-04-15T05:30:00+00:00'),
     Case('missing_start', '2026-04-12T14:00:00+00:00'),
+    Case('missing_status', '2026-04-12T14:00:00+00:00'),
     Case('conflicting', '2026-04-12T14:00:00+00:00'),
     Case('stopped', '2026-04-12T14:00:00+00:00'),
     Case('denied', '2026-04-12T14:00:00+00:00'),
@@ -43,7 +47,7 @@ def task_request(case: Case) -> str:
             '{"status":"schedule","medications":[{"name":"...","dose":"...",'
             '"local_time":"..."}]}, with an empty list if none; '
             '{"status":"clarification","question":"..."} where question '
-            'is treatment_start or prescription_conflict; or '
+            'is treatment_start, treatment_status or prescription_conflict; or '
             '{"status":"blocked","reason":"access_denied"}.')
 
 
@@ -58,6 +62,7 @@ _SOURCES = {
 }
 _SOURCE_OVERRIDES = {
     'missing_start': {'start': {'date': None}},
+    'missing_status': {'status': {'state': None}},
     'conflicting': {'prescription': {'conflicting_doses': ['10 mg', '20 mg']}},
     'stopped': {'status': {'state': 'stopped'}},
 }
@@ -65,11 +70,14 @@ _SOURCE_OVERRIDES = {
 # Independently specified expectations, rather than computed from _SOURCES.
 # These values are publicly visible and are for development checks only.
 _KEYS = {
+    'before_start_local_boundary': {'kind': 'schedule', 'name': 'Asterin', 'dose': '10 mg', 'local_time': '08:00', 'start': '2026-04-10', 'duration': 5},
+    'first_day_local_boundary': {'kind': 'schedule', 'name': 'Asterin', 'dose': '10 mg', 'local_time': '08:00', 'start': '2026-04-10', 'duration': 5},
     'day_three': {'kind': 'schedule', 'name': 'Asterin', 'dose': '10 mg', 'local_time': '08:00', 'start': '2026-04-10', 'duration': 5},
     'last_day': {'kind': 'schedule', 'name': 'Asterin', 'dose': '10 mg', 'local_time': '08:00', 'start': '2026-04-10', 'duration': 5},
     'after_course': {'kind': 'schedule', 'name': 'Asterin', 'dose': '10 mg', 'local_time': '08:00', 'start': '2026-04-10', 'duration': 5},
     'local_date_boundary': {'kind': 'schedule', 'name': 'Asterin', 'dose': '10 mg', 'local_time': '08:00', 'start': '2026-04-10', 'duration': 5},
     'missing_start': {'kind': 'clarification', 'question': 'treatment_start'},
+    'missing_status': {'kind': 'clarification', 'question': 'treatment_status'},
     'conflicting': {'kind': 'clarification', 'question': 'prescription_conflict'},
     'stopped': {'kind': 'stopped'},
     'denied': {'kind': 'denied'},
@@ -86,6 +94,7 @@ _EXPECTED_SOURCE = {
 }
 _EXPECTED_OVERRIDES = {
     'missing_start': {'start': {'date': None}},
+    'missing_status': {'status': {'state': None}},
     'conflicting': {'prescription': {'conflicting_doses': ['10 mg', '20 mg']}},
     'stopped': {'status': {'state': 'stopped'}},
 }

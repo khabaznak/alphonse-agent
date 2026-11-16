@@ -13,10 +13,33 @@ from typing import Any, Callable
 
 from alphonse.agent_v2.core.inference import InferencePurpose, InferenceRequest, InferenceResult, ModelProfile
 from alphonse.agent_v2.core.inference.openai_codex import _json_envelope
+from alphonse.agent_v2.core.intelligence.simple_loop.candidate_decision_policy import action_schema, make_request, normalize_action
 from .codex_subscription_provider import CodexSubscriptionProvider
 from .token_usage_diagnostics import usage_diagnostics
 
-_ALLOWED_SOURCES = frozenset({'index', 'conversation', 'prescription', 'treatment-status'})
+_ALLOWED_SOURCES = frozenset({'index', 'conversation', 'prescription', 'treatment-status',
+                              'calendar', 'contacts', 'household-note'})
+
+
+def _action_schema(sources: tuple[str, ...]) -> dict:
+    """Constrain the synthetic host's wire format, not access or correctness."""
+    return action_schema(fixture_sources=sources)
+
+
+def _valid_action(decision: dict, sources: tuple[str, ...]) -> bool:
+    """Check the action discriminator; the host still authorizes actual reads."""
+    if set(decision) != {'kind', 'tool_id', 'arguments', 'text'}:
+        return False
+    kind = decision.get('kind')
+    if kind == 'tool':
+        args = decision.get('arguments')
+        return (decision.get('tool_id') == 'native.fixture_read' and isinstance(args, dict)
+                and set(args) == {'source'} and isinstance(args['source'], str) and args['source'] in sources
+                and decision.get('text') is None)
+    if kind in ('answer', 'question'):
+        return (isinstance(decision.get('text'), str) and bool(decision['text'].strip())
+                and decision.get('tool_id') is None and decision.get('arguments') is None)
+    return False
 
 
 class CodexSubscriptionChooser:
@@ -31,7 +54,8 @@ class CodexSubscriptionChooser:
                  max_input_tokens: int, emit: Callable[[dict[str, Any]], None],
                  cancellation_checker: Callable[[], bool] | None = None,
                  allowed_source_names: tuple[str, ...] = ('index',),
-                 source_description: str = 'Read an authorized synthetic source.'):
+                 source_description: str = 'Read an authorized synthetic source.',
+                 observed_sources: Callable[[], tuple[str, ...]] | None = None):
         if type(provider) is not CodexSubscriptionProvider:
             raise ValueError('codex_subscription_provider_required')
         if not isinstance(model, str) or not model.strip() or len(model) > 128:
@@ -41,6 +65,8 @@ class CodexSubscriptionChooser:
         if type(max_input_tokens) is not int or max_input_tokens <= 0 or not callable(emit):
             raise ValueError('codex_chooser_configuration_invalid')
         if cancellation_checker is not None and not callable(cancellation_checker):
+            raise ValueError('codex_chooser_configuration_invalid')
+        if observed_sources is not None and not callable(observed_sources):
             raise ValueError('codex_chooser_configuration_invalid')
         if (not isinstance(allowed_source_names, tuple) or not allowed_source_names or
                 any(not isinstance(x, str) or x not in _ALLOWED_SOURCES for x in allowed_source_names) or
@@ -52,6 +78,7 @@ class CodexSubscriptionChooser:
         self.max_input_tokens, self.emit = max_input_tokens, emit
         self.cancellation_checker, self.allowed_source_names = cancellation_checker, allowed_source_names
         self.source_description = source_description
+        self.observed_sources = observed_sources
 
     def _cancelled(self) -> bool:
         if self.cancellation_checker is None:
@@ -70,28 +97,29 @@ class CodexSubscriptionChooser:
         # Codex subprocess. The JSON provider envelope does not render
         # InferenceRequest.tools, so describe the *actual host capability* here;
         # the host independently rechecks tool identity, arguments and access.
-        tool = {
+        catalog = [{
             'tool_id': 'native.fixture_read',
             'description': self.source_description,
-            'arguments': {'source': {'type': 'string', 'enum': list(self.allowed_source_names)}},
-        }
-        instructions = (
-            'You are choosing one action for Alphonse, not executing the action in Codex. '
-            'Alphonse has the following host tool available: ' + json.dumps(tool, ensure_ascii=False) + '. '
-            'To use it, return a JSON object with kind="tool", tool_id="native.fixture_read", '
-            'and arguments containing a listed source. Alphonse executes that action and supplies '
-            'the observation on the next decision; it is not a tool you need to call from Codex. '
-            'If available evidence suffices, return {"kind":"answer","text":"..."}. '
-            'Use a question only when essential information is genuinely missing after available '
-            'host sources and their results have been considered. Do not ask the user to enable an '
-            'already listed tool, and do not claim an observation that was not supplied.\n\n'
-        )
-        request = InferenceRequest(prompt=instructions + projection,
-            purpose=InferencePurpose.SIMPLE_LOOP_ACTION,
+            'argument_schema': {'type': 'object', 'properties': {
+                'source': {'type': 'string', 'enum': list(self.allowed_source_names)}},
+                'required': ['source'], 'additionalProperties': False},
+        }]
+        progress = None
+        if self.observed_sources is not None:
+            try:
+                observed = self.observed_sources()
+                if (not isinstance(observed, tuple) or len(set(observed)) != len(observed)
+                        or any(not isinstance(name, str) or name not in self.allowed_source_names for name in observed)):
+                    raise ValueError('invalid_source_progress')
+                progress = {'observed_sources': list(observed), 'unread_sources': [
+                    name for name in self.allowed_source_names if name not in observed]}
+            except Exception:
+                raise ValueError('candidate_source_progress_unavailable') from None
+        request = make_request(projection=projection, catalog=catalog,
+            cancellation_checker=self.cancellation_checker, output_schema=_action_schema(self.allowed_source_names),
             model_profile=ModelProfile(provider='openai_codex', model=self.model,
                                        profile_id='synthetic-subscription-comparison'),
-            cancel_checker=self.cancellation_checker,
-            metadata={'evaluation': 'synthetic_subscription_comparison'})
+            metadata={'evaluation': 'synthetic_subscription_comparison'}, source_progress=progress)
         # Include the same JSON envelope this provider actually renders. This
         # still cannot account for provider-side framing or hidden tokens.
         observed_input = _json_envelope(request)
@@ -137,7 +165,10 @@ class CodexSubscriptionChooser:
                    'limits': 'visible_text_bytes_not_provider_token_enforcement'})
         if status != 'returned':
             raise ValueError('candidate_codex_' + status)
-        decision = dict(result.json_value)
-        decision.pop('usage', None)  # Model text cannot manufacture provider billing metadata.
+        decision = normalize_action(result.json_value, frozenset({'native.fixture_read'}))
+        if not _valid_action(decision, self.allowed_source_names):
+            # Preserve no model text; the candidate may use its existing
+            # bounded format-repair path, never dispatch an invalid action.
+            decision = {'kind': 'invalid'}
         decision['usage'] = provider_usage
         return decision

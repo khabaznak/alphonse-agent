@@ -8,9 +8,6 @@ import pytest
 
 from alphonse.agent_v2.core.core import CoreLoopContext
 from alphonse.agent_v2.core.core import ToolExecutionContext
-from alphonse.agent_v2.core.intelligence.pdca.nodes import do_node
-from alphonse.agent_v2.core.intelligence.pdca.nodes.plan_node import _render_tool_call_plan_prompt
-from alphonse.agent_v2.core.intelligence.pdca.nodes.plan_node import plan_node
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.inference import InferencePurpose
 from alphonse.agent_v2.core.inference import InferenceRouter
@@ -25,7 +22,7 @@ from alphonse.agent_v2.core.tools.registry.native import SCHEDULED_TASK_TOOL_NAM
 from alphonse.agent_v2.core.tools.registry.native import build_native_tool_registry
 from alphonse.agent_v2.core.tools.registry.native import execute_scheduled_task
 from alphonse.agent_v2.core.tools.registry.native.scheduled_task_delivery import execute_scheduled_task_delivery
-from alphonse.agent_v2.interfaces.tui import _latest_tool_result_response
+from alphonse.agent_v2.core.io.outbox import _latest_tool_result_response
 
 
 
@@ -283,35 +280,6 @@ def test_scheduled_task_delivery_lists_and_adds_registered_telegram_address() ->
     assert store.get_task(task.scheduled_task_id).origin_channel["delivery_channels"][-1]["channel_target"] == "123"
 
 
-def test_do_node_records_scheduled_task_result_in_execution_result_not_metadata() -> None:
-    store = ScheduledTaskStore()
-    task = TaskState(user="alex", project_id="alpha")
-    task.append_plan_call(
-        {
-            "id": "call-1",
-            "tool_id": SCHEDULED_TASK_TOOL_ID,
-            "tool_name": SCHEDULED_TASK_TOOL_NAME,
-            "arguments": {
-                "name": "Check oven",
-                "prompt": "Remind Alex to check the oven.",
-                "schedule_kind": "once",
-                "run_at": "2026-07-10T09:00:00+00:00",
-            },
-            "internal_state": "Scheduling the reminder.",
-        }
-    )
-
-    do_node(
-        task,
-        context=CoreLoopContext(messages=InMemoryMessageQueue(), tools=build_native_tool_registry(), schedule_store=store),
-    )
-
-    execution = json.loads(task.plan_json)[0]["execution"]
-    assert execution["status"] == "success"
-    assert execution["result"]["scheduled_task_id"]
-    assert "scheduled_task_id" not in task.metadata
-    assert task.status == "completed"
-    assert task.metadata["terminal_after_do"] is True
 
 
 def test_scheduled_task_is_idempotent_and_plain_reminders_use_direct_delivery(tmp_path) -> None:
@@ -429,59 +397,11 @@ def test_runner_ignores_not_due_and_inactive_tasks() -> None:
     assert store.get_task(future.scheduled_task_id).status == "active"  # type: ignore[union-attr]
 
 
-def test_tool_planning_prompt_exposes_scheduled_task_tool() -> None:
-    descriptor = build_native_tool_registry().get(SCHEDULED_TASK_TOOL_NAME)
-    assert descriptor is not None
-
-    prompt = _render_tool_call_plan_prompt(
-        TaskState(goal="Remind me tomorrow", acceptance_criteria_md="1.- [ ] Reminder scheduled"),
-        (descriptor,),
-    )
-
-    assert SCHEDULED_TASK_TOOL_ID in prompt
-    assert "future activity" in prompt
-    assert "Do not pass natural-language dates" in prompt
 
 
-def test_stub_inference_can_select_scheduled_task_tool(tmp_path) -> None:
-    router = InferenceRouter(
-        provider=StubInferenceProvider(
-            markdown_by_purpose={
-                InferencePurpose.ACCEPTANCE_CRITERIA: "1.- [ ] Reminder scheduled",
-                InferencePurpose.CRITERIA_REVIEW: "1.- [x] Reminder scheduled",
-            },
-            tool_call={
-                "tool_id": SCHEDULED_TASK_TOOL_ID,
-                "tool_name": SCHEDULED_TASK_TOOL_NAME,
-                "arguments": {
-                    "name": "Check oven",
-                    "prompt": "Remind Alex to check the oven.",
-                    "schedule_kind": "once",
-                    "run_at": "2026-07-10T09:00:00+00:00",
-                },
-                "internal_state": "Scheduling the reminder.",
-            },
-        ),
-        default_profile=ModelProfile(provider="stub", model="stub", profile_id="stub"),
-    )
-    store = ScheduledTaskStore()
-    task = TaskState(user="alex", project_id="home", goal="Remind me", acceptance_criteria_md="1.- [ ] Reminder scheduled")
-
-    plan_node(
-        task,
-        context=CoreLoopContext(messages=InMemoryMessageQueue(), tools=build_native_tool_registry(), inference=router),
-    )
-    do_node(
-        task,
-        context=CoreLoopContext(messages=InMemoryMessageQueue(), tools=build_native_tool_registry(), schedule_store=store, identity_resolver=_reminder_identity(tmp_path)),
-    )
-
-    execution = json.loads(task.plan_json)[0]["execution"]
-    assert execution["status"] == "success"
-    assert store.list_tasks(owner_user_id="alex")
 
 
-def test_tui_renders_scheduled_task_result() -> None:
+def test_scheduled_task_result_renders_for_outbox() -> None:
     task = TaskState()
     task.append_plan_call(
         {

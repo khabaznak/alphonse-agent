@@ -30,21 +30,40 @@ class KillSwitchCoordinator:
         self._lock = threading.RLock()
         self._active: ActiveTask | None = None
         self._cancelled_message_ids: set[str] = set()
+        self._committed_effect_message_id = ''
 
     def activate(self, *, message_id: str, task_id: str, user_id: str, project_id: str, metadata: dict[str, Any]) -> None:
         with self._lock:
             self._active = ActiveTask(message_id, task_id, user_id, project_id, dict(metadata))
+            self._committed_effect_message_id = ''
 
     def request_cancel(self) -> ActiveTask | None:
+        status, active = self.request_cancel_status()
+        return active if status == 'cancel_requested' else None
+
+    def request_cancel_status(self) -> tuple[str, ActiveTask | None]:
         with self._lock:
             if self._active is None:
-                return None
+                return 'no_active_task', None
+            if self._active.message_id == self._committed_effect_message_id:
+                return 'effect_already_committed', self._active
             self._cancelled_message_ids.add(self._active.message_id)
-            return self._active
+            return 'cancel_requested', self._active
 
     def is_cancelled(self, message_id: str) -> bool:
         with self._lock:
             return str(message_id or "") in self._cancelled_message_ids
+
+    def commit_if_active(self, message_id: str, commit: Any) -> Any:
+        """Serialize a short local commit with cancellation of the active task."""
+        with self._lock:
+            if (self._active is None or self._active.message_id != message_id
+                    or self._committed_effect_message_id == message_id
+                    or message_id in self._cancelled_message_ids):
+                raise RuntimeError('owner_effect_cancelled')
+            result = commit()
+            self._committed_effect_message_id = message_id
+            return result
 
     def clear(self, message_id: str = "") -> None:
         with self._lock:
@@ -52,6 +71,7 @@ class KillSwitchCoordinator:
             if self._active is not None and (not target or self._active.message_id == target):
                 self._cancelled_message_ids.discard(self._active.message_id)
                 self._active = None
+                self._committed_effect_message_id = ''
 
     def finish_handoff(self, message_id: str, *, release: Any, cancel: Any) -> tuple[bool, bool]:
         """Serialize cancellation with the final queue handoff."""
@@ -63,6 +83,7 @@ class KillSwitchCoordinator:
             if completed:
                 self._cancelled_message_ids.discard(message_id)
                 self._active = None
+                self._committed_effect_message_id = ''
             return cancelled, completed
 
     def active(self) -> ActiveTask | None:

@@ -22,6 +22,14 @@ import { onAction } from "@tauri-apps/plugin-notification";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { daemonRequest, ensureDaemon, playAlertSound, showInFinder, stopDaemon } from "./api";
+import { legacyNotificationReviewMessage, OwnerConversation, ownerUnavailableMessage, type OwnerCapability } from "./ownerConversation";
+import { abandonOwnerRequest, listOwnerRecovery, type OwnerRecoveryItem } from "./ownerRecovery";
+import { OwnerRecovery } from "./OwnerRecoveryPanel";
+import { LegacyNotificationReview } from "./LegacyNotificationReview";
+import { OwnerReminders } from "./OwnerReminders";
+import { LegacyMigrationPreview } from "./LegacyMigrationPreview";
+import { OwnerQuestionSelector } from "./OwnerQuestionSelector";
+import { listOwnerQuestions, type OwnerQuestion } from "./ownerQuestions";
 import { SKILL_NAME_MAX_LENGTH, SKILL_DESCRIPTION_MAX_LENGTH, skillTextLength, limitSkillText } from "./skillFormat";
 import { DESKTOP_COMMANDS, matchingCommands } from "./commands";
 import { mergeFreshConversationHistory } from "./conversationHistory";
@@ -33,7 +41,7 @@ import { desktopDiagnosticBehavior, type DesktopDiagnosticMode } from "./diagnos
 import { createDesktopNotifier, DESKTOP_NOTIFICATION_PREFERENCES_KEY, notificationForCompletion, notificationForQuestion, readDesktopNotificationPreferences, type DesktopNotificationPreferences } from "./desktopNotifications";
 import { readDismissedScheduledSurfaces, rememberDismissedScheduledSurface, withoutDismissedSurfaces, withoutSurface } from "./dismissedSurfaces";
 import { avatarState, avatarStateLabel, capdActivityLabel, canOpenSettingsSection, isCurrentDesktopAdmin, type Workspace, SETTINGS_SECTIONS } from "./layoutState";
-import { reconcileQuestionSurfaces, reuseQuestions, withoutTaskProgressSurfaces } from "./pollState";
+import { pollForKnownUser, reconcileQuestionSurfaces, reuseQuestions, withoutTaskProgressSurfaces } from "./pollState";
 import { appendQueueSample, type QueueSample } from "./queueHistory";
 import { appendPdcaActivity, type PdcaSample } from "./pdcaHistory";
 import type { ActivityEvent, AgentDocument, ChatMessage, CodeModeSettings, InferenceSettings, MediaToolsSettings, MemorySettings, Project, Question, SystemOneSettings, WebToolsSettings } from "./types";
@@ -50,9 +58,10 @@ type PollResponse = {
   next_sequence: number;
   ui_events?: Array<{ sequence?: number; event: { type: string; name?: string; value?: unknown } }>;
   next_ui_sequence?: number;
-  deliveries: Array<{ outbox_message_id: string; message: string; task_id?: string; project_id: string; created_at: string; conversation_sequence: number; conversation_id?: string; conversation_created_at?: string }>;
+  deliveries: Array<{ outbox_message_id: string; attempt_count?: number; message: string; task_id?: string; project_id: string; created_at: string; conversation_sequence: number; conversation_id?: string; conversation_created_at?: string }>;
   questions: Question[];
   conversation_has_unseen_messages?: boolean;
+  legacy_notification_review?: { owner_scoped: number; ambiguous: number; unassigned: number } | null;
   status: { active_work: Record<string, string>; activity: { state?: string }; queue?: { ready?: number; processing?: number; retry_wait?: number } };
 };
 type HistoryResponse = { messages: ChatMessage[] };
@@ -138,6 +147,99 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const [workTaskForView, setWorkTaskForView] = useState("");
   const [modal, setModal] = useState<Modal>(null);
   const [user, setUser] = useState("");
+  const [ownerWorkerReady, setOwnerWorkerReady] = useState(false);
+  const [ownerOnly, setOwnerOnly] = useState(false);
+  const [ownerBlockingReason, setOwnerBlockingReason] = useState<string | null>(null);
+  const [pausedLegacyRequests, setPausedLegacyRequests] = useState<number | null>(null);
+  const [ownerConversationBusy, setOwnerConversationBusy] = useState(false);
+  const [ownerRecoveryItems, setOwnerRecoveryItems] = useState<OwnerRecoveryItem[]>([]);
+  const [ownerRecoveryNotice, setOwnerRecoveryNotice] = useState("");
+  const [legacyNotificationNotice, setLegacyNotificationNotice] = useState("");
+  const [ownerClarificationNotice, setOwnerClarificationNotice] = useState("");
+  const [ownerQuestions, setOwnerQuestions] = useState<OwnerQuestion[]>([]);
+  const [ownerQuestionScope, setOwnerQuestionScope] = useState("");
+  const [ownerReplyTarget, setOwnerReplyTarget] = useState("");
+  const [ownerRecoveryStopping, setOwnerRecoveryStopping] = useState("");
+  const ownerRecoveryGeneration = useRef(0);
+  const ownerQuestionGeneration = useRef(0);
+  const ownerConversation = useMemo(() =>
+    isAdmin ? new OwnerConversation(daemonRequest) : null,
+    [isAdmin, user]);
+  const ownerConversationNotice = useRef("");
+  useEffect(() => {
+    if (!isAdmin) { setOwnerWorkerReady(false); setOwnerOnly(false); setOwnerBlockingReason(null); setPausedLegacyRequests(null); return; }
+    let active = true;
+    const check = () => void daemonRequest<OwnerCapability>("experimental_owner_status", {})
+      .then((status) => { if (active) {
+        setOwnerWorkerReady(status.processing_ready === true);
+        // Older owner daemons did not send owner_only, but a ready owner
+        // worker still implies their generic queue cannot process messages.
+        setOwnerOnly(status.owner_only === true || status.processing_ready === true);
+        setOwnerBlockingReason(typeof status.blocking_reason === "string" ? status.blocking_reason : null);
+        setPausedLegacyRequests(Number.isSafeInteger(status.paused_legacy_requests) && (status.paused_legacy_requests ?? -1) >= 0 ? status.paused_legacy_requests! : null);
+      } })
+      .catch(() => { if (active) { setOwnerWorkerReady(false); setOwnerOnly(false); setOwnerBlockingReason(null); setPausedLegacyRequests(null); } });
+    check();
+    const interval = window.setInterval(check, 10000);
+    return () => { active = false; window.clearInterval(interval); };
+  }, [isAdmin]);
+  const refreshOwnerRecovery = useCallback(async () => {
+    const generation = ++ownerRecoveryGeneration.current;
+    try {
+      const items = await listOwnerRecovery(daemonRequest);
+      if (generation === ownerRecoveryGeneration.current) {
+        setOwnerRecoveryItems(items);
+        setOwnerRecoveryNotice((notice) => notice === "Unfinished requests could not be checked." ? "" : notice);
+      }
+    } catch {
+      if (generation === ownerRecoveryGeneration.current) setOwnerRecoveryNotice("Unfinished requests could not be checked.");
+    }
+  }, []);
+  const refreshOwnerQuestions = useCallback(async () => {
+    const generation = ++ownerQuestionGeneration.current;
+    try {
+      const items = await listOwnerQuestions(daemonRequest);
+      if (generation === ownerQuestionGeneration.current) { setOwnerQuestions(items); setOwnerQuestionScope(user); }
+    } catch {
+      if (generation === ownerQuestionGeneration.current) setOwnerQuestions([]);
+    }
+  }, [user]);
+  useEffect(() => {
+    // Do not carry a prior account's selected or visible question across a
+    // user/mode change while the newly scoped list is loading.
+    setOwnerQuestions([]);
+    setOwnerQuestionScope("");
+    setOwnerReplyTarget("");
+    if (!isAdmin) {
+      ++ownerRecoveryGeneration.current;
+      ++ownerQuestionGeneration.current;
+      setOwnerRecoveryItems([]);
+      return;
+    }
+    void refreshOwnerRecovery();
+    void refreshOwnerQuestions();
+    const interval = window.setInterval(() => { void refreshOwnerRecovery(); void refreshOwnerQuestions(); }, 10000);
+    return () => { ++ownerRecoveryGeneration.current; ++ownerQuestionGeneration.current; window.clearInterval(interval); };
+  }, [isAdmin, refreshOwnerRecovery, refreshOwnerQuestions, user]);
+  const stopOwnerRequest = async (messageId: string) => {
+    if (ownerRecoveryStopping) return;
+    setOwnerRecoveryStopping(messageId);
+    try {
+      const delivery = await abandonOwnerRequest(daemonRequest, messageId);
+      ownerConversation?.forgetAbandoned(messageId);
+      setOwnerConversationBusy(ownerConversation?.hasPending() || false);
+      const notice = delivery === "unconfirmed"
+        ? "Request stopped. Whether its answer was shown is still unconfirmed; it was not retried."
+        : "Request stopped. No answer pickup was recorded; it was not retried.";
+      setOwnerRecoveryNotice(notice + (ownerConversation?.hasUncertainSubmission()
+        ? " An unconfirmed submission remains blocked in this session; reopen Desktop after reviewing unfinished requests." : ""));
+      await refreshOwnerRecovery();
+    } catch {
+      setOwnerRecoveryNotice("This request could not be stopped. It may still be running; check again later.");
+    } finally {
+      setOwnerRecoveryStopping("");
+    }
+  };
   useEffect(() => { setComposerProject(null); }, [user]);
   const { state: drawer, act: changeDrawer, saveFailed: drawerSaveFailed, reconcile: reconcileWidgets } = useAtHand(user);
   const [widgetContext, setWidgetContext] = useState<WidgetContext>();
@@ -229,8 +331,14 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   }, [clientId, conversationDay, user]);
 
   const poll = useCallback(async () => {
+    // Startup resolves the real owner asynchronously. Polling with an empty
+    // actor falls back to the historical "local" ID at the IPC boundary,
+    // which the daemon correctly refuses for an onboarded household. Wait
+    // for current_user rather than falsely reporting a disconnected daemon.
     try {
-      const { response, daemonChanged, stale } = await pollTransport();
+      const outcome = await pollForKnownUser(user, pollTransport);
+      if (!outcome) return;
+      const { response, daemonChanged, stale } = outcome;
       if (stale) return;
       if (!diagnosticBehavior.commitsPollResponses) return;
       if (daemonChanged) {
@@ -243,7 +351,8 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
         setSurfaces(retainedSurfaces);
       }
       setConnected(true);
-      setError("");
+      setLegacyNotificationNotice(legacyNotificationReviewMessage(response.legacy_notification_review));
+      setError(ownerConversationNotice.current);
       setQuestionsMember(user);
       setMascotContext(response.mascot || BASE_CONTEXT);
       setWidgetContext(response.widget_context);
@@ -311,7 +420,12 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       const latest = response.events.at(-1);
       setActivity(capdActivityLabel(latest, response.status.activity.state || "idle"));
       for (const delivery of response.deliveries) {
-        if (delivered.current.has(delivery.outbox_message_id)) continue;
+        if (delivered.current.has(delivery.outbox_message_id)) {
+          // A previous acknowledgement may have expired before reaching the daemon.
+          // Confirm this acquisition without displaying the message twice.
+          await daemonRequest("desktop_ack_delivery", { client_id: clientId, outbox_message_id: delivery.outbox_message_id, attempt_count: delivery.attempt_count });
+          continue;
+        }
         delivered.current.add(delivery.outbox_message_id);
         void desktopNotifierRef.current.notify(
           notificationForCompletion(delivery, contextProjects.find((item) => item.project_id === delivery.project_id)?.name || ""),
@@ -326,7 +440,31 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
           sequence: delivery.conversation_sequence,
         };
         appendMessage(completedMessage);
-        await daemonRequest("desktop_ack_delivery", { client_id: clientId, outbox_message_id: delivery.outbox_message_id });
+        await daemonRequest("desktop_ack_delivery", { client_id: clientId, outbox_message_id: delivery.outbox_message_id, attempt_count: delivery.attempt_count });
+      }
+      if (ownerConversation) {
+        try {
+          let sawQuestion = false;
+          const acknowledgementRecovered = await ownerConversation.poll((messageId, answer, kind) => {
+            appendMessage({
+              // Match the daemon's durable outbound:owner:<message_id> source
+              // identity so a later history refresh does not duplicate it.
+              id: `owner:${messageId}`, role: "assistant", content: answer,
+              created_at: new Date().toISOString(), project_id: "",
+            });
+            sawQuestion = kind === "question";
+            setOwnerClarificationNotice(kind === "question"
+              ? "After the question is confirmed, select it below to include it in a new reply request."
+              : "");
+          });
+          if (sawQuestion || acknowledgementRecovered) void refreshOwnerQuestions();
+          setOwnerConversationBusy(ownerConversation.hasPending());
+          if (acknowledgementRecovered) { ownerConversationNotice.current = ""; setError(""); }
+        } catch (cause) {
+          setOwnerConversationBusy(ownerConversation.hasPending());
+          ownerConversationNotice.current = cause instanceof Error ? cause.message : "Owner conversation needs attention.";
+          setError(ownerConversationNotice.current);
+        }
       }
     } catch (cause) {
       if (!diagnosticBehavior.commitsPollResponses) return;
@@ -335,7 +473,19 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       setError(cause instanceof Error ? cause.message : "Daemon connection lost");
       setActivity("idle");
     }
-  }, [appendMessage, clientId, contextProjects, desktopNotifications, diagnosticBehavior.commitsPollResponses, pollTransport, reconcileWidgets, user]);
+  }, [appendMessage, clientId, contextProjects, desktopNotifications, diagnosticBehavior.commitsPollResponses, ownerConversation, pollTransport, reconcileWidgets, refreshOwnerQuestions, user]);
+
+  const showOwnerAnswer = async (messageId: string) => {
+    if (!ownerConversation) return;
+    try {
+      ownerConversation.adoptReady(messageId);
+      setOwnerConversationBusy(true);
+      await poll();
+    } catch (cause) {
+      ownerConversationNotice.current = cause instanceof Error ? cause.message : "The answer could not be opened.";
+      setError(ownerConversationNotice.current);
+    }
+  };
 
   useEffect(() => {
     const runCycle = diagnosticBehavior.cycle === "ping"
@@ -523,33 +673,34 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
     }
     try {
       const messagePrompt = value;
-      const queued = await daemonRequest<{ message_id: string; project_id: string; created_at: string; conversation_sequence: number }>("queue_message", {
-        prompt: messagePrompt,
-        user,
-        project_id: composerProject?.id || "",
-        integration_id: "desktop",
-        provider_key: "tui",
-        channel_target: user,
-        metadata: composerProject ? { desktop_project_request: true } : {},
-      });
-      setPrompt("");
-      setComposerProject(null);
-      const today = localDay(timezone);
-      conversationDayRef.current = today;
-      setConversationDay(today);
-      appendMessage({
-        id: queued.message_id,
-        role: "user",
-        content: messagePrompt,
-        created_at: queued.created_at,
-        project_id: queued.project_id,
-        sequence: queued.conversation_sequence,
-      });
-      await daemonRequest("desktop_mark_conversation_seen", { user, local_date: today });
-      setActivity("doing");
-      await poll();
+      if (ownerConversation) {
+        if (composerProject) throw new Error("Project conversations are not available in this owner conversation path.");
+        if (ownerReplyTarget && (ownerQuestionScope !== user || !ownerQuestions.some((item) => item.message_id === ownerReplyTarget))) {
+          throw new Error("The selected question is no longer available. Choose it again before sending.");
+        }
+        setOwnerConversationBusy(true);
+        const queued = await ownerConversation.send(messagePrompt, ownerReplyTarget || undefined);
+        setOwnerClarificationNotice("");
+        setOwnerReplyTarget("");
+        setOwnerConversationBusy(true);
+        setPrompt("");
+        const today = localDay(timezone);
+        conversationDayRef.current = today;
+        setConversationDay(today);
+        appendMessage({ id: queued.message_id, role: "user", content: messagePrompt,
+          created_at: new Date().toISOString(), project_id: "" });
+        setActivity("doing");
+        await poll();
+        return;
+      }
+      throw new Error("Conversation is available to the local owner only.");
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Message could not be queued");
+      const message = cause instanceof Error ? cause.message : "Message could not be queued";
+      if (ownerConversation) {
+        setOwnerConversationBusy(ownerConversation.hasPending());
+        ownerConversationNotice.current = message;
+      }
+      setError(message);
     }
   };
 
@@ -650,6 +801,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       <div className="workspace-host" ref={workspaceHostRef}>
         <div className="shell-toolbar"><div className="workspace-breadcrumb"><span>Personal view</span><ChevronRight aria-hidden="true" /><strong>{workspace === "settings" ? "Settings" : workspace === "projects" ? "Projects & Tasks" : workspace === "household" ? "Household" : workspace === "agenda" ? "Agenda" : workspace === "attention" ? "Needs your attention" : "Conversation"}</strong></div><button ref={drawerToggleRef} aria-label="Toggle At hand" aria-controls="at-hand" aria-expanded={atHandOpen} disabled={!user} onClick={() => changeDrawer({ type: "visibility", open: !atHandOpen })}>{atHandOpen ? <PanelRightClose /> : <PanelRightOpen />} At hand</button></div>
         {widgetItem?.member === user && (workspace === "agenda" && ["appointments", "reminders"].includes(widgetItem.family) || workspace === "projects" && ["todos", "shopping"].includes(widgetItem.family)) && <section className="card widget-item-detail" aria-label="Widget item details"><button onClick={() => setWidgetItem(undefined)}>Close item</button><h2>Selected item</h2>{selectedWidgetData && selectedWidgetItem ? <CoordinationList data={{ ...selectedWidgetData, items: [selectedWidgetItem] }} timezone={timezone} onAgenda={() => navigate("agenda")} onWork={() => navigate("projects")} onRequest={(draft) => { setPrompt((current) => appendWidgetDraft(current, draft)); navigate("conversation"); }} /> : <p role="status">Item unavailable. Refresh the source or check access.</p>}</section>}
+        <OwnerReminders key={user} request={daemonRequest} active={isAdmin && connected} ownerId={user} showManagement={workspace === "conversation"} />
         <section className="workspace-panel" tabIndex={-1} aria-label="Conversation workspace" hidden={workspace !== "conversation"}>
         <section className="conversation">
         <header className="topbar">
@@ -675,6 +827,15 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
               <div className="composer-bottom"><details ref={commandMenuRef} className="composer-command-menu"><summary aria-label="Conversation commands" title="Conversation commands"><Plus aria-hidden="true" /></summary><div><p>{prompt.trim() ? "Keep or send your draft before choosing a command." : "Choose a command to prepare in the composer."}</p>{DESKTOP_COMMANDS.map(command => <button key={command} type="button" disabled={Boolean(prompt.trim())} onClick={() => { setPrompt(command); if (commandMenuRef.current) commandMenuRef.current.open = false; textareaRef.current?.focus(); }}>{command}</button>)}</div></details><span className="composer-context">{composerProject ? <>Project: {composerProject.name} <button type="button" onClick={() => setComposerProject(null)} aria-label="Remove project from next message">×</button></> : "Everyday assistant"}</span><button className="send" type="submit" aria-label="Send" title="Send message"><ArrowUp aria-hidden="true" /></button></div>
           </form>
           <p className="composer-hint">Your conversation with Alphonse · {enterToSend ? "Enter to send · Shift+Enter for a new line" : "Use Send to send your message"}</p>
+          {isAdmin && !ownerWorkerReady && <p className="composer-hint" role="status">{ownerUnavailableMessage(ownerBlockingReason)}</p>}
+          {isAdmin && ownerOnly && pausedLegacyRequests === null && <p className="composer-hint" role="status">Earlier queued requests could not be checked.</p>}
+          {isAdmin && ownerOnly && pausedLegacyRequests !== null && pausedLegacyRequests > 0 && <p className="composer-hint" role="status">{pausedLegacyRequests} earlier {pausedLegacyRequests === 1 ? "request is" : "requests are"} paused while the simpler conversation service is running.</p>}
+          {isAdmin && legacyNotificationNotice && <><p className="composer-hint" role="status">{legacyNotificationNotice}</p><LegacyNotificationReview key={user} request={daemonRequest} onChanged={() => void poll()} /></>}
+          {isAdmin && <p className="composer-hint">Each message starts a separate request. Choose a question below to include it as context for a reply.</p>}
+          {isAdmin && ownerQuestionScope === user && <OwnerQuestionSelector questions={ownerQuestions} selectedId={ownerReplyTarget} disabled={ownerConversationBusy} onSelect={setOwnerReplyTarget} />}
+          {isAdmin && <OwnerRecovery items={ownerRecoveryItems} stopping={ownerRecoveryStopping} onStop={(id) => void stopOwnerRequest(id)} onShow={(id) => void showOwnerAnswer(id)} />}
+          {isAdmin && ownerRecoveryNotice && <p className="composer-hint" role="status">{ownerRecoveryNotice}</p>}
+          {isAdmin && ownerClarificationNotice && <p className="composer-hint" role="status">{ownerClarificationNotice}</p>}
         </section>
         </section></section>
         {visited.has("projects") && <section className="workspace-panel" tabIndex={-1} aria-label="Projects and tasks workspace" hidden={workspace !== "projects"}><ProjectsWorkspace active={workspace === "projects"} user={user} initialTaskId={workTaskForView} initialProjectId={projectForView.id} selectionRequest={projectForView.request} onAgenda={(id) => { setScheduledTaskForView(id); navigate("agenda"); }} onConversation={(day) => { if (day) setConversationDay(day); navigate("conversation"); }} onDelegate={(project) => { setComposerProject({ id: project.project_id, name: project.name }); setConversationDay(localDay(timezone)); navigate("conversation"); window.setTimeout(() => textareaRef.current?.focus(), 0); }} onQuestions={() => navigate("attention")} onClose={() => navigate("conversation")} /></section>}
@@ -1263,7 +1424,7 @@ export function SkillsWorkspace({ user, onClose, initialSkillId }: { user: strin
   const customize = async () => { if (!selected) return; setBusy(true); try { await daemonRequest("customize_skill", { actor_user_id: user, skill_id: selected.id }); await load(selected.id); setNotice("Household copy created. Its instructions and resources are ready to edit."); } catch (cause) { setNotice(cause instanceof Error ? cause.message : "Customization failed."); } finally { setBusy(false); } };
   const startCreate = () => { if (selected && !confirmFileDiscard()) return; ++detailSequence.current; setDetailLoading(false); selectedId.current = undefined; ++fileReadSequence.current; setName(""); setDescription(""); setInstructions(""); setSelected(null); setShowCreate(true); setNotice(""); };
   return <div className="projects-workspace skills-workspace"><aside className="projects-workspace-sidebar"><header className="projects-workspace-heading">{onClose && <button className="back-button" onClick={() => { if (!selected || confirmFileDiscard()) onClose(); }}>← All skills</button>}<h2>Skills</h2><button disabled={busy} onClick={() => void installOrUpdate()}>Install package</button><button onClick={() => showCreate ? setShowCreate(false) : startCreate()}>{showCreate ? "Cancel" : "+ New skill"}</button></header>
-    <nav className="projects-workspace-list" aria-label="Available skills">{skills.map((item) => <button type="button" key={item.id} className={selected?.id === item.id ? "active" : ""} onClick={() => { if (selected?.id === item.id && !showCreate) return; if (selected && !confirmFileDiscard()) return; setShowCreate(false); setSelected(null); selectedId.current = item.id; void load(item.id).then(() => { if (selectedId.current === item.id) void selectFileForSkill(item); }); }}><Sparkles size={17} /><span>{item.title}<small>{item.description}</small></span><ChevronRight size={16} /></button>)}{!skills.length && <p>No skills installed.</p>}</nav>{diagnostics.map((item) => <p role="status" key={item.directory}>Package unavailable ({item.category}): {item.directory} · {item.error}</p>)}{notice && <p className="projects-workspace-notice">{notice}</p>}</aside>
+    <nav className="projects-workspace-list" aria-label="Available skills">{skills.map((item) => <button type="button" key={item.id} className={selected?.id === item.id ? "active" : ""} onClick={() => { if (selected?.id === item.id && !showCreate) return; if (selected && !confirmFileDiscard()) return; setShowCreate(false); setSelected(null); selectedId.current = item.id; void load(item.id).then(() => { if (selectedId.current === item.id) void selectFileForSkill(item); }); }}><Sparkles size={17} /><span>{item.title}<small>{item.description}</small></span><ChevronRight size={16} /></button>)}{!skills.length && <p>No skills installed.</p>}</nav><LegacyMigrationPreview user={user} />{diagnostics.map((item) => <p role="status" key={item.directory}>Package unavailable ({item.category}): {item.directory} · {item.error}</p>)}{notice && <p className="projects-workspace-notice">{notice}</p>}</aside>
     <section className="projects-workspace-main">{showCreate ? <article className="skill-editor skill-create-editor"><header><div><p className="eyebrow">New skill</p><h1>Create a skill</h1><p>Keep the instructions focused so Alphonse can load them alongside other relevant skills.</p></div></header><form onSubmit={(event) => void create(event)}><section><h2>Skill name</h2><label htmlFor="new-skill-name">Use a short lowercase name with hyphens between words.</label><input id="new-skill-name" value={name} onChange={(event) => setName(limitSkillText(event.target.value, SKILL_NAME_MAX_LENGTH))} placeholder="family-doctor" required /><small className="skill-character-count">{skillTextLength(name)}/{SKILL_NAME_MAX_LENGTH} characters</small></section><section><h2>Description</h2><label htmlFor="new-skill-description">Summarize the skill’s expertise and when Alphonse should use it.</label><textarea id="new-skill-description" value={description} onChange={(event) => setDescription(limitSkillText(event.target.value, SKILL_DESCRIPTION_MAX_LENGTH))} placeholder="Family health guidance, medical history, medications, and appointments. Use for health records or family medical questions." required rows={3} /><small className="skill-character-count">{skillTextLength(description)}/{SKILL_DESCRIPTION_MAX_LENGTH} characters</small></section><section><h2>Instructions</h2><label htmlFor="new-skill-instructions">Describe a practical workflow, relevant files, tools, and boundaries. Alphonse’s authoring limit is 12,000 characters.</label><textarea id="new-skill-instructions" className="skill-instructions-input" value={instructions} onChange={(event) => setInstructions(event.target.value)} maxLength={SKILL_INSTRUCTIONS_MAX_LENGTH} placeholder={SKILL_INSTRUCTIONS_TEMPLATE} required rows={18} /><small className="skill-character-count">{instructions.length}/{SKILL_INSTRUCTIONS_MAX_LENGTH} characters</small></section><div className="dialog-actions"><button type="submit" disabled={busy || !name.trim() || !description.trim() || !instructions.trim()}>Create skill</button></div></form></article> : selected ? <article className="skill-editor"><div className="skill-section-nav" role="tablist" aria-label="Skill sections">{skillTabs.map((tab, index) => <button type="button" role="tab" id={`skill-tab-${tab}`} key={tab} aria-selected={skillTab === tab} aria-controls={`skill-panel-${tab}`} tabIndex={skillTab === tab ? 0 : -1} onClick={() => setSkillTab(tab)} onKeyDown={(event) => { let next = index; if (event.key === "ArrowRight") next = (index + 1) % skillTabs.length; else if (event.key === "ArrowLeft") next = (index + skillTabs.length - 1) % skillTabs.length; else if (event.key === "Home") next = 0; else if (event.key === "End") next = skillTabs.length - 1; else return; event.preventDefault(); setSkillTab(skillTabs[next]); document.getElementById(`skill-tab-${skillTabs[next]}`)?.focus(); }}>{skillTabLabels[tab]}</button>)}</div><header><div><p className="eyebrow">Installed skill</p><div className="skill-title-row"><h1>{selected.title}</h1><button type="button" className="skill-open-folder" aria-label={`Open ${selected.title} folder in Finder`} title="Open skill folder in Finder" onClick={() => void openSkillFolder(selected)}><FolderOpen size={17} /></button></div><p>{selected.description}</p></div><button className="secondary" onClick={() => void exportSkill()}>Export package</button>{selected.editable && <button className="secondary" onClick={() => void uninstall()}>Uninstall</button>}</header><div role="tabpanel" id="skill-panel-appearance" aria-labelledby="skill-tab-appearance" hidden={skillTab !== "appearance"}><SkillAppearanceSettings user={user} skill={selected} onSaved={() => load(selected.id)} /></div><section role="tabpanel" id="skill-panel-details" aria-labelledby="skill-tab-details" hidden={skillTab !== "details"}><h2>Skill details</h2><label>Description<input disabled={!selected.editable} value={description} onChange={(event) => setDescription(limitSkillText(event.target.value, SKILL_DESCRIPTION_MAX_LENGTH))} /></label><button onClick={() => void saveDescription()} disabled={busy || !selected.editable}>Save details</button></section><section role="tabpanel" id="skill-panel-instructions" aria-labelledby="skill-tab-instructions" hidden={skillTab !== "instructions"}><h2>Instructions</h2><textarea aria-label="Skill instructions" disabled={!selected.editable} value={instructions} onChange={(event) => setInstructions(event.target.value)} rows={12} /><button onClick={() => void saveDefinition()} disabled={busy || !selected.editable}>Save definition</button></section><section role="tabpanel" id="skill-panel-package" aria-labelledby="skill-tab-package" hidden={skillTab !== "package"}><h2>Package status</h2>{selected.lifecycle.validation_error && <p role="alert">Package validation: {selected.lifecycle.validation_error}</p>}<p>{selected.lifecycle.kind === "bundled" ? "Bundled default" : (selected.lifecycle.override || selected.lifecycle.customized) ? "Household customization" : "Installed package"}{selected.lifecycle.bundled_update_available ? " · Bundled update available" : ""}</p><p>Source: {selected.lifecycle.source || selected.directory}</p><p>Revision: {selected.lifecycle.local_revision}</p>{selected.lifecycle.base_revision && <p>Base revision: {selected.lifecycle.base_revision}</p>}{selected.lifecycle.owner && <p>Owner: {selected.lifecycle.owner} · Household package</p>}{selected.lifecycle.recovery_directory && <button className="secondary" onClick={() => void showInFinder(selected.lifecycle.recovery_directory!).catch(cause => setNotice(String(cause)))}>Open recovery folder</button>}{!selected.lifecycle.provenance_known && <p>Legacy package: base revision is unknown. Updates require an explicit replacement choice.</p>}<p>Live data and account credentials remain in their separate stores. Recovery copies are retained outside the portable package.</p>{!selected.editable ? <button disabled={busy} onClick={() => void customize()}>Customize for household</button> : <><button disabled={busy} onClick={() => void installOrUpdate(true)}>Update package</button>{selected.lifecycle.customized && <button disabled={busy} className="secondary" onClick={() => { if (window.confirm("Accept upstream content and replace local edits? A recovery copy will be retained.")) void installOrUpdate(true, "accept-upstream"); }}>Accept upstream replacement…</button>}</>}<h3>Account and dependency availability</h3>{selected.bindings.length ? selected.bindings.map(binding => <p key={binding.name}>{binding.name}: {binding.status.replace(/^skill_binding_/, "").replaceAll("_", " ")}</p>) : <p>No account or data choices configured for this member. Check compatibility and package instructions for additional prerequisites; installation does not verify arbitrary script dependencies.</p>}</section><section role="tabpanel" id="skill-panel-files" aria-labelledby="skill-tab-files" hidden={skillTab !== "files"}><div className="skill-files-heading"><h2>Package files and metadata</h2><p>Edit supported frontmatter in SKILL.md. Use relative paths for nested resources. Binary assets are preserved and can be inspected in the package folder.</p>{selected.editable && <><button type="button" className="secondary" disabled={busy} onClick={() => void addFile()}>+ Import file</button><button type="button" className="secondary" disabled={busy} onClick={() => { if (!confirmFileDiscard()) return; ++fileReadSequence.current; setFilePath("references/new-file.md"); setFileContent(""); setFileBaseline(""); setFileBaselinePath(""); setFileEditable(true); }}>+ New text file</button></>}</div><div className="skill-file-browser"><SkillFileTree key={selected.id} files={selected.files} directories={selected.directories || []} selectedPath={filePath} onSelect={path => void selectFile(path)} /><div className="skill-file-editor"><input aria-label="File path" disabled={!selected.editable} value={filePath} onChange={(event) => setFilePath(event.target.value)} /><textarea aria-label="File contents" disabled={!selected.editable || !fileEditable} value={fileContent} onChange={(event) => setFileContent(event.target.value)} rows={12} /><div className="dialog-actions">{selected.editable && <button disabled={busy || !fileEditable} onClick={() => void saveFile()}>Save file</button>}{selected.editable && filePath !== "SKILL.md" && <button className="secondary" onClick={() => void deleteFile()}>Delete file</button>}</div></div></div></section></article> : <div className="projects-workspace-empty"><Sparkles size={36} /><h1>{detailLoading ? "Loading skill…" : "Choose a skill"}</h1><p>{detailLoading ? "Loading package details and files." : "Select a skill to inspect its instructions, metadata, resources and household customization."}</p></div>}
     {!showCreate && !selected && !detailLoading && <div className="skill-global-appearance"><SkillAppearanceSettings user={user} skill={null} onSaved={() => load()} /></div>}</section>
   </div>;

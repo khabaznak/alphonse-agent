@@ -1,0 +1,65 @@
+{
+  "case": "schedules",
+  "status": "ready",
+  "provider": "Codex CLI ChatGPT subscription",
+  "model": "gpt-6-luna",
+  "delivery": "fixture pickup and acknowledgement only",
+  "start_source_sha256": {
+    "alphonse/agent_v2/core/intelligence/simple_loop/owner_read_processor.py": "ae754fa525da4c2fb1a09fdd591028b0b7e2522d6ff489f5a686286d21172c95",
+    "alphonse/agent_v2/core/intelligence/simple_loop/owner_read_recovery.py": "e172ee8bd27881398fa3e0a2afa850185259578f87ef37d418ee294c8aa1540c",
+    "alphonse/agent_v2/core/intelligence/simple_loop/owner_schedules.py": "fdd856e7ab7d800581f08bd502ccad077d9d897a7e3a07e6c30dc0d5a158d025",
+    "alphonse/agent_v2/core/tools/registry/native/skill_catalog.py": "8bc18dcb37c36a55efeb8c4a14e112a7e6c5c2b394a38c4566346e2394959fd4",
+    "alphonse/agent_v2/core/intelligence/simple_loop/candidate_decision_policy.py": "faa6e4288219fcfb37bbf940f6f7f11c75d06aa10097b49dbe546ac225e28ab4",
+    "alphonse/agent_v2/daemon.py": "02d77675601dae08d4309dd0135203bf3578fc8a32569b84ad4d438530ccba99",
+    "alphonse/agent_v2/runtime.py": "3288c8c8161e1bf6d6d47e4dcc9a5836a0e13d8b22b86e22cafab56246cc5488"
+  },
+  "answer": "You have two reminders:\n- **Water basil** — active, scheduled for November 18, 2026 at 06:57 UTC.\n- **Call locksmith about fixture** — paused, originally scheduled for November 18, 2026 at 06:57 UTC.\n\nEarlier scheduled work is paused. New Desktop reminders appear only while the Desktop conversation is open.",
+  "checks": {
+    "native_tool_called": true,
+    "owner_active_named": true,
+    "owner_paused_named": true,
+    "truthful_schedule_notice": true,
+    "other_owner_not_visible": true,
+    "fixture_acknowledged": true
+  },
+  "oracle_pass": true,
+  "decisions": [
+    {
+      "kind": "tool",
+      "tool_id": "native.owner_schedules",
+      "arguments": {},
+      "text": null
+    },
+    {
+      "kind": "answer",
+      "tool_id": null,
+      "arguments": null,
+      "text": "You have two reminders:\n- **Water basil** — active, scheduled for November 18, 2026 at 06:57 UTC.\n- **Call locksmith about fixture** — paused, originally scheduled for November 18, 2026 at 06:57 UTC."
+    }
+  ],
+  "usage": [
+    {
+      "input_tokens": 16358,
+      "output_tokens": 42
+    },
+    {
+      "input_tokens": 16615,
+      "output_tokens": 85
+    }
+  ],
+  "provider_calls": 2,
+  "fixture_acknowledged": true,
+  "history_turn_count": 2,
+  "scheduler_started": false,
+  "elapsed_seconds": 9.707,
+  "end_source_sha256": {
+    "alphonse/agent_v2/core/intelligence/simple_loop/owner_read_processor.py": "ae754fa525da4c2fb1a09fdd591028b0b7e2522d6ff489f5a686286d21172c95",
+    "alphonse/agent_v2/core/intelligence/simple_loop/owner_read_recovery.py": "e172ee8bd27881398fa3e0a2afa850185259578f87ef37d418ee294c8aa1540c",
+    "alphonse/agent_v2/core/intelligence/simple_loop/owner_schedules.py": "fdd856e7ab7d800581f08bd502ccad077d9d897a7e3a07e6c30dc0d5a158d025",
+    "alphonse/agent_v2/core/tools/registry/native/skill_catalog.py": "8bc18dcb37c36a55efeb8c4a14e112a7e6c5c2b394a38c4566346e2394959fd4",
+    "alphonse/agent_v2/core/intelligence/simple_loop/candidate_decision_policy.py": "faa6e4288219fcfb37bbf940f6f7f11c75d06aa10097b49dbe546ac225e28ab4",
+    "alphonse/agent_v2/daemon.py": "02d77675601dae08d4309dd0135203bf3578fc8a32569b84ad4d438530ccba99",
+    "alphonse/agent_v2/runtime.py": "3288c8c8161e1bf6d6d47e4dcc9a5836a0e13d8b22b86e22cafab56246cc5488"
+  },
+  "source_changed_during_attempt": false
+}

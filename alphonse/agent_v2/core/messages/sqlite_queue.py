@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
+import hashlib
+import hmac
 import os
 import sqlite3
 import time
@@ -10,6 +13,7 @@ from threading import RLock
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from alphonse.agent_v2.core.core import CoreMessage
 from alphonse.agent_v2.core.messages.queue import MessageSelector
@@ -90,6 +94,258 @@ class SQLiteMessageQueue:
                 ),
             )
         return queued
+
+    def enqueue_trusted_local_owner(self, *, prompt: str, peer_uid: int,
+                                    reply_to_message_id: str | None = None) -> str:
+        """Atomically bind a local-peer ingress to its newly created queue row.
+
+        The caller must independently verify the peer UID. This record is not
+        a claim or authorization to execute; consumers must verify both later.
+        """
+        if not self.experimental_claim_fencing or self.db_path == ':memory:':
+            raise ValueError('owner_ingress_unavailable')
+        if type(peer_uid) is not int or peer_uid != os.getuid():
+            raise PermissionError('owner_ingress_peer_denied')
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise ValueError('prompt_required')
+        message_id = uuid4().hex
+        timestamp = _now_iso()
+        with self._connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            # Readiness is only a snapshot. Recheck under the same write lock
+            # as insertion so an incompatible in-binary legacy claim cannot
+            # appear between a UI preflight and this enqueue.
+            if _claim_mode_conflict(conn, fenced=True):
+                raise RuntimeError('owner_worker_claim_mode_conflict')
+            admin = conn.execute("""SELECT u.user_id FROM v2_users u JOIN v2_user_settings s
+                ON s.key='admin_user_id' AND s.value=u.user_id
+                WHERE u.role IN ('admin','owner') AND u.is_active=1""").fetchone()
+            if admin is None:
+                raise PermissionError('owner_ingress_admin_unavailable')
+            actor = str(admin['user_id'])
+            metadata_fields = {'intelligence_engine': 'single_loop_experimental',
+                'intelligence_schema_version': 1, 'routing_disposition': 'pdca_task'}
+            if reply_to_message_id is not None:
+                from alphonse.agent_v2.core.intelligence.simple_loop.owner_clarification import bind_owner_question
+                metadata_fields['owner_clarification'] = bind_owner_question(conn, actor, reply_to_message_id)
+            metadata = json.dumps(metadata_fields, sort_keys=True)
+            payload = [message_id, timestamp, prompt.strip(), actor, '', '', '', '', metadata]
+            digest = hashlib.sha256(json.dumps(payload, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
+            conn.execute("""CREATE TABLE IF NOT EXISTS v2_trusted_owner_ingress (
+                message_id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, peer_uid INTEGER NOT NULL,
+                payload_sha256 TEXT NOT NULL, created_at TEXT NOT NULL) STRICT""")
+            conn.execute("""INSERT INTO v2_inbound_messages
+                (message_id,sequence,timestamp,prompt,user_id,project_id,tag,correlation_id,memory_session_id,
+                 metadata_json,queued_at,status) VALUES (?,?,?,?,?,?,?,?,?,?,?,'pending')""",
+                (message_id, time.time_ns(), timestamp, prompt.strip(), actor, '', '', '', '', metadata, timestamp))
+            conn.execute('INSERT INTO v2_trusted_owner_ingress VALUES (?,?,?,?,?)',
+                         (message_id, actor, peer_uid, digest, timestamp))
+        return message_id
+
+    @contextmanager
+    def trusted_local_owner_claim_transaction(self, receipt: Any, task: Any, *, clock=None, _finalize=None):
+        """Run same-database writes under a verified local-owner claim.
+
+        Both the active admin and immutable ingress payload are verified on the
+        queue connection before and after the caller's work, within the same
+        immediate claim-fenced transaction. The caller must use this connection,
+        not commit or roll back, and perform no external I/O inside the block.
+        This does not authorize particular writes, external calls or delivery,
+        fence other databases, or enable the experimental daemon path.
+        """
+        from alphonse.agent_v2.core.messages.claim_fence import (
+            ClaimFenceUnavailable, ClaimReceipt, fenced_claim_transaction,
+        )
+        if (not self.experimental_claim_fencing or not isinstance(receipt, ClaimReceipt)
+                or getattr(task, 'task_id', None) != receipt.message_id
+                or getattr(task, 'message_id', None) != receipt.message_id
+                or getattr(task, 'user', None) != receipt.user_id
+                or getattr(task, 'intelligence_engine', None) != 'single_loop_experimental'
+                or type(getattr(task, 'intelligence_schema_version', None)) is not int
+                or task.intelligence_schema_version != 1):
+            raise ClaimFenceUnavailable('owner_claim_authorization_unavailable')
+
+        def check(conn):
+            row = conn.execute("""SELECT q.message_id,q.timestamp,q.prompt,q.user_id,q.project_id,q.tag,
+                q.correlation_id,q.memory_session_id,q.metadata_json,o.owner_id,o.peer_uid,o.payload_sha256
+                FROM v2_inbound_messages q JOIN v2_trusted_owner_ingress o ON o.message_id=q.message_id
+                JOIN v2_user_settings s ON s.key='admin_user_id' AND s.value=q.user_id
+                JOIN v2_users u ON u.user_id=q.user_id AND u.role IN ('admin','owner') AND u.is_active=1
+                WHERE q.message_id=?""", (receipt.message_id,)).fetchone()
+            if row is None or row['owner_id'] != receipt.user_id or row['peer_uid'] != os.getuid():
+                raise ClaimFenceUnavailable('owner_claim_authorization_unavailable')
+            payload = [row[key] for key in ('message_id', 'timestamp', 'prompt', 'user_id', 'project_id',
+                       'tag', 'correlation_id', 'memory_session_id', 'metadata_json')]
+            digest = hashlib.sha256(json.dumps(payload, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
+            if (not isinstance(row['payload_sha256'], str) or not hmac.compare_digest(row['payload_sha256'], digest)
+                    or getattr(task, 'goal', None) != row['prompt']
+                    or any(getattr(task, key, None) != row[key]
+                           for key in ('project_id', 'tag', 'correlation_id', 'memory_session_id'))
+                    or json.dumps(getattr(task, 'metadata', None), sort_keys=True) != row['metadata_json']):
+                raise ClaimFenceUnavailable('owner_claim_authorization_unavailable')
+
+        with self._connect() as conn:
+            with fenced_claim_transaction(conn, receipt, clock=clock or (lambda: datetime.now(timezone.utc)),
+                                          _finalize=_finalize):
+                check(conn)
+                yield conn
+                check(conn)
+
+    def verify_trusted_local_owner_claim(self, receipt: Any, task: Any, *, clock=None) -> bool:
+        """Check origin and the live claim together at a point in time.
+
+        Subsequent work needs its own claim-fenced transaction. External calls,
+        publication and delivery are not protected by this check.
+        """
+        try:
+            with self.trusted_local_owner_claim_transaction(receipt, task, clock=clock):
+                return True
+        except Exception:
+            return False
+
+    def abandon_trusted_owner_message(self, message_id: str, *, clock=None) -> dict[str, str]:
+        """Explicitly abandon an unstarted or expired read-only owner request.
+
+        The caller authenticates the local owner peer. This never retries an
+        action and never asserts an uncertain pickup was or was not received.
+        A live processing lease, legacy handoff, unknown action or changed
+        origin is refused. Historical checkpoint data is retained.
+        """
+        import re
+        if (not self.experimental_claim_fencing or not isinstance(message_id, str)
+                or re.fullmatch(r'[0-9a-f]{32}', message_id) is None):
+            raise ValueError('owner_abandon_unavailable')
+        now_fn = clock or (lambda: datetime.now(timezone.utc))
+        def now_utc():
+            value = now_fn()
+            if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
+                raise ValueError('owner_abandon_clock_invalid')
+            return value.astimezone(timezone.utc)
+        with self._connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            conn.execute("""CREATE TABLE IF NOT EXISTS v2_owner_abandoned (
+                message_id TEXT PRIMARY KEY, owner_id TEXT NOT NULL,
+                delivery_status TEXT NOT NULL, recorded_at TEXT NOT NULL) STRICT""")
+            prior = conn.execute("""SELECT a.delivery_status FROM v2_owner_abandoned a
+                JOIN v2_trusted_owner_ingress o ON o.message_id=a.message_id AND o.owner_id=a.owner_id
+                JOIN v2_user_settings s ON s.key='admin_user_id' AND s.value=a.owner_id
+                JOIN v2_users u ON u.user_id=a.owner_id AND u.role IN ('admin','owner') AND u.is_active=1
+                WHERE a.message_id=? AND o.peer_uid=?""", (message_id, os.getuid())).fetchone()
+            if prior is not None:
+                return {'status': 'abandoned', 'delivery_status': prior['delivery_status']}
+            row = conn.execute("""SELECT q.*,o.owner_id,o.peer_uid,o.payload_sha256
+                FROM v2_inbound_messages q JOIN v2_trusted_owner_ingress o ON o.message_id=q.message_id
+                JOIN v2_user_settings s ON s.key='admin_user_id' AND s.value=q.user_id
+                JOIN v2_users u ON u.user_id=q.user_id AND u.role IN ('admin','owner') AND u.is_active=1
+                WHERE q.message_id=?""", (message_id,)).fetchone()
+            if row is None or row['owner_id'] != row['user_id'] or row['peer_uid'] != os.getuid():
+                raise ValueError('owner_abandon_unavailable')
+            has_outbox = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_outbox'").fetchone()
+            if not has_outbox or conn.execute('SELECT 1 FROM v2_outbox WHERE task_id=? LIMIT 1', (message_id,)).fetchone():
+                raise ValueError('owner_abandon_unavailable')
+            payload = [row[key] for key in ('message_id', 'timestamp', 'prompt', 'user_id', 'project_id',
+                       'tag', 'correlation_id', 'memory_session_id', 'metadata_json')]
+            digest = hashlib.sha256(json.dumps(payload, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
+            expected_metadata = {'intelligence_engine': 'single_loop_experimental',
+                                 'intelligence_schema_version': 1, 'routing_disposition': 'pdca_task'}
+            if (not isinstance(row['payload_sha256'], str) or not hmac.compare_digest(row['payload_sha256'], digest)
+                    or row['metadata_json'] != json.dumps(expected_metadata, sort_keys=True)
+                    or row['status'] not in {'pending', 'processing'}
+                    or conn.execute('SELECT 1 FROM v2_scheduled_handoffs WHERE message_id=?', (message_id,)).fetchone()):
+                raise ValueError('owner_abandon_unavailable')
+            started = now_utc()
+            if row['status'] == 'processing':
+                if (not isinstance(row['claim_generation'], str)
+                        or re.fullmatch(r'[0-9a-f]{32}', row['claim_generation']) is None
+                        or not row['lease_owner'] or not row['processing_at'] or row['attempt_count'] < 1):
+                    raise ValueError('owner_abandon_unavailable')
+                try:
+                    expiry = datetime.fromisoformat(row['lease_expires_at'])
+                    if expiry.tzinfo is None or expiry.utcoffset() is None or expiry.astimezone(timezone.utc) > started:
+                        raise ValueError('owner_abandon_live_claim')
+                except (TypeError, ValueError):
+                    raise ValueError('owner_abandon_live_claim') from None
+            checkpoint = conn.execute('SELECT * FROM v2_task_checkpoints WHERE task_id=?', (message_id,)).fetchone()
+            if row['status'] == 'pending' and (row['claim_generation'] or row['lease_owner']
+                    or row['lease_expires_at'] or row['processing_at'] or row['attempt_count'] != 0
+                    or checkpoint is not None):
+                raise ValueError('owner_abandon_unavailable')
+            delivery_status = 'no_pickup_recorded'
+            if checkpoint is not None:
+                try:
+                    from alphonse.agent_v2.core.messages.claim_fence import ClaimReceipt
+                    from alphonse.agent_v2.core.messages.experimental_claim_checkpoint import _claim_digest
+                    from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_candidate import CandidateState
+                    from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_checkpoint import STATE_KEY, ExperimentalCheckpointStore
+                    from alphonse.agent_v2.core.intelligence.simple_loop.task_budget import TaskBudget
+                    raw = ExperimentalCheckpointStore._validate_identity(checkpoint, message_id, row['user_id'], checkpoint['version'])
+                    metadata = raw['metadata']
+                    if (checkpoint['owner_id'] != row['user_id'] or checkpoint['status'] != 'running'
+                            or raw['task_id'] != message_id
+                            or raw['message_id'] != message_id or raw['user'] != row['user_id']
+                            or raw['intelligence_engine'] != 'single_loop_experimental'
+                            or type(raw.get('intelligence_schema_version')) is not int
+                            or raw['intelligence_schema_version'] != 1 or not isinstance(metadata, dict)):
+                        raise ValueError
+                    allowed_keys = set(expected_metadata) | {STATE_KEY, 'owner_read_observations',
+                        'owner_read_pending_action', 'owner_read_pending_decision',
+                        'owner_read_selected_draft', 'owner_read_desktop_pickup_started',
+                        'owner_read_ready_handoff'}
+                    if (set(metadata) - allowed_keys or type(metadata.get('intelligence_schema_version')) is not int
+                            or any(metadata.get(key) != value for key, value in expected_metadata.items())):
+                        raise ValueError
+                    receipt = ClaimReceipt(message_id, row['user_id'], row['lease_owner'], row['claim_generation'])
+                    claim_digest = _claim_digest(receipt)
+                    envelope = metadata[STATE_KEY]
+                    if (not isinstance(envelope, dict) or set(envelope) != {'schema_version', 'state', 'budget'}
+                            or type(envelope['schema_version']) is not int or envelope['schema_version'] != 1):
+                        raise ValueError
+                    state = CandidateState.restore(envelope['state'])
+                    budget = TaskBudget.from_dict(envelope['budget'])
+                    inflight = budget.usage()['in_flight']
+                    if (state.task_id != message_id or state.actor != row['user_id']
+                            or (state.inflight and inflight != [state.inflight])
+                            or (not state.inflight and inflight)):
+                        raise ValueError
+                    action = metadata.get('owner_read_pending_action')
+                    if action is not None and (not isinstance(action, dict) or action.get('kind') not in {'model', 'tool'}
+                            or (action.get('kind') == 'tool' and action.get('tool_id') not in {
+                                'native.search_memory', 'native.read_memory_source', 'native.owner_clock'})):
+                        raise ValueError
+                    if bool(action) != bool(state.inflight) or (action and action.get('reservation_id') != state.inflight):
+                        raise ValueError
+                    if action:
+                        reserved = budget.to_dict()['reservations'].get(state.inflight)
+                        if (action.get('claim_digest') != claim_digest or not isinstance(reserved, dict)
+                                or reserved.get('kind') != action.get('kind') or reserved.get('status') != 'reserved'):
+                            raise ValueError
+                    for key in ('owner_read_pending_decision', 'owner_read_selected_draft', 'owner_read_desktop_pickup_started', 'owner_read_ready_handoff'):
+                        marker = metadata.get(key)
+                        if marker is not None and (not isinstance(marker, dict) or marker.get('claim_digest') != claim_digest):
+                            raise ValueError
+                    pickup = metadata.get('owner_read_desktop_pickup_started')
+                    if pickup is not None:
+                        if not isinstance(pickup, dict) or pickup.get('status') != 'started_unconfirmed':
+                            raise ValueError
+                        delivery_status = 'unconfirmed'
+                    metadata['owner_read_abandoned'] = {'status': 'abandoned', 'delivery_status': delivery_status}
+                    updated = conn.execute('UPDATE v2_task_checkpoints SET task_state_json=?,version=version+1 WHERE task_id=? AND version=?',
+                        (json.dumps(raw, ensure_ascii=False, sort_keys=True), message_id, checkpoint['version']))
+                    if updated.rowcount != 1:
+                        raise ValueError
+                except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+                    raise ValueError('owner_abandon_unavailable') from None
+            ended = now_utc()
+            if ended < started:
+                raise ValueError('owner_abandon_clock_invalid')
+            deleted = conn.execute("""DELETE FROM v2_inbound_messages WHERE message_id=? AND user_id=?
+                AND status=? AND lease_owner=? AND claim_generation=? AND lease_expires_at=?""",
+                (message_id, row['user_id'], row['status'], row['lease_owner'], row['claim_generation'], row['lease_expires_at']))
+            if deleted.rowcount != 1:
+                raise ValueError('owner_abandon_unavailable')
+            conn.execute('INSERT INTO v2_owner_abandoned VALUES (?,?,?,?)',
+                         (message_id, row['user_id'], delivery_status, ended.isoformat()))
+            return {'status': 'abandoned', 'delivery_status': delivery_status}
 
     def peek(self, selector: MessageSelector | None = None) -> QueuedMessage | None:
         with self._connect() as conn:
@@ -409,114 +665,45 @@ class SQLiteMessageQueue:
             return cursor.rowcount == 1
 
     def ack_fenced(self, receipt: Any, *, outcome: str = "completed", clock: Any = None) -> bool:
-        """Experimental same-database ack; not yet wired to the daemon."""
-        from .claim_fence import ClaimReceipt, ClaimSuperseded, ClaimFenceUnavailable, _read_claim, _time
+        """Refuse acknowledgement until terminal effects are durably fenced.
+
+        A current receipt proves queue ownership only. It does not prove that
+        the actor-bound task reached the requested terminal state, that its
+        effects were reconciled, or that the response was delivered. Preserve
+        the claim for a future receipt-bound disposition instead of deleting it.
+        """
         if outcome not in {"completed", "cancelled", "processing"}:
             raise ValueError("invalid_queue_outcome")
-        if not self.experimental_claim_fencing or not isinstance(receipt, ClaimReceipt):
-            return False
-        clock = clock or _now
-        try:
-            with self._connect() as conn:
-                conn.execute("BEGIN IMMEDIATE")
-                start = _time(clock())
-                expiry = _read_claim(conn, receipt, start)
-                holds = _exclude_supersession_holds(conn)
-                cursor = conn.execute(f"""DELETE FROM v2_inbound_messages WHERE message_id=? AND user_id=?
-                    AND status='processing' AND lease_owner=? AND claim_generation=? {holds}""",
-                    (receipt.message_id, receipt.user_id, receipt.lease_owner, receipt.claim_generation))
-                if cursor.rowcount:
-                    conn.execute("DELETE FROM v2_scheduled_handoffs WHERE message_id=?", (receipt.message_id,))
-                    conn.execute("UPDATE v2_inbound_receipts SET status=?,updated_at=? WHERE message_id=?",
-                                 (outcome, _now_iso(), receipt.message_id))
-                    end = _time(clock())
-                    if end < start or end >= expiry:
-                        raise ClaimSuperseded("claim_expired_or_clock_reversed")
-                return cursor.rowcount == 1
-        except (ClaimSuperseded, ClaimFenceUnavailable):
-            return False
+        return False
 
     def release_scheduled_handoff_fenced(self, receipt: Any, *, clock: Any = None) -> bool:
-        """Experimental release of a staged handoff; staging is not yet wired."""
-        from .claim_fence import ClaimReceipt, ClaimSuperseded, ClaimFenceUnavailable, _read_claim, _time
-        if not self.experimental_claim_fencing or not isinstance(receipt, ClaimReceipt):
-            return False
-        clock = clock or _now
-        try:
-            with self._connect() as conn:
-                conn.execute("BEGIN IMMEDIATE")
-                start = _time(clock())
-                expiry = _read_claim(conn, receipt, start)
-                handoff = conn.execute("SELECT wait_outbox_id FROM v2_scheduled_handoffs WHERE message_id=? AND owner_id=?",
-                                       (receipt.message_id, receipt.user_id)).fetchone()
-                if handoff is None:
-                    return False
-                wait = bool(handoff["wait_outbox_id"])
-                retry_at = (_now() + timedelta(seconds=5)).isoformat() if wait else ""
-                holds = _exclude_supersession_holds(conn)
-                cursor = conn.execute(f"""UPDATE v2_inbound_messages SET status=?, processing_at='', lease_owner='',
-                    lease_expires_at='', next_attempt_at=?, attempt_count=MAX(attempt_count-1, 0),
-                    sequence=(SELECT MAX(sequence)+1 FROM v2_inbound_messages)
-                    WHERE message_id=? AND user_id=? AND status='processing' AND lease_owner=? AND claim_generation=? {holds}""",
-                    ("retry_wait" if wait else "pending", retry_at, receipt.message_id, receipt.user_id,
-                     receipt.lease_owner, receipt.claim_generation))
-                if cursor.rowcount:
-                    end = _time(clock())
-                    if end < start or end >= expiry:
-                        raise ClaimSuperseded("claim_expired_or_clock_reversed")
-                return cursor.rowcount == 1
-        except (ClaimSuperseded, ClaimFenceUnavailable):
-            return False
+        """Refuse release until receipt-bound handoff staging is implemented.
+
+        The legacy handoff row contains neither the claim generation nor a
+        verified checkpoint/effect boundary. Its presence cannot prove that a
+        continuation is safe, even while the presented claim is current.
+        Preserve both claim and row for explicit reconciliation.
+        """
+        return False
 
     def renew_claim_fenced(self, receipt: Any, *, lease_seconds: int,
                            is_cancelled: Any, clock: Any = None) -> bool:
-        """Renew one exact live experimental lease; no heartbeat is started.
+        """Refuse renewal until checkpoint and durable clock fencing exist.
 
-        The caller must supply a nonblocking cancellation check bound to the
-        active task and stop renewing before relinquishing ownership. Its
-        correctness and the scheduler lifecycle are not established here.
+        A queue receipt and caller-supplied cancellation callback alone cannot
+        establish that the task is still current. Nor can a pair of wall-clock
+        samples detect a regression across separate renewals or process restart.
+        Leave the claim unchanged for explicit recovery instead of reviving a
+        stale worker. This does not affect legacy queue behavior.
         """
-        from .claim_fence import ClaimReceipt, ClaimSuperseded, ClaimFenceUnavailable, _read_claim, _time
+        from .claim_fence import ClaimReceipt
         if not self.experimental_claim_fencing or not isinstance(receipt, ClaimReceipt):
             return False
         if type(lease_seconds) is not int or not 1 <= lease_seconds <= 3600 or not callable(is_cancelled):
             raise ValueError("claim_renewal_arguments_invalid")
-        clock = clock or _now
-        if not callable(clock):
+        if clock is not None and not callable(clock):
             raise ValueError("claim_renewal_arguments_invalid")
-
-        def ensure_not_cancelled() -> None:
-            try:
-                allowed = is_cancelled() is False
-            except Exception:
-                allowed = False
-            if not allowed:
-                raise ClaimSuperseded("claim_cancelled_or_unavailable")
-
-        try:
-            ensure_not_cancelled()
-            with self._connect() as conn:
-                conn.execute("BEGIN IMMEDIATE")
-                ensure_not_cancelled()
-                start = _time(clock())
-                expiry = _read_claim(conn, receipt, start)
-                renewed_expiry = max(expiry, start + timedelta(seconds=lease_seconds))
-                holds = _exclude_supersession_holds(conn)
-                cursor = conn.execute(f"""UPDATE v2_inbound_messages SET lease_expires_at=?
-                    WHERE message_id=? AND user_id=? AND status='processing'
-                    AND lease_owner=? AND claim_generation=? {holds}""",
-                    (renewed_expiry.isoformat(), receipt.message_id, receipt.user_id,
-                     receipt.lease_owner, receipt.claim_generation))
-                if cursor.rowcount != 1:
-                    return False
-                ensure_not_cancelled()
-                end = _time(clock())
-                if end < start or end >= expiry:
-                    raise ClaimSuperseded("claim_expired_or_clock_reversed")
-                _read_claim(conn, receipt, end)
-                return True
-        except (ClaimSuperseded, ClaimFenceUnavailable):
-            return False
+        return False
 
     def finish_event(self, message_id: str, outcome: str) -> None:
         if outcome not in {"completed", "cancelled", "failed"}:
@@ -604,6 +791,12 @@ class SQLiteMessageQueue:
         return self.retry(message_id, next_attempt_at=_now())
 
     def reclaim_expired(self, *, now: datetime | None = None, exclude_owner: str = "") -> int:
+        # Expiry proves lost ownership, not that an in-flight effect did not
+        # happen. Until receipt-bound reconciliation exists, requeueing a
+        # fenced claim can silently repeat a mutation or delivery. Keep it in
+        # processing for explicit recovery. Legacy queue behavior is unchanged.
+        if self.experimental_claim_fencing:
+            return 0
         timestamp = (now or _now()).isoformat()
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -664,7 +857,7 @@ class SQLiteMessageQueue:
         return str(row["status"] or "") if row is not None else ""
 
     def turns_ahead(self, message_id: str) -> int:
-        """Count independently runnable PDCA tasks ahead of a queued message."""
+        """Count independently runnable tasks ahead of a queued message."""
         with self._connect() as conn:
             target = conn.execute(
                 "SELECT sequence FROM v2_inbound_messages WHERE message_id=?",

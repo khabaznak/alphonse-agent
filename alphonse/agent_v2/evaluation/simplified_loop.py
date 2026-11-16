@@ -245,117 +245,25 @@ def compare(corpus_path: str | Path, *, baseline: Adapter | None, candidate: Ada
             'corpus_sha256': digest, 'split': corpus['split'], 'cases': rows}
 
 
-class ExistingV3ReplayAdapter:
-    """Real V3 processor with the existing scripted offline replay adapter.
-
-    Only explicitly mapped scenarios are supported. Its provider and tools are
-    deterministic stand-ins, and its Jev calls are not fully instrumented.
-    This is a runtime regression, not a live-model or Gmail integration test.
-    """
-    offline = True
-    revision = 'working-tree:hierarchical-v3:deterministic-adapters'
-    _supported = {'solar-project-completion'}
-
-    def __call__(self, case: dict[str, Any], fixture_root: Path,
-                 emit: Callable[[dict[str, Any]], None]) -> Run:
-        from .deterministic_adapters import _DeterministicProvider, _ReplayJev, _RunState, _registry, _scenario
-        from alphonse.agent_v2.core.core import CoreLoopContext
-        from alphonse.agent_v2.core.inference import InferencePurpose, InferenceResult, InferenceRouter, ModelProfile
-        from alphonse.agent_v2.core.intelligence.task_state import TaskState
-        from alphonse.agent_v2.core.intelligence.v3 import HierarchicalCAPDProcessor
-        from alphonse.agent_v2.core.messages import InMemoryMessageQueue
-        scenario_id = case.get('fixture', {}).get('v3_replay_case')
-        if scenario_id not in self._supported:
-            raise AdapterUnavailable('no_frozen_v3_adapter_for_case')
-        project = fixture_root / 'project'
-        project.mkdir()
-        for path in list(fixture_root.iterdir()):
-            if path != project:
-                path.rename(project / path.name)
-        scenario = _scenario(scenario_id)
-        state = _RunState(scenario=scenario, root=project, engine='hierarchical_v3')
-
-        class Provider(_DeterministicProvider):
-            def generate_json(self, request):
-                if request.purpose == InferencePurpose.TASK_UNDERSTANDING:
-                    return InferenceResult(json_value={
-                        'requested_outcome': case['goal'], 'supplied_parameters': [],
-                        'constraints': [], 'unresolved_dependencies': [],
-                        'superseded_constraints': [],
-                    })
-                return super().generate_json(request)
-
-        class Judge(_ReplayJev):
-            # Track the mock calls, with no claim of real provider usage.
-            def evaluate(self, **kwargs):
-                emit({'kind': 'jev', 'purpose': 'check'})
-                return super().evaluate(**kwargs)
-            def curate_request_tools(self, **kwargs):
-                emit({'kind': 'jev', 'purpose': 'tool_relevance'})
-                return super().curate_request_tools(**kwargs)
-            def select_plan_tools(self, **kwargs):
-                emit({'kind': 'jev', 'purpose': 'legacy_tool_relevance'})
-                return super().select_plan_tools(**kwargs)
-            def triage_plan_messages(self, **kwargs):
-                emit({'kind': 'jev', 'purpose': 'message_triage'})
-                return super().triage_plan_messages(**kwargs)
-            def judge_act(self, **kwargs):
-                emit({'kind': 'jev', 'purpose': 'act'})
-                return super().judge_act(**kwargs)
-            def evaluate_tactical_progress(self, **kwargs):
-                emit({'kind': 'jev', 'purpose': 'tactical_progress'})
-                return super().evaluate_tactical_progress(**kwargs)
-
-        def telemetry(event):
-            if event.get('event_type') == 'inference':
-                # The stand-in computes estimates, not real provider usage.
-                emit({'kind': 'system_two', 'estimated_usage': {
-                    'input_tokens': event.get('input_tokens_estimate'),
-                    'output_tokens': event.get('output_tokens_estimate')}})
-        router = InferenceRouter(provider=Provider(state),
-            default_profile=ModelProfile(provider='deterministic', model='replay-v1', profile_id='offline-replay'),
-            telemetry_sink=telemetry)
-        context = CoreLoopContext(messages=InMemoryMessageQueue(), tools=_registry(state), inference=router,
-            system_one=Judge({a.tool_id for a in scenario.actions if not a.read_only}), telemetry_sink=telemetry)
-        task = TaskState(task_id='fixture-v3', message_id='fixture-message', user='evaluation-user',
-            project_id='fixture-project', goal=case['goal'], intelligence_engine='hierarchical_v3',
-            intelligence_schema_version=3)
-        outcome = HierarchicalCAPDProcessor().process(task, context)
-        final = TaskState.from_dict(outcome.snapshot.metadata.get('task_state') or task.to_dict())
-        for path in list(project.iterdir()):
-            path.rename(fixture_root / path.name)
-        project.rmdir()
-        return Run(status=final.status, response=str((final.outcome or {}).get('reason') or final.status),
-                   error=str((final.outcome or {}).get('reason') or 'task failed') if final.status in {'failed', 'error'} else None,
-                   measured_kinds=('system_two', 'jev'))
-
-
 def main(argv: list[str] | None = None) -> int:
     import argparse
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('corpus', type=Path)
     parser.add_argument('output', type=Path, help='new JSON receipt; never overwritten')
-    adapters = parser.add_mutually_exclusive_group()
-    adapters.add_argument('--baseline-v3', action='store_true', help='run supported current-V3 scripted cases')
-    adapters.add_argument('--paired-read-only', action='store_true',
-                          help='run the V3 and candidate scripted read-only adapters')
-    adapters.add_argument('--baseline-v3-seeded-resume', action='store_true',
-                          help='run the limited V3 seeded-checkpoint fixture only')
+    parser.add_argument('--candidate-read-only', action='store_true',
+                        help='run the scripted simple-loop read-only adapter')
     args = parser.parse_args(argv)
-    baseline, candidate = (ExistingV3ReplayAdapter() if args.baseline_v3 else None), None
-    if args.paired_read_only:
-        from .candidate_comparison import SingleLoopFixtureAdapter, V3ReadFixtureAdapter
-        baseline, candidate = V3ReadFixtureAdapter(), SingleLoopFixtureAdapter()
-    if args.baseline_v3_seeded_resume:
-        from .seeded_v3_resume import V3SeededResumeAdapter
-        baseline = V3SeededResumeAdapter()
+    candidate = None
+    if args.candidate_read_only:
+        from .candidate_comparison import SingleLoopFixtureAdapter
+        candidate = SingleLoopFixtureAdapter()
+    baseline = None
     result = compare(args.corpus, baseline=baseline, candidate=candidate)
     with args.output.open('x', encoding='utf-8') as stream:
         json.dump(result, stream, indent=2, ensure_ascii=False)
         stream.write('\n')
     # An unavailable run is never a qualified comparison.
-    return int(any(row['baseline']['passed'] is not True or row['candidate']['passed'] is not True
-                   for row in result['cases']))
+    return int(any(row['candidate']['passed'] is not True for row in result['cases']))
 
 
 if __name__ == '__main__':

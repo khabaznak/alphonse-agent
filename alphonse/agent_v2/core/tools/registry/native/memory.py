@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from typing import Any
 
 from alphonse.agent_v2.core.memory.contracts import ContextItem, SourceReference, AccessScope, RecallResult, conversation_item
@@ -14,6 +15,242 @@ from alphonse.agent_v2.core.tools.registry import ToolDefinition
 SEARCH_MEMORY_TOOL_ID = "native.search_memory"
 SEARCH_MEMORY_TOOL_NAME = "search_memory"
 READ_MEMORY_SOURCE_TOOL_ID = "native.read_memory_source"
+OWNER_CONVERSATION_MAX_CHARS = 36000
+
+
+def complete_conversation_search(actor: str, tool_id: str, arguments: dict[str, Any], payload: dict[str, Any], *,
+                                 allow_excerpt_truncation: bool = False,
+                                 allow_search_overflow: bool = False,
+                                 allow_search_pages: bool = False) -> bool:
+    """Recognize an owner search page under the caller's coverage policy.
+
+    The native tool must have run under the authenticated actor. This checks
+    the response envelope only; it does not fence changes or establish that
+    historical search results are current, exhaustive in meaning, or authorized
+    for later publication. The opt-in overflow flag is only for a host that
+    withholds incomplete result content and requests a narrower search.
+    """
+    query = arguments.get('query')
+    if (not isinstance(actor, str) or not actor.strip() or tool_id != SEARCH_MEMORY_TOOL_ID
+            or arguments.get('source_types') != ['conversation']
+            or not isinstance(query, str) or not query.strip()
+            or type(arguments.get('offset', 0)) is not int or arguments.get('offset', 0) < 0
+            or (arguments.get('offset', 0) != 0 and not allow_search_pages)
+            or type(payload.get('schema_version')) is not int or payload.get('schema_version') != 2
+            or payload.get('query') != query.strip() or payload.get('status') not in ('found', 'empty')
+            or payload.get('coverage') != {'conversation': 'complete'} or payload.get('backend') != 'sqlite_fts5'
+            or type(payload.get('truncated')) is not bool
+            or (payload['truncated'] and not allow_excerpt_truncation)):
+        return False
+    results = payload.get('results')
+    if (not isinstance(results, list) or type(payload.get('total_matches')) is not int
+            or (payload['status'] == 'found') != bool(results)):
+        return False
+    offset = arguments.get('offset', 0)
+    if allow_search_pages:
+        limit = arguments.get('limit', 8)
+        if (type(limit) is not int or not 1 <= limit <= 30
+                or payload.get('offset') != offset or not isinstance(payload.get('snapshot'), str)
+                or not payload['snapshot'] or offset > payload['total_matches']
+                or len(results) != min(limit, payload['total_matches'] - offset)
+                or any(type(item.get('rank')) is not int or item['rank'] != offset + i + 1
+                       for i, item in enumerate(results) if isinstance(item, dict))):
+            return False
+    next_offset = payload.get('next_offset')
+    if next_offset is None:
+        if payload['total_matches'] != offset + len(results):
+            return False
+    elif (not (allow_search_overflow or allow_search_pages) or type(next_offset) is not int
+          or next_offset != offset + len(results) or next_offset <= offset
+          or payload['total_matches'] <= next_offset or payload['truncated'] is not True):
+        return False
+    for item in results:
+        if not isinstance(item, dict):
+            return False
+        source_id = item.get('source_id')
+        source = item.get('source')
+        access = source.get('access') if isinstance(source, dict) else None
+        if (not isinstance(source_id, str) or not source_id.startswith('conversation:')
+                or item.get('source_type') != 'conversation' or not isinstance(source, dict)
+                or source.get('source_id') != source_id or source.get('kind') != 'conversation'
+                or not isinstance(access, dict) or access.get('owner_user_id') != actor
+                or type(item.get('truncated')) is not bool
+                or (item['truncated'] and not allow_excerpt_truncation)):
+            return False
+    # A complete result page can still contain deliberately shortened source
+    # excerpts. Never confuse those with a missing/paginated result page.
+    return payload['truncated'] == (next_offset is not None or any(item['truncated'] for item in results))
+
+
+def complete_conversation_read(actor: str, tool_id: str, arguments: dict[str, Any], payload: dict[str, Any], *,
+                               allow_chunks: bool = False) -> bool:
+    """Recognize a complete direct-owner conversation read, not current authority.
+
+    Invoke the native tool under the authenticated actor first. This checks the
+    returned envelope only; it cannot fence revocation, publication or prove
+    that historical text is current or supports a particular answer.
+    """
+    source_id = arguments.get('source_id')
+    if (not isinstance(actor, str) or not actor.strip() or tool_id != READ_MEMORY_SOURCE_TOOL_ID
+            or not isinstance(source_id, str) or not source_id.startswith('conversation:')
+            or not source_id.removeprefix('conversation:').strip()
+            or type(arguments.get('offset', 0)) is not int or arguments.get('offset', 0) < 0
+            or (arguments.get('offset', 0) != 0 and not allow_chunks)
+            or type(payload.get('schema_version')) is not int or payload.get('schema_version') != 2
+            or payload.get('status') != 'found' or type(payload.get('truncated')) is not bool
+            or payload.get('historical_only') is not True):
+        return False
+    items = payload.get('items')
+    if not isinstance(items, list) or len(items) != 1 or not isinstance(items[0], dict):
+        return False
+    item = items[0]
+    source = item.get('source')
+    access = source.get('access') if isinstance(source, dict) else None
+    content = item.get('content')
+    offset = arguments.get('offset', 0)
+    if not (item.get('source_id') == source_id and isinstance(source, dict)
+        and source.get('source_id') == source_id and source.get('kind') == 'conversation'
+        and isinstance(access, dict) and access.get('owner_user_id') == actor
+        and isinstance(content, str) and type(item.get('start_char')) is int and item['start_char'] == offset
+        and type(item.get('end_char')) is int and item['end_char'] == offset + len(content)
+        and type(item.get('total_chars')) is int and 0 <= offset <= item['end_char'] <= item['total_chars']):
+        return False
+    total, end = item['total_chars'], item['end_char']
+    # A partial page is useful only as a bounded, contiguous sequence. It is
+    # not complete evidence on its own, and an empty intermediate page cannot
+    # advance a sequence.
+    if (not allow_chunks and (offset != 0 or end != total)
+            or allow_chunks and (total > OWNER_CONVERSATION_MAX_CHARS or (offset < total and end == offset))
+            or payload.get('next_offset') != (end if end < total else None)
+            or payload['truncated'] != (offset > 0 or end < total)):
+        return False
+    # A read may also return adjacent messages. The anchor's owner does not
+    # authorize promoting arbitrary neighbor text into the candidate's evidence.
+    neighbors = payload.get('neighbors')
+    count = arguments.get('neighbors', 2)
+    if (type(count) is not int or not 0 <= count <= 5 or not isinstance(neighbors, list)
+            or len(neighbors) > 2 * count or payload.get('supporting_sources') != []):
+        return False
+    seen = {source_id}
+    for neighbor in neighbors:
+        if not isinstance(neighbor, dict):
+            return False
+        neighbor_source = neighbor.get('source')
+        neighbor_access = neighbor_source.get('access') if isinstance(neighbor_source, dict) else None
+        neighbor_id = neighbor_source.get('source_id') if isinstance(neighbor_source, dict) else None
+        if (not isinstance(neighbor_id, str) or not neighbor_id.startswith('conversation:')
+                or neighbor_id in seen or neighbor_source.get('kind') != 'conversation'
+                or not isinstance(neighbor_access, dict) or neighbor_access.get('owner_user_id') != actor
+                or not isinstance(neighbor.get('content'), str) or neighbor.get('truncated') is not False):
+            return False
+        seen.add(neighbor_id)
+    return True
+
+
+def revalidate_conversation_observation(
+    actor: str, tool_id: str, arguments: dict[str, Any], payload: dict[str, Any], *, context: ToolExecutionContext,
+    allow_excerpt_truncation: bool = False, allow_read_chunks: bool = False,
+    allow_search_overflow: bool = False,
+    allow_search_pages: bool = False,
+) -> bool:
+    """Re-read an owner-scoped observation before promoting it to evidence.
+
+    This is a point-in-time check, not authentication, an atomic revocation
+    fence, semantic verification, or authorization to publish. Re-running the
+    native operation directly avoids repeating invocation UI/memory events.
+    """
+    try:
+        if (not isinstance(context, ToolExecutionContext)
+                or not isinstance(actor, str) or not actor.strip()
+                or getattr(context.task, 'user', None) != actor
+                or not isinstance(arguments, dict) or not isinstance(payload, dict)):
+            return False
+        cancelled = context.cancellation_checker
+        if cancelled is not None and (not callable(cancelled) or cancelled() is not False):
+            return False
+        if tool_id == SEARCH_MEMORY_TOOL_ID:
+            if not complete_conversation_search(actor, tool_id, arguments, payload,
+                                                allow_excerpt_truncation=allow_excerpt_truncation,
+                                                allow_search_overflow=allow_search_overflow,
+                                                allow_search_pages=allow_search_pages):
+                return False
+            current = execute_search_memory(arguments, context=context)
+            valid = complete_conversation_search(actor, tool_id, arguments, current,
+                                                  allow_excerpt_truncation=allow_excerpt_truncation,
+                                                  allow_search_overflow=allow_search_overflow,
+                                                  allow_search_pages=allow_search_pages)
+        elif tool_id == READ_MEMORY_SOURCE_TOOL_ID:
+            if not complete_conversation_read(actor, tool_id, arguments, payload, allow_chunks=allow_read_chunks):
+                return False
+            current = execute_read_memory_source(arguments, context=context)
+            valid = complete_conversation_read(actor, tool_id, arguments, current, allow_chunks=allow_read_chunks)
+        else:
+            return False
+        if cancelled is not None and cancelled() is not False:
+            return False
+        # JSON comparison is type-sensitive (unlike True == 1), rejects NaNs,
+        # and covers all returned content, including neighboring messages.
+        return bool(valid and json.dumps(payload, sort_keys=True, allow_nan=False)
+                    == json.dumps(current, sort_keys=True, allow_nan=False))
+    except Exception:
+        return False
+
+
+def conversation_search_sequences(actor: str, observations: dict[str, tuple[str, dict, dict]]) -> list[list[tuple[str, dict, dict]]]:
+    """Group sequential searches, rejecting gaps, changed snapshots and mixed filters."""
+    groups: list[list[tuple[str, dict, dict]]] = []
+    for ref, (tool, args, payload) in observations.items():
+        if tool != SEARCH_MEMORY_TOOL_ID:
+            continue
+        if not complete_conversation_search(actor, tool, args, payload, allow_excerpt_truncation=True,
+                                            allow_search_pages=True):
+            raise ValueError('owner_search_sequence_invalid')
+        offset = args.get('offset', 0)
+        if offset == 0:
+            groups.append([(ref, args, payload)])
+            continue
+        if not groups:
+            raise ValueError('owner_search_sequence_invalid')
+        pages = groups[-1]
+        first_args, first = pages[0][1:]
+        previous = pages[-1][2]
+        filters = lambda a: {k: v for k, v in a.items() if k != 'offset'}
+        if (len(pages) >= 3 or first['total_matches'] > 90
+                or previous['next_offset'] != offset or filters(args) != filters(first_args)
+                or payload['snapshot'] != first['snapshot'] or payload['total_matches'] != first['total_matches']):
+            raise ValueError('owner_search_sequence_invalid')
+        pages.append((ref, args, payload))
+    return groups
+
+
+def conversation_read_sequences(actor: str, observations: dict[str, tuple[str, dict, dict]]) -> dict[str, list[tuple[str, dict, dict]]]:
+    """Validate contiguous owner-read prefixes and group them by source.
+
+    Prefixes may be incomplete, but gaps, overlaps, changed source metadata or
+    inconsistent lengths are rejected. Callers must independently revalidate
+    every page against the currently authorized source before exposing content.
+    """
+    groups: dict[str, list[tuple[str, dict, dict]]] = {}
+    for ref, (tool, args, payload) in observations.items():
+        if tool != READ_MEMORY_SOURCE_TOOL_ID:
+            continue
+        if not complete_conversation_read(actor, tool, args, payload, allow_chunks=True):
+            raise ValueError('owner_read_sequence_invalid')
+        groups.setdefault(args['source_id'], []).append((ref, args, payload))
+    for pages in groups.values():
+        pages.sort(key=lambda entry: entry[1].get('offset', 0))
+        offset = 0
+        source = None
+        total = None
+        for _, args, payload in pages:
+            item = payload['items'][0]
+            if (args.get('offset', 0) != offset or (total is not None and total != item['total_chars'])
+                    or (source is not None and json.dumps(source, sort_keys=True, allow_nan=False)
+                        != json.dumps(item['source'], sort_keys=True, allow_nan=False))):
+                raise ValueError('owner_read_sequence_invalid')
+            offset = item['end_char']
+            total, source = item['total_chars'], item['source']
+    return groups
 
 
 def _identity(context):

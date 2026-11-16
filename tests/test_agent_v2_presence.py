@@ -102,6 +102,18 @@ def test_projector_heartbeats_are_interval_limited() -> None:
     assert [event[0] for event in adapter.events].count("heartbeat") == 1
 
 
+def test_discard_stops_heartbeats_without_stale_terminal_presence() -> None:
+    projector = PresenceProjector(heartbeat_interval_sec=3)
+    adapter = _RecordingAdapter()
+    projector.register('telegram-home', adapter)
+    with projector.processing(_queued_message()):
+        projector.on_activity(CoreActivityEvent(phase=ImprovementPhase.DO, label='working', message=''))
+        projector.discard()
+    projector.heartbeat(now=10**12)
+    assert [event[0] for event in adapter.events] == ['start', 'update']
+    assert not projector._active
+
+
 def test_projector_isolates_adapter_failures() -> None:
     class _BrokenAdapter(_RecordingAdapter):
         def update(self, presence: PresenceState) -> None:

@@ -1,4 +1,4 @@
-"""Outcome-first synthetic household trials through the real hierarchical processor.
+"""Synthetic household fixtures and independent outcome checks.
 
 No scripted plan, query or acceptance criteria are given to the live providers.
 All native state stores are temporary; Bash is replaced by a command allowlist.
@@ -6,15 +6,10 @@ This small diagnostic corpus does not replace the frozen rollout protocol.
 """
 from __future__ import annotations
 
-import argparse
-import hashlib
 from datetime import datetime, timedelta
 import json
-import os
 from pathlib import Path
 import shlex
-import subprocess
-import tempfile
 from time import perf_counter
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
@@ -23,7 +18,6 @@ from alphonse.agent_v2.conversations import SQLiteConversationStore
 from alphonse.agent_v2.core.core import CoreLoopContext, PromptFile
 from alphonse.agent_v2.core.inference import InferenceRouter, ModelProfile
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
-from alphonse.agent_v2.core.intelligence.v3 import HierarchicalCAPDProcessor
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
 from alphonse.agent_v2.core.memory.knowledge import KnowledgeStore, KnowledgeMemory
 from alphonse.agent_v2.core.memory.ledger import LedgerMemory
@@ -41,7 +35,6 @@ from alphonse.agent_v2.core.tools.registry.native.skill_install import build_ski
 from alphonse.agent_v2.skills import SkillStore
 from alphonse.agent_v2.users import V2UserStore
 from alphonse.agent_v2.core.io.identity import V2IdentityResolver, IntegrationIdentity
-from .context_pilot import configured_jev, projection_flag
 
 
 class FixtureSkills(SkillStore):
@@ -112,7 +105,7 @@ class HouseholdFixture:
                           role="user", source="telegram", source_message_id="private", created_at=corpus["clock"])
         task_id = "household-" + case["id"]
         self.task = TaskState(task_id=task_id, message_id=task_id, user="fixture-admin", goal=case["request"],
-                              intelligence_engine="hierarchical_v3", intelligence_schema_version=3,
+                              intelligence_engine="single_loop_experimental", intelligence_schema_version=1,
                               metadata={"routing_disposition": "pdca_task", "source": "telegram", "channel": {
                                   "integration_id": "fixture-telegram", "provider_key": "telegram",
                                   "channel_target": "fixture-admin-chat", "alphonse_user_id": "fixture-admin"}})
@@ -178,7 +171,7 @@ class HouseholdFixture:
 def score(case, fixture, task, *, error):
     """Outcome checks are independent of the agent's completion label."""
     answer = str(task.metadata.get("prepared_user_response", {}).get("message")
-                 or task.metadata.get("v3_failure_response", {}).get("message") or "")
+                 or "")
     # Use delivered LLM inputs, not the union of search results, for recall evidence.
     prompts = [entry.get("prompt", "") for entry in fixture.context.inference.provider.calls if entry.get("status") == "success"]
     source_delivery = {}
@@ -229,7 +222,7 @@ def score(case, fixture, task, *, error):
             if expected == "verified_learned_route":
                 learning = getattr(fixture, "learning", {})
                 installed = fixture.skills.list_skills()
-                selection = task.metadata.get("v3_skill_selection", {})
+                selection = task.metadata.get("skill_selection", {})
                 loaded = selection.get("loaded_skill_ids", [])
                 checks["approved_repair_installed"] = bool(learning.get("approved")) and bool(installed)
                 checks["new_task_loaded_repair"] = bool(installed) and any(skill.skill_id in loaded for skill in installed)
@@ -245,143 +238,3 @@ def score(case, fixture, task, *, error):
     return {"checks": checks, "mechanical_pass": all(checks.values()), "answer": answer,
             "source_delivery_calls": source_delivery, "human_review": "pending",
             "schedules": [item.to_dict() for item in schedules]}
-
-
-def run_case(case, corpus, provider, jev, *, candidate):
-    with tempfile.TemporaryDirectory(prefix="household-runtime-") as directory, projection_flag(candidate):
-        fixture = HouseholdFixture(Path(directory), case, corpus, provider, jev)
-        jev_calls = []
-        if getattr(jev, "client", None) is not None:
-            evaluate = jev.client.evaluate
-
-            def observed_evaluate(*, state, questions):
-                entry = {"state": state, "question_ids": list(questions), "status": "started"}
-                jev_calls.append(entry)
-                started = perf_counter()
-                print("Jev decision", len(jev_calls), "started", flush=True)
-                try:
-                    if "PRIVATE_SENTINEL" in json.dumps(state, ensure_ascii=False, default=str):
-                        raise RuntimeError("household_private_source_before_provider")
-                    response = evaluate(state=state, questions=questions)
-                    entry.update(status="success", answers=response.get("answers"), usage=response.get("usage"))
-                    return response
-                except Exception as exc:
-                    entry.update(status="failed", error=type(exc).__name__)
-                    raise
-                finally:
-                    entry["latency_ms"] = round((perf_counter() - started) * 1000, 2)
-                    print("Jev decision", len(jev_calls), entry["status"], flush=True)
-
-            jev.client.evaluate = observed_evaluate
-        error = None
-        try:
-            HierarchicalCAPDProcessor().process(fixture.task, fixture.context)
-            if case.get("learn_and_repeat"):
-                fixture.learning = {"first_task": fixture.task.to_dict(), "approved": False}
-                questions = fixture.context.question_store.list_pending_for_respondent("fixture-admin")
-                if fixture.task.status == "waiting_user" and len(questions) == 1:
-                    # This is a predeclared synthetic user response, never real user approval.
-                    # Only approve a displayed operational draft, not an unrelated question.
-                    question = questions[0]
-                    text = question.message.casefold()
-                    if ("household-sensor read --route backup" in text
-                            and all(word in text for word in ("name", "description", "instructions"))):
-                        resumed = fixture.context.question_store.route_answer(
-                            respondent_user_id="fixture-admin", text=case["approval"], question_id=question.question_id,
-                            payload={"answer": True} if question.kind == "yes_no" else None)
-                        if resumed.resumed_task is not None:
-                            fixture.learning["approved"] = True
-                            fixture.task = resumed.resumed_task
-                            fixture.task_started = perf_counter()
-                            HierarchicalCAPDProcessor().process(fixture.task, fixture.context)
-                elif fixture.task.status == "completed":
-                    draft = str(fixture.task.metadata.get("prepared_user_response", {}).get("message") or "")
-                    if ("household-sensor read --route backup" in draft.casefold()
-                            and all(word in draft.casefold() for word in ("name", "description", "instructions"))):
-                        fixture.store.record(owner_user_id="fixture-admin", role="assistant", content=draft,
-                            source="telegram", source_message_id="visible-skill-draft", created_at=corpus["clock"])
-                        fixture.learning["approved"] = True
-                        identity = "household-learned-approval"
-                        fixture.task = TaskState(task_id=identity, message_id=identity, user="fixture-admin",
-                            goal=case["approval"], intelligence_engine="hierarchical_v3", intelligence_schema_version=3,
-                            metadata={"routing_disposition": "pdca_task", "source": "desktop"})
-                        fixture.task.append_conversation_message("fixture-admin", case["approval"])
-                        fixture.task_started = perf_counter()
-                        HierarchicalCAPDProcessor().process(fixture.task, fixture.context)
-                fixture.learning["installed_task"] = fixture.task.to_dict()
-                fixture.learning["sensor_call_boundary"] = len(fixture.sensor_calls)
-                fixture.learning["model_call_boundary"] = len(provider.calls)
-                if fixture.task.status == "completed" and fixture.skills.list_skills():
-                    identity = "household-learned-repeat"
-                    fixture.task = TaskState(task_id=identity, message_id=identity, user="fixture-admin",
-                        goal=case["repeat_request"], intelligence_engine="hierarchical_v3", intelligence_schema_version=3,
-                        metadata={"routing_disposition": "pdca_task", "source": "desktop"})
-                    fixture.task.append_conversation_message("fixture-admin", case["repeat_request"])
-                    fixture.task_started = perf_counter()
-                    HierarchicalCAPDProcessor().process(fixture.task, fixture.context)
-        except Exception as exc:
-            # Preserve the failure; do not manufacture a user-facing response here.
-            error = type(exc).__name__
-        if case["expected"]["outcome"] == "verified_recipient_schedule":
-            # Fire only the disposable scheduler and enqueue to a fixture outbox;
-            # no Telegram transport or live message sender exists in this harness.
-            fixture.exercise_reminder_delivery()
-        return {"case_id": case["id"], "arm": "candidate" if candidate else "legacy",
-                "task_status": fixture.task.status, "runtime_error": error,
-                "outcome": fixture.task.outcome, "score": score(case, fixture, fixture.task, error=error),
-                "task_state": fixture.task.to_dict(), "model_calls": provider.calls,
-                "jev_calls": jev_calls,
-                "telemetry": fixture.telemetry, "events": fixture.events,
-                "deliveries": fixture.deliveries, "sensor_calls": fixture.sensor_calls,
-                "learning": getattr(fixture, "learning", None),
-                "reminder_messages": fixture.reminder_messages,
-                "scheduler_outcomes": getattr(fixture, "scheduler_outcomes", None),
-                "latency_ms": round((perf_counter() - fixture.started) * 1000, 2)}
-
-
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--corpus", type=Path, required=True)
-    parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--live", action="store_true", required=True)
-    parser.add_argument("--case")
-    parser.add_argument("--arm", choices=["legacy", "candidate", "both"], default="both")
-    args = parser.parse_args()
-    corpus = json.loads(args.corpus.read_text())
-    if corpus.get("version") not in {1, 2} or corpus.get("synthetic") is not True:
-        raise ValueError("synthetic_household_corpus_required")
-    if args.output.exists():
-        raise ValueError("household_evidence_output_exists")
-    from .household_live import HouseholdLiveProvider
-    source_root = Path(__file__).resolve().parents[3]
-    source_files = sorted((source_root / "alphonse/agent_v2").rglob("*.py"))
-    source_files.append(source_root / "alphonse/agent_v2/config/jev_tool_registry.json")
-    source_hashes = {str(path.relative_to(source_root)): hashlib.sha256(path.read_bytes()).hexdigest() for path in source_files}
-    experiment = {"corpus_sha256": hashlib.sha256(args.corpus.read_bytes()).hexdigest(),
-                  "source_head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=source_root, text=True).strip(),
-                  "runtime_source_sha256": hashlib.sha256(json.dumps(source_hashes, sort_keys=True).encode()).hexdigest(),
-                  "source_hashes": source_hashes, "clock": corpus["clock"], "timezone": corpus["timezone"],
-                  "context_budget": os.environ.get("ALPHONSE_V3_CONTEXT_TOKEN_BUDGET", "default"),
-                  "run_order": [(case["id"], arm) for case in corpus["cases"] if not args.case or case["id"] == args.case
-                      for arm in (["legacy", "candidate"] if args.arm == "both" else [args.arm])]}
-    rows = []
-    for case in corpus["cases"]:
-        if args.case and case["id"] != args.case:
-            continue
-        for candidate in ((False, True) if args.arm == "both" else (args.arm == "candidate",)):
-            provider = HouseholdLiveProvider()
-            row = run_case(case, corpus, provider, configured_jev(), candidate=candidate)
-            rows.append(row)
-            args.output.parent.mkdir(parents=True, exist_ok=True)
-            args.output.write_text(json.dumps({"protocol": "household-delegation-v1", "fixture_adapter_version": 4, "synthetic": True,
-                "full_capd": True, "qualifying_rollout_run": False, "independent_human_review": False,
-                "durable_extraction_evaluated": False,
-                "experiment": experiment,
-                "cases": rows}, indent=2, ensure_ascii=False) + "\n")
-            print(case["id"], row["arm"], row["task_status"], row["score"]["checks"], flush=True)
-    if not rows:
-        raise ValueError("household_case_not_found")
-
-
-if __name__ == "__main__":
-    main()

@@ -4,7 +4,6 @@ import pytest
 
 from alphonse.agent_v2.core.core import ToolExecutionContext
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
-from alphonse.agent_v2.core.intelligence.v3 import MutationScope
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
 from alphonse.agent_v2.core.projects import ProjectStore
 from alphonse.agent_v2.core.tools.registry.native.exact_text_edit import execute_exact_text_edit
@@ -95,8 +94,3 @@ def test_project_read_and_exact_edit_reject_internal_alphonse_paths(tmp_path) ->
         execute_exact_text_edit({
             "path": ".alphonse/memory/ledger.md", "expected_text": "secret", "replacement_text": "changed",
         }, context=context)
-
-
-def test_v3_mutation_scope_rejects_internal_alphonse_paths() -> None:
-    with pytest.raises(ValueError, match="mutation_scope_path_protected"):
-        MutationScope((".alphonse/memory/sessions/current/ledger-0001.md",))

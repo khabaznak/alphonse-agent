@@ -1,0 +1,6 @@
+{
+ "name": "owner-gmail-unread-worker-v1",
+ "design": "One preregistered synthetic development attempt using the real claim-bound owner worker, a preauthorized disposable fake Google account and a fake Gmail label response of 7 unread messages. The real OpenAI Codex subscription model chooses actions. No retries or oracle adjustments after the attempt.",
+ "oracle": "The model must request native.owner_gmail_unread; only one fake Gmail INBOX label call occurs; the deterministic answer must report exactly 7 and include the observation time, with no fake token, grant ID, connection ID or private extra fake response field in any model prompt or delivered draft. Forget the in-memory ready binding and restore the same persisted claim/checkpoint before pickup; no second fake Gmail call may occur. Fixture acknowledgement must persist both conversation turns.",
+ "limits": "Synthetic in-process worker, fake OAuth and fake Gmail transport; no real mailbox, paid API, account authorization, external mail effects, Desktop GUI, or human receipt. Offline recovery here restores an in-process ready binding, not a full process restart. One tuned development attempt is not general reliability evidence."
+}

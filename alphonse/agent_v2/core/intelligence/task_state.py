@@ -1,4 +1,4 @@
-"""Markdown-first task state for the future v2 PDCA intelligence graph."""
+"""Shared task state for conversations, persistence, and historical replay."""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ _TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
 
 @dataclass
 class TaskState:
-    """Markdown container carried through the future PDCA processor."""
+    """Durable task context shared by the runtime and historical replay."""
 
     task_id: str | None = None
     message_id: str | None = None
@@ -59,8 +59,11 @@ class TaskState:
     evidence_journal: list[dict[str, Any]] = field(default_factory=list)
     check_new_message_count: int = 0
     pdca_cycle_count: int = 0
-    intelligence_engine: str = "hierarchical_v3"
-    intelligence_schema_version: int = 3
+    # A bare task is not yet a claim-authorized simple-loop task.  Ingress
+    # explicitly stamps the engine; missing stamps from stored messages are
+    # handled separately by from_message/from_dict and never upgraded here.
+    intelligence_engine: str = "unassigned"
+    intelligence_schema_version: int = 1
     hierarchical_state: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
 

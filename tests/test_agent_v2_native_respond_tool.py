@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import pytest
 
-from alphonse.agent_v2.core.intelligence.pdca.nodes.plan_node import _render_tool_call_plan_prompt
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.tools.registry.native import RESPOND_TOOL_ID
 from alphonse.agent_v2.core.tools.registry.native import RESPOND_TOOL_NAME
@@ -34,17 +33,6 @@ def test_native_registry_exposes_native_tools() -> None:
     }
 
 
-def test_respond_descriptor_and_schema_are_visible_to_plan_prompt() -> None:
-    task = TaskState(goal="Say hello", acceptance_criteria_md="1.- [ ] User is greeted")
-    descriptors = build_native_tool_registry().list()
-
-    prompt = _render_tool_call_plan_prompt(task, descriptors)
-
-    assert RESPOND_TOOL_ID in prompt
-    assert RESPOND_TOOL_NAME in prompt
-    assert "Use `native.respond` for greetings" in prompt
-    assert "Use `native.bash` for local commands and project-file operations" in prompt
-    assert "create or edit files" in prompt
 
 
 def test_respond_tool_executes_normal_response() -> None:

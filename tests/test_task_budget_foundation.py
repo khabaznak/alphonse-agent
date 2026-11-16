@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from alphonse.agent_v2.core.intelligence.v3.task_budget import BudgetExhausted, BudgetLimits, TaskBudget
+from alphonse.agent_v2.core.intelligence.simple_loop.task_budget import BudgetExhausted, BudgetLimits, TaskBudget
 
 
 def vector(actions=0, model_calls=0, input_tokens=0, output_tokens=0):
@@ -125,7 +125,7 @@ def test_invalid_and_future_snapshots_are_rejected():
 
 
 def test_file_store_compare_and_swap_prevents_two_workers_spending_same_budget(tmp_path):
-    from alphonse.agent_v2.core.intelligence.v3.task_budget import BudgetRevisionConflict, SQLiteTaskBudgetStore
+    from alphonse.agent_v2.core.intelligence.simple_loop.task_budget import BudgetRevisionConflict, SQLiteTaskBudgetStore
     path = str(tmp_path / 'budgets.sqlite')
     store = SQLiteTaskBudgetStore(path)
     store.create('task', budget())
@@ -144,7 +144,7 @@ def test_file_store_compare_and_swap_prevents_two_workers_spending_same_budget(t
 
 
 def test_store_requires_atomic_step_before_next_transition(tmp_path):
-    from alphonse.agent_v2.core.intelligence.v3.task_budget import SQLiteTaskBudgetStore
+    from alphonse.agent_v2.core.intelligence.simple_loop.task_budget import SQLiteTaskBudgetStore
     store = SQLiteTaskBudgetStore(str(tmp_path / 'budgets.sqlite'))
     state = budget()
     store.create('task', state)
@@ -183,7 +183,7 @@ def test_inflight_prior_model_blocks_final_until_usage_is_reconciled():
 
 
 def test_deadline_rejection_is_persisted_and_clock_rollback_cannot_reopen_work(tmp_path):
-    from alphonse.agent_v2.core.intelligence.v3.task_budget import SQLiteTaskBudgetStore
+    from alphonse.agent_v2.core.intelligence.simple_loop.task_budget import SQLiteTaskBudgetStore
     store = SQLiteTaskBudgetStore(str(tmp_path / 'budget.sqlite'))
     store.create('task', budget())
     with pytest.raises(BudgetExhausted, match='elapsed'):
@@ -201,7 +201,7 @@ def test_deadline_rejection_is_persisted_and_clock_rollback_cannot_reopen_work(t
 
 
 def test_total_deadline_latch_blocks_final_after_restart(tmp_path):
-    from alphonse.agent_v2.core.intelligence.v3.task_budget import SQLiteTaskBudgetStore
+    from alphonse.agent_v2.core.intelligence.simple_loop.task_budget import SQLiteTaskBudgetStore
     store = SQLiteTaskBudgetStore(str(tmp_path / 'budget.sqlite'))
     store.create('task', budget())
     with pytest.raises(BudgetExhausted, match='elapsed'):
@@ -213,7 +213,7 @@ def test_total_deadline_latch_blocks_final_after_restart(tmp_path):
 
 
 def test_rejection_for_non_time_limit_persists_clock_before_restart(tmp_path):
-    from alphonse.agent_v2.core.intelligence.v3.task_budget import SQLiteTaskBudgetStore
+    from alphonse.agent_v2.core.intelligence.simple_loop.task_budget import SQLiteTaskBudgetStore
     store = SQLiteTaskBudgetStore(str(tmp_path / 'budget.sqlite'))
     state = budget()
     store.create('task', state)

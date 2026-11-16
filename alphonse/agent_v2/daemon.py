@@ -34,7 +34,7 @@ from alphonse.agent_v2.core.projects import ProjectStore
 from alphonse.agent_v2.core.questions import SQLiteQuestionStore
 from alphonse.agent_v2.core.scheduled_tasks import ScheduledTaskStore
 from alphonse.agent_v2.core.scheduled_tasks import schedule_summary
-from alphonse.agent_v2.database import connect_database, transaction
+from alphonse.agent_v2.database import connect_database, default_database_path, transaction
 from alphonse.agent_v2.integrations import SQLiteIntegrationStore
 from alphonse.agent_v2.inference_settings import SQLiteInferenceSettingsStore
 from alphonse.agent_v2.ipc import V2DaemonClient
@@ -112,6 +112,27 @@ def _claim_single_instance_lock(daemon_id: str) -> Any:
     return lock_file
 
 
+def _owner_public_failure_code(error: object, *, cancelled: bool = False) -> str:
+    """Map known failures to non-sensitive, actionable status categories.
+
+    Unknown exception strings are deliberately never returned to the client.
+    A failure status does not imply an in-flight claim or effect was settled.
+    """
+    if cancelled:
+        return 'cancel_requested'
+    return {
+        'candidate_deadline_exceeded': 'time_limit',
+        'candidate_model_unavailable': 'model_unavailable',
+        'candidate_model_usage_unknown_or_overrun': 'usage_unconfirmed',
+        'candidate_read_denied': 'source_unavailable',
+        'candidate_read_revoked': 'source_unavailable',
+        'candidate_evidence_changed_or_revoked': 'source_changed',
+        'candidate_observation_incomplete': 'source_incomplete',
+        'candidate_requires_read_only_native_tool': 'unsupported_operation',
+        'candidate_answer_unsupported': 'answer_unverified',
+    }.get(error, 'needs_attention') if isinstance(error, str) else 'needs_attention'
+
+
 @dataclass
 class V2Daemon:
     runtime: V2RuntimeHost
@@ -119,6 +140,7 @@ class V2Daemon:
     inbound_max_attempts: int | None = None
     event_store: EventAutomationStore | None = None
     daemon_id: str = ""
+    experimental_owner_only: bool = False
 
     def __post_init__(self) -> None:
         schedule_db_path = str(getattr(self.runtime.schedule_store, "db_path", ":memory:"))
@@ -137,6 +159,9 @@ class V2Daemon:
         self._memory_migration_thread: threading.Thread | None = None
         self._lock_file: Any | None = None
         self._lifecycle_lock = threading.RLock()
+        # Protect the whole daemon turn, including work done before core.step.
+        # This is local exclusion, not a cross-process claim fence.
+        self._run_once_lock = threading.Lock()
         self._optional_account_service = None
         self._stopped = False
         self._last_processor_error = ""
@@ -158,6 +183,14 @@ class V2Daemon:
         self._ui_event_sequence = 0
         self._ui_event_journal: list[dict[str, Any]] = []
         self._desktop_capabilities: dict[str, set[str]] = {}
+        # Private process-local handoff; receipts are never accepted from IPC.
+        self._owner_checkpoint_lock = threading.Lock()
+        self._owner_checkpoints: dict[str, tuple[Any, Any]] = {}
+        self._owner_status_lock = threading.Lock()
+        self._owner_statuses: dict[str, str] = {}
+        # Only fixed public reason codes are kept; raw errors can include
+        # private source content and are never exposed through status IPC.
+        self._owner_failure_codes: dict[str, str] = {}
         self._desktop_surfaces: dict[tuple[str, str, str], set[str]] = {}
         self._desktop_progress_surfaces: dict[tuple[str, str], set[str]] = {}
         self._desktop_progress_closures: dict[tuple[str, str], set[str]] = {}
@@ -191,6 +224,10 @@ class V2Daemon:
         if self.source_acquisition is not None:
             self.source_acquisition.findings = self.findings
         self.runtime.integration_management.oauth_factory = self.optional_accounts
+        if self.experimental_owner_only and self.runtime.owner_gmail_service is None:
+            from alphonse.agent_v2.core.intelligence.simple_loop.owner_gmail import OwnerGmailService
+            self.runtime.owner_gmail_service = OwnerGmailService(
+                self.runtime.integration_management.accounts, self.optional_accounts)
         self.runtime.integration_management.dispatcher = self.project_check_dispatcher
         self.runtime.integration_management.findings = self.findings
         self.project_check_worker = (
@@ -218,7 +255,396 @@ class V2Daemon:
         )
         self.ipc = V2DaemonServer(self)
 
+    def _start_owner_only(self) -> None:
+        """Start the explicitly selected read-only owner worker and socket.
+
+        This deliberately does not start the legacy scheduler, integrations or
+        V3 worker. Fenced queue ownership and an atomic owner processor are
+        required; uncertain claims are left untouched rather than reclaimed.
+        """
+        from alphonse.agent_v2.core.intelligence.simple_loop.owner_read_processor import OwnerReadConversationProcessor
+        from alphonse.agent_v2.core.messages.sqlite_queue import SQLiteMessageQueue
+        processor = getattr(self.runtime.processor, 'owner_read_candidate', None)
+        if (type(self.experimental_owner_only) is not bool
+                or type(self.runtime.queue) is not SQLiteMessageQueue
+                or self.runtime.queue.experimental_claim_fencing is not True
+                or not isinstance(processor, OwnerReadConversationProcessor)
+                or processor.atomic_checkpoints is None):
+            raise RuntimeError('owner_worker_configuration_invalid')
+        with self._lifecycle_lock:
+            if self._stopped:
+                raise RuntimeError('alphonse_v2_daemon_stopped')
+            if self._processor_thread is not None and self._processor_thread.is_alive():
+                return
+            self._acquire_single_instance_lock()
+        try:
+            self._stop.clear()
+            processor.selected_draft_sink = self.register_owner_checkpoint
+            self.ipc.experimental_owner_ingress = True
+            self.ipc.start()
+            self._processor_thread = threading.Thread(target=self._owner_process_loop_with_release,
+                name='alphonse-owner-read', daemon=True)
+            self._processor_thread.start()
+        except Exception:
+            self.stop()
+            raise
+
+    def _owner_process_loop_with_release(self) -> None:
+        try:
+            self._owner_process_loop()
+        finally:
+            # If stop timed out waiting for an in-flight call, keep exclusion
+            # until this worker actually exits, then release even in an
+            # embedded process that remains alive.
+            if self._stop.is_set():
+                self._release_single_instance_lock()
+
+    def _owner_process_loop(self) -> None:
+        from alphonse.agent_v2.core.core import CoreLoopContext, ProcessingStatus
+        from alphonse.agent_v2.core.intelligence.task_state import TaskState
+        from alphonse.agent_v2.core.messages.queue import MessageSelector
+        queue = self.runtime.queue
+        processor = self.runtime.processor.owner_read_candidate
+        while not self._stop.is_set():
+            message_id = ''
+            try:
+                # Claim only a server-bound local-owner ingress. Generic queue
+                # messages belong to other paths and must never be consumed.
+                with queue._connect() as conn:
+                    origin = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_trusted_owner_ingress'").fetchone()
+                    row = conn.execute("""SELECT q.message_id FROM v2_inbound_messages q
+                        JOIN v2_trusted_owner_ingress o ON o.message_id=q.message_id
+                        WHERE q.status='pending' ORDER BY q.sequence LIMIT 1""").fetchone() if origin else None
+                if row is None:
+                    self._stop.wait(self.poll_interval_sec)
+                    continue
+                message_id = str(row['message_id'])
+                acquired = queue.claim_next(selector=MessageSelector(message_id=message_id),
+                                            lease_owner=self.daemon_id, lease_seconds=180)
+                if acquired is None:
+                    self._stop.wait(self.poll_interval_sec)
+                    continue
+                with self._owner_status_lock:
+                    self._owner_statuses[message_id] = 'pending'
+                    self._owner_failure_codes.pop(message_id, None)
+                task = TaskState.from_message(acquired.message, message_id=message_id)
+                task.task_id = message_id
+                self._activate_kill_switch_task(acquired, task)
+                cancelled = threading.Event()
+                def is_cancelled(current_id=message_id, cancellation=cancelled):
+                    if self._stop.is_set() or self.kill_switch.is_cancelled(current_id):
+                        cancellation.set()
+                    return cancellation.is_set()
+                context = CoreLoopContext(messages=queue, claim_receipt=acquired.claim_receipt,
+                    tools=self.runtime.core.tools, inference=self.runtime.core.inference,
+                    conversation_store=self.runtime.conversation_store,
+                    owner_gmail_service=self.runtime.owner_gmail_service,
+                    schedule_store=self.runtime.schedule_store,
+                    skill_store=self.runtime.core.skill_store,
+                    artifact_resources=self.runtime.core.artifact_resources,
+                    skill_bindings=self.runtime.core.skill_bindings,
+                    user_timezone_provider=self.runtime.user_store.timezone,
+                    owner_effect_commit=lambda commit: self.kill_switch.commit_if_active(message_id, commit),
+                    cancellation_checker=is_cancelled)
+                result = None
+                try:
+                    result = processor.process(task, context)
+                finally:
+                    with self._owner_checkpoint_lock:
+                        selected_pair = self._owner_checkpoints.get(message_id)
+                    def finish_ready_handoff():
+                        # This callback executes while cancellation is locked
+                        # out by finish_handoff. A crash before the marker is
+                        # committed must never make the draft recoverable.
+                        if (result is not None and result.status == ProcessingStatus.WAITING
+                                and selected_pair is not None and not self._stop.is_set()):
+                            selected_pair[0].mark_ready_handoff()
+                        return True
+                    cancelled_at_finish, _ = self.kill_switch.finish_handoff(
+                        message_id, release=finish_ready_handoff, cancel=lambda: True)
+                    if cancelled_at_finish:
+                        cancelled.set()
+                with self._owner_checkpoint_lock:
+                    ready = message_id in self._owner_checkpoints
+                with self._owner_status_lock:
+                    is_ready = ready and not cancelled.is_set() and result.status == ProcessingStatus.WAITING
+                    self._owner_statuses[message_id] = 'ready' if is_ready else 'failed'
+                    if not is_ready:
+                        self._owner_failure_codes[message_id] = _owner_public_failure_code(
+                            result.error, cancelled=cancelled.is_set() or result.status == ProcessingStatus.CANCELLED)
+            except Exception:
+                if message_id:
+                    with self._owner_status_lock:
+                        self._owner_statuses[message_id] = 'failed'
+                        self._owner_failure_codes[message_id] = 'needs_attention'
+                logger.exception('owner read worker failed')
+                self._stop.wait(self.poll_interval_sec)
+
+    def owner_processing_ready(self) -> bool:
+        return self.owner_processing_blocking_reason() is None
+
+    def owner_processing_blocking_reason(self) -> str | None:
+        """Return an owner-safe readiness diagnostic, never a claim fence.
+
+        A live thread alone cannot process owner work while legacy claims
+        conflict with the queue's fenced mode. The actual enqueue and claim
+        each repeat their own transaction-bound checks.
+        """
+        if not (self.experimental_owner_only and self._processor_thread is not None
+                and self._processor_thread.is_alive() and not self._stop.is_set()):
+            return 'worker_unavailable'
+        try:
+            if self.runtime.queue.claim_mode_blocked():
+                return 'legacy_claim_conflict'
+        except Exception:
+            return 'queue_unavailable'
+        return None
+
+    def owner_paused_legacy_requests(self) -> int | None:
+        """Count other inbound work this exclusive worker will not process.
+
+        The local owner status reports only a count, never request contents or
+        identities. This snapshot does not migrate, release or replay work.
+        """
+        if not self.experimental_owner_only:
+            return None
+        try:
+            with self.runtime.queue._connect() as conn:
+                origin = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_trusted_owner_ingress'").fetchone()
+                filter_sql = ("AND NOT EXISTS (SELECT 1 FROM v2_trusted_owner_ingress o WHERE o.message_id=q.message_id)"
+                              if origin else "")
+                row = conn.execute(f"""SELECT COUNT(*) AS n FROM v2_inbound_messages q
+                    WHERE q.status IN ('pending','retry_wait','processing') {filter_sql}""").fetchone()
+                return int(row['n'])
+        except Exception:
+            return None
+
+    def owner_delivered_questions(self) -> list[dict[str, str]]:
+        """List bounded, acknowledged owner questions for explicit reply selection.
+
+        The socket handler authenticates the local peer; every candidate is
+        revalidated again during enqueue and under the new task's live claim.
+        """
+        import os
+        from alphonse.agent_v2.core.intelligence.simple_loop.owner_clarification import resolve_owner_question
+        if not self.experimental_owner_only:
+            raise ValueError('owner_question_context_unavailable')
+        try:
+            with self.runtime.queue._connect() as conn:
+                conn.execute('BEGIN')
+                admin = conn.execute("""SELECT u.user_id FROM v2_users u JOIN v2_user_settings s
+                    ON s.key='admin_user_id' AND s.value=u.user_id
+                    WHERE u.role IN ('admin','owner') AND u.is_active=1""").fetchone()
+                if admin is None:
+                    return []
+                actor = str(admin['user_id'])
+                rows = conn.execute("""SELECT c.task_id FROM v2_task_checkpoints c
+                    JOIN v2_trusted_owner_ingress o ON o.message_id=c.task_id
+                    JOIN v2_conversation_events e ON e.source_message_id=('outbound:owner:' || c.task_id)
+                    WHERE c.owner_id=? AND o.owner_id=? AND o.peer_uid=? AND e.owner_user_id=?
+                    ORDER BY e.sequence DESC LIMIT 50""", (actor, actor, os.getuid(), actor)).fetchall()
+                result = []
+                for row in rows:
+                    try:
+                        _, question, _ = resolve_owner_question(conn, actor, row['task_id'])
+                    except ValueError:
+                        continue
+                    result.append({'message_id': row['task_id'], 'question': question[:240]})
+                    if len(result) >= 10:
+                        break
+                return result
+        except Exception:
+            return []
+
+    def _restore_owner_ready(self, message_id: str) -> bool:
+        """Restore an unpicked terminal draft after exclusive daemon restart.
+
+        No task is resumed and no effect or inference is replayed. The durable
+        marker proves that cancellation handoff completed before the old
+        worker stopped. Normal single-instance exclusion must still be held;
+        the original claim must remain live and unchanged. Source access and
+        content are revalidated again by the ordinary pickup path.
+        """
+        if (not self.experimental_owner_only or self._lock_file is None
+                or not self.owner_processing_ready()):
+            return False
+        from alphonse.agent_v2.core.core import CoreLoopContext
+        from alphonse.agent_v2.core.intelligence.task_state import TaskState
+        from alphonse.agent_v2.core.intelligence.simple_loop.owner_atomic_checkpoint import OwnerAtomicCheckpoint, _decision_digest
+        from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_checkpoint import STATE_KEY
+        from alphonse.agent_v2.core.messages.experimental_claim_checkpoint import _claim_digest
+        from alphonse.agent_v2.core.messages.sqlite_queue import _row_to_message
+        try:
+            queue = self.runtime.queue
+            with self._owner_checkpoint_lock:
+                if message_id in self._owner_checkpoints:
+                    return False
+                with queue._connect() as conn:
+                    row = conn.execute("""SELECT q.*,c.version AS checkpoint_version
+                        FROM v2_inbound_messages q
+                        JOIN v2_trusted_owner_ingress o ON o.message_id=q.message_id
+                        JOIN v2_task_checkpoints c ON c.task_id=q.message_id AND c.owner_id=q.user_id
+                        WHERE q.message_id=? AND q.status='processing' AND o.owner_id=q.user_id""",
+                        (message_id,)).fetchone()
+                if row is None or type(row['checkpoint_version']) is not int:
+                    return False
+                queued = _row_to_message(row, include_claim=True)
+                task = TaskState.from_message(queued.message, message_id=message_id)
+                task.task_id = message_id
+                processor = self.runtime.processor.owner_read_candidate
+                checkpoint = OwnerAtomicCheckpoint(queue, processor.atomic_checkpoints, task,
+                    queued.claim_receipt, clock=lambda: datetime.now(timezone.utc))
+                checkpoint.version = row['checkpoint_version']
+                with checkpoint._transaction() as conn:
+                    _, raw, state, budget = checkpoint._load(conn, checkpoint.version)
+                    md = raw['metadata']
+                    selected, marker = md.get('owner_read_selected_draft'), md.get('owner_read_ready_handoff')
+                    allowed = set(task.metadata) | {STATE_KEY, 'owner_read_observations',
+                                                    'owner_read_selected_draft', 'owner_read_ready_handoff'}
+                    outbox_exists = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_outbox'").fetchone()
+                    if (state.status not in {'completed', 'waiting_user'} or state.inflight
+                            or budget.usage()['in_flight'] or budget.usage()['unknown_usage']
+                            or raw.get('goal') != task.goal
+                            or any(json.dumps(md.get(key), sort_keys=True, allow_nan=False)
+                                   != json.dumps(value, sort_keys=True, allow_nan=False)
+                                   for key, value in task.metadata.items())
+                            or set(md) - allowed or not outbox_exists
+                            or conn.execute('SELECT 1 FROM v2_outbox WHERE task_id=? LIMIT 1', (message_id,)).fetchone()
+                            or conn.execute('SELECT 1 FROM v2_scheduled_handoffs WHERE message_id=?', (message_id,)).fetchone()
+                            or 'owner_read_pending_action' in md or 'owner_read_pending_decision' in md
+                            or 'owner_read_desktop_pickup_started' in md
+                            or not isinstance(selected, dict) or not isinstance(marker, dict)
+                            or selected.get('claim_digest') != _claim_digest(queued.claim_receipt)
+                            or set(marker) != {'schema_version', 'claim_digest', 'selected_sha256'}
+                            or type(marker['schema_version']) is not int or marker['schema_version'] != 1
+                            or marker['claim_digest'] != _claim_digest(queued.claim_receipt)
+                            or marker['selected_sha256'] != _decision_digest(selected)):
+                        return False
+                context = CoreLoopContext(messages=queue, claim_receipt=queued.claim_receipt,
+                    tools=self.runtime.core.tools, inference=self.runtime.core.inference,
+                    conversation_store=self.runtime.conversation_store,
+                    owner_gmail_service=self.runtime.owner_gmail_service,
+                    schedule_store=self.runtime.schedule_store,
+                    skill_store=self.runtime.core.skill_store,
+                    artifact_resources=self.runtime.core.artifact_resources,
+                    skill_bindings=self.runtime.core.skill_bindings,
+                    user_timezone_provider=self.runtime.user_store.timezone,
+                    cancellation_checker=lambda: self._stop.is_set())
+                self._owner_checkpoints[message_id] = (checkpoint, context)
+                with self._owner_status_lock:
+                    self._owner_statuses[message_id] = 'ready'
+                return True
+        except Exception:
+            return False
+
+    def owner_message_status(self, message_id: str) -> str:
+        if not isinstance(message_id, str) or re.fullmatch(r'[0-9a-f]{32}', message_id) is None:
+            return 'unavailable'
+        try:
+            with self.runtime.queue._connect() as conn:
+                identity = conn.execute("""SELECT 1 FROM v2_trusted_owner_ingress o
+                    JOIN v2_user_settings s ON s.key='admin_user_id' AND s.value=o.owner_id
+                    JOIN v2_users u ON u.user_id=o.owner_id AND u.role IN ('admin','owner') AND u.is_active=1
+                    WHERE o.message_id=? AND o.peer_uid=?""", (message_id, os.getuid())).fetchone()
+                if identity is None:
+                    return 'unavailable'
+                exists = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_owner_abandoned'").fetchone()
+                if exists and conn.execute("""SELECT 1 FROM v2_owner_abandoned a
+                    JOIN v2_trusted_owner_ingress o ON o.message_id=a.message_id AND o.owner_id=a.owner_id
+                    JOIN v2_user_settings s ON s.key='admin_user_id' AND s.value=a.owner_id
+                    JOIN v2_users u ON u.user_id=a.owner_id AND u.role IN ('admin','owner') AND u.is_active=1
+                    WHERE a.message_id=? AND o.peer_uid=?""", (message_id, os.getuid())).fetchone():
+                    return 'abandoned'
+        except Exception:
+            return 'unavailable'
+        with self._owner_status_lock:
+            status = self._owner_statuses.get(message_id)
+        if not status and self._restore_owner_ready(message_id):
+            status = 'ready'
+        if status == 'ready':
+            with self._owner_checkpoint_lock:
+                pair = self._owner_checkpoints.get(message_id)
+            if pair is None or not pair[0].queue.verify_trusted_local_owner_claim(pair[0].receipt, pair[0].task):
+                return 'unavailable'
+        if status:
+            return status
+        # Only server-owned origin rows are observable to this endpoint. An
+        # old in-flight claim after restart is uncertain, not pending work.
+        try:
+            with self.runtime.queue._connect() as conn:
+                row = conn.execute("""SELECT q.status,q.lease_owner,q.lease_expires_at FROM v2_inbound_messages q
+                    JOIN v2_trusted_owner_ingress o ON o.message_id=q.message_id
+                    WHERE q.message_id=?""", (message_id,)).fetchone()
+            if row is not None and row['status'] == 'pending':
+                return 'pending'
+            if row is not None and row['status'] == 'processing' and self.owner_processing_ready() and row['lease_owner'] == self.daemon_id:
+                expiry = datetime.fromisoformat(row['lease_expires_at'])
+                if expiry.tzinfo is not None and expiry.utcoffset() is not None and expiry > datetime.now(timezone.utc):
+                    return 'pending'
+            return 'unavailable'
+        except Exception:
+            return 'unavailable'
+
+    def owner_message_status_payload(self, message_id: str) -> dict[str, str]:
+        """Return only an authorized status and, where known, a fixed reason."""
+        status = self.owner_message_status(message_id)
+        result = {'status': status}
+        if status == 'failed':
+            with self._owner_status_lock:
+                if self._owner_statuses.get(message_id) == 'failed':
+                    result['failure_code'] = self._owner_failure_codes.get(message_id, 'needs_attention')
+        return result
+
+    def abandon_owner_message(self, message_id: str) -> dict[str, str]:
+        result = self.runtime.queue.abandon_trusted_owner_message(message_id)
+        with self._owner_checkpoint_lock:
+            self._owner_checkpoints.pop(message_id, None)
+        with self._owner_status_lock:
+            self._owner_statuses[message_id] = 'abandoned'
+        return result
+
+    def owner_recovery_list(self) -> list[dict[str, Any]]:
+        """List current owner's unresolved requests without exposing claim tokens."""
+        try:
+            with self.runtime.queue._connect() as conn:
+                exists = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_trusted_owner_ingress'").fetchone()
+                if not exists:
+                    return []
+                rows = conn.execute("""SELECT q.message_id,q.prompt,q.status,q.lease_expires_at,c.task_state_json
+                    FROM v2_inbound_messages q JOIN v2_trusted_owner_ingress o ON o.message_id=q.message_id
+                    JOIN v2_user_settings s ON s.key='admin_user_id' AND s.value=q.user_id
+                    JOIN v2_users u ON u.user_id=q.user_id AND u.role IN ('admin','owner') AND u.is_active=1
+                    LEFT JOIN v2_task_checkpoints c ON c.task_id=q.message_id AND c.owner_id=q.user_id
+                    WHERE o.owner_id=q.user_id AND o.peer_uid=? AND q.status IN ('pending','processing')
+                    ORDER BY q.sequence DESC LIMIT 50""", (os.getuid(),)).fetchall()
+            items = []
+            for row in rows:
+                can_abandon = row['status'] == 'pending'
+                if row['status'] == 'processing':
+                    try:
+                        expiry = datetime.fromisoformat(row['lease_expires_at'])
+                        can_abandon = expiry.tzinfo is not None and expiry.utcoffset() is not None and expiry <= datetime.now(timezone.utc)
+                    except (TypeError, ValueError):
+                        can_abandon = False
+                status = self.owner_message_status(row['message_id'])
+                if status == 'unavailable' and row['task_state_json']:
+                    try:
+                        raw = json.loads(row['task_state_json'])
+                        marker = raw.get('metadata', {}).get('owner_read_desktop_pickup_started', {})
+                        if marker.get('status') == 'started_unconfirmed':
+                            status = 'started_unconfirmed'
+                    except (AttributeError, TypeError, ValueError):
+                        pass
+                items.append({'message_id': row['message_id'], 'prompt': str(row['prompt'])[:240],
+                              'status': status, 'can_abandon': bool(can_abandon)})
+            return items
+        except Exception:
+            raise RuntimeError('owner_recovery_unavailable') from None
+
     def start(self) -> None:
+        if self.experimental_owner_only:
+            self._start_owner_only()
+            return
         # A daemon startup also performs migrations, reclamation and starts
         # background workers. The run_once guard alone cannot protect those
         # paths while experimental claim receipts are not propagated end to end.
@@ -232,6 +658,12 @@ class V2Daemon:
             self._acquire_single_instance_lock()
         try:
             self._stop.clear()
+            admin = self.runtime.user_store.admin_user()
+            if (admin is not None and admin.is_active is True and admin.role in ('admin', 'owner')
+                    and self.runtime.user_store.is_admin(admin.user_id)):
+                # Migrate only untouched, owner-bound identity notifications;
+                # ambiguous or previously attempted TUI records stay untouched.
+                self.runtime.outbox.migrate_untouched_tui_identity_notices(admin.user_id)
             self._ensure_home_projects()
             family_users = [user.user_id for user in self.runtime.user_store.list_users() if user.is_active]
             self.runtime.project_store.migrate_legacy_shared_access(family_users)
@@ -268,6 +700,14 @@ class V2Daemon:
             self._stopped = True
         self._stop.set()
         self.ipc.stop()
+        if self.experimental_owner_only:
+            if self._processor_thread is not None and self._processor_thread.is_alive():
+                self._processor_thread.join(timeout=5)
+            # Do not permit another daemon to overlap a still-running owner
+            # worker, for example while a provider call has not returned.
+            if self._processor_thread is None or not self._processor_thread.is_alive():
+                self._release_single_instance_lock()
+            return
         self.scheduler.stop()
         if self.project_check_worker is not None:
             self.project_check_worker.stop()
@@ -304,6 +744,8 @@ class V2Daemon:
                 self.runtime.memory_session_store.set_migration_status(project.project_id, "failed", str(exc))
 
     def restart_integrations(self) -> None:
+        if self.experimental_owner_only:
+            raise RuntimeError('owner_only_integrations_unavailable')
         self._align_configured_provider_addresses()
         start_runtime_integrations(
             self.runtime,
@@ -329,6 +771,8 @@ class V2Daemon:
             return "Access denied: administrator privileges are required."
         if result["status"] == "no_active_task":
             return "Kill switch checked: no active task is running."
+        if result["status"] == "effect_already_committed":
+            return "The task's effect was already committed, so cancellation was too late."
         notice = "queued" if result.get("notification_outbox_id") else "could not be queued"
         return f"Kill switch engaged. Active task cancelled; owner security notice {notice}. Audit: {result['audit_id']}."
 
@@ -338,11 +782,22 @@ class V2Daemon:
         source_value = dict(source or {})
         if not self.runtime.user_store.is_admin(actor):
             return {"authorized": False, "status": "denied", "active_task": {}, "audit_id": ""}
-        active = self.kill_switch.request_cancel()
+        cancel_status, active = self.kill_switch.request_cancel_status()
+        if cancel_status == 'effect_already_committed':
+            audit_id = self.kill_switch_audit.record(actor_user_id=actor, source=source_value, active=active, status=cancel_status)
+            return {"authorized": True, "status": cancel_status, "active_task": {
+                "message_id": active.message_id, "task_id": active.task_id, "user_id": active.user_id,
+                "project_id": active.project_id,
+            }, "audit_id": audit_id}
         if active is None:
             audit_id = self.kill_switch_audit.record(actor_user_id=actor, source=source_value, active=None, status="no_active_task")
             return {"authorized": True, "status": "no_active_task", "active_task": {}, "audit_id": audit_id}
-        notification_outbox_id, notification_error = self._queue_killswitch_notice(active)
+        if self.experimental_owner_only:
+            # This worker has no legacy outbox dispatcher; leave no delayed
+            # unfenced notice that could be sent after switching modes.
+            notification_outbox_id, notification_error = '', 'owner_notice_unavailable'
+        else:
+            notification_outbox_id, notification_error = self._queue_killswitch_notice(active)
         audit_id = self.kill_switch_audit.record(
             actor_user_id=actor, source=source_value, active=active, status="cancel_requested",
             notification_outbox_id=notification_outbox_id, notification_error=notification_error,
@@ -690,6 +1145,10 @@ class V2Daemon:
         if not callable(connect):
             return 0
         with connect() as conn:
+            if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_owner_abandoned'").fetchone():
+                conn.execute('DELETE FROM v2_owner_abandoned WHERE owner_id=?', (user_id,))
+            if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_trusted_owner_ingress'").fetchone():
+                conn.execute('DELETE FROM v2_trusted_owner_ingress WHERE owner_id=?', (user_id,))
             return conn.execute("DELETE FROM v2_inbound_messages WHERE user_id=?", (user_id,)).rowcount
 
     def _delete_user_outbound_data(self, user_id: str) -> int:
@@ -715,6 +1174,8 @@ class V2Daemon:
         return [request.to_dict() for request in self.runtime.user_store.list_access_requests()]
 
     def approve_access_request(self, *, request_id: str, display_name: str = "", user_id: str = "") -> dict[str, object]:
+        if self.experimental_owner_only:
+            raise RuntimeError('owner_only_integrations_unavailable')
         request, address = self.runtime.user_store.approve_access_request(
             request_id,
             display_name=display_name,
@@ -901,7 +1362,6 @@ class V2Daemon:
         current = self.runtime.intelligence_engine_settings_store.get()
         saved = self.runtime.intelligence_engine_settings_store.save(IntelligenceEngineSettings(
             default_engine=str(values.get("default_engine") or current.default_engine),
-            v3_project_ids=tuple(str(item) for item in values.get("v3_project_ids", current.v3_project_ids)),
         ))
         return saved.to_dict()
 
@@ -1307,11 +1767,7 @@ class V2Daemon:
         return {"status": result["status"], "source": result, "expansion": "current_authorized_source; not retained decision text"}
 
     def pop_activity_events(self) -> list[dict[str, Any]]:
-        """Legacy destructive-looking API backed by a shared event journal.
-
-        Old TUI clients retain their one-shot polling behaviour while Desktop
-        clients can use a cursor without stealing events from the TUI.
-        """
+        """Compatibility polling backed by a shared, non-destructive journal."""
         with self._event_lock:
             self._collect_activity_events()
             events = [event for event in self._activity_event_journal if int(event["sequence"]) > self._legacy_activity_cursor]
@@ -1342,6 +1798,57 @@ class V2Daemon:
             ][: max(1, min(int(limit or 100), 500))]
             next_sequence = int(matched[-1]["sequence"]) if matched else cursor
             return matched, next_sequence
+
+    def register_owner_checkpoint(self, checkpoint: Any, context: Any) -> None:
+        """Register a terminal candidate checkpoint for opt-in owner pickup."""
+        from alphonse.agent_v2.core.intelligence.simple_loop.owner_atomic_checkpoint import OwnerAtomicCheckpoint
+        from alphonse.agent_v2.core.core import CoreLoopContext
+        if (type(checkpoint) is not OwnerAtomicCheckpoint or not isinstance(context, CoreLoopContext)
+                or checkpoint.queue is not self.runtime.queue or context.messages is not checkpoint.queue
+                or context.claim_receipt is not checkpoint.receipt or checkpoint.task.message_id != checkpoint.task.task_id):
+            raise ValueError('owner_desktop_pickup_unavailable')
+        saved, _ = checkpoint.load(expected_version=checkpoint.version)
+        if saved.state.status not in {'completed', 'waiting_user'}:
+            raise ValueError('owner_desktop_pickup_unavailable')
+        with self._owner_checkpoint_lock:
+            if checkpoint.task.message_id in self._owner_checkpoints:
+                raise ValueError('owner_desktop_pickup_unavailable')
+            self._owner_checkpoints[checkpoint.task.message_id] = (checkpoint, context)
+
+    def take_owner_desktop_draft(self, message_id: str) -> dict:
+        """Take a registered draft once; caller must authenticate the local owner."""
+        if not isinstance(message_id, str) or re.fullmatch(r'[0-9a-f]{32}', message_id) is None:
+            raise ValueError('owner_desktop_pickup_unavailable')
+        with self._owner_checkpoint_lock:
+            pair = self._owner_checkpoints.get(message_id)
+            if pair is None:
+                raise ValueError('owner_desktop_pickup_unavailable')
+            if getattr(self, 'experimental_owner_only', False):
+                with self._owner_status_lock:
+                    if self._owner_statuses.get(message_id) != 'ready':
+                        raise ValueError('owner_desktop_pickup_unavailable')
+            result = pair[0].take_desktop_draft(pair[1])
+            if hasattr(self, '_owner_status_lock'):
+                with self._owner_status_lock:
+                    self._owner_statuses[message_id] = 'started_unconfirmed'
+            return result
+
+    def acknowledge_owner_desktop_draft(self, message_id: str, token: str) -> None:
+        """Record an authenticated client's acknowledgement of a pickup."""
+        if not isinstance(message_id, str) or re.fullmatch(r'[0-9a-f]{32}', message_id) is None:
+            raise ValueError('owner_desktop_ack_unavailable')
+        with self._owner_checkpoint_lock:
+            pair = self._owner_checkpoints.get(message_id)
+            if pair is None:
+                from alphonse.agent_v2.core.intelligence.simple_loop.owner_atomic_checkpoint import verify_finalized_owner_ack
+                if verify_finalized_owner_ack(self.runtime.queue, message_id, token):
+                    return
+                raise ValueError('owner_desktop_ack_unavailable')
+            pair[0].acknowledge_desktop_draft(pair[1], token)
+            del self._owner_checkpoints[message_id]
+            if hasattr(self, '_owner_status_lock'):
+                with self._owner_status_lock:
+                    self._owner_statuses[message_id] = 'client_acknowledged'
 
     def poll_desktop(
         self,
@@ -1382,7 +1889,7 @@ class V2Daemon:
         )
         selector = OutboundSelector(integration_id="desktop", channel_target=normalized_user, status="pending")
         deliveries: list[dict[str, Any]] = []
-        for _ in range(max(1, min(int(limit or 20), 100))):
+        for _ in range(0 if self.experimental_owner_only else max(1, min(int(limit or 20), 100))):
             delivery = self.runtime.outbox.claim_next(selector, lease_owner=f"desktop:{normalized_client}", lease_seconds=120)
             if delivery is None:
                 break
@@ -1399,10 +1906,10 @@ class V2Daemon:
                 ),
             })
         questions = []
-        for question in self.runtime.question_store.list_pending_for_respondent(
+        for question in ([] if self.experimental_owner_only else self.runtime.question_store.list_pending_for_respondent(
             normalized_user,
             project_id=None,
-        ):
+        )):
             event = self._record_question_conversation_event(question)
             questions.append({
                 **question.to_dict(),
@@ -1425,15 +1932,17 @@ class V2Daemon:
                 project_id=normalized_project,
             ) + ui_events
             ui_events = self._a2ui_scheduled_task_events(ui_events, project_id=normalized_project)
-            ui_events.extend(
-                self._sync_question_surfaces(
+            if not self.experimental_owner_only:
+                ui_events.extend(self._sync_question_surfaces(
                     client_id=normalized_client,
                     user=normalized_user,
                     project_id=normalized_project,
-                )
-            )
+                ))
         else:
             ui_events = [item for item in ui_events if _event_name(item) != "scheduled_task_created"]
+        # Counts only: legacy TUI notifications may have ambiguous authority
+        # or an uncertain delivery. Never expose their content or retry them.
+        legacy_notifications = self.runtime.outbox.legacy_tui_unresolved_summary(normalized_user)
         return {
             "daemon_id": self.daemon_id,
             "daemon_changed": daemon_changed,
@@ -1443,6 +1952,7 @@ class V2Daemon:
             "questions": questions,
             "ui_events": ui_events,
             "next_ui_sequence": next_ui_sequence,
+            "legacy_notification_review": legacy_notifications,
             "server_capabilities": self._a2ui.server_capabilities(),
             "conversation_has_unseen_messages": self.runtime.conversation_store.user_has_unseen_messages(owner_user_id=normalized_user, local_date=day.isoformat(), start_utc=day_start.isoformat(), end_utc=day_end.isoformat()),
             "status": {"active_work": self.active_work(), "activity": self.activity_status(), "queue": self._inbound_queue_status()},
@@ -1450,15 +1960,23 @@ class V2Daemon:
             "widget_context": self.desktop_widget_context(normalized_user, capabilities.get("widgetIds")),
         }
 
-    def acknowledge_desktop_delivery(self, *, client_id: str, outbox_message_id: str) -> bool:
+    def acknowledge_desktop_delivery(self, *, client_id: str, outbox_message_id: str,
+                                     attempt_count: int | None = None) -> bool:
+        # A client that echoes the acquisition count must identify this exact
+        # claim, including after the same client reacquires a delivery. Older
+        # clients remain supported, but their acknowledgements lack this fence.
+        if attempt_count is not None and (type(attempt_count) is not int or attempt_count < 1):
+            return False
         delivery = self.runtime.outbox.get(outbox_message_id)
+        if attempt_count is not None and (delivery is None or delivery.attempt_count != attempt_count):
+            return False
         expected_owner = f"desktop:{str(client_id or 'desktop').strip() or 'desktop'}"
         late_owner = str(delivery.metadata.get("unconfirmed_lease_owner") or "") if delivery is not None else ""
         valid_lease = delivery is not None and (delivery.lease_owner == expected_owner or
                       (delivery.status == "unconfirmed" and late_owner == expected_owner))
         if delivery is None or delivery.integration_id != "desktop" or not valid_lease:
             return False
-        acknowledged = self.runtime.outbox.mark_delivered(outbox_message_id)
+        acknowledged = self.runtime.outbox.acknowledge_desktop_claim(delivery, lease_owner=expected_owner)
         if acknowledged:
             self._on_outbox_delivered(delivery)
         if acknowledged and delivery.task_id and delivery.kind != "task_acknowledgement":
@@ -1473,7 +1991,8 @@ class V2Daemon:
         day = _conversation_day(local_date, zone)
         start, end = _conversation_day_bounds(day, zone)
         legacy_project = str(project_id or "").strip()
-        if legacy_project and not self.runtime.conversation_store.legacy_import_completed(owner_user_id=normalized_user, project_id=legacy_project):
+        if (not self.experimental_owner_only and legacy_project
+                and not self.runtime.conversation_store.legacy_import_completed(owner_user_id=normalized_user, project_id=legacy_project)):
             project = self.runtime.project_store.get_project(legacy_project, requester_user_id=normalized_user, requester_is_admin=self.runtime.user_store.is_admin(normalized_user))
             if project is not None:
                 legacy = self.runtime.core.memory.latest_content(user_id=normalized_user, project_id=legacy_project)
@@ -1482,10 +2001,10 @@ class V2Daemon:
                     project_id=legacy_project,
                     events=legacy_ledger_events(legacy, owner_user_id=normalized_user, project_id=legacy_project, limit=10_000),
                 )
-        for question in self.runtime.question_store.list_for_conversation(
+        for question in ([] if self.experimental_owner_only else self.runtime.question_store.list_for_conversation(
             normalized_user,
             project_id=None,
-        ):
+        )):
             self._record_question_conversation_event(question)
         timeline = self.runtime.conversation_store.list_between(owner_user_id=normalized_user, start_utc=start.isoformat(), end_utc=end.isoformat())
         messages: dict[str, dict[str, Any]] = {}
@@ -1493,7 +2012,7 @@ class V2Daemon:
             # Older stores may contain both an outbound question and its
             # backfilled question event. Only an explicit outbox relationship
             # identifies them as the same event; equal text is not enough.
-            if event.source_message_id.startswith("outbound:"):
+            if not self.experimental_owner_only and event.source_message_id.startswith("outbound:"):
                 delivery = self.runtime.outbox.get(event.source_message_id.removeprefix("outbound:"))
                 question = self.runtime.question_store.get_question(delivery.question_id) if delivery and delivery.kind == "question" and delivery.question_id else None
                 if question is not None and question.respondent_user_id == normalized_user:
@@ -1845,7 +2364,7 @@ class V2Daemon:
             self.runtime.memory_session_store.bind(key, session)
         return session.to_dict()
 
-    def create_memory_session(self, *, user: str, project_id: str, name: str, integration_id: str = "tui", channel_target: str = "", thread_id: str = "") -> dict[str, object]:
+    def create_memory_session(self, *, user: str, project_id: str, name: str, integration_id: str = "desktop", channel_target: str = "", thread_id: str = "") -> dict[str, object]:
         actor = self._admin_user_id(user)
         project = self.runtime.project_store.get_project(project_id, requester_user_id=actor, requester_is_admin=self.runtime.user_store.is_admin(actor))
         if project is None: raise PermissionError("project_not_accessible")
@@ -1854,7 +2373,7 @@ class V2Daemon:
         self.runtime.memory_session_store.bind(key, session)
         return session.to_dict()
 
-    def select_memory_session(self, *, user: str, project_id: str, session_id: str, integration_id: str = "tui", channel_target: str = "", thread_id: str = "") -> dict[str, object]:
+    def select_memory_session(self, *, user: str, project_id: str, session_id: str, integration_id: str = "desktop", channel_target: str = "", thread_id: str = "") -> dict[str, object]:
         actor = self._admin_user_id(user)
         project = self.runtime.project_store.get_project(project_id, requester_user_id=actor, requester_is_admin=self.runtime.user_store.is_admin(actor))
         if project is None: raise PermissionError("project_not_accessible")
@@ -1862,7 +2381,7 @@ class V2Daemon:
         self.runtime.memory_session_store.bind(MemorySessionBindingKey(actor, integration_id, channel_target or actor, thread_id, project.project_id), session)
         return session.to_dict()
 
-    def close_memory_session(self, *, user: str, project_id: str, session_id: str, integration_id: str = "tui", channel_target: str = "", thread_id: str = "") -> dict[str, object]:
+    def close_memory_session(self, *, user: str, project_id: str, session_id: str, integration_id: str = "desktop", channel_target: str = "", thread_id: str = "") -> dict[str, object]:
         actor = self._admin_user_id(user)
         project = self.runtime.project_store.get_project(project_id, requester_user_id=actor, requester_is_admin=self.runtime.user_store.is_admin(actor))
         if project is None: raise PermissionError("project_not_accessible")
@@ -2092,7 +2611,7 @@ class V2Daemon:
                     "routing_disposition": "correlated_response",
                 },
                 integration_id="desktop",
-                provider_key="tui",
+                provider_key="desktop",
                 channel_target=normalized_user,
             )
             payload_result = result.to_dict()
@@ -2267,6 +2786,8 @@ class V2Daemon:
         ]
 
     def save_telegram_integration(self, *, user: str, values: dict[str, Any]) -> dict[str, Any]:
+        if self.experimental_owner_only:
+            raise RuntimeError('owner_only_integrations_unavailable')
         existing = self.runtime.integration_store.get(str(values.get("integration_id") or "")) or self.runtime.integration_store.get_by_provider("telegram")
         secrets = dict(existing.secrets) if existing is not None else {}
         token = str(values.get("bot_token") or "").strip()
@@ -2304,6 +2825,8 @@ class V2Daemon:
         return record.to_dict()
 
     def save_discord_integration(self, *, user: str, values: dict[str, Any]) -> dict[str, Any]:
+        if self.experimental_owner_only:
+            raise RuntimeError('owner_only_integrations_unavailable')
         existing = self.runtime.integration_store.get(str(values.get("integration_id") or "")) or self.runtime.integration_store.get_by_provider("discord")
         secrets = dict(existing.secrets) if existing is not None else {}
         token = str(values.get("bot_token") or "").strip()
@@ -2411,7 +2934,7 @@ class V2Daemon:
         return {"ready": ready, "processing": processing, "retry_wait": int(values.get("retry_wait", 0) or 0)}
 
     def ui_events_since(self, *, after_sequence: int = 0, user: str, limit: int = 100) -> tuple[list[dict[str, Any]], int]:
-        """Return ordered AG-UI events without changing TUI activity polling."""
+        """Return ordered AG-UI events without changing activity polling."""
         with self._ui_event_lock:
             self._collect_ui_events()
             cursor = max(0, int(after_sequence or 0))
@@ -2485,6 +3008,17 @@ class V2Daemon:
             return dict(self._activity_status)
 
     def run_once(self) -> Any:
+        if not self._run_once_lock.acquire(blocking=False):
+            from alphonse.agent_v2.core.core import LoopStepResult
+            from alphonse.agent_v2.core.state.runtime import State
+            state = State.snapshot()
+            return LoopStepResult(status=LoopStepStatus.BUSY, state_before=state, state_after=state)
+        try:
+            return self._run_once_exclusive()
+        finally:
+            self._run_once_lock.release()
+
+    def _run_once_exclusive(self) -> Any:
         # The experimental queue can issue fenced claims, but this daemon does
         # not yet carry their receipts through publication and acknowledgement.
         # Refuse the entire turn before retention, reconciliation, presence,
@@ -2511,6 +3045,12 @@ class V2Daemon:
             self.event_store.execution_lifecycle(event_execution_id, "processing")
         with self.runtime.presence_projector.processing(queued):
             step = self.runtime.core.step()
+            if step.status == LoopStepStatus.SUPERSEDED:
+                # The processing context otherwise emits a failure on exit.
+                # No snapshot, queue disposition, event or notification may be
+                # published from this superseded run.
+                self.runtime.presence_projector.discard()
+                return step
             if step.status in {
                 LoopStepStatus.PROCESSED,
                 LoopStepStatus.YIELDED,
@@ -2523,6 +3063,13 @@ class V2Daemon:
                     failed=step.status == LoopStepStatus.FAILED,
                     waiting=step.status in {LoopStepStatus.PARKED, LoopStepStatus.WAITING},
                 )
+        # An unadvertised fenced receipt may only be discovered when core
+        # dequeues it.  The daemon has no claim-aware disposition or
+        # publication path, so do not reconcile events, inspect a possibly
+        # unrelated snapshot, acknowledge, retry, or publish after refusal.
+        # Prework above may already have occurred; this is not claim fencing.
+        if step.status == LoopStepStatus.BUSY and step.error == "claim_fencing_runtime_unavailable":
+            return step
         snapshot = self.runtime.visible_state.snapshot()
         queued_metadata = self._scheduled_metadata_for_step(queued, snapshot)
         occurrence_key = str(queued_metadata.get("occurrence_key") or "").strip()
@@ -2573,9 +3120,18 @@ class V2Daemon:
                 acknowledge = getattr(self.runtime.queue, "ack", None)
                 if callable(acknowledge):
                     if event_execution_id and step.status in {LoopStepStatus.PARKED, LoopStepStatus.WAITING}:
-                        acknowledge(step.queued_message_id, lease_owner=self.daemon_id, outcome="processing")
+                        acknowledged = acknowledge(step.queued_message_id, lease_owner=self.daemon_id, outcome="processing")
                     else:
-                        acknowledge(step.queued_message_id, lease_owner=self.daemon_id)
+                        acknowledged = acknowledge(step.queued_message_id, lease_owner=self.daemon_id)
+                    if acknowledged is not True:
+                        # The legacy queue may have lost ownership before the
+                        # disposition. Projection already happened and cannot
+                        # be undone; do not additionally claim terminal success,
+                        # complete the checkpoint, or reconcile this event.
+                        # A durable claim-bound publication protocol is still
+                        # required to prevent the earlier stale projection.
+                        logger.warning("Inbound acknowledgement was rejected; reconciliation is required")
+                        return self._rejected_queue_disposition(step)
             if step.status == LoopStepStatus.PROCESSED:
                 self._mark_snapshot_checkpoint_terminal(snapshot, status="done")
                 if occurrence_key:
@@ -2585,9 +3141,12 @@ class V2Daemon:
             acknowledge = getattr(self.runtime.queue, "ack", None)
             if callable(acknowledge):
                 if event_execution_id:
-                    acknowledge(step.queued_message_id, lease_owner=self.daemon_id, outcome="cancelled")
+                    acknowledged = acknowledge(step.queued_message_id, lease_owner=self.daemon_id, outcome="cancelled")
                 else:
-                    acknowledge(step.queued_message_id, lease_owner=self.daemon_id)
+                    acknowledged = acknowledge(step.queued_message_id, lease_owner=self.daemon_id)
+                if acknowledged is not True:
+                    logger.warning("Inbound cancellation acknowledgement was rejected; reconciliation is required")
+                    return self._rejected_queue_disposition(step)
             self._mark_snapshot_checkpoint_terminal(snapshot, status="cancelled")
             if occurrence_key:
                 self.runtime.schedule_store.mark_occurrence_cancelled(occurrence_key)
@@ -2601,13 +3160,19 @@ class V2Daemon:
                 self._record_selected_model_access_warning(error)
             retry = getattr(self.runtime.queue, "retry", None)
             if callable(retry):
-                retry(
+                disposition_recorded = retry(
                     step.queued_message_id,
                     error=error,
                     next_attempt_at=datetime.now(timezone.utc) + timedelta(seconds=5),
                     lease_owner=self.daemon_id,
                     max_attempts=1 if non_retryable else self.inbound_max_attempts,
                 )
+                if disposition_recorded is not True:
+                    # The queue did not accept this worker's outcome. Avoid
+                    # announcing failure/retry or reconciling another owner's
+                    # event based on a disposition that never happened.
+                    logger.warning("Inbound retry disposition was rejected; reconciliation is required")
+                    return self._rejected_queue_disposition(step)
             status_for = getattr(self.runtime.queue, "status_for", None)
             terminal = non_retryable or (callable(status_for) and status_for(step.queued_message_id) == "failed")
             if terminal:
@@ -3006,6 +3571,15 @@ class V2Daemon:
             progress=_task_progress_snapshot(task),
         ))
 
+    def _rejected_queue_disposition(self, step: Any) -> Any:
+        # These are daemon-local indicators, not the task checkpoint or the
+        # generation-less core FSM. Do not clear cancellation or reset the FSM:
+        # ownership and the durable outcome still require reconciliation.
+        with self._active_work_lock:
+            self._active_work = {}
+            self._activity_status = {"state": "error", "updated_at": datetime.now(timezone.utc).isoformat()}
+        return replace(step, status=LoopStepStatus.SUPERSEDED, queued_message_id=None, error=None)
+
     def _set_activity_status(self, state: str) -> None:
         with self._active_work_lock:
             self._activity_status = {"state": state, "updated_at": datetime.now(timezone.utc).isoformat()}
@@ -3260,6 +3834,8 @@ def _scheduled_failure_is_non_retryable(error: str) -> bool:
     return _scheduled_failure_code(error) in {
         "capd_processing_failed",
         "inference_cancelled",
+        "intelligence_engine_unregistered",
+        "candidate_checkpoint_unavailable",
         "openai_codex_auth_required",
         "openai_codex_cli_missing",
         "openai_codex_cli_upgrade_required",
@@ -3281,6 +3857,8 @@ def _scheduled_failure_message(task_name: str, error: str) -> str:
     code = _scheduled_failure_code(error)
     if error == "v3_task_failed:scheduled_delivery_repetition_unresolved":
         detail = "A similar message was already queued or delivered. I stopped to avoid sending it again; please check before retrying."
+    elif code in {"intelligence_engine_unregistered", "candidate_checkpoint_unavailable"}:
+        detail = "This saved task cannot run in the current version. Its previous state needs review before any work is restarted."
     elif code == "system_one_unavailable":
         detail = _system_one_failure_detail(error)
     elif code == "openai_codex_auth_required":
@@ -3318,6 +3896,8 @@ def _system_one_failure_detail(error: str) -> str:
 def _inbound_failure_message(error: str, model_id: str, *, task_state=None) -> str:
     code = _scheduled_failure_code(error)
     model = str(model_id or "").strip()
+    if code in {"intelligence_engine_unregistered", "candidate_checkpoint_unavailable"}:
+        return "I couldn't run this saved task in the current version. Its previous state needs review before any work is restarted."
     if code == "system_one_unavailable":
         detail = _system_one_failure_detail(error)
         metadata = (task_state.get('metadata') or {}) if isinstance(task_state, dict) else {}
@@ -3442,7 +4022,8 @@ def main() -> None:
             build_runtime_host(
                 user=user_store.admin_user().user_id if user_store.admin_user() else "",
                 user_store=user_store,
-                messages=SQLiteMessageQueue.default(lease_owner=daemon_id),
+                messages=SQLiteMessageQueue(default_database_path(), lease_owner=daemon_id,
+                    experimental_claim_fencing=True),
                 question_store=SQLiteQuestionStore.default(),
                 project_store=ProjectStore.default(),
                 schedule_store=ScheduledTaskStore.default(),
@@ -3462,9 +4043,13 @@ def main() -> None:
                 project_session_store=SQLiteProjectSessionStore.default(),
                 memory_session_store=SQLiteMemorySessionStore.default(),
                 communication_thread_store=SQLiteCommunicationThreadStore.default(),
+                experimental_owner_read=True,
+                owner_selected_draft_sink=lambda *_: None,
             ),
             daemon_id=daemon_id,
+            experimental_owner_only=True,
         )
+        logger.warning('Simple loop: owner-only read conversation; schedulers and integrations are disabled.')
         daemon._lock_file = startup_lock
         startup_lock = None
     finally:

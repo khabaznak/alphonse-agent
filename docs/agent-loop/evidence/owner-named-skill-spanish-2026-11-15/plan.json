@@ -1,0 +1,14 @@
+{
+  "purpose": "Exercise an explicit Spanish named-skill request through the owner worker",
+  "prompt": "Usa la habilidad meal-planning para sugerir una comida.",
+  "fixture": "Disposable synthetic meal-planning package and SQLite database; no household data or external effects",
+  "instruction": "Para este ejercicio, sugiere avena con azafrán como comida.",
+  "oracle": [
+    "The worker chooses native.owner_named_skill for the exact requested package",
+    "The full fixture instructions appear in the subsequent model prompt",
+    "The answer includes avena and azafrán",
+    "The ready draft is recovered before pickup"
+  ],
+  "provider": "Codex CLI subscription, gpt-6-luna; no Jev",
+  "limit": "One attempt; this does not test automatic selection, resource execution, or general Spanish intent"
+}

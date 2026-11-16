@@ -5,7 +5,6 @@ import pytest
 
 from alphonse.agent_v2.core.core import CoreLoopContext
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
-from alphonse.agent_v2.core.intelligence.v3.planner import plan_phase
 from alphonse.agent_v2.core.memory.clarification import authenticated_answers
 from alphonse.agent_v2.core.memory.retry_context import (
     prepare_retry_continuity, retry_continuity_context, retry_source_unresolved,
@@ -119,18 +118,6 @@ def test_later_correction_invalidates_assessment_and_includes_both_questions():
     assert 'Which invoice and exact values?' in calls[-1].prompt
 
 
-def test_complete_answer_releases_planner_without_bypassing_scope_validation():
-    task = setup(); context, calls = context_with(judgment()); prepare_retry_continuity(task, context)
-    phase = dict(schema_version=3, phase_id='update', objective='Update fixture and read back',
-        acceptance_criteria=['Requested invoice values are saved and read back'], criterion_ids=['ac-1'],
-        authorized_capabilities=['local_shell'], mutation_scope={'allowed_paths':['fixture.sqlite'],'allow_external_effects':False},
-        subgoals=[dict(subgoal_id='write', objective='Update fixture and verify', required_output_type='verified_record',
-            allowed_capabilities=['local_shell'], allowed_side_effects=['project_mutation'], completion={'kind':'output_present'})])
-    context.inference.generate_json = lambda request: SimpleNamespace(json_value=deepcopy(phase))
-    context.system_one.select_plan_tools = lambda **kw: SystemOneToolRegistrySelection()
-    result = plan_phase(task, context)
-    assert result.phase_id == 'update' and result.mutation_scope.allowed_paths == ('fixture.sqlite',)
-    assert not task.hierarchical_state  # Planning did not execute an update.
 
 
 def test_oversized_current_answer_is_withheld_without_a_provider_call():
@@ -169,4 +156,3 @@ def test_cached_assessment_cannot_render_or_execute_with_invalid_answer_referenc
 
 
 # Existing scripted providers delegate the shared interpretation call explicitly.
-pytestmark = pytest.mark.usefixtures("task_understanding_provider")
