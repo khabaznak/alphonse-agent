@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import hashlib
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
@@ -13,7 +14,7 @@ from alphonse.agent_v2.core.io.outbox import SQLiteOutboundStore
 from alphonse.agent_v2.core.questions import SQLiteQuestionStore
 from alphonse.agent_v2.database import DEFAULT_BUSY_TIMEOUT_MS, connect_database, default_database_path
 from alphonse.agent_v2.retention import prune_operational_data
-from alphonse.agent_v2.storage_migration import migrate_legacy_databases
+from alphonse.agent_v2.storage_migration import _copy_table, migrate_legacy_databases
 from alphonse.agent_v2.users import V2UserStore
 
 
@@ -125,6 +126,293 @@ def test_failed_migration_does_not_modify_legacy_database(tmp_path) -> None:
 
     with sqlite3.connect(source) as connection:
         assert connection.execute("SELECT value FROM v2_unknown WHERE id='one'").fetchone()[0] == "still here"
+
+
+def test_migration_refuses_colliding_backup_names_without_overwriting_sources(tmp_path) -> None:
+    sources = [tmp_path / directory / 'legacy.sqlite3' for directory in ('first', 'second')]
+    for index, source in enumerate(sources):
+        source.parent.mkdir()
+        with sqlite3.connect(source) as connection:
+            connection.execute('CREATE TABLE fixture (value TEXT)')
+            connection.execute('INSERT INTO fixture VALUES (?)', (str(index),))
+
+    with pytest.raises(RuntimeError, match='unified_migration_backup_name_conflict'):
+        migrate_legacy_databases(target=tmp_path / 'target.sqlite3', sources=sources,
+                                 backup_root=tmp_path / 'backups')
+    assert not (tmp_path / 'backups').exists()
+    for index, source in enumerate(sources):
+        with sqlite3.connect(source) as connection:
+            assert connection.execute('SELECT value FROM fixture').fetchone()[0] == str(index)
+
+
+@pytest.mark.parametrize('second_value, should_conflict', [('same', False), ('different', True)])
+def test_migration_checks_existing_primary_key_contents(tmp_path, second_value, should_conflict) -> None:
+    sources = [tmp_path / 'first.sqlite3', tmp_path / 'second.sqlite3']
+    for source, value in zip(sources, ('same', second_value)):
+        with sqlite3.connect(source) as connection:
+            connection.execute('CREATE TABLE v2_user_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL)')
+            connection.execute('INSERT INTO v2_user_settings VALUES (?, ?, ?)', ('fixture', value, 'synthetic'))
+    target = tmp_path / 'target.sqlite3'
+    if should_conflict:
+        with pytest.raises(RuntimeError, match='unified_migration_row_conflict: v2_user_settings'):
+            migrate_legacy_databases(target=target, sources=sources, backup_root=tmp_path / 'backups')
+    else:
+        assert migrate_legacy_databases(target=target, sources=sources, backup_root=tmp_path / 'backups')['status'] == 'migrated'
+    with sqlite3.connect(target) as connection:
+        assert connection.execute("SELECT value FROM v2_user_settings WHERE key='fixture'").fetchone()[0] == 'same'
+        marker = connection.execute("SELECT 1 FROM v2_schema_migrations WHERE migration_id='2026-07-30-unified-v2-database'").fetchone()
+        assert bool(marker) is not should_conflict
+    for source, value in zip(sources, ('same', second_value)):
+        with sqlite3.connect(source) as connection:
+            assert connection.execute('SELECT value FROM v2_user_settings').fetchone()[0] == value
+
+
+def _migration_fixture(tmp_path, *, source_sql, destination_sql, source_rows, target_rows=()):
+    source = tmp_path / 'source.sqlite3'
+    with sqlite3.connect(source) as connection:
+        connection.execute(source_sql)
+        connection.executemany('INSERT INTO v2_fixture VALUES (' + ','.join('?' for _ in source_rows[0]) + ')', source_rows)
+    connection = sqlite3.connect(tmp_path / 'target.sqlite3')
+    connection.execute(destination_sql)
+    if target_rows:
+        connection.executemany('INSERT INTO v2_fixture VALUES (' + ','.join('?' for _ in target_rows[0]) + ')', target_rows)
+    connection.commit()
+    connection.execute('ATTACH DATABASE ? AS legacy_0', (str(source),))
+    return connection
+
+
+def test_migration_rejects_partial_composite_key(tmp_path):
+    connection = _migration_fixture(tmp_path,
+        source_sql='CREATE TABLE v2_fixture (part_a TEXT, value TEXT)',
+        destination_sql='CREATE TABLE v2_fixture (part_a TEXT, part_b TEXT DEFAULT "default", value TEXT, PRIMARY KEY (part_a, part_b))',
+        source_rows=[('one', 'value')])
+    with pytest.raises(RuntimeError, match='unified_migration_source_key_missing'), connection:
+        _copy_table(connection, alias='legacy_0', table='v2_fixture')
+    assert connection.execute('SELECT COUNT(*) FROM v2_fixture').fetchone()[0] == 0
+    connection.close()
+
+
+def test_migration_preserves_older_schema_with_new_optional_destination_column(tmp_path):
+    connection = _migration_fixture(tmp_path,
+        source_sql='CREATE TABLE v2_fixture (id TEXT PRIMARY KEY, value TEXT)',
+        destination_sql='CREATE TABLE v2_fixture (id TEXT PRIMARY KEY, value TEXT, extra TEXT DEFAULT "new")',
+        source_rows=[('one', 'value')])
+    with connection:
+        _copy_table(connection, alias='legacy_0', table='v2_fixture')
+    assert connection.execute('SELECT * FROM v2_fixture').fetchone() == ('one', 'value', 'new')
+    connection.close()
+
+
+def test_migration_refuses_to_drop_source_only_columns(tmp_path):
+    connection = _migration_fixture(tmp_path,
+        source_sql='CREATE TABLE v2_fixture (id TEXT PRIMARY KEY, value TEXT, old_context TEXT)',
+        destination_sql='CREATE TABLE v2_fixture (id TEXT PRIMARY KEY, value TEXT)',
+        source_rows=[('one', 'value', 'preserve')])
+    with pytest.raises(RuntimeError, match='unified_migration_source_columns_unmapped'), connection:
+        _copy_table(connection, alias='legacy_0', table='v2_fixture')
+    assert connection.execute('SELECT old_context FROM legacy_0.v2_fixture').fetchone()[0] == 'preserve'
+    connection.close()
+
+
+def test_migration_refuses_existing_non_keyed_rows(tmp_path):
+    connection = _migration_fixture(tmp_path,
+        source_sql='CREATE TABLE v2_fixture (value TEXT, context TEXT)',
+        destination_sql='CREATE TABLE v2_fixture (value TEXT UNIQUE, context TEXT)',
+        source_rows=[('one', 'source')], target_rows=[('one', 'different')])
+    with pytest.raises(RuntimeError, match='unified_migration_unkeyed_target_not_empty'), connection:
+        _copy_table(connection, alias='legacy_0', table='v2_fixture')
+    assert connection.execute('SELECT context FROM v2_fixture').fetchone()[0] == 'different'
+    connection.close()
+
+
+def test_migration_checks_non_keyed_duplicate_multiplicity(tmp_path):
+    connection = _migration_fixture(tmp_path,
+        source_sql='CREATE TABLE v2_fixture (value TEXT, context TEXT)',
+        destination_sql='CREATE TABLE v2_fixture (value TEXT UNIQUE, context TEXT)',
+        source_rows=[('one', 'same'), ('one', 'same')])
+    with pytest.raises(RuntimeError, match='unified_migration_row_validation_failed'), connection:
+        _copy_table(connection, alias='legacy_0', table='v2_fixture')
+    connection.close()
+
+
+def test_migration_refuses_non_keyed_retry_without_duplicating_rows(tmp_path):
+    connection = _migration_fixture(tmp_path,
+        source_sql='CREATE TABLE v2_fixture (value TEXT, context TEXT)',
+        destination_sql='CREATE TABLE v2_fixture (value TEXT, context TEXT)',
+        source_rows=[('one', 'same'), ('one', 'same')])
+    with connection:
+        _copy_table(connection, alias='legacy_0', table='v2_fixture')
+    with pytest.raises(RuntimeError, match='unified_migration_unkeyed_target_not_empty'), connection:
+        _copy_table(connection, alias='legacy_0', table='v2_fixture')
+    assert connection.execute('SELECT value, context FROM v2_fixture').fetchall() == [('one', 'same'), ('one', 'same')]
+    connection.close()
+
+
+def test_populated_legacy_conversation_migrates_with_verified_index(tmp_path):
+    source = tmp_path / 'conversations.sqlite3'
+    store = SQLiteConversationStore(source)
+    event = store.record(owner_user_id='owner', role='user', content='synthetic apple',
+                         source='test', source_message_id='fixture')
+    deleted = store.record(owner_user_id='owner', role='user', content='synthetic deleted',
+                           source='test', source_message_id='deleted')
+    assert store.delete(event_id=deleted.event_id, owner_user_id='owner')
+    target = tmp_path / 'target.sqlite3'
+    args = dict(target=target, sources=[source], backup_root=tmp_path / 'backups')
+    assert migrate_legacy_databases(**args)['status'] == 'migrated'
+    assert migrate_legacy_databases(**args)['status'] == 'already_applied'
+    with sqlite3.connect(source) as connection:
+        assert connection.execute('SELECT event_id, content FROM v2_conversation_events').fetchone() == (event.event_id, 'synthetic apple')
+    with sqlite3.connect(target) as connection:
+        assert connection.execute('SELECT event_id, content FROM v2_conversation_events').fetchall() == [(event.event_id, 'synthetic apple')]
+        assert connection.execute('SELECT event_id FROM v2_conversation_tombstones').fetchall() == [(deleted.event_id,)]
+        assert connection.execute('SELECT event_id, content FROM v2_conversation_fts').fetchall() == [(event.event_id, 'synthetic apple')]
+    assert [item.event_id for item in SQLiteConversationStore(target).search(owner_user_id='owner', query='apple')] == [event.event_id]
+
+
+def test_migration_refuses_inconsistent_source_conversation_index(tmp_path):
+    source = tmp_path / 'conversations.sqlite3'
+    event = SQLiteConversationStore(source).record(owner_user_id='owner', role='user', content='synthetic',
+                                                  source='test', source_message_id='fixture')
+    with sqlite3.connect(source) as connection:
+        connection.execute('DELETE FROM v2_conversation_fts WHERE event_id=?', (event.event_id,))
+    target = tmp_path / 'target.sqlite3'
+    with pytest.raises(RuntimeError, match='unified_migration_conversation_fts_mismatch'):
+        migrate_legacy_databases(target=target, sources=[source], backup_root=tmp_path / 'backups')
+    with sqlite3.connect(source) as connection:
+        assert connection.execute('SELECT event_id FROM v2_conversation_events').fetchone() == (event.event_id,)
+    with sqlite3.connect(target) as connection:
+        assert connection.execute('SELECT COUNT(*) FROM v2_conversation_events').fetchone()[0] == 0
+
+
+def test_migration_refuses_fake_fts_table(tmp_path):
+    source = tmp_path / 'conversations.sqlite3'
+    with sqlite3.connect(source) as connection:
+        connection.execute('CREATE TABLE v2_conversation_fts (event_id TEXT, owner_user_id TEXT, content TEXT)')
+        connection.execute("INSERT INTO v2_conversation_fts VALUES ('id', 'owner', 'do not discard')")
+    with pytest.raises(RuntimeError, match='unified_migration_conversation_fts_schema_invalid'):
+        migrate_legacy_databases(target=tmp_path / 'target.sqlite3', sources=[source], backup_root=tmp_path / 'backups')
+    with sqlite3.connect(source) as connection:
+        assert connection.execute('SELECT content FROM v2_conversation_fts').fetchone()[0] == 'do not discard'
+
+
+def test_migration_refuses_resurrection_of_destination_tombstone(tmp_path):
+    source = tmp_path / 'conversations.sqlite3'
+    event = SQLiteConversationStore(source).record(owner_user_id='owner', role='user', content='synthetic',
+                                                  source='test', source_message_id='fixture')
+    target = tmp_path / 'target.sqlite3'
+    SQLiteConversationStore(target)
+    with sqlite3.connect(target) as connection:
+        connection.execute('INSERT INTO v2_conversation_tombstones VALUES (?, ?, ?, ?)',
+                           (event.event_id, 'owner', 'synthetic', 'digest'))
+    with pytest.raises(RuntimeError, match='unified_migration_conversation_tombstone_conflict'):
+        migrate_legacy_databases(target=target, sources=[source], backup_root=tmp_path / 'backups')
+    with sqlite3.connect(target) as connection:
+        assert connection.execute('SELECT COUNT(*) FROM v2_conversation_events').fetchone()[0] == 0
+        assert connection.execute('SELECT event_id FROM v2_conversation_tombstones').fetchone() == (event.event_id,)
+
+
+def test_old_conversation_without_fts_builds_and_verifies_target_index(tmp_path):
+    source = tmp_path / 'conversations.sqlite3'
+    event = SQLiteConversationStore(source).record(owner_user_id='owner', role='user', content='synthetic pear',
+                                                  source='test', source_message_id='fixture')
+    with sqlite3.connect(source) as connection:
+        connection.execute('DROP TRIGGER v2_conversation_fts_insert')
+        connection.execute('DROP TABLE v2_conversation_fts')
+    target = tmp_path / 'target.sqlite3'
+    assert migrate_legacy_databases(target=target, sources=[source], backup_root=tmp_path / 'backups')['status'] == 'migrated'
+    assert [item.event_id for item in SQLiteConversationStore(target).search(owner_user_id='owner', query='pear')] == [event.event_id]
+
+
+def test_old_conversation_without_fts_refuses_target_index_not_updated(tmp_path, monkeypatch):
+    from alphonse.agent_v2 import storage_migration
+    source = tmp_path / 'conversations.sqlite3'
+    SQLiteConversationStore(source).record(owner_user_id='owner', role='user', content='synthetic pear',
+                                           source='test', source_message_id='fixture')
+    with sqlite3.connect(source) as connection:
+        connection.execute('DROP TRIGGER v2_conversation_fts_insert')
+        connection.execute('DROP TABLE v2_conversation_fts')
+    target = tmp_path / 'target.sqlite3'
+    storage_migration.initialize_unified_schema(target)
+    with sqlite3.connect(target) as connection:
+        connection.execute('DROP TRIGGER v2_conversation_fts_insert')
+    monkeypatch.setattr(storage_migration, 'initialize_unified_schema', lambda _: None)
+    with pytest.raises(RuntimeError, match='unified_migration_conversation_fts_mismatch'):
+        migrate_legacy_databases(target=target, sources=[source], backup_root=tmp_path / 'backups')
+    with sqlite3.connect(target) as connection:
+        assert connection.execute('SELECT COUNT(*) FROM v2_conversation_events').fetchone()[0] == 0
+
+
+def test_explicit_empty_migration_sources_never_scans_default_paths(tmp_path, monkeypatch):
+    from alphonse.agent_v2 import storage_migration
+    def no_default_scan():
+        raise AssertionError('unexpected default source scan')
+    monkeypatch.setattr(storage_migration, 'legacy_database_paths', no_default_scan)
+    target = tmp_path / 'target.sqlite3'
+    result = migrate_legacy_databases(target=target, sources=[], backup_root=tmp_path / 'backups')
+    assert result['status'] == 'no_sources'
+    assert result['sources'] == []
+    assert not target.exists()
+    source = tmp_path / 'legacy.sqlite3'
+    with sqlite3.connect(source) as connection:
+        connection.execute('CREATE TABLE v2_user_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL)')
+        connection.execute("INSERT INTO v2_user_settings VALUES ('fixture', 'preserved', 'synthetic')")
+    assert migrate_legacy_databases(target=target, sources=[source], backup_root=tmp_path / 'backups')['status'] == 'migrated'
+    with sqlite3.connect(target) as connection:
+        assert connection.execute("SELECT value FROM v2_user_settings WHERE key='fixture'").fetchone()[0] == 'preserved'
+
+
+@pytest.mark.parametrize('tombstone_in_source', [False, True])
+def test_migration_rejects_tombstone_digest_conflict_across_sources(tmp_path, tombstone_in_source):
+    source = tmp_path / 'conversations.sqlite3'
+    target = tmp_path / 'target.sqlite3'
+    source_store, target_store = SQLiteConversationStore(source), SQLiteConversationStore(target)
+    event_store = target_store if tombstone_in_source else source_store
+    event = event_store.record(owner_user_id='owner', role='user', content='synthetic',
+                               source='test', source_message_id='same-origin')
+    tombstone_path = source if tombstone_in_source else target
+    digest = hashlib.sha256(b'same-origin').hexdigest()
+    with sqlite3.connect(tombstone_path) as connection:
+        connection.execute('INSERT INTO v2_conversation_tombstones VALUES (?, ?, ?, ?)',
+                           ('different-event-id', 'owner', 'synthetic', digest))
+    with pytest.raises(RuntimeError, match='unified_migration_conversation_tombstone_conflict'):
+        migrate_legacy_databases(target=target, sources=[source], backup_root=tmp_path / 'backups')
+    with sqlite3.connect(target) as connection:
+        event_ids = [row[0] for row in connection.execute('SELECT event_id FROM v2_conversation_events')]
+        assert event_ids == ([event.event_id] if tombstone_in_source else [])
+
+
+def test_migration_does_not_match_blank_source_ids_to_blank_digest_tombstone(tmp_path):
+    source = tmp_path / 'conversations.sqlite3'
+    target = tmp_path / 'target.sqlite3'
+    event = SQLiteConversationStore(source).record(owner_user_id='owner', role='user', content='synthetic',
+                                                  source='test', source_message_id='')
+    SQLiteConversationStore(target)
+    with sqlite3.connect(target) as connection:
+        connection.execute('INSERT INTO v2_conversation_tombstones VALUES (?, ?, ?, ?)',
+                           ('different-event-id', 'owner', 'synthetic', hashlib.sha256(b'').hexdigest()))
+    assert migrate_legacy_databases(target=target, sources=[source], backup_root=tmp_path / 'backups')['status'] == 'migrated'
+    with sqlite3.connect(target) as connection:
+        assert connection.execute('SELECT event_id FROM v2_conversation_events').fetchone() == (event.event_id,)
+
+
+def test_migration_value_comparison_does_not_accept_nocase_conflicts(tmp_path):
+    connection = _migration_fixture(tmp_path,
+        source_sql='CREATE TABLE v2_fixture (id TEXT PRIMARY KEY, value TEXT)',
+        destination_sql='CREATE TABLE v2_fixture (id TEXT PRIMARY KEY COLLATE NOCASE, value TEXT COLLATE NOCASE)',
+        source_rows=[('same', 'lower')], target_rows=[('SAME', 'LOWER')])
+    with pytest.raises(RuntimeError, match='unified_migration_row_conflict'), connection:
+        _copy_table(connection, alias='legacy_0', table='v2_fixture')
+    connection.close()
+
+
+def test_migration_rejects_changed_sqlite_value_type(tmp_path):
+    connection = _migration_fixture(tmp_path,
+        source_sql='CREATE TABLE v2_fixture (id TEXT PRIMARY KEY, value)',
+        destination_sql='CREATE TABLE v2_fixture (id TEXT PRIMARY KEY, value)',
+        source_rows=[('same', 1)], target_rows=[('same', 1.0)])
+    with pytest.raises(RuntimeError, match='unified_migration_row_conflict'), connection:
+        _copy_table(connection, alias='legacy_0', table='v2_fixture')
+    connection.close()
 
 
 def test_checkpoint_omits_ledger_and_resumes_actionable_state(tmp_path) -> None:

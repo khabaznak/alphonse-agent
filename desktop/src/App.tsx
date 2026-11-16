@@ -22,7 +22,7 @@ import { onAction } from "@tauri-apps/plugin-notification";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { daemonRequest, ensureDaemon, playAlertSound, showInFinder, stopDaemon } from "./api";
-import { legacyNotificationReviewMessage, OwnerConversation, ownerUnavailableMessage, type OwnerCapability } from "./ownerConversation";
+import { legacyNotificationReviewMessage, OwnerConversation, ownerBusyFor, ownerUnavailableMessage, type OwnerCapability } from "./ownerConversation";
 import { abandonOwnerRequest, listOwnerRecovery, type OwnerRecoveryItem } from "./ownerRecovery";
 import { OwnerRecovery } from "./OwnerRecoveryPanel";
 import { LegacyNotificationReview } from "./LegacyNotificationReview";
@@ -43,7 +43,6 @@ import { readDismissedScheduledSurfaces, rememberDismissedScheduledSurface, with
 import { avatarState, avatarStateLabel, capdActivityLabel, canOpenSettingsSection, isCurrentDesktopAdmin, type Workspace, SETTINGS_SECTIONS } from "./layoutState";
 import { pollForKnownUser, reconcileQuestionSurfaces, reuseQuestions, withoutTaskProgressSurfaces } from "./pollState";
 import { appendQueueSample, type QueueSample } from "./queueHistory";
-import { appendPdcaActivity, type PdcaSample } from "./pdcaHistory";
 import type { ActivityEvent, AgentDocument, ChatMessage, CodeModeSettings, InferenceSettings, MediaToolsSettings, MemorySettings, Project, Question, SystemOneSettings, WebToolsSettings } from "./types";
 
 type Modal = "onboarding" | null;
@@ -151,7 +150,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const [ownerOnly, setOwnerOnly] = useState(false);
   const [ownerBlockingReason, setOwnerBlockingReason] = useState<string | null>(null);
   const [pausedLegacyRequests, setPausedLegacyRequests] = useState<number | null>(null);
-  const [ownerConversationBusy, setOwnerConversationBusy] = useState(false);
+  const [ownerBusySnapshot, setOwnerBusySnapshot] = useState<{ conversation: OwnerConversation | null; busy: boolean }>({ conversation: null, busy: false });
   const [ownerRecoveryItems, setOwnerRecoveryItems] = useState<OwnerRecoveryItem[]>([]);
   const [ownerRecoveryNotice, setOwnerRecoveryNotice] = useState("");
   const [legacyNotificationNotice, setLegacyNotificationNotice] = useState("");
@@ -165,6 +164,12 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const ownerConversation = useMemo(() =>
     isAdmin ? new OwnerConversation(daemonRequest) : null,
     [isAdmin, user]);
+  const ownerConversationRef = useRef(ownerConversation);
+  ownerConversationRef.current = ownerConversation;
+  const ownerConversationBusy = ownerBusyFor(ownerBusySnapshot, ownerConversation);
+  const setOwnerConversationBusy = (busy: boolean) => {
+    if (ownerConversationRef.current === ownerConversation) setOwnerBusySnapshot({ conversation: ownerConversation, busy });
+  };
   const ownerConversationNotice = useRef("");
   useEffect(() => {
     if (!isAdmin) { setOwnerWorkerReady(false); setOwnerOnly(false); setOwnerBlockingReason(null); setPausedLegacyRequests(null); return; }
@@ -259,7 +264,6 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const [activityMember, setActivityMember] = useState("");
   const historyMemberRef = useRef("");
   const [queueHistory, setQueueHistory] = useState<QueueSample[]>([]);
-  const [pdcaHistory, setPdcaHistory] = useState<PdcaSample[]>([]);
   const [conversationHasUnseenMessages, setConversationHasUnseenMessages] = useState(false);
   const [timezone, setTimezone] = useState("UTC");
   const timezoneRef = useRef(timezone);
@@ -273,7 +277,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   useEffect(() => { window.localStorage.setItem("alphonse.desktop.mascotMotion", String(mascotMotion)); }, [mascotMotion]);
   const [desktopNotifications, setDesktopNotifications] = useState<DesktopNotificationPreferences>(() => readDesktopNotificationPreferences(window.localStorage));
   const [diagnosticRenderTick, forceDiagnosticRender] = useState(0);
-  const currentAvatarState = avatarState(connected, error, activity);
+  const currentAvatarState = avatarState(connected, error, ownerOnly ? "idle" : activity, ownerConversationBusy);
   const currentAvatarStateLabel = avatarStateLabel(currentAvatarState);
   conversationDayRef.current = conversationDay;
   timezoneRef.current = timezone;
@@ -380,12 +384,6 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
         ready: response.status.queue?.ready || 0,
         processing: response.status.queue?.processing || 0,
       }, polledAt));
-      setPdcaHistory((current) => appendPdcaActivity(
-        daemonChanged || historyMemberChanged ? [] : current,
-        response.events,
-        response.status.activity.state || "idle",
-        polledAt,
-      ));
       const newProgressTaskIds = taskProgressIds(response.ui_events || []);
       if (newProgressTaskIds.length) {
         setProgressTaskIds((current) => [...current, ...newProgressTaskIds.filter((taskId) => !current.includes(taskId))]);
@@ -773,7 +771,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
     <main className={`app-shell desktop-shell ${sidebarCollapsed && workspace !== "settings" ? "sidebar-collapsed" : ""} ${atHandOpen ? "at-hand-open" : ""} ${workspace === "settings" ? "settings-active" : ""} ${mascotMotion ? "" : "mascot-motion-off"}`}>
       <aside className="sidebar" aria-label="Alphonse navigation">
         <div className="brand">
-          <div className="brand-avatar" title={`Alphonse is ${currentAvatarStateLabel}`}>
+          <div className="brand-avatar" title={`Alphonse: ${currentAvatarStateLabel}`}>
             <SkillMascot user={user} state={currentAvatarState} context={mascotContext} />
             {currentAvatarState === "disconnected" && <span className="brand-avatar-status">Disconnected</span>}
           </div>
@@ -845,7 +843,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       {visited.has("settings") && <section className="workspace-panel" tabIndex={-1} aria-label="Settings workspace" hidden={workspace !== "settings"}><SettingsWorkspace isAdmin={isAdmin} user={user} initialTab={settingsTab} workspaceRequired={workspaceRequired} enterToSend={enterToSend} desktopStyle={desktopStyle} desktopNotifications={desktopNotifications} onDesktopStyleChange={changeDesktopStyle} onDesktopNotificationsChange={setDesktopNotifications} onEnterToSendChange={setEnterToSend} onTimezoneChange={setTimezone} onWorkspaceConfigured={() => setWorkspaceRequired(false)} onTestDesktopNotification={() => void desktopNotifierRef.current.notify({ id: `test:${Date.now()}`, title: "Alphonse test alert", body: "Desktop notifications are ready." }, { ...desktopNotifications, onlyWhenUnfocused: false })} mascotMotion={mascotMotion} onMascotMotionChange={setMascotMotion} onNavigate={setSettingsTab} onWidgets={() => setWidgetCatalogOpen(true)} onClose={() => { navigate(returnWorkspace); }} /></section>}
       </div>
       {widgetCatalogOpen && <WidgetCatalogDialog state={drawer} act={changeDrawer} member={user} onClose={() => setWidgetCatalogOpen(false)} />}
-      <AtHandDrawer activityMember={activityMember} queueSamples={queueHistory} pdcaSamples={pdcaHistory} state={{ ...drawer, open: atHandOpen }} act={changeDrawer} member={user} connected={connected} questionCount={questions.length} questionsMember={questionsMember} onAttention={() => navigate("attention")} onAgenda={(id) => { setScheduleViewRequest((value) => value + 1); setScheduledTaskForView(id || ""); navigate("agenda"); }} toggleRef={drawerToggleRef} saveFailed={drawerSaveFailed} widgetContext={widgetContext} timezone={timezone} onItem={(artifactId, itemId, family) => { setWidgetItem({ member: user, artifactId, itemId, family }); navigate(["appointments", "reminders"].includes(family) ? "agenda" : "projects"); }} onWork={(id, taskId) => { setWorkTaskForView(taskId || ""); setProjectForView((current) => ({ id: taskId ? "" : id, request: current.request + 1 })); navigate("projects"); }} onRequest={(draft) => { setPrompt((current) => appendWidgetDraft(current, draft)); setConversationDay(localDay(timezone)); navigate("conversation"); window.requestAnimationFrame(() => textareaRef.current?.focus()); }} />
+      <AtHandDrawer activityMember={activityMember} queueSamples={queueHistory} state={{ ...drawer, open: atHandOpen }} act={changeDrawer} member={user} connected={connected} questionCount={questions.length} questionsMember={questionsMember} onAttention={() => navigate("attention")} onAgenda={(id) => { setScheduleViewRequest((value) => value + 1); setScheduledTaskForView(id || ""); navigate("agenda"); }} toggleRef={drawerToggleRef} saveFailed={drawerSaveFailed} widgetContext={widgetContext} timezone={timezone} onItem={(artifactId, itemId, family) => { setWidgetItem({ member: user, artifactId, itemId, family }); navigate(["appointments", "reminders"].includes(family) ? "agenda" : "projects"); }} onWork={(id, taskId) => { setWorkTaskForView(taskId || ""); setProjectForView((current) => ({ id: taskId ? "" : id, request: current.request + 1 })); navigate("projects"); }} onRequest={(draft) => { setPrompt((current) => appendWidgetDraft(current, draft)); setConversationDay(localDay(timezone)); navigate("conversation"); window.requestAnimationFrame(() => textareaRef.current?.focus()); }} />
       {modal === "onboarding" && <OnboardingModal onComplete={(next) => { setUser(next); setIsAdmin(true); setWorkspaceRequired(false); setModal(null); void poll(); }} />}
     </main>
   );
@@ -1589,7 +1587,7 @@ function SystemOneSettingsSection({ user }: { user: string }) {
       });
       setSettings(result.settings);
       setApiKey("");
-      setNotice(result.settings.enabled ? "Validated and enabled for newly started V3 tasks." : "Saved. System One is disabled.");
+      setNotice(result.settings.enabled ? "Validated and saved." : "Saved. System One is disabled.");
     } catch (cause) {
       setNotice(errorNotice(cause, "System One validation failed"));
     } finally {
@@ -1598,23 +1596,20 @@ function SystemOneSettingsSection({ user }: { user: string }) {
   };
   const status = settings?.validation_error || (settings?.validated_at
     ? `Last validated ${new Date(settings.validated_at).toLocaleString()}.`
-    : "Not validated. Alphonse will continue using the existing System Two review until validation succeeds.");
+    : "Not validated.");
   return <section className="settings-panel">
     <h3>System One</h3>
-    <p>Use TypeSafe.ai Jev for V3 tool curation, task admission, Check acceptance-evidence decisions, and Act routing. Each decision has an independent calibration threshold. Deterministic safety gates remain authoritative; unavailable or unresolved evidence reviews fall back to the agent model.</p>
+    <p>Configure TypeSafe.ai Jev for supported bounded decisions. The current conversation loop does not yet use these settings for tool selection or task decisions. Existing settings are preserved.</p>
     {settings && <>
-      <div className="form-field checkbox-field"><label htmlFor="system-one-enabled"><input id="system-one-enabled" type="checkbox" checked={settings.enabled} onChange={(event) => setSettings({ ...settings, enabled: event.target.checked })} /> Enable System One for V3 admission, Do, Check, and Act</label></div>
+      <div className="form-field checkbox-field"><label htmlFor="system-one-enabled"><input id="system-one-enabled" type="checkbox" checked={settings.enabled} onChange={(event) => setSettings({ ...settings, enabled: event.target.checked })} /> Enable System One</label></div>
       <div className="form-field"><label htmlFor="system-one-url">API URL</label><input id="system-one-url" value={settings.api_url} onChange={(event) => setSettings({ ...settings, api_url: event.target.value })} /></div>
       <div className="form-field"><label htmlFor="system-one-model">Model</label><input id="system-one-model" value={settings.model} onChange={(event) => setSettings({ ...settings, model: event.target.value })} /></div>
       <div className="form-field"><label htmlFor="system-one-key">API key</label><input id="system-one-key" type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={settings.has_api_key ? "Leave blank to keep the saved key" : "Enter TypeSafe.ai API key"} autoComplete="new-password" /></div>
       <details><summary>Decision thresholds</summary>
-        <div className="form-field"><label htmlFor="system-one-tools">Tool selection minimum threshold</label><input id="system-one-tools" type="range" min="0" max="1" step="0.01" value={settings.tool_selection_threshold} onChange={(event) => setSettings({ ...settings, tool_selection_threshold: Number(event.target.value) })} /><output htmlFor="system-one-tools">{settings.tool_selection_threshold.toFixed(2)}</output><small>Select tools at or above this value; reject tools below it.</small></div>
-        <div className="form-field"><label htmlFor="system-one-admission">Task admission threshold</label><input id="system-one-admission" type="range" min="0" max="1" step="0.01" value={settings.task_admission_threshold} onChange={(event) => setSettings({ ...settings, task_admission_threshold: Number(event.target.value) })} /><output htmlFor="system-one-admission">{settings.task_admission_threshold.toFixed(2)}</output><small>Scores at or above this value start a task; scores below it receive a direct conversational reply.</small></div>
-        <div className="form-field"><label htmlFor="system-one-check">Check completion threshold</label><input id="system-one-check" type="range" min={Math.min(1, Math.round((settings.no_threshold + 0.01) * 100) / 100)} max="1" step="0.01" value={settings.check_completion_threshold} onChange={(event) => setSettings({ ...settings, check_completion_threshold: Number(event.target.value) })} /><output htmlFor="system-one-check">{settings.check_completion_threshold.toFixed(2)}</output><small>Evidence at or above this value can satisfy an acceptance criterion. Must be higher than the evidence no threshold.</small></div>
-        <div className="form-field"><label htmlFor="system-one-yes">Tactical evidence yes threshold</label><input id="system-one-yes" type="number" min="0" max="1" step="0.01" value={settings.yes_threshold} onChange={(event) => setSettings({ ...settings, yes_threshold: Number(event.target.value) })} /></div>
+        <div className="form-field"><label htmlFor="system-one-yes">Evidence yes threshold</label><input id="system-one-yes" type="number" min="0" max="1" step="0.01" value={settings.yes_threshold} onChange={(event) => setSettings({ ...settings, yes_threshold: Number(event.target.value) })} /></div>
         <div className="form-field"><label htmlFor="system-one-no">Evidence no threshold</label><input id="system-one-no" type="number" min="0" max="1" step="0.01" value={settings.no_threshold} onChange={(event) => setSettings({ ...settings, no_threshold: Number(event.target.value) })} /></div>
       </details>
-      <p><small>When enabled, bounded phase objectives, acceptance criteria, and verified evidence summaries are sent to the configured TypeSafe.ai endpoint. The API key stays in local settings and is never returned to the desktop.</small></p>
+      <p><small>Supported decisions may send relevant context to the configured TypeSafe.ai endpoint. The API key stays in local settings and is never returned to the desktop.</small></p>
       <button disabled={saving || (settings.enabled && !settings.has_api_key && !apiKey)} onClick={() => void save()}>{settings.enabled ? "Validate & save" : "Save disabled settings"}</button>
       <p role="status">{notice || status}</p>
     </>}

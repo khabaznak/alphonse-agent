@@ -1,4 +1,5 @@
 import json
+import hashlib
 from pathlib import Path
 import sqlite3
 
@@ -160,6 +161,31 @@ def test_restore_does_not_accept_checkpoint_changed_during_copy(scope, tmp_path,
     assert not (tmp_path / "recovery").exists()
 
 
+@pytest.mark.parametrize('damage', ['missing_database', 'missing_root', 'invalid_sqlite'])
+def test_restore_rejects_structurally_incomplete_or_invalid_backup(scope, tmp_path, damage):
+    database = tmp_path / 'db.sqlite'
+    with sqlite3.connect(database) as connection:
+        connection.execute('CREATE TABLE events (value TEXT)')
+    checkpoint = tmp_path / 'checkpoint'
+    backup(database, [scope], checkpoint)
+    manifest_path = checkpoint / 'backup.json'
+    manifest = json.loads(manifest_path.read_text())
+    if damage == 'missing_database':
+        (checkpoint / 'database.sqlite3').unlink()
+        del manifest['files']['database.sqlite3']
+    elif damage == 'missing_root':
+        # Manifest describes a second root, even though its directory is absent.
+        manifest['root_sources'].append('/synthetic/missing-root')
+    else:
+        data = b'not a sqlite database'
+        (checkpoint / 'database.sqlite3').write_bytes(data)
+        manifest['files']['database.sqlite3'] = hashlib.sha256(data).hexdigest()
+    manifest_path.write_text(json.dumps(manifest))
+    with pytest.raises(ValueError, match='memory_backup_invalid_manifest|memory_backup_database_integrity'):
+        restore(checkpoint, tmp_path / 'recovery')
+    assert not (tmp_path / 'recovery').exists()
+
+
 def test_repeated_migration_preserves_canonical_events_knowledge_and_daily_views(scope, tmp_path):
     from alphonse.agent_v2.core.memory.knowledge import KnowledgeStore
     database = tmp_path / "db.sqlite"
@@ -178,6 +204,7 @@ def test_repeated_migration_preserves_canonical_events_knowledge_and_daily_views
         projector.refresh_for_event(event)
     assert [e.to_dict() for e in conversations.list_all(owner_user_id="alex")] == events_before
     assert inventory(tmp_path / "users") == daily_before
-    assert "2026-10-17.md" in str(projector.refresh_for_event(event))
+    assert projector.refresh_for_event(event) is None
+    assert projector.available is False
     with sqlite3.connect(database) as conn:
         assert conn.execute("SELECT COUNT(*) FROM memory_knowledge").fetchone()[0] == 0

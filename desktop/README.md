@@ -34,6 +34,12 @@ npm run tauri build
 The packaged executable is launched only when the app cannot connect to an
 already-running daemon. Closing Desktop leaves the daemon running.
 
+The current daemon serves the local owner through the simpler conversation
+loop. Older scheduled jobs, event workers, integration listeners and ordinary
+outbox dispatch are paused. A new app bundle alone does not update an already
+running daemon. See the [transition inventory](../docs/agent-loop/retirement-transition-2026-11-15.md)
+for recovery and upgrade limitations.
+
 ## WebKit memory diagnostics
 
 Set `ALPHONSE_DESKTOP_DIAGNOSTIC_MODE` before launching the desktop executable
@@ -76,9 +82,10 @@ optional. **Household** shows shared efforts you are allowed to see.
 open the item to inspect its current state and related conversation.
 
 **Needs your attention** keeps pending questions reachable across navigation.
-Answer the specific question card once. Text and choice answers resume its own
-task; a question answer does not grant new tool permissions. If submission fails,
-read the displayed error and check the question's current state before retrying.
+For an eligible delivered owner clarification, select it as context for a new
+request. This does not resume the old task or grant new tool permissions. If
+submission fails, read the displayed error and check the current state before
+retrying.
 
 Open **At hand** for contextual or saved cards. A pin keeps a card after context
 changes; a lock also prevents moving or removing it until you unlock it. Compact
@@ -90,8 +97,8 @@ card list scroll separately. Source/details disclosures retain provenance and
 secondary actions without crowding out the content.
 
 The Agenda card previews Month, Week or Today; use Detailed Agenda for the full
-workspace. Select a schedule occurrence to inspect/edit it, pause/resume it or
-review execution history. A projected occurrence is not evidence that it ran.
+workspace. A projected occurrence is not evidence that it ran. Legacy scheduled
+execution is paused in the current daemon; editing a schedule does not resume it.
 Other open Agenda views refresh within 30 seconds. Source status stays separate
 from event time and recurrence. Unconnected calendar feeds are identified under
 Calendar sources.
@@ -125,11 +132,9 @@ The current validation evidence, known baseline failures, observation record and
 pending owner acceptance are in
 [the daily-use acceptance record](../docs/new-ui/78-daily-use-acceptance.md).
 
-Workload and PDCA activity are available from At hand → Add widget. They display
-this session's existing samples, and support the same pin, lock and remove controls
-as other cards. They no longer occupy the navigation sidebar. Removing them does
-not stop processing or delete history; samples themselves are not saved in layout
-storage. The sidebar filter finds visible workspaces and authorized projects.
+The sidebar filter finds visible workspaces and authorized projects. Widget
+samples are not a persistent task audit; removing a widget does not stop
+processing or delete history.
 
 The composer's plus opens the existing conversation command catalog. Choose a
 command to prepare it, then review and send it. An existing nonempty draft disables

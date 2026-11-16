@@ -51,6 +51,8 @@ from pathlib import Path
 assert not list(Path({str(installed)!r}).rglob('*.pyc'))
 from importlib.resources import files
 from alphonse.agent_v2.skills import SkillStore
+from alphonse.agent_v2.core.intelligence.task_state import TaskState
+assert 'Distribution smoke test' in TaskState(goal='Distribution smoke test').to_markdown_prompt()
 root = files('alphonse.agent_v2').joinpath('builtin_skills/sample')
 for relative, content in {expected!r}.items():
     assert root.joinpath(relative).read_bytes() == content, relative

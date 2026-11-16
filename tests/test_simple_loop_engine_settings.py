@@ -18,6 +18,12 @@ def test_legacy_preference_does_not_select_old_loop_or_rewrite_saved_state(tmp_p
     assert store.get().to_dict() == {'default_engine': 'single_loop_experimental', 'updated_at': 'old'}
     with sqlite3.connect(path) as db:
         assert db.execute('SELECT default_engine FROM v2_intelligence_engine_settings').fetchone() == ('hierarchical_v3',)
+    # An old client may still save the only available engine. It must not
+    # erase the legacy preference or project IDs needed for later review.
+    assert store.save(IntelligenceEngineSettings()).default_engine == 'single_loop_experimental'
+    with sqlite3.connect(path) as db:
+        assert db.execute('SELECT default_engine, v3_project_ids_json, updated_at FROM v2_intelligence_engine_settings').fetchone() == (
+            'hierarchical_v3', '["old-project"]', 'old')
     with pytest.raises(ValueError, match='intelligence_engine_invalid'):
         IntelligenceEngineSettings(default_engine='hierarchical_v3')
     assert TaskState().intelligence_engine == 'unassigned'

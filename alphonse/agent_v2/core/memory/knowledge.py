@@ -115,6 +115,44 @@ class KnowledgeRecord:
 class KnowledgeStore:
     """Immutable payloads plus transactional lifecycle edges and processing receipts."""
 
+    @staticmethod
+    def erase_conversation_derivations(conn: sqlite3.Connection, event_id: str) -> int:
+        """Remove source-linked derived records using the caller's write transaction.
+
+        Single-source records can be removed. Mixed-source records and records
+        with dependents require reconciliation: their prose can combine evidence
+        and cannot safely be edited by substring or discarded as a side effect.
+        Unknown payloads fail closed so deletion is not reported as complete
+        when their source references cannot be inspected. This does not cover
+        separate databases, task evidence, historical files, WAL or backups.
+        """
+        if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='memory_knowledge'").fetchone():
+            return 0
+        rows = conn.execute("SELECT memory_id, payload, status, conflicts FROM memory_knowledge").fetchall()
+        records: dict[str, KnowledgeRecord] = {}
+        try:
+            for row in rows:
+                conflicts = json.loads(row[3])
+                if not isinstance(conflicts, list) or any(not isinstance(item, str) for item in conflicts):
+                    raise ValueError("invalid_knowledge_conflicts")
+                record = replace(KnowledgeRecord.from_dict(json.loads(row[1])), status=row[2], conflicts_with=tuple(conflicts))
+                if record.memory_id != row[0]:
+                    raise ValueError("knowledge_identity_mismatch")
+                records[record.memory_id] = record
+        except (TypeError, ValueError, KeyError):
+            raise ValueError("knowledge_erasure_requires_reconciliation") from None
+        source_id = f"conversation:{event_id}"
+        affected = {key for key, record in records.items()
+                    if any(source.source_id == source_id for source in record.sources)}
+        if (any(any(source.source_id != source_id for source in records[key].sources)
+                or records[key].dependencies or records[key].supersedes or records[key].conflicts_with for key in affected)
+                or any(affected.intersection(record.dependencies)
+                       or record.supersedes in affected
+                       or affected.intersection(record.conflicts_with) for record in records.values())):
+            raise ValueError("knowledge_erasure_requires_reconciliation")
+        conn.executemany("DELETE FROM memory_knowledge WHERE memory_id=?", ((key,) for key in affected))
+        return len(affected)
+
     def __init__(self, db_path: str = ":memory:") -> None:
         self.db_path = str(db_path)
         self._lock = RLock()
@@ -290,6 +328,27 @@ class KnowledgeStore:
             for record in records:
                 if record.access.owner_user_id != owner or not any(s.source_id == source_id for s in record.sources):
                     raise ValueError("knowledge_write_scope")
+                # A resolver alone is a point-in-time read, potentially from
+                # another connection. Recheck conversation sources under this
+                # database's write lock so an erased or revoked source cannot
+                # be reintroduced by a stale producer after deletion.
+                for source, quote in zip(record.sources, record.quotes):
+                    if source.source_id.startswith("conversation:") and source.kind != "conversation":
+                        raise ValueError("knowledge_support_no_longer_available")
+                    if source.kind != "conversation":
+                        continue
+                    if (not source.source_id.startswith("conversation:") or not conn.execute(
+                            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_conversation_events'").fetchone()):
+                        raise ValueError("knowledge_support_no_longer_available")
+                    row = conn.execute("SELECT * FROM v2_conversation_events WHERE event_id=?",
+                                       (source.source_id.removeprefix("conversation:"),)).fetchone()
+                    from alphonse.agent_v2.conversations import _event
+                    try:
+                        item = conversation_item(_event(row), owner) if row is not None else None
+                    except (TypeError, ValueError, KeyError):
+                        item = None
+                    if item is None or item.source != source or quote not in item.content:
+                        raise ValueError("knowledge_support_no_longer_available")
                 if resolver is not None and not self._sources_available(record, owner, resolver):
                     raise ValueError("knowledge_support_no_longer_available")
                 for dependency_id in record.dependencies:

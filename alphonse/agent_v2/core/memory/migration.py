@@ -169,11 +169,27 @@ def restore(checkpoint: Path, destination: Path) -> dict:
     checkpoint = Path(checkpoint).absolute()
     _contained(checkpoint, "backup.json")
     manifest = json.loads((checkpoint / "backup.json").read_text())
-    if manifest.get("version") != VERSION:
+    if not isinstance(manifest, dict) or type(manifest.get("version")) is not int or manifest["version"] != VERSION:
         raise ValueError("memory_backup_unsupported_version")
+    roots = manifest.get("root_sources")
+    files = manifest.get("files")
+    if (not isinstance(manifest.get("database_source"), str) or not manifest["database_source"]
+            or not isinstance(roots, list) or any(not isinstance(root, str) or not root for root in roots)
+            or not isinstance(files, dict) or "database.sqlite3" not in files):
+        raise ValueError("memory_backup_invalid_manifest")
+    database = _contained(checkpoint, "database.sqlite3")
+    if not database.is_file() or any(not _contained(checkpoint, f"roots/{index}").is_dir()
+                                     for index in range(len(roots))):
+        raise ValueError("memory_backup_invalid_manifest")
     verified = _inventory(checkpoint)
     if {name: digest for name, digest in verified.items() if name != "backup.json"} != manifest.get("files"):
         raise ValueError("memory_backup_integrity_failed")
+    try:
+        with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True) as connection:
+            if connection.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+                raise ValueError("memory_backup_database_integrity")
+    except sqlite3.DatabaseError:
+        raise ValueError("memory_backup_database_integrity") from None
     destination = _new_destination(Path(destination), [checkpoint])
     destination.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=".memory-restore-", dir=destination.parent) as temporary:

@@ -20,7 +20,7 @@ export function buildConversationTimeline(
   for (const message of visibleMessages) {
     const taskId = morphedMessageTaskIds[message.id];
     items.push({ kind: "message", key: taskId ? `task:${taskId}` : `message:${message.id}`, message });
-    // V3 tasks use the inbound message ID. Keep each log beside its own request,
+    // Keep a task log beside its initiating request when their IDs match,
     // even after later messages or acknowledgements arrive from another task.
     if (message.role === "user" && activeProgressTaskIds.includes(message.id)) {
       items.push({ kind: "progress", key: `task:${message.id}`, taskId: message.id });

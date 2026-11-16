@@ -1,5 +1,13 @@
 # Gmail conversational reads: integration safety
 
+**Historical design note:** The V3 loop described below has been removed. A
+separate, narrower owner-only Gmail count path is now registered in the simple
+loop; it requires an authorized account and a usable existing token. This note's
+unregistered generic multi-actor path and its safety requirements must not be
+confused with that owner-only implementation. See
+[the current transition inventory](agent-loop/retirement-transition-2026-11-15.md)
+and [credential investigation](agent-loop/gmail-owner-refresh-2026-11-15.md).
+
 Status: incomplete; the native Gmail unread-count definition is intentionally **not registered**. `GmailUnreadService` and its account-choice proof are synthetic-testable foundations, not an authorized production path. Account connection or an actor identity does not establish a confidential answer destination.
 
 ## Enforced in the isolated foundation

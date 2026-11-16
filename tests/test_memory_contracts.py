@@ -114,6 +114,7 @@ def test_additive_migration_preserves_original_events_and_ambiguous_imports(tmp_
     assert restarted.mark_user_seen(**interval) == 0
 
 
+@pytest.mark.skip(reason="daily projection suspended pending a cross-writer protocol")
 def test_rebuild_and_erasure_preserve_ids_remove_all_generated_copies(tmp_path):
     store = SQLiteConversationStore(tmp_path / "history.sqlite")
     projector = DailyLedgerProjector(conversation_store=store, users_root=lambda: tmp_path,
@@ -141,6 +142,9 @@ def test_rebuild_and_erasure_preserve_ids_remove_all_generated_copies(tmp_path):
 def test_erasure_projection_failure_leaves_no_stale_generated_text(tmp_path, monkeypatch):
     store = SQLiteConversationStore(":memory:")
     projector = DailyLedgerProjector(conversation_store=store, users_root=lambda: tmp_path)
+    # Exercise the legacy enabled-projector failure contract explicitly. The
+    # shipped projector is suspended and is not called after commit.
+    projector.projection_enabled = True
     store.set_daily_ledger_projector(projector)
     event = record(store)
     def broken(*args):
@@ -150,6 +154,21 @@ def test_erasure_projection_failure_leaves_no_stale_generated_text(tmp_path, mon
         store.delete(event_id=event.event_id, owner_user_id="alex")
     assert store.read(event_id=event.event_id, requester_user_id="alex") is None
     assert not list((tmp_path / "alex/memory/daily").glob("*.md"))
+
+
+def test_suspended_projection_keeps_canonical_erasure_and_other_events(tmp_path):
+    store = SQLiteConversationStore(tmp_path / "history.sqlite")
+    projector = DailyLedgerProjector(conversation_store=store, users_root=lambda: tmp_path)
+    store.set_daily_ledger_projector(projector)
+    erased = record(store)
+    retained = record(store, source_message_id="today", content="Retained note")
+    assert projector.projection_enabled is False
+    assert not store.delete(event_id=erased.event_id, owner_user_id="sam")
+    assert store.delete(event_id=erased.event_id, owner_user_id="alex")
+    assert store.read(event_id=erased.event_id, requester_user_id="alex") is None
+    assert store.list_all(owner_user_id="alex") == [retained]
+    assert record(store) is None
+    assert not (tmp_path / "alex/memory/daily").exists()
 
 
 def test_recall_envelope_distinguishes_empty_and_unavailable_backends():

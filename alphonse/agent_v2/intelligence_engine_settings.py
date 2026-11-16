@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 
 from alphonse.agent_v2.database import connect_database, default_database_path
@@ -52,12 +50,10 @@ class SQLiteIntelligenceEngineSettingsStore:
         return IntelligenceEngineSettings(updated_at=str(row["updated_at"]))
 
     def save(self, settings: IntelligenceEngineSettings) -> IntelligenceEngineSettings:
-        validated = IntelligenceEngineSettings(settings.default_engine)
-        with self._connect() as conn:
-            conn.execute(
-                "INSERT OR REPLACE INTO v2_intelligence_engine_settings(settings_id,default_engine,v3_project_ids_json,updated_at) VALUES(1,?,?,?)",
-                (validated.default_engine, json.dumps([]), datetime.now(timezone.utc).isoformat()),
-            )
+        # There is no engine choice to persist. Keep this compatibility method
+        # for older clients but do not overwrite historical preferences, which
+        # may be needed for recovery and have no effect on new dispatch.
+        IntelligenceEngineSettings(settings.default_engine)
         return self.get()
 
     def _connect(self):

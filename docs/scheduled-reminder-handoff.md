@@ -1,5 +1,9 @@
 # Scheduled reminder handoff and recovery
 
+**Historical lifecycle evidence:** The current owner-only daemon does not start
+the legacy scheduler or resume these handoffs. Existing state is preserved; this
+document does not establish automatic recovery or delivery in the simple loop.
+
 ## Synthetic lifecycle findings
 
 The disposable queue/checkpoint/question/outbox tests reproduce four relevant

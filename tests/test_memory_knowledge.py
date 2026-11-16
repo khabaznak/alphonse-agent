@@ -2,6 +2,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 import json
+import sqlite3
 from itertools import count
 from types import SimpleNamespace
 
@@ -105,10 +106,12 @@ def test_same_claim_in_one_batch_is_disputed_and_commit_rolls_back(setup):
     bad = replace(records[0], memory_id="bad", supersedes="absent")
     good = replace(records[1], memory_id="good", conflicts_with=())
     judgments = {(old.memory_id, new.memory_id): "compatible" for old in [*records, good] for new in [good, bad]}
+    other = event(conversations, source.content)
+    reference = conversation_item(other, "alex").source
     with pytest.raises(ValueError, match="relation_missing"):
-        store.commit("alex", "conversation:other", [replace(good, sources=(replace(good.sources[0], source_id="conversation:other"),)),
-                                                    replace(bad, sources=(replace(bad.sources[0], source_id="conversation:other"),))], comparisons=judgments)
-    assert not store.processed("alex", "conversation:other")
+        store.commit("alex", reference.source_id, [replace(good, sources=(reference,)),
+                                                   replace(bad, sources=(reference,))], comparisons=judgments)
+    assert not store.processed("alex", reference.source_id)
     assert len(memory.recall("alex", historical=True)) == 2
 
 
@@ -127,6 +130,137 @@ def test_private_shared_and_current_source_revocation(setup):
     assert memory.recall("gaby") == []
     conversations.delete(event_id=source.event_id, owner_user_id="alex")
     assert private.memory_id not in {r.memory_id for r in memory.recall("alex", historical=True)}
+
+
+def test_conversation_erasure_refuses_mixed_knowledge_and_preserves_sources(setup):
+    conversations, store, memory, _, _ = setup
+    source, linked = save(setup)
+    other_source, unrelated = save(setup, "Different synthetic preference.",
+                                   fields={"claim_key": "other.claim", "subjects": ["other"]})
+    # A combined claim cannot be safely edited by removing only one quote.
+    dependent = replace(linked, memory_id="dependent", claim_key="combined.claim",
+                        sources=(linked.sources[0], unrelated.sources[0]),
+                        quotes=(linked.quotes[0], unrelated.quotes[0]),
+                        dependencies=(linked.memory_id,))
+    indirect = replace(unrelated, memory_id="indirect", claim_key="indirect.claim",
+                       dependencies=(dependent.memory_id,))
+    with store._connect() as conn:
+        for record in (dependent, indirect):
+            conn.execute("INSERT INTO memory_knowledge VALUES (?,?,?,?,?,?)",
+                         (record.memory_id, "alex", record.claim_key,
+                          json.dumps(record.to_dict()), record.status, "[]"))
+    assert not conversations.delete(event_id=source.event_id, owner_user_id="someone-else")
+    with pytest.raises(ValueError, match="knowledge_erasure_requires_reconciliation"):
+        conversations.delete(event_id=source.event_id, owner_user_id="alex")
+    with store._connect() as conn:
+        rows = conn.execute("SELECT memory_id, payload FROM memory_knowledge").fetchall()
+    assert {row["memory_id"] for row in rows} == {linked.memory_id, unrelated.memory_id, "dependent", "indirect"}
+    assert conversations.read(event_id=source.event_id, requester_user_id="alex") is not None
+    assert conversations.read(event_id=other_source.event_id, requester_user_id="alex") is not None
+
+
+def test_conversation_erasure_rolls_back_if_knowledge_cannot_be_inspected(setup):
+    conversations, store, _, _, _ = setup
+    source, linked = save(setup)
+    with store._connect() as conn:
+        conn.execute("UPDATE memory_knowledge SET payload=? WHERE memory_id=?", ('{"schema_version": 999}', linked.memory_id))
+    with pytest.raises(ValueError, match="knowledge_erasure_requires_reconciliation"):
+        conversations.delete(event_id=source.event_id, owner_user_id="alex")
+    assert conversations.read(event_id=source.event_id, requester_user_id="alex") is not None
+    with store._connect() as conn:
+        assert conn.execute("SELECT 1 FROM v2_conversation_tombstones WHERE event_id=?", (source.event_id,)).fetchone() is None
+
+
+def test_conversation_erasure_preserves_live_conflict_links_for_reconciliation(setup):
+    conversations, _, memory, _, _ = setup
+    source, original = save(setup)
+    _, other = save(setup, "Another synthetic filter is FX-205.")
+    assert {record.status for record in memory.recall("alex")} == {"disputed"}
+    with pytest.raises(ValueError, match="knowledge_erasure_requires_reconciliation"):
+        conversations.delete(event_id=source.event_id, owner_user_id="alex")
+    assert {record.memory_id for record in memory.recall("alex", historical=True)} == {original.memory_id, other.memory_id}
+    assert conversations.read(event_id=source.event_id, requester_user_id="alex") is not None
+
+
+def test_deleted_conversation_cannot_be_reintroduced_by_stale_producer(setup):
+    conversations, store, _, _, _ = setup
+    source, linked = save(setup)
+    stale = replace(linked, memory_id="stale")
+    assert conversations.delete(event_id=source.event_id, owner_user_id="alex")
+    # A new receipt or no resolver must not bypass the same-DB source check.
+    with store._connect() as conn:
+        conn.execute("DELETE FROM memory_processing WHERE owner=? AND source_id=?", ("alex", linked.sources[0].source_id))
+    with pytest.raises(ValueError, match="knowledge_support_no_longer_available"):
+        store.commit("alex", linked.sources[0].source_id, [stale])
+    with store._connect() as conn:
+        assert conn.execute("SELECT 1 FROM memory_knowledge WHERE memory_id='stale'").fetchone() is None
+
+
+def test_changed_or_misclassified_conversation_source_cannot_be_committed(setup):
+    conversations, store, _, _, _ = setup
+    source, linked = save(setup)
+    stale = replace(linked, memory_id="stale")
+    with store._connect() as conn:
+        conn.execute("DELETE FROM memory_processing WHERE owner=? AND source_id=?", ("alex", linked.sources[0].source_id))
+    forged = replace(stale, sources=(replace(stale.sources[0], kind="task_evidence"),))
+    with pytest.raises(ValueError, match="knowledge_support_no_longer_available"):
+        store.commit("alex", linked.sources[0].source_id, [forged])
+    with conversations._connect() as conn:
+        conn.execute("UPDATE v2_conversation_events SET content=? WHERE event_id=?", ("Changed source", source.event_id))
+    with pytest.raises(ValueError, match="knowledge_support_no_longer_available"):
+        store.commit("alex", linked.sources[0].source_id, [stale])
+
+
+def test_separate_in_memory_stores_fail_closed_for_conversation_knowledge(setup):
+    # Independent in-memory connections cannot provide the same transactional
+    # source check as the shared file-backed production store.
+    _, template = save(setup)
+    conversations = SQLiteConversationStore()
+    source = event(conversations, template.content)
+    reference = conversation_item(source, "alex").source
+    record = replace(template, memory_id="independent", sources=(reference,), quotes=(source.content,))
+    store = KnowledgeStore()
+    with pytest.raises(ValueError, match="knowledge_support_no_longer_available"):
+        store.commit("alex", reference.source_id, [record])
+
+
+def test_conversation_erasure_rolls_back_if_existing_index_delete_fails(setup):
+    conversations, store, _, _, _ = setup
+    source, linked = save(setup)
+    with conversations._connect() as conn:
+        conn.execute("DROP TABLE v2_conversation_fts")
+        conn.execute("CREATE TABLE v2_conversation_fts (unexpected_column TEXT)")
+    with pytest.raises(sqlite3.OperationalError, match="event_id"):
+        conversations.delete(event_id=source.event_id, owner_user_id="alex")
+    assert conversations.read(event_id=source.event_id, requester_user_id="alex") is not None
+    with store._connect() as conn:
+        assert conn.execute("SELECT 1 FROM memory_knowledge WHERE memory_id=?", (linked.memory_id,)).fetchone() is not None
+        assert conn.execute("SELECT 1 FROM v2_conversation_tombstones WHERE event_id=?", (source.event_id,)).fetchone() is None
+
+
+def test_erasure_succeeds_without_rebuilding_suspended_daily_projection(setup, tmp_path):
+    from alphonse.agent_v2.core.memory.daily_ledger import DailyLedgerProjector
+    conversations, store, _, _, _ = setup
+    source, linked = save(setup)
+    projector = DailyLedgerProjector(conversation_store=conversations, users_root=lambda: tmp_path / "no-daily")
+    conversations.set_daily_ledger_projector(projector)
+    assert projector.projection_enabled is False
+    assert conversations.delete(event_id=source.event_id, owner_user_id="alex") is True
+    assert conversations.read(event_id=source.event_id, requester_user_id="alex") is None
+    with store._connect() as conn:
+        assert conn.execute("SELECT 1 FROM memory_knowledge WHERE memory_id=?", (linked.memory_id,)).fetchone() is None
+
+
+def test_runtime_wired_suspended_projector_does_not_fail_after_erasure(tmp_path):
+    from alphonse.agent_v2.runtime import build_runtime_host
+    from alphonse.agent_v2.users import V2UserStore
+    users = V2UserStore(tmp_path / "users.sqlite")
+    users.set_users_root(tmp_path / "users")
+    conversations = SQLiteConversationStore(tmp_path / "history.sqlite")
+    runtime = build_runtime_host(user="alex", user_store=users, conversation_store=conversations)
+    source = event(runtime.conversation_store)
+    assert runtime.conversation_store.delete(event_id=source.event_id, owner_user_id="alex") is True
+    assert runtime.conversation_store.read(event_id=source.event_id, requester_user_id="alex") is None
 
 
 def test_audience_widening_is_rejected(setup):
@@ -417,7 +551,8 @@ def test_runtime_wires_extraction_to_current_router_and_jev_without_project(tmp_
     assert users.users_root().is_relative_to(tmp_path)
     assert users.skills_root().is_relative_to(tmp_path)
     assert users.artifacts_root().is_relative_to(tmp_path)
-    runtime = build_runtime_host(user="alex", user_store=users)
+    runtime = build_runtime_host(user="alex", user_store=users,
+                                 conversation_store=SQLiteConversationStore(tmp_path / "shared-memory.sqlite"))
     # Replace the runtime's router/provider after construction, as settings refresh does.
     provider = StubInferenceProvider(json_by_purpose={InferencePurpose.MEMORY_EXTRACTION: {"candidates": [candidate()]}})
     runtime.core.inference = InferenceRouter(provider=provider, default_profile=None)
@@ -439,7 +574,7 @@ def test_runtime_wires_extraction_to_current_router_and_jev_without_project(tmp_
     audit = profile_memory / "generic" / "ledger-0001.md"
     daily = profile_memory / "daily" / f"{source.observed_at[:10]}.md"
     assert "Which filter?" in audit.read_text()
-    assert source.content in daily.read_text()
+    assert not daily.exists()  # Daily file projection is suspended; SQLite remains authoritative.
 
 
 def test_commitment_reported_completion_preserves_authoritative_task_state(setup):
@@ -561,8 +696,9 @@ def test_synthesis_carries_all_exposed_support_even_if_generator_omits_it(setup)
     assert derived.quotes == (source.content, original_source.content)
     assert "content" not in next(r for r in setup[4][-1]["existing"] if r["memory_id"] == original.memory_id)
     assert setup[4][-1]["supporting_knowledge"][0]["content"] == original.content
-    conversations.delete(event_id=original_source.event_id, owner_user_id="alex")
-    assert memory.recall("alex", historical=True) == []
+    with pytest.raises(ValueError, match="knowledge_erasure_requires_reconciliation"):
+        conversations.delete(event_id=original_source.event_id, owner_user_id="alex")
+    assert {record.memory_id for record in memory.recall("alex", historical=True)} >= {original.memory_id, derived.memory_id}
 
 
 def test_unrelated_prior_facts_are_not_exposed_or_inherited_by_source_only_extraction(setup):
