@@ -11,6 +11,7 @@ _STATUSES = {
     'queue': {'pending', 'processing', 'retry_wait', 'failed'},
     'checkpoint': {'queued', 'running', 'waiting_user', 'done', 'failed', 'cancelled'},
 }
+_OUTBOX_STATUSES = {'pending', 'claimed', 'retry_wait', 'delivered', 'failed', 'unconfirmed'}
 
 
 def inspect_legacy_items(db_path: str | Path, *, expected_owner: str) -> dict | None:
@@ -68,8 +69,27 @@ def inspect_legacy_items(db_path: str | Path, *, expected_owner: str) -> dict | 
                     category = row['engine'] if row['engine'] in _ENGINES | {'missing', 'malformed'} else 'other'
                     items.append({'id': identifier_value, 'status': status, 'engine': category, 'origin_marker': row['marker']})
                 return {'items': items, 'truncated': len(rows) > _LIMIT}
+            outbox_rows = conn.execute('''SELECT
+                CASE WHEN length(CAST(o.outbox_message_id AS BLOB)) <= 256 THEN o.outbox_message_id END AS identifier,
+                o.status, CASE WHEN typeof(o.attempt_count)!='integer' OR o.attempt_count<0 THEN 'invalid'
+                    WHEN o.attempt_count=0 THEN 'zero' ELSE 'positive' END AS attempts,
+                CASE WHEN length(CAST(o.task_id AS BLOB)) <= 256 AND EXISTS
+                    (SELECT 1 FROM v2_task_checkpoints c WHERE c.task_id=o.task_id AND c.owner_id=?)
+                    THEN o.task_id ELSE NULL END AS owner_task
+                FROM v2_outbox o WHERE o.audience_user_id=? ORDER BY o.outbox_message_id LIMIT ?''',
+                (expected_owner, expected_owner, _LIMIT + 1)).fetchall()
+            outbox = []
+            for row in outbox_rows[:_LIMIT]:
+                identity, task = row['identifier'], row['owner_task']
+                if not isinstance(identity, str) or not identity or not identity.isprintable():
+                    raise ValueError('legacy_item_identifier_invalid')
+                if task is not None and (not isinstance(task, str) or not task or not task.isprintable()):
+                    raise ValueError('legacy_item_identifier_invalid')
+                outbox.append({'id': identity, 'status': row['status'] if row['status'] in _OUTBOX_STATUSES else 'other',
+                               'attempts': row['attempts'], 'owner_task_id': task})
             return {'queue': group('queue', 'v2_inbound_messages', 'q', 'message_id', 'user_id', 'metadata_json'),
-                    'checkpoints': group('checkpoint', 'v2_task_checkpoints', 'c', 'task_id', 'owner_id', 'task_state_json')}
+                    'checkpoints': group('checkpoint', 'v2_task_checkpoints', 'c', 'task_id', 'owner_id', 'task_state_json'),
+                    'outbox': {'items': outbox, 'truncated': len(outbox_rows) > _LIMIT}}
         finally:
             conn.close()
     except (sqlite3.Error, OSError, ValueError, TypeError, OverflowError):

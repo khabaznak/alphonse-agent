@@ -3,7 +3,8 @@ import type { OwnerRequest } from "./ownerConversation";
 
 type Counts = Record<string, number>;
 type WorkItem = { id: string; status: string; engine: string; origin_marker: string };
-type WorkItems = { queue: { items: WorkItem[]; truncated: boolean }; checkpoints: { items: WorkItem[]; truncated: boolean } };
+type OutboxItem = { id: string; status: string; attempts: string; owner_task_id: string | null };
+type WorkItems = { queue: { items: WorkItem[]; truncated: boolean }; checkpoints: { items: WorkItem[]; truncated: boolean }; outbox: { items: OutboxItem[]; truncated: boolean } };
 type Inventory = {
   queue_other_ingress: { statuses: Counts };
   checkpoints_other_ingress: { statuses: Counts };
@@ -37,8 +38,18 @@ export async function loadLegacyStateItems(request: OwnerRequest, actor: string)
     });
     return { items, truncated: group.truncated };
   }
+  const outbox = response.items.outbox;
+  if (!outbox || !Array.isArray(outbox.items) || outbox.items.length > 50 || typeof outbox.truncated !== "boolean") throw new Error("invalid items");
+  const deliveries = outbox.items.map((item) => {
+    if (!item || typeof item.id !== "string" || !item.id || item.id.length > 256 ||
+        !["pending", "claimed", "retry_wait", "delivered", "failed", "unconfirmed", "other"].includes(item.status) ||
+        !["zero", "positive", "invalid"].includes(item.attempts) ||
+        (item.owner_task_id !== null && (typeof item.owner_task_id !== "string" || !item.owner_task_id || item.owner_task_id.length > 256))) throw new Error("invalid item");
+    return { id: item.id, status: item.status, attempts: item.attempts, owner_task_id: item.owner_task_id };
+  });
   return { queue: checked(response.items.queue, ["pending", "processing", "retry_wait", "failed", "other"]),
-    checkpoints: checked(response.items.checkpoints, ["queued", "running", "waiting_user", "done", "failed", "cancelled", "other"]) };
+    checkpoints: checked(response.items.checkpoints, ["queued", "running", "waiting_user", "done", "failed", "cancelled", "other"]),
+    outbox: { items: deliveries, truncated: outbox.truncated } };
 }
 
 export async function loadLegacyStateInventory(request: OwnerRequest, actor: string): Promise<Inventory> {
@@ -127,6 +138,12 @@ function LegacyStateInventoryForActor({ request, actor }: { request: OwnerReques
         <p>{label}{group.truncated ? " (first 50; more records exist)" : ""}</p>
         {group.items.length === 0 ? <p>No records in this snapshot.</p> : <ul>{group.items.map(item => <li key={item.id}><code>{item.id}</code> — {item.status}; engine: {item.engine}; origin marker: {item.origin_marker}</li>)}</ul>}
       </div>)}
+      <div><p>Outbound records addressed to you{details.outbox.truncated ? " (first 50; more records exist)" : ""}</p>
+        <p>Stored attempt counters and task associations are unverified; they do not establish an effect or delivery.</p>
+        {details.outbox.items.length === 0 ? <p>No records in this snapshot.</p> : <ul>{details.outbox.items.map(item => <li key={item.id}>
+          <code>{item.id}</code> — {item.status}; stored attempts: {item.attempts}; {item.owner_task_id ? <>stored task association: <code>{item.owner_task_id}</code></> : "no owner-attributed task association"}
+        </li>)}</ul>}
+      </div>
     </div>}
   </section>;
 }

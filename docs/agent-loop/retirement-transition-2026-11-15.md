@@ -37,7 +37,12 @@ unregistered no longer describe this revision.
   refuses malformed generations and legacy in-flight claims at initialization.
   Same-binary claim checks guard concurrent fenced and unfenced queue clients;
   they do not exclude old binaries, direct database writers or external effects.
-  An old process can therefore defeat these checks. Startup also invokes legacy
+  Current daemons also hold advisory socket and canonical-database-path locks
+  before migration and until the worker and accepted IPC/OAuth work drain, so
+  cooperating daemons cannot start against the same database merely by choosing
+  different socket paths. These locks do not fence an old binary, direct writer,
+  hard-link alias, replacement of a lock file, separate stores, or external effect. An old process can
+  therefore defeat these checks. Startup also invokes legacy
   database and asset migrations before the worker starts; it is not a read-only
   inspection operation (`daemon.py:main`).
 - The older per-store database import (`storage_migration.py`) initializes the
@@ -113,6 +118,12 @@ It rechecks the canonical owner in the same file and read transaction, returns
 at most 50 records of each kind and explicitly marks truncation. It omits request
 text, checkpoint and effect contents, and other members' rows; markers are not
 verified. The list may include current work and is not a recovery decision.
+It also lists owner-addressed outbound record identifiers, stored delivery
+status and an attempt-counter category. A stored task association is shown only
+if a checkpoint with that identifier is attributed to the owner in the same
+transaction. This association, the counter and delivery status are not proof
+of an action, dispatch or receipt. Message text, targets, provider identifiers,
+errors and links to other members' checkpoints remain hidden.
 Individual protected effect inspection and independently verified reconciliation
 remain open. Older binaries and direct writers remain outside the protocol.
 
@@ -125,9 +136,10 @@ is not a claim that the current UI or an automated command supplies them.
 1. **Identify and stop writers.** Inventory installed binary versions, daemon
    and background processes, their database and data locations, schedulers,
    integration listeners and other writers. Quiesce them and verify they have
-   actually exited, including in-flight provider calls. The single-instance
-   lock and current queue checks do not establish exclusion for every older or
-   external writer. If exclusion cannot be established, stop the transition.
+   actually exited, including in-flight provider calls. The advisory socket and
+   canonical-database locks and current queue checks do not establish exclusion
+   for older or external writers or hard-link aliases. If exclusion cannot be
+   established, stop the transition.
 2. **Preserve a consistent recovery point.** With writers stopped, create and
    verify a consistent backup of all relevant databases and associated
    household files, credentials, configuration, installed skill packages,
@@ -183,7 +195,9 @@ is not a claim that the current UI or an automated command supplies them.
   field. This does not validate a full household
   restore, a concurrent SQLite backup or arbitrary schema incompatibilities.
 - `tests/test_queue_migration_compatibility_diagnostics.py` demonstrates that
-  older queue SQL and separate socket locks can bypass current claim fencing.
+  older queue SQL and separate socket locks alone can bypass claim fencing;
+  `tests/test_daemon_database_lock.py` checks the additional lock for
+  cooperating daemons and symlink aliases.
   These are demonstrations of the gap, not passing mixed-version protection.
 - `tests/test_owner_read_recovery.py`, `test_owner_ready_restart.py` and
   `test_owner_daemon_end_to_end.py` cover selected owner-only recovery and

@@ -120,6 +120,9 @@ def test_item_inspection_is_bounded_owner_scoped_and_read_only(state):
     assert queue['old-broken']['engine'] == 'malformed'
     assert 'member-private' not in queue
     assert result['queue']['truncated'] is False
+    outbox = {item['id']: item for item in result['outbox']['items']}
+    assert outbox['one']['attempts'] == 'zero' and outbox['two']['attempts'] == 'positive'
+    assert outbox['two']['status'] == 'unconfirmed' and 'private-member' not in outbox
     rendered = json.dumps(result)
     assert 'PRIVATE' not in rendered and member.user_id not in rendered and 'member-checkpoint' not in rendered
     assert inspect_legacy_items(path, expected_owner=member.user_id) is None
@@ -132,6 +135,34 @@ def test_item_inspection_is_bounded_owner_scoped_and_read_only(state):
              for i in range(55)])
     limited = inspect_legacy_items(path, expected_owner=owner.user_id)
     assert limited['queue']['truncated'] is True and len(limited['queue']['items']) == 50
+
+
+def test_outbox_item_association_requires_owner_checkpoint_and_omits_private_fields(state):
+    path, _, owner, _, _ = state
+    with sqlite3.connect(path) as conn:
+        conn.execute("UPDATE v2_outbox SET task_id='checkpoint-v2', provider_message_id='SECRET-PROVIDER' WHERE outbox_message_id='one'")
+        conn.execute("UPDATE v2_outbox SET task_id='member-checkpoint' WHERE outbox_message_id='two'")
+        before = list(conn.iterdump())
+    result = inspect_legacy_items(path, expected_owner=owner.user_id)
+    outbox = {item['id']: item for item in result['outbox']['items']}
+    assert outbox['one']['owner_task_id'] == 'checkpoint-v2'
+    assert outbox['two']['owner_task_id'] is None
+    rendered = json.dumps(result)
+    assert 'SECRET-PROVIDER' not in rendered and 'PRIVATE' not in rendered and 'member-checkpoint' not in rendered
+    with sqlite3.connect(path) as conn:
+        assert list(conn.iterdump()) == before
+
+
+def test_outbox_item_inspection_marks_truncation(state):
+    path, _, owner, _, _ = state
+    with sqlite3.connect(path) as conn:
+        conn.executemany('''INSERT INTO v2_outbox(outbox_message_id,integration_id,provider_key,channel_target,
+            message,kind,audience_user_id,status,created_at,updated_at,attempt_count)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?)''', [(f'extra-{i:03}', 'fixture', 'fixture', 'SECRET-TARGET', 'SECRET-MESSAGE',
+            'message', owner.user_id, 'failed', 'fixture', 'fixture', 1) for i in range(55)])
+    result = inspect_legacy_items(path, expected_owner=owner.user_id)
+    assert result['outbox']['truncated'] is True and len(result['outbox']['items']) == 50
+    assert 'SECRET' not in json.dumps(result)
 
 
 def test_item_inspection_ipc_enforces_peer_and_same_store(state, tmp_path, monkeypatch):
