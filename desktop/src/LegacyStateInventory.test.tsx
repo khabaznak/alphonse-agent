@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { LegacyStateInventory, loadLegacyStateInventory, scheduledWorkSummary } from "./LegacyStateInventory";
+import { LegacyStateInventory, loadLegacyStateInventory, loadLegacyStateItems, scheduledWorkSummary } from "./LegacyStateInventory";
 import type { OwnerRequest } from "./ownerConversation";
 
 const inventory = {
@@ -15,6 +15,15 @@ const inventory = {
 };
 
 describe("earlier work inventory", () => {
+  it("loads only bounded record metadata on explicit request", async () => {
+    const items = { queue: { items: [{ id: "fixture-id", status: "pending", engine: "hierarchical_v3", origin_marker: "absent" }], truncated: false },
+      checkpoints: { items: [], truncated: true } };
+    const request = vi.fn(async () => ({ status: "available", items }));
+    expect(await loadLegacyStateItems(request as OwnerRequest, "fixture-owner")).toEqual(items);
+    expect(request).toHaveBeenCalledExactlyOnceWith("legacy_state_items", { actor_user_id: "fixture-owner" });
+    const invalid = vi.fn(async () => ({ status: "available", items: { ...items, queue: { items: [{ ...items.queue.items[0], status: "arbitrary" }], truncated: false } } }));
+    await expect(loadLegacyStateItems(invalid as OwnerRequest, "fixture-owner")).rejects.toThrow();
+  });
   it("only requests the read-only owner inventory on demand", async () => {
     const request = vi.fn(async () => ({ status: "available", inventory }));
     const html = renderToStaticMarkup(<LegacyStateInventory request={request as OwnerRequest} actor="fixture-owner" />);

@@ -174,10 +174,15 @@ def test_owner_gmail_setup_uses_canonical_owner_and_limits_actions(management, m
     assert result['connections'] == [{'provider': 'google', 'connection_id': 'g'}]
     started = []
     server._oauth_loopback = SimpleNamespace(start=started.append)
+    server._accepting_handlers = True  # Exercise an accepted live IPC request.
     values = {'connection_id': 'new', 'provider': 'google', 'capabilities': ['mail_read'],
               'expected_revision': 0, 'display_name': 'Fixture'}
     server._optional_management(peer, req('begin', values))
     assert captured[-1] == ('parent', 'begin', values)
+    assert started == ['google']
+    server._accepting_handlers = False
+    with pytest.raises(RuntimeError, match='daemon_stopping'):
+        server._optional_management(peer, req('begin', values))
     assert started == ['google']
     for action, values in [
         ('review', {}), ('set_status', {}), ('complete', {}),

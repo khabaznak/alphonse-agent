@@ -1629,6 +1629,9 @@ button.mockup-member-card:not(:disabled):hover { border-color: var(--accent); }
 .account-service-detail .mockup-settings-row p { margin: 4px 0; color: var(--muted); font-size: 12px; }
 .account-service-detail details summary { cursor: pointer; color: var(--accent); font-size: 12px; font-weight: 700; }
 .account-service-detail .mockup-settings-row details { margin-top: 8px; }
+.account-service-detail .integration-remove-account { display: block; margin-top: 10px; }
+.account-service-detail .integration-removed-accounts { margin-top: 16px; }
+.account-service-detail .integration-removed-accounts > p { color: var(--muted); font-size: 12px; }
 .account-service-detail .integration-connect-form form { margin-top: 16px; }
 .account-service-detail .integration-connect-form .form-field { margin: 0 0 12px; }
 .account-service-detail .integration-connect-form input { width: 100%; }

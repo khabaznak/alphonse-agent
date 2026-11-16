@@ -394,17 +394,60 @@ def test_owner_stop_retains_lock_until_inflight_worker_exits(monkeypatch):
     daemon._lifecycle_lock = threading.RLock()
     daemon._stopped = False
     daemon._stop = threading.Event()
-    daemon.ipc = SimpleNamespace(stop=lambda: None)
+    daemon.ipc = SimpleNamespace(stop=lambda: None, wait_quiescent=lambda timeout=None: True)
     allow_exit, lock_released = threading.Event(), threading.Event()
     monkeypatch.setattr(daemon, '_owner_process_loop', lambda: allow_exit.wait(3))
     monkeypatch.setattr(daemon, '_release_single_instance_lock', lock_released.set)
     daemon._processor_thread = threading.Thread(target=daemon._owner_process_loop_with_release)
     daemon._processor_thread.start()
-    monkeypatch.setattr(daemon._processor_thread, 'join', lambda timeout=None: None)
+    real_join = daemon._processor_thread.join
+    monkeypatch.setattr(daemon._processor_thread, 'join', lambda timeout=None: None if timeout is not None else real_join())
     daemon.stop()
     assert not lock_released.is_set()
     allow_exit.set()
     assert lock_released.wait(3)
+
+
+def test_owner_stop_retains_lock_until_ipc_requests_finish(monkeypatch):
+    daemon = V2Daemon.__new__(V2Daemon)
+    daemon.experimental_owner_only = True
+    daemon._lifecycle_lock = threading.RLock()
+    daemon._stopped = False
+    daemon._stop = threading.Event()
+    daemon._processor_thread = None
+    drained, released = threading.Event(), threading.Event()
+    daemon.ipc = SimpleNamespace(stop=lambda: None, wait_quiescent=lambda timeout=None: drained.wait(timeout))
+    monkeypatch.setattr(daemon, '_release_single_instance_lock', released.set)
+    daemon.stop()
+    assert not released.is_set()
+    drained.set()
+    assert released.wait(3)
+
+
+def test_ipc_stop_tracks_an_accepted_request(monkeypatch):
+    import socket
+    temp_dir = tempfile.TemporaryDirectory(prefix='ipc-drain-', dir='/private/tmp')
+    server = V2DaemonServer(SimpleNamespace(), os.path.join(temp_dir.name, 'p.sock'))
+    entered, finish = threading.Event(), threading.Event()
+    def handle(connection):
+        with connection:
+            entered.set()
+            assert finish.wait(3)
+    monkeypatch.setattr(server, '_handle', handle)
+    server.start()
+    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        client.connect(str(server.socket_path))
+        assert entered.wait(3)
+        server.stop()
+        assert not server.wait_quiescent(0)
+        finish.set()
+        assert server.wait_quiescent(3)
+    finally:
+        finish.set()
+        client.close()
+        server.stop()
+        temp_dir.cleanup()
 
 
 def test_concurrent_start_creates_only_one_owner_worker(tmp_path, monkeypatch):
@@ -436,6 +479,8 @@ def test_concurrent_start_creates_only_one_owner_worker(tmp_path, monkeypatch):
 
         def stop(self):
             pass
+        def wait_quiescent(self, timeout=None):
+            return True
 
     daemon.ipc = IPC()
     monkeypatch.setattr(daemon, '_acquire_single_instance_lock', lambda: None)
@@ -503,6 +548,8 @@ def test_owner_start_failure_stops_outside_lifecycle_lock(tmp_path, monkeypatch,
             thread = threading.Thread(target=cleanup)
             thread.start()
             thread.join(1)
+        def wait_quiescent(self, timeout=None):
+            return True
     daemon.ipc = IPC()
     released = []
     monkeypatch.setattr(daemon, '_acquire_single_instance_lock', lambda: None)
@@ -542,6 +589,8 @@ def test_owner_stop_during_start_waits_then_stops_worker(tmp_path, monkeypatch):
             assert release.wait(3)
         def stop(self):
             stopped.set()
+        def wait_quiescent(self, timeout=None):
+            return True
     daemon.ipc = IPC()
     monkeypatch.setattr(daemon, '_acquire_single_instance_lock', lambda: None)
     monkeypatch.setattr(daemon, '_release_single_instance_lock', lambda: None)

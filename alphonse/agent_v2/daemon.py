@@ -301,14 +301,16 @@ class V2Daemon:
             raise failure
 
     def _owner_process_loop_with_release(self) -> None:
-        try:
-            self._owner_process_loop()
-        finally:
-            # If stop timed out waiting for an in-flight call, keep exclusion
-            # until this worker actually exits, then release even in an
-            # embedded process that remains alive.
-            if self._stop.is_set():
-                self._release_single_instance_lock()
+        self._owner_process_loop()
+
+    def _release_after_owner_quiescence(self) -> None:
+        """Retain process exclusion until worker and accepted requests exit."""
+        worker = self._processor_thread
+        if worker is not None and worker.is_alive():
+            worker.join()
+        wait = getattr(self.ipc, 'wait_quiescent', None)
+        if callable(wait) and wait():
+            self._release_single_instance_lock()
 
     def _owner_process_loop(self) -> None:
         from alphonse.agent_v2.core.core import CoreLoopContext, ProcessingStatus
@@ -714,10 +716,15 @@ class V2Daemon:
         if self.experimental_owner_only:
             if self._processor_thread is not None and self._processor_thread.is_alive():
                 self._processor_thread.join(timeout=5)
-            # Do not permit another daemon to overlap a still-running owner
-            # worker, for example while a provider call has not returned.
-            if self._processor_thread is None or not self._processor_thread.is_alive():
+            wait = getattr(self.ipc, 'wait_quiescent', None)
+            if ((self._processor_thread is None or not self._processor_thread.is_alive())
+                    and callable(wait) and wait(0)):
                 self._release_single_instance_lock()
+            else:
+                # A provider or accepted IPC/OAuth callback can outlive the
+                # bounded stop. Keep the instance lock until all have exited.
+                threading.Thread(target=self._release_after_owner_quiescence,
+                    name='alphonse-owner-shutdown', daemon=True).start()
             return
         self.scheduler.stop()
         if self.project_check_worker is not None:
@@ -2780,8 +2787,9 @@ class V2Daemon:
                 for provider in ("google", "microsoft"):
                     prefix = "ALPHONSE_" + provider.upper() + "_OAUTH_"
                     client_id, redirect = os.environ.get(prefix + "CLIENT_ID", ""), os.environ.get(prefix + "REDIRECT_URI", "")
+                    client_secret_ref = os.environ.get(prefix + "CLIENT_SECRET_REF", "") if provider == 'google' else ''
                     if client_id or redirect:
-                        clients.append(ClientConfig(provider, client_id, redirect))
+                        clients.append(ClientConfig(provider, client_id, redirect, client_secret_ref))
                 def owner_session_guard(candidate):
                     if getattr(self, 'experimental_owner_only', False) is not True:
                         return True

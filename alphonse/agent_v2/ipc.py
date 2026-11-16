@@ -8,6 +8,7 @@ import re
 import socket
 import sys
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -311,6 +312,10 @@ class V2DaemonServer:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._socket_identity: tuple[int, int] | None = None
+        self._quiescence = threading.Condition()
+        self._accepting_handlers = False
+        self._listener_running = False
+        self._handlers: set[threading.Thread] = set()
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -328,10 +333,22 @@ class V2DaemonServer:
         self._server.listen(16)
         self._server.settimeout(0.5)
         self._stop.clear()
-        self._thread = threading.Thread(target=self._serve, name="alphonse-v2-ipc", daemon=True)
-        self._thread.start()
+        with self._quiescence:
+            self._accepting_handlers = True
+            self._listener_running = True
+            self._thread = threading.Thread(target=self._serve, name="alphonse-v2-ipc", daemon=True)
+            try:
+                self._thread.start()
+            except Exception:
+                self._accepting_handlers = False
+                self._listener_running = False
+                self._quiescence.notify_all()
+                raise
 
     def stop(self) -> None:
+        with self._quiescence:
+            self._accepting_handlers = False
+            self._quiescence.notify_all()
         if hasattr(self, '_oauth_loopback'):
             self._oauth_loopback.stop()
         self._stop.set()
@@ -355,16 +372,54 @@ class V2DaemonServer:
     def is_serving(self) -> bool:
         return self._thread is not None and self._thread.is_alive() and not self._stop.is_set()
 
+    def wait_quiescent(self, timeout: float | None = None) -> bool:
+        """Wait until the listener and all accepted IPC requests have exited."""
+        deadline = None if timeout is None else time.monotonic() + max(0, timeout)
+        with self._quiescence:
+            done = self._quiescence.wait_for(
+                lambda: not self._accepting_handlers and not self._listener_running and not self._handlers,
+                timeout=timeout)
+            oauth = getattr(self, '_oauth_loopback', None)
+        if not done:
+            return False
+        return oauth is None or (callable(getattr(oauth, 'wait_quiescent', None))
+                                 and oauth.wait_quiescent(None if deadline is None else max(0, deadline - time.monotonic())))
+
     def _serve(self) -> None:
         assert self._server is not None
-        while not self._stop.is_set():
-            try:
-                connection, _ = self._server.accept()
-            except (TimeoutError, socket.timeout):
-                continue
-            except OSError:
-                break
-            threading.Thread(target=self._handle, args=(connection,), daemon=True).start()
+        try:
+            while not self._stop.is_set():
+                try:
+                    connection, _ = self._server.accept()
+                except (TimeoutError, socket.timeout):
+                    continue
+                except OSError:
+                    break
+                with self._quiescence:
+                    if not self._accepting_handlers:
+                        connection.close()
+                        continue
+                    thread = threading.Thread(target=self._handle_tracked, args=(connection,), daemon=True)
+                    self._handlers.add(thread)
+                    try:
+                        thread.start()
+                    except Exception:
+                        self._handlers.remove(thread)
+                        connection.close()
+                        self._quiescence.notify_all()
+                        raise
+        finally:
+            with self._quiescence:
+                self._listener_running = False
+                self._quiescence.notify_all()
+
+    def _handle_tracked(self, connection: socket.socket) -> None:
+        try:
+            self._handle(connection)
+        finally:
+            with self._quiescence:
+                self._handlers.discard(threading.current_thread())
+                self._quiescence.notify_all()
 
     def _handle(self, connection: socket.socket) -> None:
         with connection:
@@ -383,6 +438,8 @@ class V2DaemonServer:
                     result = self._owner_status(connection, request)
                 elif isinstance(request, dict) and request.get('method') == 'legacy_state_inventory':
                     result = self._legacy_state_inventory(connection, request)
+                elif isinstance(request, dict) and request.get('method') == 'legacy_state_items':
+                    result = self._legacy_state_items(connection, request)
                 elif isinstance(request, dict) and request.get('method') == 'experimental_owner_abandon':
                     result = self._owner_abandon(connection, request)
                 elif isinstance(request, dict) and request.get('method') == 'experimental_owner_recovery_list':
@@ -503,6 +560,24 @@ class V2DaemonServer:
 
     def _legacy_state_inventory(self, connection, request):
         """Return bounded owner-only counts; never replay or change stored work."""
+        runtime, queue, actor = self._legacy_state_database(connection, request)
+        from alphonse.agent_v2.core.messages.legacy_state_inventory import inspect_legacy_state
+        try:
+            same_schedule_db = os.path.samefile(queue.db_path, runtime.schedule_store.db_path)
+        except (AttributeError, OSError, TypeError, ValueError):
+            same_schedule_db = False
+        result = inspect_legacy_state(queue.db_path, expected_owner=actor,
+                                      include_schedules=same_schedule_db)
+        return {'status': 'available', 'inventory': result} if result is not None else {'status': 'unavailable'}
+
+    def _legacy_state_items(self, connection, request):
+        """Return bounded owner-only metadata; never change or resume work."""
+        _, queue, actor = self._legacy_state_database(connection, request)
+        from alphonse.agent_v2.core.messages.legacy_state_items import inspect_legacy_items
+        result = inspect_legacy_items(queue.db_path, expected_owner=actor)
+        return {'status': 'available', 'items': result} if result is not None else {'status': 'unavailable'}
+
+    def _legacy_state_database(self, connection, request):
         if not self.experimental_owner_ingress or getattr(self.daemon, 'experimental_owner_only', False) is not True:
             raise PermissionError('legacy_state_inventory_unavailable')
         if request.get('version') != PROTOCOL_VERSION:
@@ -514,7 +589,6 @@ class V2DaemonServer:
         if self._local_peer_uid(connection) != os.getuid():
             raise PermissionError('legacy_state_inventory_unavailable')
         from alphonse.agent_v2.core.messages.sqlite_queue import SQLiteMessageQueue
-        from alphonse.agent_v2.core.messages.legacy_state_inventory import inspect_legacy_state
         runtime = self.daemon.runtime
         queue = getattr(runtime, 'queue', None)
         try:
@@ -525,13 +599,7 @@ class V2DaemonServer:
                 raise ValueError
         except (AttributeError, OSError, TypeError, ValueError):
             raise PermissionError('legacy_state_inventory_unavailable') from None
-        try:
-            same_schedule_db = os.path.samefile(queue.db_path, runtime.schedule_store.db_path)
-        except (AttributeError, OSError, TypeError, ValueError):
-            same_schedule_db = False
-        result = inspect_legacy_state(queue.db_path, expected_owner=params['actor_user_id'],
-                                      include_schedules=same_schedule_db)
-        return {'status': 'available', 'inventory': result} if result is not None else {'status': 'unavailable'}
+        return runtime, queue, params['actor_user_id']
 
     def _owner_status(self, connection, request):
         if not self.experimental_owner_ingress:
@@ -694,9 +762,14 @@ class V2DaemonServer:
         management.oauth = oauth
         if action == 'begin':
             from alphonse.agent_v2.integrations.oauth_loopback import OAuthLoopback
-            if not hasattr(self, '_oauth_loopback'):
-                self._oauth_loopback = OAuthLoopback(oauth)
-            self._oauth_loopback.start(values['provider'])
+            # A previously accepted request must not create a new callback
+            # listener after shutdown has begun.
+            with self._quiescence:
+                if not self._accepting_handlers:
+                    raise RuntimeError('daemon_stopping')
+                if not hasattr(self, '_oauth_loopback'):
+                    self._oauth_loopback = OAuthLoopback(oauth)
+                self._oauth_loopback.start(values['provider'])
         # Callback exchange is accepted only by the loopback listener, never raw IPC.
         if action == 'complete':
             raise PermissionError('oauth_callback_transport_required')
