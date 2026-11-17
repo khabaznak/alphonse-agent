@@ -63,7 +63,8 @@ def _crash_fixture_daemon(root: str, socket_dir: str, signal, hold_model=False):
         time.sleep(1)
 
 
-def test_ready_answer_survives_real_daemon_process_death(tmp_path, monkeypatch):
+@pytest.mark.parametrize('stage', ['ready', 'pickup', 'acknowledged'])
+def test_ready_answer_survives_real_daemon_process_death(tmp_path, monkeypatch, stage):
     from alphonse.agent_v2 import daemon as module
     socket_dir = Path(tempfile.mkdtemp(prefix='owner-crash-', dir='/private/tmp'))
     monkeypatch.setattr(module, 'default_socket_path', lambda: socket_dir / 'daemon.sock')
@@ -84,6 +85,13 @@ def test_ready_answer_survives_real_daemon_process_death(tmp_path, monkeypatch):
             time.sleep(.02)
         assert status == 'ready'
         assert signal.get(timeout=2) == 'model_call'
+        draft_before_crash = None
+        if stage != 'ready':
+            draft_before_crash = client.request('experimental_owner_take_draft', message_id=message_id)
+            assert draft_before_crash['delivery_status'] == 'started_unconfirmed'
+            if stage == 'acknowledged':
+                assert client.request('experimental_owner_ack_draft', message_id=message_id,
+                    acknowledgement_token=draft_before_crash['acknowledgement_token'])['status'] == 'client_acknowledged'
         process.kill()
         process.join(timeout=10)
         assert not process.is_alive()
@@ -93,17 +101,19 @@ def test_ready_answer_survives_real_daemon_process_death(tmp_path, monkeypatch):
         queue = SQLiteMessageQueue(db, experimental_claim_fencing=True)
         conversation = SQLiteConversationStore(db)
         owner = users.admin_user()
-        # The accepted request survives process death before Desktop picks up
-        # the answer; a prepared draft is not yet a delivered response.
-        assert [(row.role, row.content) for row in conversation.list(owner_user_id=owner.user_id)] == [
-            ('user', 'Say hello.')]
+        expected_history = [('user', 'Say hello.')]
+        if stage == 'acknowledged':
+            expected_history.append(('assistant', 'Synthetic answer.'))
+        assert [(row.role, row.content) for row in conversation.list(owner_user_id=owner.user_id)] == expected_history
         registry = InMemoryToolRegistry()
         registry.register(build_search_memory_tool_definition())
         registry.register(build_read_memory_source_tool_definition())
+        calls = []
         class NeverProvider:
             supports_image_input = False
             def generate_json(self, request):
-                pytest.fail('a recovered ready answer must not repeat inference')
+                calls.append(True)
+                raise AssertionError('a recovered answer must not repeat inference')
         runtime = build_runtime_host(user_store=users, messages=queue, question_store=SQLiteQuestionStore(db),
             conversation_store=conversation, outbox=SQLiteOutboundStore(db), tools=registry,
             inference=InferenceRouter(provider=NeverProvider(), default_profile=ModelProfile('test', 'fixture', 'offline')),
@@ -112,14 +122,31 @@ def test_ready_answer_survives_real_daemon_process_death(tmp_path, monkeypatch):
         replacement.ipc = V2DaemonServer(replacement, str(socket_dir / 'two.sock'))
         replacement.start()
         resumed = V2DaemonClient(replacement.ipc.socket_path)
-        assert resumed.request('experimental_owner_status', message_id=message_id)['status'] == 'ready'
-        draft = resumed.request('experimental_owner_take_draft', message_id=message_id)
-        assert draft['message'] == 'Synthetic answer.'
-        assert resumed.request('experimental_owner_ack_draft', message_id=message_id,
-            acknowledgement_token=draft['acknowledgement_token'])['status'] == 'client_acknowledged'
+        if stage == 'ready':
+            assert resumed.request('experimental_owner_status', message_id=message_id)['status'] == 'ready'
+            draft = resumed.request('experimental_owner_take_draft', message_id=message_id)
+            assert draft['message'] == 'Synthetic answer.'
+            assert resumed.request('experimental_owner_ack_draft', message_id=message_id,
+                acknowledgement_token=draft['acknowledgement_token'])['status'] == 'client_acknowledged'
+            expected_history.append(('assistant', 'Synthetic answer.'))
+        else:
+            assert resumed.request('experimental_owner_status', message_id=message_id)['status'] == 'unavailable'
+            with pytest.raises(RuntimeError, match='owner_desktop_pickup_unavailable'):
+                resumed.request('experimental_owner_take_draft', message_id=message_id)
+            if stage == 'pickup':
+                items = resumed.request('experimental_owner_recovery_list')['items']
+                assert len(items) == 1 and items[0]['message_id'] == message_id
+                assert items[0]['status'] == 'started_unconfirmed'
+                with pytest.raises(RuntimeError, match='owner_desktop_ack_unavailable'):
+                    resumed.request('experimental_owner_ack_draft', message_id=message_id,
+                        acknowledgement_token=draft_before_crash['acknowledgement_token'])
+            else:
+                assert resumed.request('experimental_owner_recovery_list')['items'] == []
+                assert resumed.request('experimental_owner_ack_draft', message_id=message_id,
+                    acknowledgement_token=draft_before_crash['acknowledgement_token'])['status'] == 'client_acknowledged'
         owner = users.admin_user()
-        assert [(row.role, row.content) for row in conversation.list(owner_user_id=owner.user_id)] == [
-            ('user', 'Say hello.'), ('assistant', 'Synthetic answer.')]
+        assert [(row.role, row.content) for row in conversation.list(owner_user_id=owner.user_id)] == expected_history
+        assert calls == []
     finally:
         if process.is_alive():
             process.kill()

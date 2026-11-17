@@ -126,6 +126,59 @@ def test_abandon_pristine_pending_message_is_explicit_and_idempotent(owner_claim
     assert queue.abandon_trusted_owner_message(message_id) == expected
 
 
+def test_abandon_eligibility_is_read_only_and_action_rechecks_after_state_changes(owner_claim):
+    queue, _, _, _ = owner_claim
+    SQLiteQuestionStore(queue.db_path)
+    message_id = queue.enqueue_trusted_local_owner(prompt='not started', peer_uid=os.getuid())
+    with queue._connect() as conn:
+        before = list(conn.iterdump())
+    assert queue.can_abandon_trusted_owner_message(message_id) is True
+    with queue._connect() as conn:
+        assert list(conn.iterdump()) == before
+        assert conn.execute("SELECT 1 FROM sqlite_master WHERE name='v2_owner_abandoned'").fetchone() is None
+        conn.execute('''INSERT INTO v2_outbox(outbox_message_id,integration_id,provider_key,channel_target,
+            message,kind,task_id,created_at,updated_at)
+            VALUES ('later','desktop','desktop','fixture','synthetic','response',?,'now','now')''', (message_id,))
+    assert queue.can_abandon_trusted_owner_message(message_id) is False
+    with pytest.raises(ValueError, match='owner_abandon_unavailable'):
+        queue.abandon_trusted_owner_message(message_id)
+    with queue._connect() as conn:
+        assert conn.execute('SELECT 1 FROM v2_inbound_messages WHERE message_id=?', (message_id,)).fetchone()
+
+
+def test_abandon_batch_uses_one_read_only_connection_without_store_initialization(owner_claim, monkeypatch):
+    from alphonse.agent_v2.core.messages import sqlite_queue as module
+    queue, _, _, _ = owner_claim
+    SQLiteQuestionStore(queue.db_path)
+    first = queue.enqueue_trusted_local_owner(prompt='first', peer_uid=os.getuid())
+    second = queue.enqueue_trusted_local_owner(prompt='second', peer_uid=os.getuid())
+    original_connect = module.sqlite3.connect
+    calls = []
+    def connect(*args, **kwargs):
+        calls.append((args, kwargs))
+        return original_connect(*args, **kwargs)
+    monkeypatch.setattr(module.sqlite3, 'connect', connect)
+    monkeypatch.setattr(queue, '_connect', lambda: pytest.fail('preview must not initialize the writable store'))
+    result = queue.can_abandon_trusted_owner_messages([first, second])
+    assert result == {first: True, second: True}
+    assert len(calls) == 1 and calls[0][0][0].endswith('?mode=ro')
+    assert calls[0][1]['uri'] is True and calls[0][1]['timeout'] <= .1
+
+
+def test_abandon_batch_rejects_oversize_and_fails_closed_on_budget_interruption(owner_claim, monkeypatch):
+    from alphonse.agent_v2.core.messages import sqlite_queue as module
+    queue, _, _, _ = owner_claim
+    SQLiteQuestionStore(queue.db_path)
+    message_id = queue.enqueue_trusted_local_owner(prompt='not started', peer_uid=os.getuid())
+    assert queue.can_abandon_trusted_owner_messages([message_id] * 51) == {}
+    assert queue.can_abandon_trusted_owner_message(message_id) is True
+    samples = iter([0.0] + [10.0] * 10000)
+    with monkeypatch.context() as patch:
+        patch.setattr(module.time, 'monotonic', lambda: next(samples, 10.0))
+        assert queue.can_abandon_trusted_owner_messages([message_id]) == {message_id: False}
+    assert queue.can_abandon_trusted_owner_message(message_id) is True
+
+
 def test_abandon_rejects_tampered_origin_and_revoked_owner(owner_claim):
     queue, _, _, owner = owner_claim
     SQLiteQuestionStore(queue.db_path)
