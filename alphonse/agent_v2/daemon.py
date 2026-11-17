@@ -676,15 +676,14 @@ class V2Daemon:
                     LEFT JOIN v2_task_checkpoints c ON c.task_id=q.message_id AND c.owner_id=q.user_id
                     WHERE o.owner_id=q.user_id AND o.peer_uid=? AND q.status IN ('pending','processing')
                     ORDER BY q.sequence DESC LIMIT 50""", (os.getuid(),)).fetchall()
+            eligibility = self.runtime.queue.can_abandon_trusted_owner_messages([row['message_id'] for row in rows])
             items = []
             for row in rows:
-                can_abandon = row['status'] == 'pending'
-                if row['status'] == 'processing':
-                    try:
-                        expiry = datetime.fromisoformat(row['lease_expires_at'])
-                        can_abandon = expiry.tzinfo is not None and expiry.utcoffset() is not None and expiry <= datetime.now(timezone.utc)
-                    except (TypeError, ValueError):
-                        can_abandon = False
+                # A pending status or expired lease alone says nothing about
+                # in-flight actions, outbox state or checkpoint integrity.
+                # The same read-only validation used by abandonment checks
+                # those conditions; the action still rechecks transactionally.
+                can_abandon = eligibility.get(row['message_id'], False)
                 status = self.owner_message_status(row['message_id'])
                 if status == 'unavailable' and row['task_state_json']:
                     try:

@@ -147,16 +147,20 @@ does not authenticate its caller or prove that no external effect occurred.
 Only disposable fixtures exercise it, and nothing installs or invokes it in the
 daemon, IPC or Desktop.
 
-This is not ready for production: existing generic claim/reclaim paths do not
-skip this new hold table. A held row at the front of the queue can therefore
-make a claimant's guarded update fail and block later work. Integration requires
-explicit selection/reclaim exclusion, forward-progress and old-writer tests,
-an authenticated owner action, same-file verification, data/effect review and
-an explicit recovery/guard lifecycle. The triggers cannot prevent effects
-already dispatched, writers to external stores or a writer that removes them.
-Unknown or external links may exist even when the checks find none. The
-prototype requires a dedicated connection because it temporarily installs a
-SQLite progress handler.
+The current queue now checks the exact hold table and trigger definitions, skips
+held IDs during generic selection and unfenced reclaim, and fails closed when
+the guard schema is partial or changed. Disposable tests cover a held head row
+and progress on the next row. Older binaries do not contain that selection
+change: their guarded write can still fail and block later work. Broad writes
+that touch a held row also fail. The prototype remains unregistered and is not
+ready for production; integration requires old-writer qualification, an
+authenticated owner action, same-file verification, data/effect review and an
+explicit recovery/guard lifecycle. The triggers cannot prevent effects already
+dispatched, writers to external stores, new linked state, or a writer that
+removes them. Unknown or external links may exist even when the checks find
+none. Any later disposition must recheck links and effects. The prototype
+requires a dedicated connection because it temporarily installs a SQLite
+progress handler.
 
 ## Proposed transition and rollback sequence
 
@@ -235,10 +239,19 @@ is not a claim that the current UI or an automated command supplies them.
   handoff cases. The process-death tests include a fake model call interrupted
   after reservation: the accepted user message and original processing claim
   survive restart, no draft is offered, and that call is not retried during the
-  observed interval. This is not proof about provider-side processing, arbitrary
+  observed interval. Separate process-death cases cover a ready answer, a pickup
+  without acknowledgement, and a client-acknowledged pickup. An unacknowledged
+  pickup stays unconfirmed and is not replayed; an acknowledged pickup retains
+  one assistant ledger event and accepts a repeated acknowledgement. Neither
+  state proves a person read the answer. This is not proof about provider-side processing, arbitrary
   crash windows or external effects. These tests do not reconcile old scheduled or externally dispatched
   tasks. A complete data inventory, effect evidence and tested recovery remain
   outstanding; the aggregate queue count cannot substitute for them.
+- `tests/test_owner_reminder_crash_restart.py` kills a synthetic owner daemon
+  after its local reminder and ready confirmation commit, then verifies a new
+  daemon recovers the confirmation without repeating inference or duplicating
+  the reminder. It does not verify a Desktop notification was delivered or
+  qualify other effects or crash windows.
 
 #229 remains open until supported capabilities, migration and recovery are
 qualified against actual requirements; this document does not certify them.

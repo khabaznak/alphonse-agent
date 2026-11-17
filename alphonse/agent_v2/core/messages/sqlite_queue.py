@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 import hashlib
 import hmac
 import os
@@ -227,6 +227,56 @@ class SQLiteMessageQueue:
         A live processing lease, legacy handoff, unknown action or changed
         origin is refused. Historical checkpoint data is retained.
         """
+        return self._abandon_trusted_owner_message(message_id, clock=clock, preview=False)
+
+    def can_abandon_trusted_owner_message(self, message_id: str, *, clock=None) -> bool:
+        """Point-in-time read-only guards; commit can still fail or state change."""
+        return self.can_abandon_trusted_owner_messages([message_id], clock=clock).get(message_id, False)
+
+    def can_abandon_trusted_owner_messages(self, message_ids: list[str], *, clock=None) -> dict[str, bool]:
+        """Evaluate at most 50 IDs on one read-only snapshot.
+
+        Busy wait and SQLite VM work have cooperative budgets; an individual
+        SQLite or OS operation can exceed the target. The action rechecks all
+        guards under its own write transaction.
+        """
+        if not isinstance(message_ids, list) or len(message_ids) > 50 or any(not isinstance(item, str) for item in message_ids):
+            return {}
+        result = {message_id: False for message_id in message_ids}
+        if not self.experimental_claim_fencing or not self.db_path or self.db_path == ':memory:':
+            return result
+        conn = None
+        try:
+            path = Path(self.db_path).expanduser().resolve(strict=True)
+            if not path.is_file():
+                return result
+            conn = sqlite3.connect(path.as_uri() + '?mode=ro', uri=True, timeout=.1)
+            conn.row_factory = sqlite3.Row
+            conn.execute('PRAGMA query_only=ON')
+            conn.execute('BEGIN')
+            deadline = time.monotonic() + .75
+            calls = 0
+            def progress():
+                nonlocal calls
+                calls += 1
+                return int(calls > 20000 or time.monotonic() >= deadline)
+            conn.set_progress_handler(progress, 100)
+            for message_id in message_ids:
+                try:
+                    result[message_id] = self._abandon_trusted_owner_message(
+                        message_id, clock=clock, preview=True, connection=conn)['status'] == 'eligible'
+                except Exception:
+                    result[message_id] = False
+        except Exception:
+            return {message_id: False for message_id in message_ids}
+        finally:
+            if conn is not None:
+                conn.set_progress_handler(None, 0)
+                conn.close()
+        return result
+
+    def _abandon_trusted_owner_message(self, message_id: str, *, clock=None, preview: bool,
+                                       connection: sqlite3.Connection | None = None) -> dict[str, str]:
         import re
         if (not self.experimental_claim_fencing or not isinstance(message_id, str)
                 or re.fullmatch(r'[0-9a-f]{32}', message_id) is None):
@@ -237,16 +287,17 @@ class SQLiteMessageQueue:
             if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
                 raise ValueError('owner_abandon_clock_invalid')
             return value.astimezone(timezone.utc)
-        with self._connect() as conn:
-            conn.execute('BEGIN IMMEDIATE')
-            conn.execute("""CREATE TABLE IF NOT EXISTS v2_owner_abandoned (
-                message_id TEXT PRIMARY KEY, owner_id TEXT NOT NULL,
-                delivery_status TEXT NOT NULL, recorded_at TEXT NOT NULL) STRICT""")
+        if connection is not None and not preview:
+            raise ValueError('owner_abandon_unavailable')
+        with (nullcontext(connection) if connection is not None else self._connect()) as conn:
+            if connection is None:
+                conn.execute('BEGIN IMMEDIATE')
+            table_exists = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_owner_abandoned'").fetchone()
             prior = conn.execute("""SELECT a.delivery_status FROM v2_owner_abandoned a
                 JOIN v2_trusted_owner_ingress o ON o.message_id=a.message_id AND o.owner_id=a.owner_id
                 JOIN v2_user_settings s ON s.key='admin_user_id' AND s.value=a.owner_id
                 JOIN v2_users u ON u.user_id=a.owner_id AND u.role IN ('admin','owner') AND u.is_active=1
-                WHERE a.message_id=? AND o.peer_uid=?""", (message_id, os.getuid())).fetchone()
+                WHERE a.message_id=? AND o.peer_uid=?""", (message_id, os.getuid())).fetchone() if table_exists else None
             if prior is not None:
                 return {'status': 'abandoned', 'delivery_status': prior['delivery_status']}
             row = conn.execute("""SELECT q.*,o.owner_id,o.peer_uid,o.payload_sha256,o.history_version,o.history_event_id
@@ -344,15 +395,21 @@ class SQLiteMessageQueue:
                             raise ValueError
                         delivery_status = 'unconfirmed'
                     metadata['owner_read_abandoned'] = {'status': 'abandoned', 'delivery_status': delivery_status}
-                    updated = conn.execute('UPDATE v2_task_checkpoints SET task_state_json=?,version=version+1 WHERE task_id=? AND version=?',
-                        (json.dumps(raw, ensure_ascii=False, sort_keys=True), message_id, checkpoint['version']))
-                    if updated.rowcount != 1:
-                        raise ValueError
+                    if not preview:
+                        updated = conn.execute('UPDATE v2_task_checkpoints SET task_state_json=?,version=version+1 WHERE task_id=? AND version=?',
+                            (json.dumps(raw, ensure_ascii=False, sort_keys=True), message_id, checkpoint['version']))
+                        if updated.rowcount != 1:
+                            raise ValueError
                 except (KeyError, TypeError, ValueError, json.JSONDecodeError):
                     raise ValueError('owner_abandon_unavailable') from None
             ended = now_utc()
             if ended < started:
                 raise ValueError('owner_abandon_clock_invalid')
+            if preview:
+                return {'status': 'eligible'}
+            conn.execute("""CREATE TABLE IF NOT EXISTS v2_owner_abandoned (
+                message_id TEXT PRIMARY KEY, owner_id TEXT NOT NULL,
+                delivery_status TEXT NOT NULL, recorded_at TEXT NOT NULL) STRICT""")
             deleted = conn.execute("""DELETE FROM v2_inbound_messages WHERE message_id=? AND user_id=?
                 AND status=? AND lease_owner=? AND claim_generation=? AND lease_expires_at=?""",
                 (message_id, row['user_id'], row['status'], row['lease_owner'], row['claim_generation'], row['lease_expires_at']))
@@ -364,10 +421,13 @@ class SQLiteMessageQueue:
 
     def peek(self, selector: MessageSelector | None = None) -> QueuedMessage | None:
         with self._connect() as conn:
+            conn.execute('BEGIN')
+            holds = _exclude_legacy_pending_holds(conn)
             row = conn.execute(
                 f"""
                 SELECT * FROM v2_inbound_messages
                 WHERE (status = 'pending' OR (status = 'retry_wait' AND next_attempt_at <= ?))
+                  {holds}
                   {_where(selector)}
                 ORDER BY sequence LIMIT 1
                 """,
@@ -377,10 +437,13 @@ class SQLiteMessageQueue:
 
     def list_pending(self, selector: MessageSelector | None = None, *, limit: int = 1000) -> list[QueuedMessage]:
         with self._connect() as conn:
+            conn.execute('BEGIN')
+            holds = _exclude_legacy_pending_holds(conn)
             rows = conn.execute(
                 f"""
                 SELECT * FROM v2_inbound_messages
                 WHERE (status = 'pending' OR (status = 'retry_wait' AND next_attempt_at <= ?))
+                  {holds}
                   {_where(selector)}
                 ORDER BY sequence LIMIT ?
                 """,
@@ -604,7 +667,7 @@ class SQLiteMessageQueue:
             now = _now()
             lease_expires_at = (now + timedelta(seconds=max(1, int(lease_seconds)))).isoformat()
             legacy_guard = "" if self.experimental_claim_fencing else _legacy_unfenced_guard(conn)
-            holds = _exclude_supersession_holds(conn)
+            holds = _exclude_supersession_holds(conn) + _exclude_legacy_pending_holds(conn)
             # Event receipts currently lack a generation after queue-row removal;
             # fenced event claims are unsupported until that lifecycle is fenced.
             identity_guard = (" AND trim(user_id) != '' AND trim(message_id) != '' AND message_id NOT LIKE 'event:%'"
@@ -811,12 +874,15 @@ class SQLiteMessageQueue:
         # fenced claim can silently repeat a mutation or delivery. Keep it in
         # processing for explicit recovery. Legacy queue behavior is unchanged.
         if self.experimental_claim_fencing:
+            with self._connect() as conn:
+                conn.execute('BEGIN')
+                _exclude_legacy_pending_holds(conn)
             return 0
         timestamp = (now or _now()).isoformat()
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             guard = " AND COALESCE(claim_generation, '') != ''" if self.experimental_claim_fencing else _legacy_unfenced_guard(conn)
-            holds = _exclude_supersession_holds(conn)
+            holds = _exclude_supersession_holds(conn) + _exclude_legacy_pending_holds(conn)
             cursor = conn.execute(
                 f"""
                 UPDATE v2_inbound_messages
@@ -838,10 +904,13 @@ class SQLiteMessageQueue:
 
     def size(self, selector: MessageSelector | None = None) -> int:
         with self._connect() as conn:
+            conn.execute('BEGIN')
+            holds = _exclude_legacy_pending_holds(conn)
             row = conn.execute(
                 f"""
                 SELECT COUNT(*) AS count FROM v2_inbound_messages
                 WHERE (status = 'pending' OR (status = 'retry_wait' AND next_attempt_at <= ?))
+                  {holds}
                   {_where(selector)}
                 """,
                 (_now_iso(), *_values(selector)),
@@ -1068,6 +1137,18 @@ def _exclude_supersession_holds(conn: sqlite3.Connection) -> str:
     if conn.execute("SELECT 1 FROM main.sqlite_master WHERE type='table' AND name='v2_supersession_holds'").fetchone():
         return " AND NOT EXISTS (SELECT 1 FROM main.v2_supersession_holds h WHERE h.message_id=v2_inbound_messages.message_id)"
     return ""
+
+
+def _exclude_legacy_pending_holds(conn: sqlite3.Connection) -> str:
+    """Skip verified holds; fail closed on any partial or changed guard set."""
+    names = ('v2_legacy_pending_holds', 'v2_legacy_pending_hold_prevent_insert',
+             'v2_legacy_pending_hold_prevent_update', 'v2_legacy_pending_hold_prevent_delete')
+    placeholders = ','.join('?' for _ in names)
+    if not conn.execute(f'SELECT 1 FROM main.sqlite_master WHERE name IN ({placeholders}) LIMIT 1', names).fetchone():
+        return ''
+    from .legacy_pending_hold import _objects
+    _objects(conn, install=False)
+    return ' AND NOT EXISTS (SELECT 1 FROM main.v2_legacy_pending_holds h WHERE h.message_id=v2_inbound_messages.message_id)'
 
 
 def _ensure_owner_history_columns(conn: sqlite3.Connection) -> None:

@@ -282,7 +282,9 @@ def test_explicit_owner_worker_routes_to_socket_and_saves_history(tmp_path, monk
                         conn.execute("""INSERT INTO v2_outbox(outbox_message_id,integration_id,provider_key,
                             channel_target,message,kind,task_id,created_at,updated_at)
                             VALUES ('fixture','desktop','desktop','fixture','fixture','response',?,'now','now')""", (message_id,))
-                assert client.request('experimental_owner_recovery_list')['items'][0]['can_abandon'] is True
+                # Expiry alone is insufficient: unknown effects, outbox state
+                # and malformed checkpoints must not be advertised as safe.
+                assert client.request('experimental_owner_recovery_list')['items'][0]['can_abandon'] is (mode == 'abandon')
                 if mode in {'unknown_effect', 'unknown_outbox', 'bad_schema', 'bad_status'}:
                     with pytest.raises(RuntimeError, match='owner_abandon_unavailable'):
                         client.request('experimental_owner_abandon', message_id=message_id)

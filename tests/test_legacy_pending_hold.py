@@ -188,3 +188,74 @@ def test_interrupted_query_rolls_back_and_clears_progress_handler(state, monkeyp
         assert conn.execute("SELECT status FROM v2_inbound_messages WHERE message_id='legacy'").fetchone() == ('pending',)
         if phase != 'install':
             assert conn.execute('SELECT COUNT(*) FROM v2_legacy_pending_holds').fetchone() == (0,)
+
+
+@pytest.mark.parametrize('fenced', [False, True])
+def test_claim_peek_list_and_size_skip_held_head_without_blocking_next(state, fenced):
+    path, owner, _ = state
+    with connect(path) as conn:
+        install_legacy_hold_schema(conn)
+        hold(conn, owner, preview(conn, owner))
+        conn.execute('''INSERT INTO v2_inbound_messages
+            (message_id,sequence,timestamp,prompt,user_id,metadata_json,queued_at,status)
+            VALUES ('next',2,'2026-01-01T00:00:00+00:00','synthetic',?,'{}','2026-01-01T00:00:00+00:00','pending')''', (owner,))
+        conn.commit()
+    queue = SQLiteMessageQueue(path, experimental_claim_fencing=fenced)
+    assert queue.peek().message_id == 'next'
+    assert [item.message_id for item in queue.list_pending()] == ['next']
+    assert queue.size() == 1
+    assert queue.claim_next().message_id == 'next'
+    with connect(path) as conn:
+        assert conn.execute("SELECT status,attempt_count FROM v2_inbound_messages WHERE message_id='legacy'").fetchone() == ('pending', 0)
+
+
+@pytest.mark.parametrize('fenced', [False, True])
+def test_queue_behavior_is_unchanged_when_hold_schema_is_absent(state, fenced):
+    path, _, _ = state
+    with connect(path) as conn:
+        conn.execute("UPDATE v2_inbound_messages SET timestamp='2026-01-01T00:00:00+00:00', queued_at='2026-01-01T00:00:00+00:00' WHERE message_id='legacy'")
+        conn.commit()
+    queue = SQLiteMessageQueue(path, experimental_claim_fencing=fenced)
+    assert queue.peek().message_id == 'legacy'
+    assert [item.message_id for item in queue.list_pending()] == ['legacy']
+    assert queue.size() == 1 and queue.reclaim_expired() == 0
+    assert queue.claim_next().message_id == 'legacy'
+
+
+def test_unfenced_reclaim_skips_held_processing_row_and_reclaims_another(state):
+    path, owner, _ = state
+    with connect(path) as conn:
+        install_legacy_hold_schema(conn)
+        conn.execute("UPDATE v2_inbound_messages SET status='processing',lease_owner='old',lease_expires_at='2000-01-01T00:00:00+00:00' WHERE message_id='legacy'")
+        conn.execute('''INSERT INTO v2_inbound_messages
+            (message_id,sequence,timestamp,prompt,user_id,metadata_json,queued_at,status,lease_owner,lease_expires_at)
+            VALUES ('next',2,'fixture','synthetic',?,'{}','fixture','processing','old','2000-01-01T00:00:00+00:00')''', (owner,))
+        # Synthetic damaged state: installer never creates a processing hold.
+        conn.execute("INSERT INTO v2_legacy_pending_holds VALUES ('legacy',?,'fixture')", (owner,))
+        conn.commit()
+    queue = SQLiteMessageQueue(path)
+    assert queue.reclaim_expired() == 1
+    with connect(path) as conn:
+        assert conn.execute("SELECT status FROM v2_inbound_messages WHERE message_id='legacy'").fetchone() == ('processing',)
+        assert conn.execute("SELECT status FROM v2_inbound_messages WHERE message_id='next'").fetchone() == ('pending',)
+
+
+@pytest.mark.parametrize('damage', ['missing_trigger', 'conflicting_table', 'stray_trigger'])
+@pytest.mark.parametrize('fenced', [False, True])
+def test_partial_or_conflicting_hold_schema_fails_closed_for_queue_operations(state, damage, fenced):
+    path, _, _ = state
+    with connect(path) as conn:
+        if damage == 'missing_trigger':
+            install_legacy_hold_schema(conn)
+            conn.execute('DROP TRIGGER v2_legacy_pending_hold_prevent_update')
+        elif damage == 'conflicting_table':
+            conn.execute('CREATE TABLE v2_legacy_pending_holds (message_id TEXT)')
+        else:
+            conn.execute('CREATE TRIGGER v2_legacy_pending_hold_prevent_update BEFORE UPDATE ON v2_inbound_messages BEGIN SELECT 1; END')
+        conn.commit()
+    queue = SQLiteMessageQueue(path, experimental_claim_fencing=fenced)
+    for operation in (queue.peek, queue.list_pending, queue.size, queue.claim_next, queue.reclaim_expired):
+        with pytest.raises(ValueError, match='legacy_hold_schema_unavailable'):
+            operation()
+    with connect(path) as conn:
+        assert conn.execute("SELECT status,attempt_count FROM v2_inbound_messages WHERE message_id='legacy'").fetchone() == ('pending', 0)

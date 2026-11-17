@@ -32,9 +32,6 @@ integrations are not included in the fixture. It uses synthetic data and a fake
 provider; it does not establish semantic correctness, external effects, or
 completeness of the entire application security boundary.
 
-The source removal/audit is distinct from capability migration, retained-state
-recovery and the single-active-processor release criterion. The currently
-worded V3 audit checkbox in #229 also includes finishing shared capability and
-legacy-state migration, so the audit evidence alone does not satisfy that whole
-checkbox. The separate data/recovery and operational qualification criteria
-likewise remain open.
+The completed source removal/audit is distinct from the separately tracked
+shared-capability migration, retained-state recovery and single-active-processor
+release criteria in #229. Those separate obligations remain open.

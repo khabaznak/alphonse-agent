@@ -1,0 +1,463 @@
+{
+  "schema_version": 1,
+  "split": "development_synthetic",
+  "cases": [
+    {
+      "id": "reminder-save-once",
+      "input": {
+        "goal": "Remind me to call the plumber tomorrow at 10:00 UTC.",
+        "actor": "owner",
+        "now": "2026-01-01T09:00:00+00:00",
+        "timezone": "UTC"
+      },
+      "fixture": {
+        "owner": "owner",
+        "available_operations": [
+          "create_reminder"
+        ]
+      },
+      "oracle": {
+        "allowed_statuses": [
+          "completed"
+        ],
+        "expected_effects": [
+          {
+            "kind": "reminder",
+            "request_id": "reminder-1",
+            "message": "call the plumber",
+            "due_at": "2026-01-02T10:00:00+00:00"
+          }
+        ],
+        "required_observations": [
+          {
+            "operation": "create_reminder",
+            "status": "saved"
+          }
+        ],
+        "target_status": "completed"
+      }
+    },
+    {
+      "id": "recurring-event-not-active",
+      "input": {
+        "goal": "Schedule a weekly household meeting.",
+        "actor": "owner"
+      },
+      "fixture": {
+        "owner": "owner",
+        "available_operations": []
+      },
+      "oracle": {
+        "allowed_statuses": [
+          "blocked",
+          "unavailable"
+        ],
+        "expected_effects": [],
+        "required_observations": [
+          {
+            "operation": "schedule_event",
+            "status": "unavailable"
+          }
+        ],
+        "target_status": "completed"
+      }
+    },
+    {
+      "id": "timebox-not-started",
+      "input": {
+        "goal": "Start a 25-minute focus timer.",
+        "actor": "owner"
+      },
+      "fixture": {
+        "owner": "owner",
+        "available_operations": []
+      },
+      "oracle": {
+        "allowed_statuses": [
+          "blocked",
+          "unavailable"
+        ],
+        "expected_effects": [],
+        "required_observations": [
+          {
+            "operation": "start_timer",
+            "status": "unavailable"
+          }
+        ],
+        "target_status": "completed"
+      }
+    },
+    {
+      "id": "event-trigger-not-installed",
+      "input": {
+        "goal": "When the synthetic door opens, remind me to check the lights.",
+        "actor": "owner"
+      },
+      "fixture": {
+        "owner": "owner",
+        "available_operations": []
+      },
+      "oracle": {
+        "allowed_statuses": [
+          "blocked",
+          "unavailable"
+        ],
+        "expected_effects": [],
+        "required_observations": [
+          {
+            "operation": "subscribe_event",
+            "status": "unavailable"
+          }
+        ],
+        "target_status": "completed"
+      }
+    },
+    {
+      "id": "timebox-not-scheduled",
+      "input": {
+        "goal": "Reserve a 30-minute focus block after lunch.",
+        "actor": "owner"
+      },
+      "fixture": {
+        "owner": "owner",
+        "available_operations": []
+      },
+      "oracle": {
+        "allowed_statuses": [
+          "blocked",
+          "unavailable"
+        ],
+        "expected_effects": [],
+        "required_observations": [
+          {
+            "operation": "schedule_timebox",
+            "status": "unavailable"
+          }
+        ],
+        "target_status": "completed"
+      }
+    },
+    {
+      "id": "voice-unavailable",
+      "input": {
+        "goal": "Read the answer aloud.",
+        "actor": "owner"
+      },
+      "fixture": {
+        "owner": "owner",
+        "available_operations": []
+      },
+      "oracle": {
+        "allowed_statuses": [
+          "blocked",
+          "unavailable"
+        ],
+        "expected_effects": [],
+        "required_observations": [
+          {
+            "operation": "play_voice",
+            "status": "unavailable"
+          }
+        ],
+        "target_status": "completed"
+      }
+    },
+    {
+      "id": "home-assistant-mutation-unavailable",
+      "input": {
+        "goal": "Turn off the synthetic kitchen light.",
+        "actor": "owner"
+      },
+      "fixture": {
+        "owner": "owner",
+        "available_operations": []
+      },
+      "oracle": {
+        "allowed_statuses": [
+          "blocked",
+          "unavailable"
+        ],
+        "expected_effects": [],
+        "required_observations": [
+          {
+            "operation": "home_assistant_write",
+            "status": "unavailable"
+          }
+        ],
+        "target_status": "completed"
+      }
+    },
+    {
+      "id": "compose-two-authorized-skills",
+      "input": {
+        "goal": "Use the pantry and meal-planning skills together.",
+        "actor": "owner"
+      },
+      "fixture": {
+        "owner": "owner",
+        "available_operations": [
+          "read_skill"
+        ],
+        "skills": {
+          "pantry": {
+            "owner": "owner",
+            "content": "Use ingredients on hand."
+          },
+          "meal-plan": {
+            "owner": "owner",
+            "content": "Plan balanced meals."
+          },
+          "private": {
+            "owner": "another-member",
+            "content": "PRIVATE FIXTURE"
+          }
+        }
+      },
+      "oracle": {
+        "allowed_statuses": [
+          "completed"
+        ],
+        "expected_effects": [],
+        "required_observations": [
+          {
+            "operation": "read_skill",
+            "status": "read",
+            "resource": "pantry"
+          },
+          {
+            "operation": "read_skill",
+            "status": "read",
+            "resource": "meal-plan"
+          }
+        ],
+        "target_status": "completed",
+        "semantic_assessment_required": true
+      }
+    },
+    {
+      "id": "recurring-event-simulated",
+      "input": {
+        "goal": "Schedule the household meeting every Monday at 10:00 UTC, starting 2026-01-05.",
+        "actor": "owner"
+      },
+      "fixture": {
+        "owner": "owner",
+        "available_operations": [
+          "schedule_event"
+        ]
+      },
+      "oracle": {
+        "allowed_statuses": [
+          "completed"
+        ],
+        "expected_effects": [
+          {
+            "kind": "schedule",
+            "title": "household meeting",
+            "recurrence": "weekly",
+            "timezone": "UTC",
+            "starts_at": "2026-01-05T10:00:00+00:00"
+          }
+        ],
+        "required_observations": [
+          {
+            "operation": "schedule_event",
+            "status": "saved"
+          }
+        ],
+        "target_status": "completed"
+      }
+    },
+    {
+      "id": "timer-simulated",
+      "input": {
+        "goal": "Start a 25-minute focus timer.",
+        "actor": "owner"
+      },
+      "fixture": {
+        "owner": "owner",
+        "available_operations": [
+          "start_timer"
+        ]
+      },
+      "oracle": {
+        "allowed_statuses": [
+          "completed"
+        ],
+        "expected_effects": [
+          {
+            "kind": "timer",
+            "label": "focus",
+            "duration_seconds": 1500
+          }
+        ],
+        "required_observations": [
+          {
+            "operation": "start_timer",
+            "status": "saved"
+          }
+        ],
+        "target_status": "completed"
+      }
+    },
+    {
+      "id": "event-trigger-simulated",
+      "input": {
+        "goal": "When the synthetic door opens, remind me to check the lights.",
+        "actor": "owner"
+      },
+      "fixture": {
+        "owner": "owner",
+        "available_operations": [
+          "subscribe_event"
+        ]
+      },
+      "oracle": {
+        "allowed_statuses": [
+          "completed"
+        ],
+        "expected_effects": [
+          {
+            "kind": "subscription",
+            "source": "synthetic door",
+            "event": "open",
+            "action": "remind check lights"
+          }
+        ],
+        "required_observations": [
+          {
+            "operation": "subscribe_event",
+            "status": "saved"
+          }
+        ],
+        "target_status": "completed"
+      }
+    },
+    {
+      "id": "timebox-simulated",
+      "input": {
+        "goal": "Reserve a 30-minute focus block on 2026-01-01 at 13:00 UTC.",
+        "actor": "owner"
+      },
+      "fixture": {
+        "owner": "owner",
+        "available_operations": [
+          "schedule_timebox"
+        ]
+      },
+      "oracle": {
+        "allowed_statuses": [
+          "completed"
+        ],
+        "expected_effects": [
+          {
+            "kind": "timebox",
+            "label": "focus",
+            "start": "2026-01-01T13:00:00+00:00",
+            "duration_minutes": 30
+          }
+        ],
+        "required_observations": [
+          {
+            "operation": "schedule_timebox",
+            "status": "saved"
+          }
+        ],
+        "target_status": "completed"
+      }
+    },
+    {
+      "id": "voice-simulated",
+      "input": {
+        "goal": "Read aloud exactly: synthetic answer.",
+        "actor": "owner"
+      },
+      "fixture": {
+        "owner": "owner",
+        "available_operations": [
+          "play_voice"
+        ]
+      },
+      "oracle": {
+        "allowed_statuses": [
+          "completed"
+        ],
+        "expected_effects": [
+          {
+            "kind": "voice_playback",
+            "text": "synthetic answer"
+          }
+        ],
+        "required_observations": [
+          {
+            "operation": "play_voice",
+            "status": "saved"
+          }
+        ],
+        "target_status": "completed"
+      }
+    },
+    {
+      "id": "home-assistant-simulated",
+      "input": {
+        "goal": "Turn off the synthetic kitchen light.",
+        "actor": "owner"
+      },
+      "fixture": {
+        "owner": "owner",
+        "available_operations": [
+          "home_assistant_write"
+        ]
+      },
+      "oracle": {
+        "allowed_statuses": [
+          "completed"
+        ],
+        "expected_effects": [
+          {
+            "kind": "home_assistant_change",
+            "entity_id": "light.synthetic_kitchen",
+            "state": "off"
+          }
+        ],
+        "required_observations": [
+          {
+            "operation": "home_assistant_write",
+            "status": "saved"
+          }
+        ],
+        "target_status": "completed"
+      }
+    },
+    {
+      "id": "home-assistant-denied",
+      "input": {
+        "goal": "Turn off the synthetic kitchen light.",
+        "actor": "owner"
+      },
+      "fixture": {
+        "owner": "owner",
+        "available_operations": [
+          "home_assistant_write"
+        ],
+        "denied_operations": [
+          "home_assistant_write"
+        ]
+      },
+      "oracle": {
+        "allowed_statuses": [
+          "blocked",
+          "unavailable"
+        ],
+        "expected_effects": [],
+        "required_observations": [
+          {
+            "operation": "home_assistant_write",
+            "status": "denied"
+          }
+        ],
+        "target_status": "completed"
+      }
+    }
+  ]
+}
