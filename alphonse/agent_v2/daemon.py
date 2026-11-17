@@ -133,7 +133,10 @@ def _claim_database_instance_lock(db_path: str, daemon_id: str) -> Any:
     """
     if not isinstance(db_path, str) or not db_path or db_path == ':memory:':
         raise ValueError('daemon_database_lock_path_invalid')
-    canonical = os.path.realpath(os.path.abspath(db_path))
+    # Match connect_database(), which expands a leading tilde before opening
+    # SQLite; otherwise two spellings of the same database could take locks
+    # on different files in an embedded host.
+    canonical = os.path.realpath(os.path.abspath(os.path.expanduser(db_path)))
     lock_path = Path(canonical + '.alphonse-daemon.lock')
     lock_file = _open_instance_lock(lock_path)
     try:

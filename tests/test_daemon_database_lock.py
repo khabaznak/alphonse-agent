@@ -1,6 +1,8 @@
 """Disposable tests for cooperating-daemon exclusion by database path."""
 import sqlite3
 import os
+import socket
+import tempfile
 import threading
 from types import SimpleNamespace
 
@@ -30,6 +32,19 @@ def test_database_lock_fences_different_socket_paths_and_symlink_aliases(tmp_pat
         module._unlock_instance_file(socket_one)
     second = module._claim_database_instance_lock(str(alias), 'two')
     module._unlock_instance_file(second)
+
+
+def test_database_lock_uses_sqlites_home_path_expansion(tmp_path, monkeypatch):
+    db = tmp_path / 'fixture.sqlite'
+    monkeypatch.chdir(tmp_path)
+    expanduser = os.path.expanduser
+    monkeypatch.setattr(os.path, 'expanduser', lambda value: str(db) if value == '~/fixture.sqlite' else expanduser(value))
+    first = module._claim_database_instance_lock(str(db), 'one')
+    try:
+        with pytest.raises(RuntimeError, match='database_lock_held'):
+            module._claim_database_instance_lock('~/fixture.sqlite', 'two')
+    finally:
+        module._unlock_instance_file(first)
 
 
 def test_database_lock_conflict_blocks_migration_and_releases_socket_lock(tmp_path, monkeypatch):
@@ -143,3 +158,60 @@ def test_database_lock_is_held_until_accepted_requests_drain(tmp_path, monkeypat
     finally:
         drained.set()
         released.wait(3)
+
+
+def test_real_ipc_request_holds_both_locks_until_shutdown_drains(tmp_path, monkeypatch):
+    db = tmp_path / 'db.sqlite'
+    with tempfile.TemporaryDirectory(prefix='lock-ipc-', dir='/private/tmp') as socket_dir:
+        first_socket = os.path.join(socket_dir, 'one.sock')
+        second_socket = os.path.join(socket_dir, 'two.sock')
+        monkeypatch.setattr(module, 'default_socket_path', lambda: module.Path(first_socket))
+        instance = module.V2Daemon.__new__(module.V2Daemon)
+        instance.experimental_owner_only = True
+        instance._lifecycle_lock = threading.RLock()
+        instance._stopped = False
+        instance._stop = threading.Event()
+        instance._processor_thread = None
+        instance._lock_file = module._claim_single_instance_lock('first')
+        instance._database_lock_file = module._claim_database_instance_lock(str(db), 'first')
+        server = module.V2DaemonServer(instance, first_socket)
+        instance.ipc = server
+        entered, finish, released = threading.Event(), threading.Event(), threading.Event()
+        def handle(connection):
+            with connection:
+                entered.set()
+                assert finish.wait(5)
+        monkeypatch.setattr(server, '_handle', handle)
+        original_release = instance._release_single_instance_lock
+        def release():
+            original_release()
+            released.set()
+        monkeypatch.setattr(instance, '_release_single_instance_lock', release)
+        server.start()
+        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            client.connect(first_socket)
+            assert entered.wait(3)
+            instance.stop()
+            assert not released.is_set()
+            with pytest.raises(RuntimeError, match='daemon_lock_held|daemon_already_running'):
+                module._claim_single_instance_lock('second')
+            monkeypatch.setattr(module, 'default_socket_path', lambda: module.Path(second_socket))
+            other_socket = module._claim_single_instance_lock('second')
+            try:
+                with pytest.raises(RuntimeError, match='database_lock_held'):
+                    module._claim_database_instance_lock(str(db), 'second')
+            finally:
+                module._unlock_instance_file(other_socket)
+            finish.set()
+            assert released.wait(3)
+            monkeypatch.setattr(module, 'default_socket_path', lambda: module.Path(first_socket))
+            socket_after = module._claim_single_instance_lock('second')
+            module._unlock_instance_file(socket_after)
+            second_db = module._claim_database_instance_lock(str(db), 'second')
+            module._unlock_instance_file(second_db)
+        finally:
+            finish.set()
+            released.wait(3)
+            client.close()
+            server.stop()
