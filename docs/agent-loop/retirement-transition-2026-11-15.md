@@ -137,6 +137,27 @@ proof of execution or delivery; no job is resumed.
 Individual protected effect inspection and independently verified reconciliation
 remain open. Older binaries and direct writers remain outside the protocol.
 
+An unregistered `legacy_pending_hold` prototype explores a narrower explicit
+preservation action: an active canonical owner may hold an unclaimed,
+zero-attempt V2/V3 pending queue row only after strict schema, metadata and
+known-link checks. A session-keyed preview is rechecked under a SQLite write
+transaction, which inserts a hold without modifying the queue row; verified
+triggers then refuse queue insert, update and delete for that ID. The prototype
+does not authenticate its caller or prove that no external effect occurred.
+Only disposable fixtures exercise it, and nothing installs or invokes it in the
+daemon, IPC or Desktop.
+
+This is not ready for production: existing generic claim/reclaim paths do not
+skip this new hold table. A held row at the front of the queue can therefore
+make a claimant's guarded update fail and block later work. Integration requires
+explicit selection/reclaim exclusion, forward-progress and old-writer tests,
+an authenticated owner action, same-file verification, data/effect review and
+an explicit recovery/guard lifecycle. The triggers cannot prevent effects
+already dispatched, writers to external stores or a writer that removes them.
+Unknown or external links may exist even when the checks find none. The
+prototype requires a dedicated connection because it temporarily installs a
+SQLite progress handler.
+
 ## Proposed transition and rollback sequence
 
 No complete, tested household migration or rollback protocol exists yet. The
