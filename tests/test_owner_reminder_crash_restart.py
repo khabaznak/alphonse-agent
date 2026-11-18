@@ -2,10 +2,13 @@
 import json
 import multiprocessing
 import shutil
+import sqlite3
 import tempfile
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+import pytest
 
 from alphonse.agent_v2.conversations import SQLiteConversationStore
 from alphonse.agent_v2.core.inference.models import InferenceResult, ModelProfile
@@ -42,7 +45,7 @@ def _build(root, socket_dir, daemon_id, provider):
     return daemon, users, conversation
 
 
-def _child_after_commit(root, socket_dir, signal, due, goal):
+def _child_after_commit(root, socket_dir, signal, due, goal, before_commit=False):
     from alphonse.agent_v2 import daemon as module
     module.default_socket_path = lambda: Path(socket_dir) / 'daemon.sock'
     class Provider:
@@ -59,14 +62,23 @@ def _child_after_commit(root, socket_dir, signal, due, goal):
             return InferenceResult(json_value=value, raw_response=json.dumps(value),
                                    usage={'input_tokens': 100, 'output_tokens': 20})
     daemon, _, _ = _build(root, socket_dir, 'first', Provider())
-    commit = daemon.kill_switch.commit_if_active
-    def pause_after_commit(message_id, callback):
-        result = commit(message_id, callback)
-        signal.put('committed')
-        while True:
-            time.sleep(1)
-        return result
-    daemon.kill_switch.commit_if_active = pause_after_commit
+    if before_commit:
+        create = OwnerDesktopReminders.create_locked
+        def pause_inside_transaction(conn, *args, **kwargs):
+            result = create(conn, *args, **kwargs)
+            assert conn.in_transaction and result['state'] == 'pending'
+            signal.put('inserted_uncommitted')
+            while True:
+                time.sleep(1)
+        OwnerDesktopReminders.create_locked = staticmethod(pause_inside_transaction)
+    else:
+        commit = daemon.kill_switch.commit_if_active
+        def pause_after_commit(message_id, callback):
+            result = commit(message_id, callback)
+            signal.put('committed')
+            while True:
+                time.sleep(1)
+        daemon.kill_switch.commit_if_active = pause_after_commit
     daemon.start()
     signal.put('started')
     while True:
@@ -116,6 +128,71 @@ def test_committed_reminder_survives_process_death_without_duplicate(tmp_path, m
         assert [(event.role, event.content) for event in conversation.list(owner_user_id=owner.user_id)] == [
             ('user', goal), ('assistant', draft['message'])]
         assert calls == []
+    finally:
+        if process.is_alive():
+            process.kill()
+            process.join(timeout=10)
+        if replacement is not None:
+            replacement.stop()
+        signal.close()
+        shutil.rmtree(socket_dir)
+
+
+def test_uncommitted_reminder_rolls_back_after_process_death(tmp_path, monkeypatch):
+    from alphonse.agent_v2 import daemon as module
+    socket_dir = Path(tempfile.mkdtemp(prefix='reminder-rollback-', dir='/private/tmp'))
+    monkeypatch.setattr(module, 'default_socket_path', lambda: socket_dir / 'daemon.sock')
+    due = (datetime.now(timezone.utc) + timedelta(hours=1)).replace(microsecond=0).isoformat()
+    goal = f'Please remind me to call the plumber at {due}'
+    ctx = multiprocessing.get_context('spawn')
+    signal = ctx.Queue()
+    process = ctx.Process(target=_child_after_commit,
+                          args=(str(tmp_path), str(socket_dir), signal, due, goal, True))
+    process.start()
+    replacement = None
+    try:
+        assert signal.get(timeout=20) == 'started'
+        client = V2DaemonClient(str(socket_dir / 'first.sock'))
+        message_id = client.request('experimental_owner_ingress', prompt=goal)['message_id']
+        assert signal.get(timeout=10) == 'inserted_uncommitted'
+        process.kill()
+        process.join(timeout=10)
+        assert not process.is_alive()
+        db = tmp_path / 'fixture.sqlite'
+        with sqlite3.connect(db) as conn:
+            table = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='owner_desktop_reminders'").fetchone()
+            assert table is None or conn.execute('SELECT COUNT(*) FROM owner_desktop_reminders').fetchone()[0] == 0
+            saved = json.loads(conn.execute('SELECT task_state_json FROM v2_task_checkpoints WHERE task_id=?',
+                                            (message_id,)).fetchone()[0])['metadata']
+            assert 'owner_read_pending_decision' in saved
+            assert 'owner_read_ready_handoff' not in saved
+            assert 'owner_read_selected_draft' not in saved
+            before = conn.execute('SELECT status,claim_generation FROM v2_inbound_messages WHERE message_id=?',
+                                  (message_id,)).fetchone()
+        assert before[0] == 'processing' and before[1]
+
+        calls = []
+        class NeverProvider:
+            supports_image_input = False
+            def generate_json(self, request):
+                calls.append(True)
+                raise AssertionError('uncertain reminder request was replayed')
+        replacement, users, conversation = _build(tmp_path, socket_dir, 'second', NeverProvider())
+        owner = users.admin_user()
+        assert [(event.role, event.content) for event in conversation.list(owner_user_id=owner.user_id)] == [('user', goal)]
+        replacement.start()
+        resumed = V2DaemonClient(replacement.ipc.socket_path)
+        assert resumed.request('experimental_owner_status', message_id=message_id)['status'] == 'unavailable'
+        with pytest.raises(RuntimeError, match='owner_desktop_pickup_unavailable'):
+            resumed.request('experimental_owner_take_draft', message_id=message_id)
+        time.sleep(.2)
+        assert OwnerDesktopReminders(str(db)).list_open(owner.user_id) == []
+        with sqlite3.connect(db) as conn:
+            after = conn.execute('SELECT status,claim_generation FROM v2_inbound_messages WHERE message_id=?',
+                                 (message_id,)).fetchone()
+        assert after == before
+        assert calls == []
+        assert [(event.role, event.content) for event in conversation.list(owner_user_id=owner.user_id)] == [('user', goal)]
     finally:
         if process.is_alive():
             process.kill()

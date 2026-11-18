@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "split": "development_synthetic",
+  "cases": [
+    {
+      "id": "spanish-water-reminder-one-minute",
+      "input": {
+        "goal": "Hola Alphonse buenas noches.\nOye me puedes recordar en 1 min bajar por agua?",
+        "actor": "owner",
+        "now": "2026-11-18T04:31:00+00:00",
+        "timezone": "UTC"
+      },
+      "fixture": {
+        "owner": "owner",
+        "available_operations": ["read_clock", "create_reminder"],
+        "clock": {"observed_at_utc": "2026-11-18T04:31:00+00:00", "timezone": "UTC"}
+      },
+      "oracle": {
+        "allowed_statuses": ["completed"],
+        "target_status": "completed",
+        "expected_effects": [{"kind": "reminder", "message": "bajar por agua", "due_at": "2026-11-18T04:32:00+00:00"}],
+        "required_observations": [{"operation": "read_clock", "status": "read"}, {"operation": "create_reminder", "status": "saved"}],
+        "semantic_assessment_required": true
+      }
+    }
+  ]
+}

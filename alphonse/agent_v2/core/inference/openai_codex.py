@@ -7,6 +7,7 @@ import os
 import signal
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from dataclasses import dataclass, replace
@@ -18,6 +19,28 @@ from alphonse.agent_v2.core.inference.images import IMAGE_SUFFIXES
 from alphonse.agent_v2.core.core import ToolDescriptor
 from alphonse.agent_v2.core.inference.models import InferenceRequest
 from alphonse.agent_v2.core.inference.models import InferenceResult
+
+
+_MACOS_HOMEBREW_CODEX = ('/opt/homebrew/bin/codex', '/usr/local/bin/codex')
+
+
+def _resolve_cli(cli_bin: str) -> tuple[str, str | None]:
+    """Find the configured CLI, or a standard Homebrew install for GUI apps.
+
+    Explicit selections never silently fall back to another binary. The second
+    return value is a trusted fixed PATH directory needed by the Homebrew
+    JavaScript launcher to find its Node interpreter.
+    """
+    if shutil.which(cli_bin):
+        # An explicitly selected Homebrew launcher also needs Node on PATH
+        # when the desktop process inherited a minimal GUI environment.
+        directory = os.path.dirname(cli_bin) if cli_bin in _MACOS_HOMEBREW_CODEX and sys.platform == 'darwin' else None
+        return cli_bin, directory
+    if cli_bin == 'codex' and sys.platform == 'darwin':
+        for candidate in _MACOS_HOMEBREW_CODEX:
+            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                return candidate, os.path.dirname(candidate)
+    raise ValueError('openai_codex_cli_missing')
 
 
 @dataclass(frozen=True)
@@ -94,9 +117,7 @@ class OpenAICodexProvider:
         model = _model_for_request(request)
         if self.config.require_explicit_model and not model:
             raise ValueError("openai_codex_model_not_configured")
-        cli_bin = self.config.cli_bin
-        if not shutil.which(cli_bin):
-            raise ValueError("openai_codex_cli_missing")
+        cli_bin, fallback_path = _resolve_cli(self.config.cli_bin)
 
         # The owner selected subscription-backed execution for the candidate.
         # Keep this boundary scoped to simple-loop usage so the existing V3
@@ -110,6 +131,10 @@ class OpenAICodexProvider:
             if not env.get("HOME") or not env.get("PATH"):
                 raise ValueError("openai_codex_subscription_auth_unverified")
             options = ["-c", 'model_provider="openai"', "-c", 'cli_auth_credentials_store="auto"']
+        if fallback_path:
+            if env is None:
+                env = dict(os.environ)
+            env['PATH'] = fallback_path + os.pathsep + env.get('PATH', '')
         command = [cli_bin, *options, "exec", "--skip-git-repo-check"]
         if collect_usage:
             command.extend(["--ignore-user-config", "--ephemeral", "--sandbox", "read-only"])

@@ -566,7 +566,7 @@ class OwnerAtomicCheckpoint:
         The database transaction fences the live claim, selected decision,
         reminder insertion, budget settlement and terminal checkpoint together.
         """
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timezone
         from zoneinfo import ZoneInfo
         from .owner_clock import OWNER_CLOCK_TOOL_ID, valid_clock_observation
         from .owner_reminder_create import OWNER_REMINDER_CREATE_TOOL_ID, validate_reminder_request
@@ -602,8 +602,11 @@ class OwnerAtomicCheckpoint:
                 observed_at=clock_bindings[-1]['clock_observation']['observed_at_utc'])
             now = datetime.now(timezone.utc)
             due = datetime.fromisoformat(canonical['due_at'])
-            if due <= now + timedelta(minutes=1):
-                raise ValueError('owner_reminder_time_too_near')
+            # Time spent interpreting the request counts against a relative
+            # duration. Never save an already-expired reminder, but do not
+            # reject a future one merely because less than a minute remains.
+            if due <= now:
+                raise ValueError('owner_reminder_time_expired')
             reservation = 'reminder-' + secrets.token_hex(16)
             budget.reserve(reservation, kind='tool', amounts={'actions': 1, 'model_calls': 0,
                 'input_tokens': 0, 'output_tokens': 0}, now_ms=now_ms)
