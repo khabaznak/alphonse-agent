@@ -225,11 +225,61 @@ def test_codex_provider_plan_tool_call_transports_tools_and_normalizes_result(
 
 def test_codex_provider_missing_cli_raises_controlled_error(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("alphonse.agent_v2.core.inference.openai_codex.shutil.which", lambda _bin: None)
+    monkeypatch.setattr("alphonse.agent_v2.core.inference.openai_codex._MACOS_HOMEBREW_CODEX", ())
 
     with pytest.raises(ValueError, match="openai_codex_cli_missing"):
         OpenAICodexProvider().generate_markdown(
             InferenceRequest(prompt="Prompt", purpose=InferencePurpose.ACCEPTANCE_CRITERIA)
         )
+
+
+def test_gui_path_falls_back_to_homebrew_launcher_with_node_path(monkeypatch, tmp_path):
+    from alphonse.agent_v2.core.inference import openai_codex as module
+    cli = tmp_path / 'brew' / 'bin' / 'codex'
+    cli.parent.mkdir(parents=True)
+    cli.write_text('fixture')
+    cli.chmod(0o755)
+    monkeypatch.setattr(module.sys, 'platform', 'darwin')
+    monkeypatch.setattr(module, '_MACOS_HOMEBREW_CODEX', (str(cli),))
+    monkeypatch.setattr(module.shutil, 'which', lambda _: None)
+    monkeypatch.setenv('PATH', '/usr/bin:/bin')
+    monkeypatch.setenv('OPENAI_API_KEY', 'never-forwarded')
+    calls = []
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs['env']))
+        if command[-2:] == ['login', 'status']:
+            return SimpleNamespace(returncode=0, stdout='Logged in using ChatGPT', stderr='')
+        Path(command[command.index('--output-last-message') + 1]).write_text('{"kind":"answer"}')
+        return SimpleNamespace(returncode=0, stderr='', stdout=json.dumps(
+            {'type': 'turn.completed', 'usage': {'input_tokens': 5, 'output_tokens': 1}}))
+    monkeypatch.setattr(module.subprocess, 'run', fake_run)
+    result = OpenAICodexProvider().generate_json(InferenceRequest(prompt='fixture', purpose=InferencePurpose.SIMPLE_LOOP_ACTION))
+    assert result.json_value == {'kind': 'answer'}
+    assert len(calls) == 2
+    assert all(command[0] == str(cli) for command, _ in calls)
+    assert all(env['PATH'] == str(cli.parent) + ':/usr/bin:/bin' and 'OPENAI_API_KEY' not in env for _, env in calls)
+
+
+def test_explicit_missing_cli_does_not_fall_back(monkeypatch, tmp_path):
+    from alphonse.agent_v2.core.inference import openai_codex as module
+    cli = tmp_path / 'codex'
+    cli.write_text('fixture')
+    cli.chmod(0o755)
+    monkeypatch.setattr(module.sys, 'platform', 'darwin')
+    monkeypatch.setattr(module, '_MACOS_HOMEBREW_CODEX', (str(cli),))
+    monkeypatch.setattr(module.shutil, 'which', lambda _: None)
+    with pytest.raises(ValueError, match='openai_codex_cli_missing'):
+        OpenAICodexProvider(OpenAICodexProviderConfig(cli_bin='/missing/custom-codex')).generate_markdown(
+            InferenceRequest(prompt='fixture', purpose=InferencePurpose.ACCEPTANCE_CRITERIA))
+
+
+def test_explicit_homebrew_cli_gets_interpreter_path(monkeypatch, tmp_path):
+    from alphonse.agent_v2.core.inference import openai_codex as module
+    cli = str(tmp_path / 'bin' / 'codex')
+    monkeypatch.setattr(module.sys, 'platform', 'darwin')
+    monkeypatch.setattr(module, '_MACOS_HOMEBREW_CODEX', (cli,))
+    monkeypatch.setattr(module.shutil, 'which', lambda value: value)
+    assert module._resolve_cli(cli) == (cli, str(tmp_path / 'bin'))
 
 
 def test_codex_provider_auth_failure_raises_controlled_error(monkeypatch: pytest.MonkeyPatch) -> None:

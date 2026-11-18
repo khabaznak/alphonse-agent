@@ -250,8 +250,11 @@ is not a claim that the current UI or an automated command supplies them.
 - `tests/test_owner_reminder_crash_restart.py` kills a synthetic owner daemon
   after its local reminder and ready confirmation commit, then verifies a new
   daemon recovers the confirmation without repeating inference or duplicating
-  the reminder. It does not verify a Desktop notification was delivered or
-  qualify other effects or crash windows.
+  the reminder. It also kills the process after the reminder INSERT but before
+  its transaction commits: the insert rolls back, the accepted request and
+  uncertain processing claim remain, no draft is offered, and the observed
+  restart does not replay the request. These tests do not verify a Desktop
+  notification was delivered or qualify other effects or crash windows.
 
 #229 remains open until supported capabilities, migration and recovery are
 qualified against actual requirements; this document does not certify them.

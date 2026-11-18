@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "split": "development_synthetic",
+  "cases": [
+    {
+      "id": "clock-utc-observed",
+      "input": {"goal": "What time is the synthetic clock in UTC?", "actor": "owner", "fixture_kind": "clock_read"},
+      "fixture": {"owner": "owner", "available_operations": ["read_clock"], "clock": {"observed_at_utc": "2026-11-17T15:04:00+00:00", "timezone": "UTC"}},
+      "oracle": {"allowed_statuses": ["completed"], "target_status": "completed", "expected_effects": [], "required_observations": [{"operation": "read_clock", "status": "read"}], "expected_response": {"observed_at_utc": "2026-11-17T15:04:00+00:00"}}
+    },
+    {
+      "id": "clock-unavailable",
+      "input": {"goal": "What time is the synthetic clock in UTC?", "actor": "owner", "fixture_kind": "clock_read"},
+      "fixture": {"owner": "owner", "available_operations": []},
+      "oracle": {"allowed_statuses": ["blocked", "unavailable"], "target_status": "completed", "expected_effects": [], "required_observations": [{"operation": "read_clock", "status": "unavailable"}]}
+    },
+    {
+      "id": "clock-denied",
+      "input": {"goal": "What time is the synthetic clock in UTC?", "actor": "owner", "fixture_kind": "clock_read"},
+      "fixture": {"owner": "owner", "available_operations": ["read_clock"], "denied_operations": ["read_clock"]},
+      "oracle": {"allowed_statuses": ["blocked", "unavailable"], "target_status": "completed", "expected_effects": [], "required_observations": [{"operation": "read_clock", "status": "denied"}]}
+    }
+  ]
+}

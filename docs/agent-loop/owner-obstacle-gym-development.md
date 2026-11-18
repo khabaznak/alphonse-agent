@@ -31,6 +31,32 @@ or production readiness. No live model, Jev or household integration is called.
 The scripted two-skill case checks wiring and reads only; its task pass remains
 unknown because its answer has no independent semantic assessment.
 
+The separate `clock_development_v1.json` corpus can exercise the current
+candidate's read-only tool path with a frozen UTC clock observation:
+
+```
+python -m alphonse.agent_v2.evaluation.owner_obstacle_gym \
+  tests/fixtures/owner_obstacles/clock_development_v1.json /tmp/owner-clock.json \
+  --adapter clock-scripted
+```
+
+Its scripted chooser reads the synthetic clock and assembles a JSON timestamp
+from that observation. A separate fixture oracle checks the exact JSON value,
+the clock-read event and absence of effects. Unavailable and denied clock cases
+block rather than fabricate a value. This is a candidate wiring exercise, not a
+real owner clock, a model assessment, an elapsed-time test or evidence of a
+real reminder or external delivery.
+
+`relative_reminder_development_v1.json` records the owner's Spanish request
+to be reminded in one minute to go downstairs for water. It fixes a synthetic
+UTC observation and checks for one matching reminder due exactly one minute
+later, with a clock read and no duplicate effect. The expected reminder text is
+an exact fixture representation, so valid paraphrases need a future semantic
+grader. Response meaning remains unassessed; even a scripted fixture effect is
+not an autonomous task pass. No adapter currently exercises this case against
+the real owner processor. Without one it is reported unavailable, not passed;
+the existing English-only reminder gate is still a known product limitation.
+
 Before using this for broader qualification, add independent semantic and
 evidence-quality grading, independently designed held-out cases, multilingual
 examples, realistic clocks and cancellation/restart faults, execution provenance,

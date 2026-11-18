@@ -82,6 +82,29 @@ def test_simple_loop_provider_failure_does_not_leak_source_data_to_telemetry() -
     assert "synthetic-private-source-data" not in str(events)
 
 
+@pytest.mark.parametrize(('error', 'category'), [
+    ('openai_codex_cli_missing', 'cli_missing'),
+    ('openai_codex_subscription_auth_unverified', 'subscription_auth_unverified'),
+    ('openai_codex_timeout', 'provider_timeout'),
+    ('synthetic-private-source-data', 'provider_error'),
+    ('openai_codex_cli_missing synthetic-private-source-data', 'provider_error'),
+])
+def test_simple_loop_failure_diagnostics_are_allowlisted(error, category, caplog):
+    class FailingProvider(_Provider):
+        def generate_json(self, request):
+            raise ValueError(error)
+    events = []
+    router = InferenceRouter(provider=FailingProvider(),
+        default_profile=ModelProfile(provider='test', model='model', profile_id='profile'),
+        telemetry_sink=events.append)
+    with pytest.raises(ValueError):
+        router.generate_json(InferenceRequest(prompt='synthetic-private-prompt', purpose=InferencePurpose.SIMPLE_LOOP_ACTION))
+    assert events[0]['error'] == 'simple_loop_' + category
+    assert 'category=' + category in caplog.text
+    assert 'synthetic-private' not in caplog.text
+    assert 'synthetic-private' not in str(events)
+
+
 def test_tool_invocation_emits_result_scope_and_failures() -> None:
     events: list[dict[str, Any]] = []
     registry = InMemoryToolRegistry()

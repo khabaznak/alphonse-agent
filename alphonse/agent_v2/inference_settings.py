@@ -305,10 +305,15 @@ def _codex_cache_path() -> Path:
 
 
 def _codex_cli_version() -> str:
-    cli_bin = _codex_cli_bin()
     try:
-        completed = subprocess.run([cli_bin, "--version"], capture_output=True, text=True, timeout=5, check=False)
-    except (OSError, subprocess.TimeoutExpired):
+        from alphonse.agent_v2.core.inference.openai_codex import _resolve_cli
+        cli_bin, fallback_path = _resolve_cli(_codex_cli_bin())
+        env = None
+        if fallback_path:
+            env = dict(os.environ)
+            env['PATH'] = fallback_path + os.pathsep + env.get('PATH', '')
+        completed = subprocess.run([cli_bin, "--version"], capture_output=True, text=True, timeout=5, check=False, env=env)
+    except (OSError, subprocess.TimeoutExpired, ValueError):
         return ""
     return str(completed.stdout or "").strip() if completed.returncode == 0 else ""
 

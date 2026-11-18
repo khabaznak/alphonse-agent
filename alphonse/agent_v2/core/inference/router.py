@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import replace
 from time import monotonic
 from typing import Any, Callable, Protocol
@@ -11,6 +12,29 @@ from alphonse.agent_v2.core.inference.models import InferenceRequest
 from alphonse.agent_v2.core.inference.models import InferenceResult
 from alphonse.agent_v2.core.inference.models import ModelProfile
 from alphonse.agent_v2.core.telemetry import InferenceTelemetryEvent, approximate_tokens, json_chars, safe_telemetry_value
+
+
+logger = logging.getLogger(__name__)
+
+# Only exact, product-defined errors can produce a more specific diagnostic.
+# Provider messages and even exception class names may contain household data.
+_CODEX_FAILURES = {
+    'openai_codex_model_not_configured': 'model_not_configured',
+    'openai_codex_cli_missing': 'cli_missing',
+    'openai_codex_subscription_auth_unverified': 'subscription_auth_unverified',
+    'openai_codex_auth_required': 'authentication_required',
+    'openai_codex_cli_upgrade_required': 'cli_upgrade_required',
+    'openai_codex_timeout': 'provider_timeout',
+    'openai_codex_empty_response': 'empty_response',
+    'openai_codex_invalid_json': 'invalid_response',
+    'inference_cancelled': 'cancelled',
+}
+
+
+def _simple_loop_failure_category(exc: Exception) -> str:
+    if type(exc) is ValueError and len(exc.args) == 1 and type(exc.args[0]) is str:
+        return _CODEX_FAILURES.get(exc.args[0], 'provider_error')
+    return 'provider_error'
 
 
 class InferenceProvider(Protocol):
@@ -86,7 +110,10 @@ class InferenceRouter:
                 # A provider exception may contain model output or source data.
                 # The simple-loop chooser sanitizes what it returns, but router
                 # telemetry is emitted before that outer handler runs.
-                error = "simple_loop_provider_error"
+                category = _simple_loop_failure_category(exc)
+                error = f"simple_loop_{category}"
+                # No exception text, traceback, prompts, responses or credentials.
+                logger.warning("simple_loop_inference_failed category=%s", category)
             else:
                 error = f"{type(exc).__name__}: {exc}"
             self._emit(resolved, None, started, status="failed", error=error)

@@ -109,6 +109,37 @@ def test_owner_conversation_creates_tomorrow_reminder(tmp_path, monkeypatch):
         daemon.stop()
 
 
+def test_one_minute_relative_reminder_can_be_saved(tmp_path, monkeypatch):
+    due = (datetime.now(timezone.utc) + timedelta(minutes=1)).replace(microsecond=0).isoformat()
+    goal = 'Remind me to drink water in 1 minute'
+    args = {'message': 'drink water', 'due_at': due, 'request_quote': goal}
+    daemon, owner, message_id, status, path, _ = worker(tmp_path, monkeypatch, goal=goal, args=args)
+    try:
+        assert status == 'ready'
+        reminders = OwnerDesktopReminders(str(path)).list_open(owner.user_id)
+        assert len(reminders) == 1 and reminders[0]['due_at'] == due
+        assert daemon.take_owner_desktop_draft(message_id)['message'].startswith('Reminder saved: drink water')
+    finally:
+        daemon.stop()
+
+
+def test_elapsed_relative_reminder_is_not_saved(tmp_path, monkeypatch):
+    # Simulate a valid interpretation whose due time has elapsed by commit.
+    # The atomic host must independently reject it even after validation.
+    from alphonse.agent_v2.core.intelligence.simple_loop import owner_reminder_create
+    due = (datetime.now(timezone.utc) - timedelta(seconds=1)).replace(microsecond=0).isoformat()
+    goal = 'Remind me to drink water in 1 minute'
+    args = {'message': 'drink water', 'due_at': due, 'request_quote': goal}
+    monkeypatch.setattr(owner_reminder_create, 'validate_reminder_request',
+                        lambda *_args, **_kwargs: {'message': 'drink water', 'due_at': due})
+    daemon, owner, _, status, path, _ = worker(tmp_path, monkeypatch, goal=goal, args=args)
+    try:
+        assert status != 'ready'
+        assert OwnerDesktopReminders(str(path)).list_open(owner.user_id) == []
+    finally:
+        daemon.stop()
+
+
 @pytest.mark.parametrize('mode', ['no_clock', 'negated', 'invented', 'cancel'])
 def test_reminder_rejects_missing_authority_or_clock_without_effect(tmp_path, monkeypatch, mode):
     goal = 'Do not remind me to call the plumber' if mode == 'negated' else None

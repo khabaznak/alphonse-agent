@@ -798,3 +798,10 @@ def test_recovery_policy_exception_fails_closed(fixture):
         remaining_advertised_evidence=policy)
     result = run_candidate(fixture.state, host)
     assert (result.status, result.blocker, result.unsupported_retries) == ('blocked', 'candidate_answer_unsupported', 0)
+
+
+def test_chooser_failure_categories_do_not_include_private_exception_text():
+    from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_candidate import _chooser_failure_category
+    assert _chooser_failure_category(ValueError('candidate_router_input_exceeds_reservation')) == 'input_exceeds_reservation'
+    assert _chooser_failure_category(ValueError('candidate_router_input_exceeds_reservation: private')) == 'chooser_error'
+    assert _chooser_failure_category(RuntimeError('private')) == 'chooser_error'

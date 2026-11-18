@@ -12,6 +12,7 @@ from __future__ import annotations
 from copy import deepcopy
 import hashlib
 import json
+import logging
 from dataclasses import asdict, dataclass, field
 from typing import Any, Callable
 from uuid import uuid4
@@ -19,6 +20,23 @@ from uuid import uuid4
 from .evidence_projection import EvidenceAccessError, EvidenceSource, project_evidence
 from .task_budget import BudgetExhausted, SQLiteTaskBudgetStore, SyntheticEvaluationBudgetStore
 from alphonse.agent_v2.core.tools.invocation import ToolInvocationService
+
+
+logger = logging.getLogger(__name__)
+_CHOOSER_FAILURES = {
+    'candidate_router_input_exceeds_reservation': 'input_exceeds_reservation',
+    'candidate_router_output_exceeds_reservation': 'output_exceeds_reservation',
+    'candidate_router_source_progress_unavailable': 'source_progress_unavailable',
+    'candidate_router_result_invalid': 'result_invalid',
+    'candidate_router_cancelled': 'cancelled',
+    'candidate_router_unavailable': 'provider_unavailable',
+}
+
+
+def _chooser_failure_category(exc: Exception) -> str:
+    if type(exc) is ValueError and len(exc.args) == 1 and type(exc.args[0]) is str:
+        return _CHOOSER_FAILURES.get(exc.args[0], 'chooser_error')
+    return 'chooser_error'
 
 
 @dataclass
@@ -274,7 +292,8 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
             return _terminal(host, state, 'blocked', 'candidate_claim_unavailable')
         try:
             decision = host.choose(decision_input, host.output_reservation)
-        except Exception:
+        except Exception as exc:
+            logger.warning('simple_loop_decision_failed category=%s', _chooser_failure_category(exc))
             decision = None
         usage = decision.get('usage', {}) if isinstance(decision, dict) else {}
         if not isinstance(usage, dict):

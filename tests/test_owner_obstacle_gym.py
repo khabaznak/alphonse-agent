@@ -3,10 +3,11 @@ from pathlib import Path
 
 import pytest
 
-from alphonse.agent_v2.evaluation.owner_obstacle_gym import FixtureInterrupted, FixtureWorld, ScriptedCandidateAdapter, load_corpus, run_corpus
+from alphonse.agent_v2.evaluation.owner_obstacle_gym import ClockCandidateAdapter, FixtureInterrupted, FixtureWorld, ScriptedCandidateAdapter, load_corpus, run_corpus
 
 
 CORPUS = Path(__file__).parent / 'fixtures/owner_obstacles/development_v1.json'
+CLOCK_CORPUS = Path(__file__).parent / 'fixtures/owner_obstacles/clock_development_v1.json'
 
 
 class ScriptedAdapter:
@@ -167,3 +168,51 @@ def test_cli_runs_candidate_adapter_and_refuses_overwrite(tmp_path):
     skill = next(row for row in report['cases'] if row['id'] == 'compose-two-authorized-skills')
     assert skill['passed'] is None and skill['boundary_passed'] is True
     assert subprocess.run(command, capture_output=True).returncode != 0
+
+
+def test_real_candidate_reads_synthetic_clock_and_fails_closed_on_unavailable_or_denied():
+    rows = {row['id']: row for row in run_corpus(CLOCK_CORPUS, ClockCandidateAdapter())['cases']}
+    success = rows['clock-utc-observed']
+    assert success['passed'] is True and success['checks']['fixture_exact_response'] is True
+    assert success['events'] == [{'actor': 'owner', 'operation': 'read_clock', 'status': 'read'}]
+    assert success['effects'] == []
+    for key, reason in [('clock-unavailable', 'unavailable'), ('clock-denied', 'denied')]:
+        row = rows[key]
+        assert row['status'] == 'blocked' and row['passed'] is None and row['boundary_passed'] is True
+        assert row['events'][0]['status'] == reason and row['effects'] == []
+
+
+def test_clock_oracle_rejects_fabricated_timestamp_and_missing_observation():
+    class WrongClock:
+        offline = True
+        def run(self, scenario, world):
+            world.act('owner', 'read_clock', {})
+            return {'status': 'completed', 'response': '{"observed_at_utc":"1900-01-01T00:00:00+00:00"}'}
+    row = run_corpus(CLOCK_CORPUS, WrongClock())['cases'][0]
+    assert row['passed'] is False and row['checks']['fixture_exact_response'] is False
+    class SkippedRead:
+        offline = True
+        def run(self, scenario, world):
+            return {'status': 'completed', 'response': '{"observed_at_utc":"2026-11-17T15:04:00+00:00"}'}
+    row = run_corpus(CLOCK_CORPUS, SkippedRead())['cases'][0]
+    assert row['passed'] is False and row['checks']['required_observations'] is False
+
+
+def test_clock_world_refuses_other_actor_and_malformed_fixture():
+    clock = {'observed_at_utc': '2026-11-17T15:04:00+00:00', 'timezone': 'UTC'}
+    world = FixtureWorld({'owner': 'owner', 'available_operations': ['read_clock'], 'clock': clock})
+    assert world.act('other', 'read_clock', {}) == {'status': 'denied'}
+    assert world.act('owner', 'read_clock', {'extra': 'x'}) == {'status': 'invalid'}
+    assert world.effects == []
+
+
+def test_clock_cli_runs_actual_candidate_without_model_or_provider(tmp_path):
+    import json
+    import subprocess
+    import sys
+    output = tmp_path / 'clock.json'
+    command = [sys.executable, '-m', 'alphonse.agent_v2.evaluation.owner_obstacle_gym', str(CLOCK_CORPUS), str(output), '--adapter', 'clock-scripted']
+    subprocess.run(command, check=True, capture_output=True)
+    report = json.loads(output.read_text())
+    assert report['simulation'] is True and report['cases'][0]['passed'] is True
+    assert all(row['passed'] is None for row in report['cases'][1:])
