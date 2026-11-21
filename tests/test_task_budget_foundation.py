@@ -75,6 +75,20 @@ def test_overrun_is_accounted_and_cannot_be_hidden_by_reservation():
     # Caller must use a deterministic no-model final response if even reserve is exhausted.
 
 
+def test_actual_usage_respects_aggregate_work_and_final_reserve_after_restart():
+    state = budget()
+    state.reserve('one', kind='model', amounts=model(200, 60), now_ms=1001)
+    state.settle('one', outcome='success', input_tokens=700, output_tokens=20)
+    state = roundtrip(state)
+    assert state.within_work_limits()
+    state.reserve('two', kind='model', amounts=model(100, 20), now_ms=1002)
+    state.settle('two', outcome='success', input_tokens=151, output_tokens=5)
+    assert state.usage()['charged']['input_tokens'] == 851
+    assert not roundtrip(state).within_work_limits()  # 1000 total, 150 reserved for final.
+    with pytest.raises(BudgetExhausted, match='input_tokens'):
+        state.reserve('tool', kind='tool', amounts=vector(actions=1), now_ms=1003)
+
+
 def test_actions_count_on_mixed_success_failure_and_cancel_and_reservation_survives_restart():
     state = budget()
     for n, outcome in enumerate(('success', 'failure', 'cancelled')):

@@ -24,6 +24,13 @@ from alphonse.agent_v2.core.inference.models import InferenceResult
 _MACOS_HOMEBREW_CODEX = ('/opt/homebrew/bin/codex', '/usr/local/bin/codex')
 
 
+def _invalid_json(stage: str) -> ValueError:
+    """Keep the public error stable while exposing only a fixed parse stage."""
+    error = ValueError('openai_codex_invalid_json')
+    error.response_stage = stage
+    return error
+
+
 def _resolve_cli(cli_bin: str) -> tuple[str, str | None]:
     """Find the configured CLI, or a standard Homebrew install for GUI apps.
 
@@ -67,6 +74,19 @@ class OpenAICodexProvider:
 
     def generate_json(self, request: InferenceRequest) -> InferenceResult:
         tactical = request.purpose.value == "tactical_action"
+        encoded_arguments = False
+        if request.purpose.value == "simple_loop_action":
+            from alphonse.agent_v2.core.intelligence.simple_loop.candidate_decision_policy import action_schema
+            # Structured output requires closed objects, but host tool arguments
+            # vary by tool. Encode only this wire field; host validation still
+            # checks the decoded object against the selected native tool schema.
+            if request.output_schema == action_schema():
+                schema = {**request.output_schema, 'properties': {**request.output_schema['properties'],
+                          'arguments': {'type': ['string', 'null']}}}
+                request = replace(request, output_schema=schema, prompt=request.prompt +
+                    '\nFor kind="tool", encode the arguments object as a JSON string in the arguments field. '
+                    'For other kinds, arguments must be null.')
+                encoded_arguments = True
         if tactical:
             from .tactical_wire import SCHEMA, INSTRUCTIONS
             request = replace(request, output_schema=SCHEMA, prompt=request.prompt + "\n" + INSTRUCTIONS)
@@ -90,7 +110,17 @@ class OpenAICodexProvider:
         else:
             parsed = _try_parse_json_object(output)
             if parsed is None:
-                raise ValueError("openai_codex_invalid_json")
+                raise _invalid_json('outer_object')
+            if encoded_arguments and parsed.get('arguments') is not None:
+                if not isinstance(parsed['arguments'], str):
+                    raise _invalid_json('arguments_not_string')
+                try:
+                    arguments = json.loads(parsed['arguments'])
+                except (TypeError, ValueError):
+                    raise _invalid_json('arguments_invalid_json') from None
+                if not isinstance(arguments, dict):
+                    raise _invalid_json('arguments_not_object')
+                parsed['arguments'] = arguments
         return InferenceResult(json_value=parsed, model_profile=request.model_profile,
                                raw_response=None if tactical else output, usage=usage)
 
@@ -137,7 +167,15 @@ class OpenAICodexProvider:
             env['PATH'] = fallback_path + os.pathsep + env.get('PATH', '')
         command = [cli_bin, *options, "exec", "--skip-git-repo-check"]
         if collect_usage:
-            command.extend(["--ignore-user-config", "--ephemeral", "--sandbox", "read-only"])
+            # The simple loop asks Codex for one decision; Alphonse dispatches
+            # its own tools. Disable the CLI's shell feature to avoid a second,
+            # unobserved shell loop inside each decision. This does not remove
+            # Alphonse's native Bash from the tool catalog or dispatch path.
+            # Some CLI versions may keep unified_exec enabled despite the
+            # explicit feature flag, so this is not an OS security boundary.
+            command.extend(["--ignore-user-config", "--ephemeral", "--sandbox", "read-only",
+                            "--disable", "shell_tool", "--disable", "unified_exec",
+                            "--disable", "apps", "--disable", "browser_use", "--disable", "tool_suggest"])
         if self.config.ephemeral and not collect_usage:
             command.append("--ephemeral")
         if model:

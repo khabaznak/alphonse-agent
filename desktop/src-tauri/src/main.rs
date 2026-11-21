@@ -9,6 +9,18 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 use tokio::time::{sleep, Duration, Instant};
 
+// A typed authority transport building block. It is deliberately not exposed
+// to the webview or connected to owner submissions until the Desktop origin,
+// protected application code and service provisioning are established.
+#[cfg(target_os = "macos")]
+mod authority_client;
+#[cfg(target_os = "macos")]
+mod protected_navigation;
+#[cfg(target_os = "macos")]
+mod owner_bash_settings;
+#[cfg(target_os = "macos")]
+mod protected_owner_ingress;
+
 const PROTOCOL_VERSION: u8 = 1;
 // React may request readiness again while a cold sidecar is still starting.
 // Serialize those attempts so only one child daemon is launched.
@@ -195,10 +207,46 @@ fn dirs_home() -> Option<PathBuf> {
 }
 
 fn main() {
+    let mut context = tauri::generate_context!();
+    // Only the embedded, protected release uses authority. Install its
+    // navigation handlers at window creation, before any page can load.
+    #[cfg(target_os = "macos")]
+    let protected_owner = cfg!(feature = "protected-owner") && !cfg!(debug_assertions);
+    #[cfg(target_os = "macos")]
+    if protected_owner {
+        for window in &mut context.config_mut().app.windows {
+            if window.label == "main" {
+                window.create = false;
+            }
+        }
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
+        .setup(move |app| {
+            #[cfg(target_os = "macos")]
+            if protected_owner {
+                use protected_navigation::{destination, open_external, Destination};
+                use tauri::webview::NewWindowResponse;
+
+                let config = app.config().app.windows.iter().find(|window| window.label == "main")
+                    .ok_or("protected main window is unavailable")?;
+                tauri::WebviewWindowBuilder::from_config(&*app, config)?
+                    .on_navigation(|url| match destination(url) {
+                        Destination::Application => true,
+                        Destination::ExternalWeb => { open_external(url); false }
+                        Destination::Denied => false,
+                    })
+                    .on_new_window(|url, _features| {
+                        open_external(&url);
+                        NewWindowResponse::Deny
+                    })
+                    .build()?;
+            }
+            let _ = app;
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             desktop_diagnostic_mode,
             desktop_diagnostic_project_id,
@@ -209,6 +257,6 @@ fn main() {
             show_in_finder,
             play_alert_sound
         ])
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("error while running Alphonse Desktop");
 }

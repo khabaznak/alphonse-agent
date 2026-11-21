@@ -55,6 +55,9 @@ class V2DaemonClient:
     def status(self) -> dict[str, Any]:
         return self.request("status")
 
+    def runtime_identity(self) -> dict[str, Any]:
+        return self.request("runtime_identity")
+
     def stop(self) -> dict[str, Any]:
         return self.request("stop")
 
@@ -302,10 +305,14 @@ class V2DaemonClient:
 
 
 class V2DaemonServer:
-    def __init__(self, daemon: Any, socket_path: str | Path | None = None, *, experimental_owner_ingress: bool = False) -> None:
-        if type(experimental_owner_ingress) is not bool:
+    def __init__(self, daemon: Any, socket_path: str | Path | None = None, *, experimental_owner_ingress: bool = False,
+                 experimental_authority_ingress: bool = False) -> None:
+        if type(experimental_owner_ingress) is not bool or type(experimental_authority_ingress) is not bool:
             raise ValueError('owner_ingress_configuration_invalid')
         self.experimental_owner_ingress = experimental_owner_ingress
+        # Test-only wiring: this is NOT a protected Desktop authentication
+        # boundary and must not enable host Bash or be set by IPC clients.
+        self.experimental_authority_ingress = experimental_authority_ingress
         self.daemon = daemon
         self.socket_path = Path(socket_path) if socket_path is not None else default_socket_path()
         self._server: socket.socket | None = None
@@ -436,6 +443,8 @@ class V2DaemonServer:
                     result = self._owner_ack_draft(connection, request)
                 elif isinstance(request, dict) and request.get('method') == 'experimental_owner_status':
                     result = self._owner_status(connection, request)
+                elif isinstance(request, dict) and request.get('method') == 'experimental_owner_cancel_schedule':
+                    result = self._owner_cancel_schedule(connection, request)
                 elif isinstance(request, dict) and request.get('method') == 'legacy_state_inventory':
                     result = self._legacy_state_inventory(connection, request)
                 elif isinstance(request, dict) and request.get('method') == 'legacy_state_items':
@@ -450,6 +459,9 @@ class V2DaemonServer:
                         'owner_reminder_create', 'owner_reminder_take', 'owner_reminder_ack',
                         'owner_reminder_list', 'owner_reminder_cancel', 'owner_reminder_resolve', 'owner_reminder_lookup'}:
                     result = self._owner_reminders(connection, request)
+                elif isinstance(request, dict) and request.get('method') in {
+                        'owner_scheduled_results_list', 'owner_scheduled_result_ack'}:
+                    result = self._owner_scheduled_delivery(connection, request)
                 elif isinstance(request, dict) and request.get('method') in {'legacy_notification_list', 'legacy_notification_archive'}:
                     result = self._legacy_notification_review(connection, request)
                 else:
@@ -512,15 +524,51 @@ class V2DaemonServer:
             return reminders.lookup(owner.user_id, params['request_id'])
         return reminders.acknowledge(owner.user_id, params['id'], params['token'])
 
+    def _owner_scheduled_delivery(self, connection, request):
+        """Only the authenticated local owner can present/ack their results."""
+        if not self.experimental_owner_ingress or getattr(self.daemon, 'experimental_owner_only', False) is not True:
+            raise PermissionError('owner_scheduled_delivery_unavailable')
+        if request.get('version') != PROTOCOL_VERSION:
+            raise ValueError('daemon_protocol_version_unsupported')
+        method, params = request.get('method'), request.get('params')
+        expected = set() if method == 'owner_scheduled_results_list' else {'id'}
+        if not isinstance(params, dict) or set(params) != expected:
+            raise ValueError('owner_scheduled_delivery_payload_denied')
+        self._local_peer_uid(connection)
+        users = self.daemon.runtime.user_store
+        owner = users.admin_user()
+        if owner is None or owner.is_active is not True or owner.role not in ('admin', 'owner') or not users.is_admin(owner.user_id):
+            raise PermissionError('owner_scheduled_delivery_unavailable')
+        from alphonse.agent_v2.core.messages.sqlite_queue import SQLiteMessageQueue
+        queue = self.daemon.runtime.queue
+        if (type(queue) is not SQLiteMessageQueue or queue.experimental_claim_fencing is not True
+                or not users.db_path or users.db_path == ':memory:'
+                or os.path.realpath(str(users.db_path)) != os.path.realpath(str(queue.db_path))):
+            raise PermissionError('owner_scheduled_delivery_unavailable')
+        from alphonse.agent_v2.owner_scheduled_delivery import OwnerScheduledDelivery
+        deliveries = OwnerScheduledDelivery(str(users.db_path))
+        if method == 'owner_scheduled_results_list':
+            return {'results': deliveries.list_pending(owner.user_id)}
+        return deliveries.acknowledge(owner.user_id, params['id'])
+
     def _owner_ingress(self, connection, request):
         if not self.experimental_owner_ingress:
             raise PermissionError('owner_ingress_unavailable')
         if request.get('version') != PROTOCOL_VERSION:
             raise ValueError('daemon_protocol_version_unsupported')
         params = request.get('params')
+        allowed_fields = {'prompt', 'reply_to_message_id'}
+        if self.experimental_authority_ingress:
+            allowed_fields |= {'message_id', 'authority_request_id'}
         if (not isinstance(params, dict) or 'prompt' not in params
-                or set(params) - {'prompt', 'reply_to_message_id'}):
+                or set(params) - allowed_fields):
             raise ValueError('owner_ingress_payload_denied')
+        binding = None
+        if self.experimental_authority_ingress:
+            if any(not isinstance(params.get(key), str) or re.fullmatch(r'[0-9a-f]{32}', params[key]) is None
+                   for key in ('message_id', 'authority_request_id')):
+                raise ValueError('owner_authority_binding_invalid')
+            binding = (params['message_id'], params['authority_request_id'])
         if ('reply_to_message_id' in params and
                 (not isinstance(params['reply_to_message_id'], str)
                  or re.fullmatch(r'[0-9a-f]{32}', params['reply_to_message_id']) is None)):
@@ -534,7 +582,8 @@ class V2DaemonServer:
         if type(queue) is not SQLiteMessageQueue:
             raise PermissionError('owner_ingress_unavailable')
         return queue.enqueue_trusted_local_owner(prompt=params['prompt'], peer_uid=uid,
-                    reply_to_message_id=params.get('reply_to_message_id'), return_receipt=True)
+                    reply_to_message_id=params.get('reply_to_message_id'), return_receipt=True,
+                    _authority_binding=binding)
 
     def _legacy_notification_review(self, connection, request):
         """Review legacy deliveries as the authenticated local owner only."""
@@ -604,6 +653,21 @@ class V2DaemonServer:
         except (AttributeError, OSError, TypeError, ValueError):
             raise PermissionError('legacy_state_inventory_unavailable') from None
         return runtime, queue, params['actor_user_id']
+
+    def _owner_cancel_schedule(self, connection, request):
+        if (not self.experimental_owner_ingress or getattr(self.daemon, 'experimental_owner_only', False) is not True
+                or request.get('version') != PROTOCOL_VERSION):
+            raise PermissionError('owner_schedule_cancel_unavailable')
+        params = request.get('params')
+        if (not isinstance(params, dict) or set(params) != {'scheduled_task_id'}
+                or not isinstance(params['scheduled_task_id'], str) or not params['scheduled_task_id'].strip()):
+            raise ValueError('owner_schedule_cancel_payload_denied')
+        self._local_peer_uid(connection)
+        actor = self.daemon.runtime.user_store.admin_user()
+        if actor is None or not self.daemon.runtime.user_store.is_admin(actor.user_id):
+            raise PermissionError('owner_schedule_cancel_unavailable')
+        return self.daemon.cancel_owner_schedule(actor_user_id=actor.user_id,
+                                                  scheduled_task_id=params['scheduled_task_id'])
 
     def _owner_status(self, connection, request):
         if not self.experimental_owner_ingress:
@@ -804,6 +868,18 @@ class V2DaemonServer:
             raise RuntimeError('owner_only_operation_unavailable')
         if method == "ping":
             return {"service": "alphonse-v2-daemon", "status": "ready"}
+        if method == "runtime_identity":
+            if params:
+                raise ValueError('runtime_identity_payload_denied')
+            return self.daemon.runtime_identity()
+        if method == "get_trusted_local_bash_settings":
+            if params:
+                raise ValueError('trusted_local_bash_setting_invalid')
+            return self.daemon.trusted_local_bash_settings()
+        if method == "set_trusted_local_bash_settings":
+            if set(params) != {'enabled'} or type(params['enabled']) is not bool:
+                raise ValueError('trusted_local_bash_setting_invalid')
+            return self.daemon.set_trusted_local_bash_settings(params['enabled'])
         if method == "status":
             runtime = self.daemon.runtime
             status_error = ""

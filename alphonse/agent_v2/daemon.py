@@ -5,7 +5,9 @@ from __future__ import annotations
 import signal
 import json
 import fcntl
+import hashlib
 import logging
+import marshal
 import mimetypes
 import os
 import re
@@ -15,6 +17,8 @@ import shutil
 import threading
 import time
 import traceback
+import sys
+import tempfile
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -169,13 +173,55 @@ def _owner_public_failure_code(error: object, *, cancelled: bool = False) -> str
         'candidate_deadline_exceeded': 'time_limit',
         'candidate_model_unavailable': 'model_unavailable',
         'candidate_model_usage_unknown_or_overrun': 'usage_unconfirmed',
+        'candidate_model_usage_overrun': 'usage_limit_exceeded',
+        'BudgetExhausted:budget_exhausted:actions': 'action_limit',
         'candidate_read_denied': 'source_unavailable',
         'candidate_read_revoked': 'source_unavailable',
         'candidate_evidence_changed_or_revoked': 'source_changed',
         'candidate_observation_incomplete': 'source_incomplete',
         'candidate_requires_read_only_native_tool': 'unsupported_operation',
         'candidate_answer_unsupported': 'answer_unverified',
+        'candidate_question_not_verified': 'clarification_unverified',
+        'candidate_question_review_unavailable': 'clarification_review_unavailable',
     }.get(error, 'needs_attention') if isinstance(error, str) else 'needs_attention'
+
+
+def _owner_bash_action_unconfirmed(raw: object, *, message_id: str, actor: str) -> bool:
+    """Identify an actor-bound unresolved shell reservation without changing it.
+
+    A reservation may have been made before dispatch. It establishes neither
+    execution nor an effect, and this classification cannot authorize replay or
+    reconciliation. Malformed or legacy state remains unavailable.
+    """
+    try:
+        from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_candidate import CandidateState
+        from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_checkpoint import SCHEMA_VERSION, STATE_KEY
+        from alphonse.agent_v2.core.intelligence.simple_loop.task_budget import TaskBudget
+        if not isinstance(raw, dict) or not isinstance(raw.get('metadata'), dict):
+            return False
+        metadata = raw['metadata']
+        envelope = metadata[STATE_KEY]
+        if (not isinstance(envelope, dict) or type(envelope.get('schema_version')) is not int
+                or envelope['schema_version'] != SCHEMA_VERSION):
+            return False
+        state = CandidateState.restore(envelope['state'])
+        budget = TaskBudget.from_dict(envelope['budget'])
+        pending = metadata['owner_read_pending_action']
+        return bool(raw.get('task_id') == message_id and raw.get('message_id') == message_id
+                    and raw.get('user') == actor and raw.get('intelligence_engine') == 'single_loop_experimental'
+                    and type(raw.get('intelligence_schema_version')) is int and raw['intelligence_schema_version'] == 1
+                    and state.task_id == message_id and state.actor == actor and state.status == 'running'
+                    and isinstance(pending, dict)
+                    and set(pending) == {'reservation_id', 'kind', 'tool_id', 'arguments', 'claim_digest'}
+                    and pending.get('kind') == 'tool' and pending.get('tool_id') == 'native.bash'
+                    and isinstance(pending.get('arguments'), dict)
+                    and isinstance(pending.get('claim_digest'), str)
+                    and re.fullmatch(r'[0-9a-f]{64}', pending['claim_digest']) is not None
+                    and isinstance(state.inflight, str) and bool(state.inflight)
+                    and pending.get('reservation_id') == state.inflight
+                    and budget.usage()['in_flight'] == [state.inflight])
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return False
 
 
 @dataclass
@@ -188,6 +234,7 @@ class V2Daemon:
     experimental_owner_only: bool = False
 
     def __post_init__(self) -> None:
+        self._identity_started_at = datetime.now(timezone.utc).isoformat()
         schedule_db_path = str(getattr(self.runtime.schedule_store, "db_path", ":memory:"))
         self.event_store = self.event_store or (
             EventAutomationStore(":memory:")
@@ -301,6 +348,94 @@ class V2Daemon:
         )
         self.ipc = V2DaemonServer(self)
 
+    def runtime_identity(self) -> dict[str, Any]:
+        """Describe the live worker and fingerprint selected loaded code objects.
+
+        These fingerprints cover only three functions, include interpreter and
+        compilation details, and are not an attestation of the whole build.
+        Package metadata is a version label, not a Git revision.
+        """
+        from importlib.metadata import PackageNotFoundError, version
+        from alphonse.agent_v2.core.intelligence.simple_loop import owner_read_processor
+        from alphonse.agent_v2.core.intelligence.simple_loop import single_loop_candidate
+
+        try:
+            package_version = version('alphonse-agent')
+        except PackageNotFoundError:
+            package_version = None
+        processor = getattr(getattr(self.runtime, 'processor', None), 'owner_read_candidate', None)
+        thread = self._processor_thread
+        alive = bool(thread is not None and thread.is_alive())
+        is_owner_worker = (self.experimental_owner_only is True
+                           and type(processor) is owner_read_processor.OwnerReadConversationProcessor
+                           and getattr(processor.process, '__func__', None) is owner_read_processor.OwnerReadConversationProcessor.process
+                           and owner_read_processor.run_candidate is single_loop_candidate.run_candidate
+                           and getattr(self._owner_process_loop, '__func__', None) is V2Daemon._owner_process_loop)
+        functions = {
+            'owner_worker': getattr(self._owner_process_loop, '__func__', None),
+            'owner_processor': getattr(getattr(processor, 'process', None), '__func__', None),
+            'simple_loop_candidate': owner_read_processor.run_candidate,
+        }
+        fingerprints = {}
+        for name, function in functions.items():
+            code = getattr(function, '__code__', None)
+            if code is not None:
+                fingerprints[name] = hashlib.sha256(marshal.dumps(code)).hexdigest()
+        # Report the loaded worker's configuration, not a guarantee that a
+        # particular request is authorized, dispatchable, or protected from
+        # same-user impersonation. Dojo container Bash is a different path.
+        bash_flag = getattr(processor, '_owner_host_bash_enabled', None)
+        unsafe_test = getattr(processor, '_allow_unprotected_host_bash_for_testing', None)
+        trusted_local = getattr(processor, '_trusted_local_host_bash', None)
+        authority = getattr(processor, '_experimental_owner_authority', None)
+        if not is_owner_worker or type(bash_flag) is not bool:
+            host_bash_mode = 'unverified'
+        elif not bash_flag:
+            host_bash_mode = 'disabled'
+        elif trusted_local is True:
+            host_bash_mode = 'trusted_local_unprotected'
+        elif unsafe_test is True:
+            host_bash_mode = 'experimental_unprotected'
+        elif unsafe_test is False and authority is not None:
+            host_bash_mode = 'experimental_authority_unverified'
+        elif unsafe_test is False:
+            host_bash_mode = 'blocked_missing_authority'
+        else:
+            host_bash_mode = 'unverified'
+        return {
+            'daemon_id': self.daemon_id, 'pid': os.getpid(), 'instance_created_at_utc': self._identity_started_at,
+            'distribution_version': package_version, 'source_revision': None,
+            'python_version': sys.version.split()[0],
+            'worker_alive': alive, 'owner_only': self.experimental_owner_only is True,
+            'loop': 'simple_loop' if is_owner_worker else 'unknown',
+            'loop_status': 'configured_worker_alive' if is_owner_worker and alive else
+                           'configured_worker_not_alive' if is_owner_worker else 'unverified',
+            'owner_host_bash_mode': host_bash_mode,
+            'loaded_code_sha256': fingerprints,
+            'identity_scope': 'Selected loaded function code only; not a complete build fingerprint or proof of executed tasks.',
+        }
+
+    def trusted_local_bash_settings(self) -> dict[str, Any]:
+        """Report the persisted development preference and the live worker state."""
+        enabled = _read_trusted_local_bash_preference()
+        identity = self.runtime_identity()
+        active = None
+        if identity['loop_status'] == 'configured_worker_alive':
+            mode = identity['owner_host_bash_mode']
+            if mode == 'trusted_local_unprotected':
+                active = True
+            elif mode in {'disabled', 'blocked_missing_authority'}:
+                active = False
+        return {'enabled': enabled, 'active': active,
+                'restart_required': enabled != active if active is not None else None}
+
+    def set_trusted_local_bash_settings(self, enabled: bool) -> dict[str, Any]:
+        """Persist a local development preference; never change a running worker."""
+        if type(enabled) is not bool:
+            raise ValueError('trusted_local_bash_setting_invalid')
+        _write_trusted_local_bash_preference(enabled)
+        return self.trusted_local_bash_settings()
+
     def _start_owner_only(self) -> None:
         """Start the explicitly selected read-only owner worker and socket.
 
@@ -366,14 +501,42 @@ class V2Daemon:
         processor = self.runtime.processor.owner_read_candidate
         while not self._stop.is_set():
             message_id = ''
+            acquired = task = None
+            scheduled_occurrence = False
             try:
+                # Only schedules created by the current owner path have the
+                # separate provenance row. Legacy schedules remain paused.
+                from alphonse.agent_v2.core.intelligence.simple_loop.owner_schedule_origin import stage_due_occurrence_locked
+                with queue._connect() as conn:
+                    has_schedules = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_owner_schedule_origins'").fetchone()
+                    if has_schedules:
+                        conn.execute('BEGIN IMMEDIATE')
+                        candidates = conn.execute('''SELECT o.scheduled_task_id FROM v2_owner_schedule_origins o
+                            JOIN v2_scheduled_tasks t ON t.scheduled_task_id=o.scheduled_task_id
+                            WHERE t.status='active' AND t.next_run_at IS NOT NULL
+                              AND NOT EXISTS (SELECT 1 FROM v2_owner_schedule_occurrences x
+                                              WHERE x.schedule_id=o.scheduled_task_id)
+                            ORDER BY t.next_run_at LIMIT 50''').fetchall()
+                        now = queue._owner_schedule_clock()
+                        for candidate in candidates:
+                            try:
+                                stage_due_occurrence_locked(conn, candidate['scheduled_task_id'], now=now)
+                            except ValueError:
+                                # Not-yet-due, revoked or invalid schedules are
+                                # never made into owner-authorized messages.
+                                continue
                 # Claim only a server-bound local-owner ingress. Generic queue
                 # messages belong to other paths and must never be consumed.
                 with queue._connect() as conn:
                     origin = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_trusted_owner_ingress'").fetchone()
-                    row = conn.execute("""SELECT q.message_id FROM v2_inbound_messages q
-                        JOIN v2_trusted_owner_ingress o ON o.message_id=q.message_id
-                        WHERE q.status='pending' ORDER BY q.sequence LIMIT 1""").fetchone() if origin else None
+                    schedules = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_owner_schedule_occurrences'").fetchone()
+                    filters = []
+                    if origin:
+                        filters.append('EXISTS (SELECT 1 FROM v2_trusted_owner_ingress o WHERE o.message_id=q.message_id)')
+                    if schedules:
+                        filters.append("EXISTS (SELECT 1 FROM v2_owner_schedule_occurrences x WHERE x.message_id=q.message_id AND x.state='queued')")
+                    row = conn.execute("SELECT q.message_id FROM v2_inbound_messages q WHERE q.status='pending' AND ("
+                        + ' OR '.join(filters) + ") ORDER BY q.sequence LIMIT 1").fetchone() if filters else None
                 if row is None:
                     self._stop.wait(self.poll_interval_sec)
                     continue
@@ -388,6 +551,11 @@ class V2Daemon:
                     self._owner_failure_codes.pop(message_id, None)
                 task = TaskState.from_message(acquired.message, message_id=message_id)
                 task.task_id = message_id
+                with queue._connect() as conn:
+                    schedule_table = conn.execute("SELECT 1 FROM sqlite_master WHERE name='v2_owner_schedule_occurrences'").fetchone()
+                    scheduled_occurrence = bool(schedule_table and conn.execute(
+                        'SELECT 1 FROM v2_owner_schedule_occurrences WHERE message_id=? AND owner_id=?',
+                        (message_id, task.user)).fetchone())
                 self._activate_kill_switch_task(acquired, task)
                 cancelled = threading.Event()
                 def is_cancelled(current_id=message_id, cancellation=cancelled):
@@ -396,9 +564,14 @@ class V2Daemon:
                     return cancellation.is_set()
                 context = CoreLoopContext(messages=queue, claim_receipt=acquired.claim_receipt,
                     tools=self.runtime.core.tools, inference=self.runtime.core.inference,
+                    system_one=self.runtime.core.system_one,
                     conversation_store=self.runtime.conversation_store,
+                    identity_resolver=self.runtime.identity_resolver,
+                    project_store=self.runtime.project_store,
                     owner_gmail_service=self.runtime.owner_gmail_service,
                     schedule_store=self.runtime.schedule_store,
+                    owner_schedule_store=self.runtime.owner_schedule_store,
+                    owner_schedule_creation_enabled=(self.runtime.owner_schedule_store is not None),
                     skill_store=self.runtime.core.skill_store,
                     artifact_resources=self.runtime.core.artifact_resources,
                     skill_bindings=self.runtime.core.skill_bindings,
@@ -406,32 +579,54 @@ class V2Daemon:
                     owner_effect_commit=lambda commit: self.kill_switch.commit_if_active(message_id, commit),
                     cancellation_checker=is_cancelled)
                 result = None
+                scheduled_recorded = False
                 try:
                     result = processor.process(task, context)
                 finally:
                     with self._owner_checkpoint_lock:
                         selected_pair = self._owner_checkpoints.get(message_id)
                     def finish_ready_handoff():
+                        nonlocal scheduled_recorded
                         # This callback executes while cancellation is locked
                         # out by finish_handoff. A crash before the marker is
                         # committed must never make the draft recoverable.
                         if (result is not None and result.status == ProcessingStatus.WAITING
                                 and selected_pair is not None and not self._stop.is_set()):
-                            selected_pair[0].mark_ready_handoff()
+                            if selected_pair[0].scheduled_origin:
+                                selected_pair[0].finalize_scheduled_result(selected_pair[1])
+                                scheduled_recorded = True
+                            else:
+                                selected_pair[0].mark_ready_handoff()
                         return True
                     cancelled_at_finish, _ = self.kill_switch.finish_handoff(
                         message_id, release=finish_ready_handoff, cancel=lambda: True)
                     if cancelled_at_finish:
                         cancelled.set()
                 with self._owner_checkpoint_lock:
+                    if scheduled_recorded:
+                        self._owner_checkpoints.pop(message_id, None)
                     ready = message_id in self._owner_checkpoints
                 with self._owner_status_lock:
                     is_ready = ready and not cancelled.is_set() and result.status == ProcessingStatus.WAITING
-                    self._owner_statuses[message_id] = 'ready' if is_ready else 'failed'
-                    if not is_ready:
+                    self._owner_statuses[message_id] = 'recorded' if scheduled_recorded else ('ready' if is_ready else 'failed')
+                    if not is_ready and not scheduled_recorded:
                         self._owner_failure_codes[message_id] = _owner_public_failure_code(
                             result.error, cancelled=cancelled.is_set() or result.status == ProcessingStatus.CANCELLED)
+                if scheduled_occurrence and not is_ready and not scheduled_recorded:
+                    try:
+                        from alphonse.agent_v2.core.intelligence.simple_loop.owner_schedule_recovery import record_uncertain_schedule
+                        record_uncertain_schedule(queue, acquired.claim_receipt, task)
+                    except Exception:
+                        # Expired or invalid claims cannot write the marker;
+                        # the read-only observer reports their state as uncertain.
+                        logger.warning('scheduled occurrence needs attention; durable marker unavailable')
             except Exception:
+                if scheduled_occurrence and acquired is not None and task is not None:
+                    try:
+                        from alphonse.agent_v2.core.intelligence.simple_loop.owner_schedule_recovery import record_uncertain_schedule
+                        record_uncertain_schedule(queue, acquired.claim_receipt, task)
+                    except Exception:
+                        logger.warning('scheduled occurrence needs attention; durable marker unavailable')
                 if message_id:
                     with self._owner_status_lock:
                         self._owner_statuses[message_id] = 'failed'
@@ -582,8 +777,11 @@ class V2Daemon:
                 context = CoreLoopContext(messages=queue, claim_receipt=queued.claim_receipt,
                     tools=self.runtime.core.tools, inference=self.runtime.core.inference,
                     conversation_store=self.runtime.conversation_store,
+                    identity_resolver=self.runtime.identity_resolver,
+                    project_store=self.runtime.project_store,
                     owner_gmail_service=self.runtime.owner_gmail_service,
                     schedule_store=self.runtime.schedule_store,
+                    owner_schedule_store=self.runtime.owner_schedule_store,
                     skill_store=self.runtime.core.skill_store,
                     artifact_resources=self.runtime.core.artifact_resources,
                     skill_bindings=self.runtime.core.skill_bindings,
@@ -669,7 +867,7 @@ class V2Daemon:
                 exists = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_trusted_owner_ingress'").fetchone()
                 if not exists:
                     return []
-                rows = conn.execute("""SELECT q.message_id,q.prompt,q.status,q.lease_expires_at,c.task_state_json
+                rows = conn.execute("""SELECT q.message_id,q.user_id,q.prompt,q.status,q.lease_expires_at,c.task_state_json
                     FROM v2_inbound_messages q JOIN v2_trusted_owner_ingress o ON o.message_id=q.message_id
                     JOIN v2_user_settings s ON s.key='admin_user_id' AND s.value=q.user_id
                     JOIN v2_users u ON u.user_id=q.user_id AND u.role IN ('admin','owner') AND u.is_active=1
@@ -685,16 +883,26 @@ class V2Daemon:
                 # those conditions; the action still rechecks transactionally.
                 can_abandon = eligibility.get(row['message_id'], False)
                 status = self.owner_message_status(row['message_id'])
-                if status == 'unavailable' and row['task_state_json']:
+                if status in {'unavailable', 'failed'} and row['task_state_json']:
                     try:
                         raw = json.loads(row['task_state_json'])
-                        marker = raw.get('metadata', {}).get('owner_read_desktop_pickup_started', {})
-                        if marker.get('status') == 'started_unconfirmed':
-                            status = 'started_unconfirmed'
+                        if _owner_bash_action_unconfirmed(raw, message_id=row['message_id'], actor=row['user_id']):
+                            status = 'action_unconfirmed'
+                            can_abandon = False
+                        elif status == 'unavailable':
+                            marker = raw.get('metadata', {}).get('owner_read_desktop_pickup_started', {})
+                            if marker.get('status') == 'started_unconfirmed':
+                                status = 'started_unconfirmed'
                     except (AttributeError, TypeError, ValueError):
                         pass
-                items.append({'message_id': row['message_id'], 'prompt': str(row['prompt'])[:240],
-                              'status': status, 'can_abandon': bool(can_abandon)})
+                item = {'message_id': row['message_id'], 'prompt': str(row['prompt'])[:240],
+                        'status': status, 'can_abandon': bool(can_abandon)}
+                if status in {'failed', 'unavailable'}:
+                    from alphonse.agent_v2.core.intelligence.simple_loop.owner_schedule_cancel import committed_cancel_for_recovery
+                    effect = committed_cancel_for_recovery(self.runtime.queue, row['message_id'], row['user_id'])
+                    if effect is not None:
+                        item.update({'status': 'effect_committed', 'can_abandon': False, 'committed_effect': effect})
+                items.append(item)
             return items
         except Exception:
             raise RuntimeError('owner_recovery_unavailable') from None
@@ -1066,6 +1274,37 @@ class V2Daemon:
         owner = self._scheduled_task_owner(actor_user_id=actor_user_id, requested_owner_user_id=owner_user_id)
         tasks = self.runtime.schedule_store.list_tasks(owner_user_id=owner, status=status, limit=limit)
         return [{**task.to_dict(), "latest_execution": self._latest_scheduled_execution(task.scheduled_task_id)} for task in tasks]
+
+    def cancel_owner_schedule(self, *, actor_user_id: str, scheduled_task_id: str) -> dict[str, object]:
+        """Cancel one provenance-bound owner schedule without touching legacy jobs.
+
+        The IPC caller authenticates the local peer; actor is checked again in
+        the same transaction as cancellation. A running effect is uncertain.
+        """
+        from alphonse.agent_v2.core.intelligence.simple_loop.owner_schedule_origin import verified_schedule_origin_locked
+        if not self.experimental_owner_only or not isinstance(scheduled_task_id, str) or not scheduled_task_id:
+            raise ValueError('owner_schedule_cancel_unavailable')
+        queue = self.runtime.queue
+        with queue._connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            row = verified_schedule_origin_locked(conn, scheduled_task_id)
+            if (row is None or row['owner_user_id'] != actor_user_id
+                    or row['status'] not in {'active', 'paused'}):
+                raise ValueError('owner_schedule_cancel_unavailable')
+            occurrence = conn.execute('''SELECT x.message_id,q.status AS queue_status
+                FROM v2_owner_schedule_occurrences x LEFT JOIN v2_inbound_messages q ON q.message_id=x.message_id
+                WHERE x.schedule_id=?''', (scheduled_task_id,)).fetchone()
+            running = occurrence is not None and occurrence['queue_status'] != 'pending'
+            changed = conn.execute("UPDATE v2_scheduled_tasks SET status='cancelled', next_run_at=NULL WHERE scheduled_task_id=? AND owner_user_id=? AND status IN ('active','paused')",
+                                   (scheduled_task_id, actor_user_id))
+            if changed.rowcount != 1:
+                raise ValueError('owner_schedule_cancel_unavailable')
+            if occurrence is not None:
+                conn.execute("UPDATE v2_owner_schedule_occurrences SET state='cancelled' WHERE schedule_id=? AND state='queued'", (scheduled_task_id,))
+                if not running:
+                    conn.execute("DELETE FROM v2_inbound_messages WHERE message_id=? AND status='pending'", (occurrence['message_id'],))
+            return {'scheduled_task_id': scheduled_task_id, 'status': 'cancelled',
+                    'execution_may_have_started': running}
 
     def scheduled_task_executions(self, *, actor_user_id: str = "", scheduled_task_id: str, limit: int = 100) -> list[dict[str, object]]:
         self._scheduled_task_for_actor(actor_user_id=actor_user_id, scheduled_task_id=scheduled_task_id)
@@ -2101,6 +2340,12 @@ class V2Daemon:
                 "project_id": event.project_id,
                 "sequence": event.sequence,
             }
+            if self.experimental_owner_only and event.source_message_id.startswith('outbound:owner:'):
+                from alphonse.agent_v2.core.intelligence.simple_loop.owner_schedule_cancel import committed_cancel_for_recovery
+                effect = committed_cancel_for_recovery(self.runtime.queue,
+                    event.source_message_id.removeprefix('outbound:owner:'), normalized_user)
+                if effect is not None:
+                    messages[message_id]['committed_effect'] = effect
         return list(messages.values())
 
     def mark_desktop_project_seen(self, *, user: str, project_id: str = "", local_date: str = "", through_sequence: int | None = None) -> dict[str, Any]:
@@ -4091,6 +4336,93 @@ def _positive_float(value: Any) -> float:
     return parsed if parsed > 0 else 1.0
 
 
+def _configure_trusted_local_bash(runtime: Any, *, enabled: bool) -> None:
+    """Explicit local development opt-in; this is not a protected boundary."""
+    if type(enabled) is not bool:
+        raise ValueError('trusted_local_bash_configuration_invalid')
+    if enabled:
+        candidate = getattr(getattr(runtime, 'processor', None), 'owner_read_candidate', None)
+        if candidate is None or not callable(getattr(candidate, 'enable_owner_host_bash', None)):
+            raise ValueError('trusted_local_bash_owner_worker_unavailable')
+        candidate.enable_owner_host_bash(trusted_local_development=True)
+        logger.warning('Trusted local development Bash is enabled without a protected owner authority boundary.')
+
+
+def _trusted_local_bash_preference_path() -> Path:
+    return Path.home() / '.alphonse' / 'trusted-local-development.json'
+
+
+def _read_trusted_local_bash_preference(path: Path | None = None) -> bool:
+    """Read the exact setting; do not silently overwrite invalid household data."""
+    path = path if path is not None else _trusted_local_bash_preference_path()
+
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError('duplicate_setting_key')
+            result[key] = value
+        return result
+
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0))
+    except FileNotFoundError:
+        return False
+    except OSError:
+        raise ValueError('trusted_local_bash_setting_unavailable') from None
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > 4096:
+            raise ValueError('trusted_local_bash_setting_invalid')
+        with os.fdopen(fd, 'rb') as source:
+            fd = -1
+            value = json.loads(source.read(4097), object_pairs_hook=unique_object)
+    except (OSError, ValueError, UnicodeError):
+        raise ValueError('trusted_local_bash_setting_invalid') from None
+    finally:
+        if fd != -1:
+            os.close(fd)
+    if (not isinstance(value, dict) or set(value) != {'trusted_local_bash'}
+            or type(value['trusted_local_bash']) is not bool):
+        raise ValueError('trusted_local_bash_setting_invalid')
+    return value['trusted_local_bash']
+
+
+def _write_trusted_local_bash_preference(enabled: bool, path: Path | None = None) -> None:
+    if type(enabled) is not bool:
+        raise ValueError('trusted_local_bash_setting_invalid')
+    path = path if path is not None else _trusted_local_bash_preference_path()
+    # Refuse to replace malformed, unknown, or symlinked content.
+    _read_trusted_local_bash_preference(path)
+    temp_name = None
+    try:
+        with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=path.parent,
+                                         prefix='.trusted-local-development-', delete=False) as temp:
+            temp_name = temp.name
+            json.dump({'trusted_local_bash': enabled}, temp)
+            temp.write('\n')
+            temp.flush()
+            os.fsync(temp.fileno())
+        os.replace(temp_name, path)
+        temp_name = None
+    except OSError:
+        raise ValueError('trusted_local_bash_setting_unavailable') from None
+    finally:
+        if temp_name is not None:
+            try:
+                os.unlink(temp_name)
+            except FileNotFoundError:
+                pass
+
+
+def _trusted_local_bash_enabled(path: Path | None = None) -> bool:
+    """Fail closed for the same-user-writable development preference at startup."""
+    try:
+        return _read_trusted_local_bash_preference(path)
+    except ValueError:
+        return False
+
+
 def _question_answer_text(payload: dict[str, Any] | None) -> str:
     value = dict(payload or {})
     if "text" in value:
@@ -4153,6 +4485,7 @@ def main() -> None:
             daemon_id=daemon_id,
             experimental_owner_only=True,
         )
+        _configure_trusted_local_bash(daemon.runtime, enabled=_trusted_local_bash_enabled())
         logger.warning('Simple loop: owner-only read conversation; schedulers and integrations are disabled.')
         daemon._lock_file = startup_lock
         daemon._database_lock_file = startup_database_lock

@@ -1,0 +1,26 @@
+{
+  "at_utc": "2026-11-20T15:05:16.499816+00:00",
+  "corrected_score": {
+    "conventional_table_checks": [
+      {
+        "exact_source_rows": true,
+        "table": "prospects",
+        "update_probe": null
+      }
+    ],
+    "database_status": "observed",
+    "effect_passed": null,
+    "expected_leads_with_same_row_evidence": 4,
+    "response_semantics": "unassessed",
+    "scan_complete": true,
+    "schema_interpretation": "manual_review_if_not_verified",
+    "source_unchanged": true,
+    "verified_import_and_update_tables": []
+  },
+  "event": "regrade",
+  "fixture_replay": "unavailable; original run retained unchanged",
+  "grader_source_sha256": "5e95dddae960676eae47d4490cc3f9cfadbed875d2014fb9c3283f908e407cc9",
+  "original_journal_sha256": "01cd2b668afc1e888ba36854877682fe049ec0381d8b6cb84db5b51e2ade0fc8",
+  "prior_effect_passed": true,
+  "reason": "Same-row evidence alone does not establish usable schema, complete import or ability to update. The original fixture was destroyed before an independent update probe existed."
+}

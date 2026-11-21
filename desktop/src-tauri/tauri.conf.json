@@ -19,7 +19,7 @@
         "minHeight": 600
       }
     ],
-    "security": { "csp": "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self';" }
+    "security": { "csp": "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; base-uri 'none'; object-src 'none'; frame-src 'none'; form-action 'none';" }
   },
   "bundle": {
     "active": true,

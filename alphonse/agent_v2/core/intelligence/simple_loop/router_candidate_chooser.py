@@ -25,7 +25,8 @@ class RouterCandidateChooser:
     def __init__(self, *, router: InferenceRouter, task: TaskState, tools: tuple[ToolDescriptor, ...],
                  max_input_tokens: int, cancellation_checker: Callable[[], bool] | None = None,
                  observation_progress: Callable[[], dict[str, list[str]]] | None = None,
-                 allow_owner_reminder: bool = False):
+                 allow_owner_reminder: bool = False, allow_disposable_bash: bool = False,
+                 allow_owner_schedule: bool = False, allow_owner_host_bash: bool = False):
         if not isinstance(router, InferenceRouter) or type(max_input_tokens) is not int or max_input_tokens <= 0:
             raise ValueError('candidate_router_configuration_invalid')
         if (not isinstance(task, TaskState) or not isinstance(task.task_id, str) or not task.task_id.strip()
@@ -36,7 +37,8 @@ class RouterCandidateChooser:
             raise ValueError('candidate_router_configuration_invalid')
         if observation_progress is not None and not callable(observation_progress):
             raise ValueError('candidate_router_configuration_invalid')
-        if type(allow_owner_reminder) is not bool:
+        if (type(allow_owner_reminder) is not bool or type(allow_disposable_bash) is not bool
+                or type(allow_owner_schedule) is not bool or type(allow_owner_host_bash) is not bool):
             raise ValueError('candidate_router_configuration_invalid')
         if not isinstance(tools, tuple):
             raise ValueError('candidate_router_tools_invalid')
@@ -44,8 +46,10 @@ class RouterCandidateChooser:
         seen = set()
         for tool in tools:
             if (not isinstance(tool, ToolDescriptor) or tool.kind is not ToolKind.NATIVE
-                    or (tool.read_only is not True and not (allow_owner_reminder
-                        and tool.tool_id == 'native.owner_reminder_create' and tool.read_only is False))
+                    or (tool.read_only is not True and not (tool.read_only is False and
+                        ((allow_owner_reminder and tool.tool_id == 'native.owner_reminder_create') or
+                         (allow_owner_schedule and tool.tool_id == 'native.scheduled_task') or
+                         ((allow_disposable_bash or allow_owner_host_bash) and tool.tool_id == 'native.bash'))))
                     or not isinstance(tool.tool_id, str)
                     or not tool.tool_id.strip() or tool.tool_id in seen
                     or not isinstance(tool.description, str) or not isinstance(tool.argument_schema, dict)):

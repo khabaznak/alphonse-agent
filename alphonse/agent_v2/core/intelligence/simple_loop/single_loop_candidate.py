@@ -1,11 +1,9 @@
-"""Isolated read-only single-loop experiment; NOT a registered runtime engine.
+"""Simple-loop candidate with narrowly scoped injected host controls.
 
-Only synthetic, explicitly injected collaborators are suitable today. This
-prototype does not implement the production authority, question, delivery,
-effect, engine-stamping or transactional-checkpoint contracts. It rejects all
-non-read-only tools, and an in-flight operation on restart blocks rather than
-replaying it. A trusting or incorrectly implemented host callback is unsafe;
-therefore this module must not be wired to household traffic as-is.
+Ordinary read paths and the owner reminder have separate production host
+guards. A disposable evaluation host can explicitly supply a Bash callback;
+it must enforce isolation and is not a household effect boundary.
+An in-flight operation on restart blocks rather than replaying it.
 """
 from __future__ import annotations
 
@@ -19,10 +17,17 @@ from uuid import uuid4
 
 from .evidence_projection import EvidenceAccessError, EvidenceSource, project_evidence
 from .task_budget import BudgetExhausted, SQLiteTaskBudgetStore, SyntheticEvaluationBudgetStore
+from .prerequisite import FEEDBACK, MissingPrerequisite
 from alphonse.agent_v2.core.tools.invocation import ToolInvocationService
 
 
 logger = logging.getLogger(__name__)
+
+
+class ClarificationReviewUnavailable(Exception):
+    """The clarification reviewer could not be reached or configured."""
+
+
 _CHOOSER_FAILURES = {
     'candidate_router_input_exceeds_reservation': 'input_exceeds_reservation',
     'candidate_router_output_exceeds_reservation': 'output_exceeds_reservation',
@@ -54,9 +59,11 @@ class CandidateState:
     invalid_decision_retries: int = 0
     decision_format_pending: bool = False
     answer_review_state: str = 'not_started'
+    prerequisite_feedback: str = ''
+    prerequisite_retries: int = 0
 
     def snapshot(self) -> dict[str, Any]:
-        return {'schema_version': 4, **deepcopy(asdict(self))}
+        return {'schema_version': 5, **deepcopy(asdict(self))}
 
     @classmethod
     def restore(cls, snapshot: dict[str, Any]) -> 'CandidateState':
@@ -64,13 +71,15 @@ class CandidateState:
             raise ValueError('candidate_checkpoint_invalid')
         version = snapshot.get('schema_version')
         base = {'schema_version', 'task_id', 'actor', 'goal_source', 'evidence_sources', 'status', 'response', 'blocker', 'inflight'}
-        if type(version) is not int or version not in (1, 2, 3, 4):
+        if type(version) is not int or version not in (1, 2, 3, 4, 5):
             raise ValueError('candidate_checkpoint_version_unsupported')
         expected = base if version == 1 else base | {'unsupported_retries', 'recovery_pending'}
         if version >= 3:
             expected |= {'invalid_decision_retries', 'decision_format_pending'}
-        if version == 4:
+        if version >= 4:
             expected |= {'answer_review_state'}
+        if version >= 5:
+            expected |= {'prerequisite_feedback', 'prerequisite_retries'}
         if set(snapshot) != expected:
             raise ValueError('candidate_checkpoint_invalid')
         state = cls(**{key: deepcopy(value) for key, value in snapshot.items() if key != 'schema_version'})
@@ -88,6 +97,10 @@ class CandidateState:
                 or (state.decision_format_pending and state.invalid_decision_retries == 0)
                 or not isinstance(state.answer_review_state, str)
                 or state.answer_review_state not in {'not_started', 'pending', 'used'}):
+            raise ValueError('candidate_checkpoint_invalid')
+        if (state.prerequisite_feedback not in {'', *FEEDBACK}
+                or type(state.prerequisite_retries) is not int or not 0 <= state.prerequisite_retries <= 2
+                or (state.prerequisite_feedback and not state.prerequisite_retries)):
             raise ValueError('candidate_checkpoint_invalid')
         return state
 
@@ -138,10 +151,24 @@ class CandidateHost:
     # Narrow host-owned local mutation. The callback atomically commits the
     # effect, budget and terminal checkpoint; it never dispatches generic tools.
     commit_owner_reminder: Callable[[Any, dict, str], Any] | None = None
+    commit_owner_schedule: Callable[[Any, dict, str], Any] | None = None
     allow_question: Callable[[str], bool] | None = None
     # Trusted owner host only. Neither callback is supplied by the model.
     read_private_knowledge: Callable[[], Any] | None = None
     record_private_knowledge: Callable[[str, str, dict, dict, str], str] | None = None
+    # Disposable evaluation host only; these callbacks grant no household access.
+    # Successful invocation conveys an observation, not verified task success;
+    # a completed nonzero command can be observed for model recovery. Callback
+    # exceptions preserve unknown in-flight work. The callback must enforce its
+    # own cancellation, isolation, cleanup, bounded output and timeout controls.
+    authorize_disposable_tool: Callable[[str, str, dict[str, Any]], bool] | None = None
+    execute_disposable_tool: Callable[[str, str, dict[str, Any]], dict[str, Any]] | None = None
+    # Non-persistent Dojo session only. Never enable for a household shell.
+    disposable_atomic_session: str = ''
+    # Explicit trusted-owner host adapter. A returned process is evidence of
+    # process output, not verification that its requested effects occurred.
+    authorize_host_bash: Callable[[str, str, dict[str, Any]], bool] | None = None
+    execute_host_bash: Callable[[str, dict[str, Any], str], dict[str, Any]] | None = None
 
 
 def _save(host: CandidateHost, state: CandidateState, *, consume_decision: bool = False,
@@ -249,6 +276,8 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
                 decision_input += ('\nA previous answer was not verified. Consider whether the available evidence '
                                    'supports every part of the request; inspect relevant authorized sources before '
                                    'answering, or explain what prevents progress.')
+            if state.prerequisite_feedback:
+                decision_input += '\n' + FEEDBACK[state.prerequisite_feedback]
             if state.decision_format_pending:
                 decision_input += ('\nThe previous decision had an invalid format and was not executed. '
                                    'Return one valid action: an answer or question with text, '
@@ -307,9 +336,10 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
                               output_tokens=usage.get('output_tokens'))
                 host.budgets.save(state.task_id, budget, expected_revision=revision)
             else:
-                host.atomic_checkpoint.settle_model(expected_version=host.atomic_checkpoint.version,
+                settled = host.atomic_checkpoint.settle_model(expected_version=host.atomic_checkpoint.version,
                     reservation_id=call_id, outcome=outcome, input_tokens=usage.get('input_tokens'),
                     output_tokens=usage.get('output_tokens'), decision=decision, projection_fingerprint=fingerprint)
+                budget = settled.budget
         except (ValueError, KeyError):
             return _terminal(host, state, 'blocked', 'candidate_model_settlement_unavailable')
         state.inflight = ''
@@ -319,11 +349,12 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
             return _terminal(host, state, 'cancelled', 'cancelled')
         if not isinstance(decision, dict):
             return _terminal(host, state, 'blocked', 'candidate_model_unavailable')
-        if any((value is not None and (type(value) is not int or value < 0 or value > limit))
+        if any((value is not None and (type(value) is not int or value < 0))
                or (value is None and not host.synthetic_allow_unreported_usage)
-               for value, limit in ((usage.get('input_tokens'), host.input_reservation),
-                                    (usage.get('output_tokens'), host.output_reservation))):
+               for value in (usage.get('input_tokens'), usage.get('output_tokens'))):
             return _terminal(host, state, 'blocked', 'candidate_model_usage_unknown_or_overrun')
+        if not budget.within_work_limits():
+            return _terminal(host, state, 'blocked', 'candidate_model_usage_overrun')
         # A still-authorized source may nevertheless have changed during inference.
         if not _is_fresh(host, state, fingerprint):
             return _terminal(host, state, 'blocked', 'candidate_evidence_changed_or_revoked')
@@ -349,8 +380,13 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
             if not isinstance(text, str) or not text.strip():
                 return _terminal(host, state, 'blocked', 'candidate_empty_communication')
             if kind == 'question':
-                if host.allow_question is not None and not host.allow_question(text):
-                    return _terminal(host, state, 'blocked', 'candidate_question_not_verified')
+                if host.allow_question is not None:
+                    try:
+                        allowed_question = host.allow_question(text)
+                    except Exception:
+                        return _terminal(host, state, 'blocked', 'candidate_question_review_unavailable')
+                    if allowed_question is not True:
+                        return _terminal(host, state, 'blocked', 'candidate_question_not_verified')
                 if _deadline_elapsed(host):
                     return _terminal(host, state, 'blocked', 'candidate_deadline_exceeded')
                 return _terminal(host, state, 'waiting_user', 'question_delivery_not_integrated', text,
@@ -401,20 +437,52 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
                  or descriptor.metadata.get('sensitive_content') is not True
                  or not callable(host.read_private_knowledge) or not callable(host.record_private_knowledge))):
             return _terminal(host, state, 'blocked', 'candidate_private_read_unavailable')
-        if tool_id == 'native.owner_reminder_create':
-            if (host.atomic_checkpoint is None or not callable(host.commit_owner_reminder)
+        mutation = {
+            'native.owner_reminder_create': (host.commit_owner_reminder, 'owner_reminder_unavailable'),
+            'native.scheduled_task': (host.commit_owner_schedule, 'owner_schedule_unavailable'),
+        }.get(tool_id)
+        if mutation is not None:
+            commit, unavailable = mutation
+            if (host.atomic_checkpoint is None or not callable(commit)
                     or descriptor is None or descriptor.read_only is not False
                     or _cancelled(host) or _deadline_elapsed(host)
                     or not _is_fresh(host, state, fingerprint)):
-                return _terminal(host, state, 'blocked', 'owner_reminder_unavailable')
+                return _terminal(host, state, 'blocked', unavailable)
             try:
-                return host.commit_owner_reminder(state, decision, fingerprint)
+                committed = commit(state, decision, fingerprint)
+                if (tool_id == 'native.scheduled_task' and args.get('operation') == 'cancel'
+                        and isinstance(committed, CandidateState) and committed.status == 'running'):
+                    state = committed
+                    continue
+                return committed
+            except MissingPrerequisite as exc:
+                if (_cancelled(host) or not _is_fresh(host, state, fingerprint)
+                        or exc.code not in FEEDBACK or state.prerequisite_retries >= 2):
+                    return _terminal(host, state, 'blocked', 'candidate_prerequisite_unavailable')
+                state.prerequisite_feedback = exc.code
+                state.prerequisite_retries += 1
+                _save(host, state, consume_decision=True)
+                continue
             except Exception:
-                return _terminal(host, state, 'blocked', 'owner_reminder_unavailable')
-        if descriptor is None or getattr(getattr(descriptor, 'kind', None), 'value', '') != 'native' or descriptor.read_only is not True:
+                return _terminal(host, state, 'blocked', unavailable)
+        disposable = (tool_id == 'native.bash' and descriptor is not None
+                      and descriptor.read_only is False
+                      and (host.atomic_checkpoint is None or
+                           (isinstance(host.disposable_atomic_session, str) and bool(host.disposable_atomic_session)))
+                      and callable(host.authorize_disposable_tool) and callable(host.execute_disposable_tool))
+        host_bash = (tool_id == 'native.bash' and not disposable and descriptor is not None
+                     and descriptor.read_only is False and host.atomic_checkpoint is not None
+                     and callable(host.authorize_host_bash) and callable(host.execute_host_bash))
+        if descriptor is None or getattr(getattr(descriptor, 'kind', None), 'value', '') != 'native' or (descriptor.read_only is not True and not disposable and not host_bash):
             return _terminal(host, state, 'blocked', 'candidate_requires_read_only_native_tool')
+        def permitted_action():
+            if disposable:
+                return host.authorize_disposable_tool(state.actor, tool_id, deepcopy(args)) is True
+            if host_bash:
+                return host.authorize_host_bash(state.actor, host.task.task_id, deepcopy(args)) is True
+            return host.authorize_read(state.actor, tool_id, args) is True
         try:
-            permitted = host.authorize_read(state.actor, tool_id, args) is True
+            permitted = permitted_action()
         except Exception:
             permitted = False
         if not permitted:
@@ -442,7 +510,7 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
         # Re-check revocation at dispatch; native tool invocation applies its own
         # validation/context but does not substitute for host authorization.
         try:
-            permitted = host.authorize_read(state.actor, tool_id, args) is True
+            permitted = permitted_action()
         except Exception:
             permitted = False
         if not permitted:
@@ -469,6 +537,23 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
                 result = {'status': 'success', 'result': deepcopy(private.observation)}
             except Exception:
                 result = {'status': 'failed', 'result': None}
+        elif disposable:
+            try:
+                result = host.execute_disposable_tool(state.actor, tool_id, deepcopy(args))
+                if (not isinstance(result, dict) or result.get('status') not in {'success', 'failed'}
+                        or not isinstance(result.get('result'), dict)):
+                    raise ValueError('invalid_disposable_result')
+            except Exception:
+                # An effect may have occurred. Retain the in-flight marker and
+                # reservation rather than settling or replaying unknown work.
+                return _terminal(host, state, 'blocked', 'candidate_disposable_effect_unconfirmed')
+        elif host_bash:
+            try:
+                result = {'status': 'success', 'result': host.execute_host_bash(state.actor, deepcopy(args), action_id)}
+            except Exception:
+                # A process may have started. Preserve the durable dispatch
+                # marker and reservation for explicit recovery, never replay.
+                return _terminal(host, state, 'blocked', 'candidate_host_bash_effect_unconfirmed')
         else:
             result = ToolInvocationService(context=host.context, task=host.task).invoke(tool_id, args, call_id=action_id)
         if host.atomic_checkpoint is None:
@@ -482,7 +567,7 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
         if _cancelled(host):
             return _terminal(host, state, 'cancelled', 'cancelled')
         try:
-            permitted = host.authorize_read(state.actor, tool_id, args) is True
+            permitted = permitted_action()
         except Exception:
             permitted = False
         if not permitted:
@@ -510,7 +595,7 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
         if _deadline_elapsed(host):
             return _terminal(host, state, 'blocked', 'candidate_deadline_exceeded')
         try:
-            permitted = host.authorize_read(state.actor, tool_id, args) is True
+            permitted = permitted_action()
         except Exception:
             permitted = False
         if not permitted:
@@ -529,9 +614,21 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
         if host.atomic_checkpoint is not None:
             extra = ({'knowledge_snapshot_digest': private_digest,
                       'cancellation_checker': host.context.cancellation_checker} if private_digest is not None else {})
-            host.atomic_checkpoint.settle_read(expected_version=host.atomic_checkpoint.version,
-                reservation_id=action_id, tool_id=tool_id, arguments=args, evidence_ref=ref, observation=payload, **extra)
+            if disposable:
+                host.atomic_checkpoint.settle_dojo_bash(expected_version=host.atomic_checkpoint.version,
+                    reservation_id=action_id, arguments=args, evidence_ref=ref, observation=payload,
+                    session_id=host.disposable_atomic_session, context=host.context)
+            elif host_bash:
+                host.atomic_checkpoint.settle_host_bash_return(expected_version=host.atomic_checkpoint.version,
+                    reservation_id=action_id, arguments=args, evidence_ref=ref,
+                    authorize=host.authorize_host_bash, cancellation_checker=host.context.cancellation_checker)
+            else:
+                host.atomic_checkpoint.settle_read(expected_version=host.atomic_checkpoint.version,
+                    reservation_id=action_id, tool_id=tool_id, arguments=args, evidence_ref=ref, observation=payload, **extra)
         state.evidence_sources.append(ref)
+        if (state.prerequisite_feedback == 'owner_clock' and tool_id == 'native.owner_clock'
+                or state.prerequisite_feedback == 'owner_schedules' and tool_id == 'native.owner_schedules'):
+            state.prerequisite_feedback = ''
         # Reading one source does not establish that the prior answer was
         # supported. Preserve the generic feedback until a terminal outcome.
         state.inflight = ''

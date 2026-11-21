@@ -47,10 +47,18 @@ def make_request(*, projection: str, catalog: list[dict[str, Any]], cancellation
     instructions = (
         'You are choosing one action for Alphonse, not executing the action in Codex. '
         'Alphonse has the following host tools available: ' + json.dumps(catalog, ensure_ascii=False) + '. '
-        'To read, return kind="tool" with a listed tool_id and arguments; Alphonse executes '
+        'To use a tool, return kind="tool" with a listed tool_id and arguments; Alphonse executes '
         'the action and supplies the observation on the next decision. These are not tools '
         'you need to call from Codex. If available evidence suffices, return an answer. '
+        'Respect when the owner asked the work to happen. Information observed now does not '
+        'by itself arrange a request to do work or report it at a later time. Arrange the '
+        'requested future action using an available capability, or explain what prevents it; '
+        'do not silently substitute an immediate answer. '
         'Always include kind, tool_id, arguments, and text; use null for fields not needed. '
+        'Before claiming an action changed something, verify the outcome against the actual requested '
+        'target using available observations or a separate readback; a command exit alone does not '
+        'establish the intended effect. Do not repeat a mutation merely to check it. '
+        'If the outcome cannot be verified, say what remains uncertain. '
         'Before answering, consider whether another available authorized source could materially '
         'change the conclusion, for example by clarifying timing, current status, or conflicting facts. '
         'Inspect relevant sources when needed; do not assume missing context from a partial record. '
@@ -79,10 +87,21 @@ def make_request(*, projection: str, catalog: list[dict[str, Any]], cancellation
             'do not claim that it was used.\n\n')
     if 'native.owner_schedules' in tool_ids:
         instructions += (
-            'The schedule tool lists records only; it cannot create, change, execute or send a reminder. '
-            'Earlier scheduled work is paused. New one-time Desktop reminders can be created explicitly '
+            'The owner_schedules tool lists existing schedules and reminders; it cannot create, change, execute or send them. '
+            'Older scheduled work is paused. New one-time Desktop reminders can be created explicitly '
             'in Desktop and appear only while Desktop is open. Do not promise a reminder or action '
             'unless the host has actually confirmed it.\n\n')
+    if 'native.scheduled_task' in tool_ids:
+        instructions += (
+            'To cancel an existing owner task, first list owner_schedules and select its exact ID. '
+            'If the owner’s intended task is ambiguous, ask rather than guess. '
+            'After a cancellation effect is verified, explain the observed result naturally in the user’s language. '
+            'If execution_may_have_started is true, explicitly say the work may already have started. '
+            'For a direct request for future work, the scheduled_task tool schedules one attempt of '
+            'the original owner request. Read owner_clock first; provide the requested time with '
+            'the owner timezone offset and quote the whole current request exactly. The result will '
+            'be recorded in the conversation, but execution success and delivery are not guaranteed. '
+            'Ask when the time is unclear. Do not treat older paused schedules as newly enabled.\n\n')
     if 'native.owner_reminder_create' in tool_ids:
         instructions += (
             'The owner reminder creation tool can create exactly one new local Desktop reminder '
@@ -92,7 +111,11 @@ def make_request(*, projection: str, catalog: list[dict[str, Any]], cancellation
             'Do not promise recurrence, external delivery, or that the reminder has fired.\n\n')
     if {'native.search_memory', 'native.read_memory_source'} <= tool_ids:
         instructions += (
-            'For questions about past conversations, use search to discover candidate sources. '
+            'The current message and recent conversation are evidence of what was said there. '
+            'When the owner asks you to repeat or interpret a statement they just supplied, '
+            'use that statement; do not require a separate memory search to confirm its wording. '
+            'Distinguish what someone said from independently verified current external facts. '
+            'For questions about past conversations beyond the visible context, use search to discover candidate sources. '
             'A complete preview may provide the needed evidence; if it is shortened or missing '
             'material context, read the relevant source before answering. Select sources that '
             'establish facts requested by the user. A shared search term alone does not make '

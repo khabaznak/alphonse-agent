@@ -18,6 +18,47 @@ from alphonse.agent_v2.core.inference import OpenAICodexProviderConfig
 from alphonse.agent_v2.core.inference.openai_codex import _run_interruptible
 
 
+def test_simple_loop_wire_encodes_and_decodes_arbitrary_tool_arguments(monkeypatch):
+    from alphonse.agent_v2.core.intelligence.simple_loop.candidate_decision_policy import action_schema
+    def run(_self, _prompt, request):
+        assert request.output_schema['properties']['arguments'] == {'type': ['string', 'null']}
+        assert 'encode the arguments object as a JSON string' in request.prompt
+        return json.dumps({'kind': 'tool', 'tool_id': 'native.example',
+                           'arguments': json.dumps({'query': 'apples', 'limit': 3}), 'text': None}), {}
+    monkeypatch.setattr(OpenAICodexProvider, '_run_codex_with_usage', run)
+    result = OpenAICodexProvider().generate_json(InferenceRequest(
+        prompt='fixture', purpose=InferencePurpose.SIMPLE_LOOP_ACTION, output_schema=action_schema()))
+    assert result.json_value['arguments'] == {'query': 'apples', 'limit': 3}
+
+
+@pytest.mark.parametrize(('arguments', 'stage'), [
+    ('[]', 'arguments_not_object'), ('not json', 'arguments_invalid_json'),
+    ({'bad': 'object'}, 'arguments_not_string'),
+])
+def test_simple_loop_wire_rejects_invalid_encoded_arguments(monkeypatch, arguments, stage):
+    from alphonse.agent_v2.core.intelligence.simple_loop.candidate_decision_policy import action_schema
+    from alphonse.agent_v2.core.inference.router import _simple_loop_failure_category, _simple_loop_failure_detail
+    monkeypatch.setattr(OpenAICodexProvider, '_run_codex_with_usage', lambda *_: (
+        json.dumps({'kind': 'tool', 'tool_id': 'native.example', 'arguments': arguments, 'text': None}), {}))
+    with pytest.raises(ValueError, match='^openai_codex_invalid_json$') as caught:
+        OpenAICodexProvider().generate_json(InferenceRequest(
+            prompt='fixture', purpose=InferencePurpose.SIMPLE_LOOP_ACTION, output_schema=action_schema()))
+    assert _simple_loop_failure_category(caught.value) == 'invalid_response'
+    assert _simple_loop_failure_detail(caught.value) == stage
+
+
+def test_simple_loop_invalid_outer_response_exposes_only_fixed_stage(monkeypatch):
+    from alphonse.agent_v2.core.intelligence.simple_loop.candidate_decision_policy import action_schema
+    from alphonse.agent_v2.core.inference.router import _simple_loop_failure_detail
+    monkeypatch.setattr(OpenAICodexProvider, '_run_codex_with_usage', lambda *_: ('private synthetic content', {}))
+    with pytest.raises(ValueError, match='^openai_codex_invalid_json$') as caught:
+        OpenAICodexProvider().generate_json(InferenceRequest(
+            prompt='fixture', purpose=InferencePurpose.SIMPLE_LOOP_ACTION, output_schema=action_schema()))
+    assert _simple_loop_failure_detail(caught.value) == 'outer_object'
+    caught.value.response_stage = 'private synthetic content'
+    assert _simple_loop_failure_detail(caught.value) is None
+
+
 def test_codex_provider_markdown_maps_stdout_to_content(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, object] = {}
 
@@ -109,6 +150,10 @@ def test_simple_loop_provider_returns_cli_reported_usage_without_raw_trace(monke
             return SimpleNamespace(returncode=0, stdout='Logged in using ChatGPT', stderr='')
         assert '--json' in command
         assert '--ignore-user-config' in command and '--sandbox' in command
+        assert ('--disable', 'shell_tool') in list(zip(command, command[1:]))
+        assert ('--disable', 'unified_exec') in list(zip(command, command[1:]))
+        for feature in ('apps', 'browser_use', 'tool_suggest'):
+            assert ('--disable', feature) in list(zip(command, command[1:]))
         Path(command[command.index('--output-last-message') + 1]).write_text('{"kind":"answer"}')
         trace = '\n'.join(json.dumps(event) for event in [
             {'type': 'item.completed', 'item': {'type': 'agent_message', 'text': private_marker}},

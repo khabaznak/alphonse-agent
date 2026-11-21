@@ -158,6 +158,15 @@ def test_truncated_action_output_cannot_hide_a_failure(tmp_path):
     assert result['verification']['status'] == 'unavailable'
 
 
+def test_capture_overflow_cannot_be_verified_as_a_success(tmp_path):
+    spec = {'source': 'workspace_text', 'path': 'notes.txt', 'expected': 'verified', 'require_change': True}
+    command = "printf verified > notes.txt; python3 -c 'print(\"x\" * 2000000); print(\"FAILURE\")'"
+    result = execute_bash({'command': command, 'verification': spec}, context=context(tmp_path))
+    assert result['exit_code'] == 0
+    assert result['stdout'].endswith('... [truncated]')
+    assert result['verification_failed'] is True
+
+
 def test_pinned_http_reader_uses_checked_address_and_rejects_redirects_and_large_bodies(monkeypatch):
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     from threading import Thread

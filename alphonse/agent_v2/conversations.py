@@ -180,6 +180,29 @@ class SQLiteConversationStore:
             ).fetchall()
         return [_event(row) for row in reversed(rows)]
 
+    def list_before_source(self, *, owner_user_id: str, project_id: str,
+                           source_message_id: str, limit: int = 8) -> list[ConversationEvent]:
+        """Return bounded prior turns for the anchor's channel, never later events.
+
+        Source is an interim channel boundary until conversations have a
+        durable identity. Do not mix unrelated integrations or fixture events.
+        """
+        owner = str(owner_user_id or '').strip()
+        project = str(project_id or '').strip()
+        source = str(source_message_id or '').strip()
+        if not owner or not source or type(limit) is not int or not 1 <= limit <= 30:
+            raise ValueError('conversation_context_invalid')
+        with self._connect() as conn:
+            anchor = conn.execute('''SELECT sequence,source FROM v2_conversation_events
+                WHERE owner_user_id=? AND project_id=? AND source_message_id=? AND role='user' ''',
+                (owner, project, source)).fetchone()
+            if anchor is None:
+                return []
+            rows = conn.execute('''SELECT * FROM v2_conversation_events
+                WHERE owner_user_id=? AND project_id=? AND source=? AND sequence<? AND role IN ('user','assistant')
+                ORDER BY sequence DESC LIMIT ?''', (owner, project, anchor['source'], anchor['sequence'], limit)).fetchall()
+        return [_event(row) for row in reversed(rows)]
+
     def list_between(self, *, owner_user_id: str, start_utc: str, end_utc: str) -> list[ConversationEvent]:
         """List all events in a UTC half-open interval, ordered by conversation sequence."""
         with self._connect() as conn:

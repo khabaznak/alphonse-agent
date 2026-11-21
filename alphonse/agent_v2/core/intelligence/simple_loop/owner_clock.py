@@ -25,7 +25,7 @@ def execute_owner_clock(arguments, *, context):
             'local_time': instant.astimezone(local_zone).isoformat()}
 
 
-def valid_clock_observation(actor, arguments, observation, *, context):
+def valid_clock_observation(actor, arguments, observation, *, context, allow_expired=False):
     try:
         if (context.task.user != actor or arguments != {} or context.cancellation_checker() is not False
                 or not isinstance(observation, dict)
@@ -38,7 +38,8 @@ def valid_clock_observation(actor, arguments, observation, *, context):
             return False
         local = instant.astimezone(ZoneInfo(observation['timezone'])).isoformat()
         age = datetime.now(timezone.utc) - instant
-        return (observation['local_time'] == local and timedelta(0) <= age <= MAX_CLOCK_AGE
+        return (type(allow_expired) is bool and observation['local_time'] == local and timedelta(0) <= age
+                and (allow_expired or age <= MAX_CLOCK_AGE)
                 and context.cancellation_checker() is False)
     except Exception:
         return False

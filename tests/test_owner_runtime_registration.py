@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+from types import SimpleNamespace
 
 from alphonse.agent_v2.conversations import SQLiteConversationStore
 from alphonse.agent_v2.core.core import CoreLoopContext, LoopStepStatus, ProcessingStatus
@@ -113,7 +114,8 @@ def test_registered_processor_hands_server_checkpoint_to_sink_after_selection(tm
     task = TaskState.from_message(acquired.message, message_id=message_id)
     task.task_id = message_id
     context = CoreLoopContext(messages=queue, claim_receipt=acquired.claim_receipt, tools=registry,
-        inference=inference, conversation_store=conversations, cancellation_checker=lambda: False)
+        inference=inference, conversation_store=conversations, cancellation_checker=lambda: False,
+        system_one=SimpleNamespace(review_clarification_effect_claim=lambda **_: True))
     result = runtime.processor.owner_read_candidate.process(task, context)
     assert result.status == ProcessingStatus.WAITING, result.error
     assert result.snapshot.metadata['draft'] == 'Synthetic answer.'

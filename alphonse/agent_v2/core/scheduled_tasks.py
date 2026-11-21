@@ -7,6 +7,7 @@ import os
 import sqlite3
 import hashlib
 import threading
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -173,7 +174,20 @@ class ScheduledTaskStore:
         delivery_mode: str = "pdca",
         idempotency_key: str = "",
         now: datetime | None = None,
+        connection: sqlite3.Connection | None = None,
     ) -> ScheduledTaskRecord:
+        # Callers using an existing transaction own its commit and rollback.
+        # The transaction must belong to this store, not another database.
+        if connection is not None:
+            if not isinstance(connection, sqlite3.Connection) or not connection.in_transaction:
+                raise ValueError("scheduled_task_transaction_required")
+            row = connection.execute("PRAGMA database_list").fetchone()
+            database_path = row[2] if row else ""
+            if (self.db_path == ":memory:" or not database_path
+                    or not os.path.samefile(database_path, self.db_path)):
+                raise ValueError("scheduled_task_transaction_store_mismatch")
+        def write_connection():
+            return nullcontext(connection) if connection is not None else self._connect()
         owner = str(owner_user_id or "").strip()
         name_value = str(name or "").strip()
         prompt_value = str(prompt or "").strip()
@@ -200,7 +214,7 @@ class ScheduledTaskStore:
             raise ValueError("scheduled_task_delivery_mode_invalid")
         key = str(idempotency_key or "").strip()
         if key:
-            with self._connect() as conn:
+            with write_connection() as conn:
                 row = conn.execute(
                     "SELECT * FROM v2_scheduled_tasks WHERE idempotency_key=?",
                     (key,),
@@ -239,7 +253,7 @@ class ScheduledTaskStore:
             created_at=now_text,
             updated_at=now_text,
         )
-        with self._connect() as conn:
+        with write_connection() as conn:
             try:
                 conn.execute(
                     """

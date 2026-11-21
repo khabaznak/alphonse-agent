@@ -26,6 +26,10 @@ from alphonse.agent_v2.users import V2UserStore
 def test_owner_failure_codes_are_allowlisted_and_do_not_disclose_errors():
     assert _owner_public_failure_code('candidate_observation_incomplete') == 'source_incomplete'
     assert _owner_public_failure_code('candidate_deadline_exceeded') == 'time_limit'
+    assert _owner_public_failure_code('candidate_model_usage_overrun') == 'usage_limit_exceeded'
+    assert _owner_public_failure_code('BudgetExhausted:budget_exhausted:actions') == 'action_limit'
+    assert _owner_public_failure_code('candidate_model_usage_unknown_or_overrun') == 'usage_unconfirmed'
+    assert _owner_public_failure_code('candidate_question_not_verified') == 'clarification_unverified'
     assert _owner_public_failure_code('raw private source text') == 'needs_attention'
     assert _owner_public_failure_code(None) == 'needs_attention'
     assert _owner_public_failure_code('candidate_deadline_exceeded', cancelled=True) == 'cancel_requested'
@@ -55,6 +59,7 @@ def test_daemon_main_always_selects_simple_loop(monkeypatch, tmp_path, old_flag)
                  'SQLiteMemorySessionStore', 'SQLiteCommunicationThreadStore'):
         monkeypatch.setattr(module, name, SimpleNamespace(default=lambda: object()))
     monkeypatch.setattr(module, 'AgentConfigStore', lambda *_: object())
+    monkeypatch.setattr(module, '_trusted_local_bash_enabled', lambda: False)
     class Queue:
         @classmethod
         def default(cls, *, lease_owner):
@@ -69,6 +74,7 @@ def test_daemon_main_always_selects_simple_loop(monkeypatch, tmp_path, old_flag)
     monkeypatch.setattr(module, 'build_runtime_host', runtime)
     class Daemon:
         def __init__(self, runtime, **kwargs):
+            self.runtime = runtime
             captured['daemon'] = kwargs
         def run_forever(self):
             captured['ran'] = True
@@ -127,6 +133,9 @@ def test_explicit_owner_worker_routes_to_socket_and_saves_history(tmp_path, monk
     runtime = build_runtime_host(user_store=users, messages=queue, question_store=SQLiteQuestionStore(path),
         conversation_store=conversation, outbox=SQLiteOutboundStore(path), tools=tools, inference=router, coding_skill_service=object(),
         experimental_owner_read=True, owner_selected_draft_sink=lambda *_: None)
+    if mode in {'question', 'question_context_changed'}:
+        # This fixture tests IPC correlation, not Jev's semantic judgment.
+        runtime.core.system_one = SimpleNamespace(review_clarification_effect_claim=lambda **_: True)
     daemon = V2Daemon(runtime, daemon_id='fixture', experimental_owner_only=True)
     holder['daemon'] = daemon
     # The exclusive owner worker must retain the same protected package and
@@ -138,10 +147,19 @@ def test_explicit_owner_worker_routes_to_socket_and_saves_history(tmp_path, monk
         assert context.skill_store is runtime.core.skill_store
         assert context.artifact_resources is runtime.core.artifact_resources
         assert context.skill_bindings is runtime.core.skill_bindings
+        assert context.identity_resolver is runtime.identity_resolver
+        assert context.project_store is runtime.project_store
         execution = context.tool_execution_context(task)
         assert execution.skill_store is context.skill_store
         assert execution.artifact_resources is context.artifact_resources
         assert execution.skill_bindings is context.skill_bindings
+        assert execution.identity_resolver is context.identity_resolver
+        assert execution.project_store is context.project_store
+        # Native Bash uses this actor-bound workspace when a conversation has
+        # no project or explicit cwd. Supplying the dependencies alone does
+        # not advertise or authorize Bash in the owner worker.
+        from alphonse.agent_v2.core.tools.registry.native.bash import _resolve_cwd
+        assert _resolve_cwd(None, context=execution) == str(users.ordinary_workspace(owner.user_id))
         return original_process(task, context)
     monkeypatch.setattr(candidate, 'process', process_with_runtime_context)
     register_checkpoint = daemon.register_owner_checkpoint
@@ -358,6 +376,95 @@ def test_explicit_owner_worker_routes_to_socket_and_saves_history(tmp_path, monk
                 assert 'Find the apples note.' in provider.last_prompt
                 assert 'Which apples?' in provider.last_prompt
                 assert 'quoted conversation context only' in provider.last_prompt
+                # A second distinct owner reply may refer to the same prior
+                # question. Both are real, separately recorded owner ingress.
+                second_reply_id = client.request('experimental_owner_ingress', prompt='The red ones.',
+                                                 reply_to_message_id=message_id)['message_id']
+                # The exchange snapshot preserves the exact separate turns;
+                # it must not silently trust a different reply or altered
+                # earlier history. It does not itself grant action authority.
+                from alphonse.agent_v2.core.intelligence.simple_loop.owner_clarification import load_bound_owner_exchange
+                with queue._connect() as conn:
+                    conn.execute('BEGIN')
+                    queued = conn.execute('SELECT prompt,metadata_json FROM v2_inbound_messages WHERE message_id=?',
+                                          (reply_id,)).fetchone()
+                    task = SimpleNamespace(user=owner.user_id, message_id=reply_id, goal=queued['prompt'],
+                                           metadata=json.loads(queued['metadata_json']))
+                    exchange = load_bound_owner_exchange(conn, task)
+                    assert (exchange.prior_user_message, exchange.assistant_question, exchange.owner_reply) == (
+                        'Find the apples note.', 'Which apples?', 'The green ones.')
+                    assert exchange.prior_message_id == message_id and exchange.reply_message_id == reply_id
+                    assert len(exchange.sha256) == 64
+                    task.goal = 'A different reply.'
+                    with pytest.raises(ValueError, match='owner_question_context_unavailable'):
+                        load_bound_owner_exchange(conn, task)
+                    task.goal = queued['prompt']
+                    task.user = 'different-owner'
+                    with pytest.raises(ValueError, match='owner_question_context_unavailable'):
+                        load_bound_owner_exchange(conn, task)
+                    task.user = owner.user_id
+
+                    # A disconnected proposal prototype may bind these exact
+                    # turns, but only a separately authenticated UI event may
+                    # confirm its immutable fields. No natural-language reply
+                    # or model judgment is interpreted as confirmation here.
+                    from datetime import timedelta
+                    from alphonse.agent_v2.core.intelligence.simple_loop.owner_reminder_proposal import (
+                        ProposalUnavailable, prepare_locked, confirm_locked, cancel_locked, consume_locked)
+                    now = datetime.now(timezone.utc)
+                    proposal = prepare_locked(conn, task, message='check the apples',
+                        due_at=(now + timedelta(minutes=5)).isoformat(), timezone_name='UTC', now=now)
+                    second_row = conn.execute('SELECT prompt,metadata_json FROM v2_inbound_messages WHERE message_id=?',
+                                              (second_reply_id,)).fetchone()
+                    second_task = SimpleNamespace(user=owner.user_id, message_id=second_reply_id,
+                        goal=second_row['prompt'], metadata=json.loads(second_row['metadata_json']))
+                    second_proposal = prepare_locked(conn, second_task, message='check the red apples',
+                        due_at=(now + timedelta(minutes=5)).isoformat(), timezone_name='UTC', now=now)
+                    with pytest.raises(ProposalUnavailable):
+                        consume_locked(conn, task, proposal_id=proposal['id'], now=now, is_cancelled=lambda: False)
+                    with pytest.raises(ProposalUnavailable):
+                        confirm_locked(conn, task, proposal_id=proposal['id'], proposal_sha256=proposal['proposal_sha256'],
+                                       authenticated_owner='different-owner', now=now)
+                    with pytest.raises(ProposalUnavailable):
+                        confirm_locked(conn, task, proposal_id=proposal['id'], proposal_sha256='0' * 64,
+                                       authenticated_owner=owner.user_id, now=now)
+                    conn.execute('SAVEPOINT altered_proposal')
+                    conn.execute("UPDATE owner_reminder_proposals SET message='different content' WHERE id=?", (proposal['id'],))
+                    with pytest.raises(ProposalUnavailable):
+                        confirm_locked(conn, task, proposal_id=proposal['id'], proposal_sha256=proposal['proposal_sha256'],
+                                       authenticated_owner=owner.user_id, now=now)
+                    conn.execute('ROLLBACK TO altered_proposal')
+                    conn.execute('RELEASE altered_proposal')
+                    confirm_locked(conn, task, proposal_id=proposal['id'], proposal_sha256=proposal['proposal_sha256'],
+                                   authenticated_owner=owner.user_id, now=now)
+                    confirm_locked(conn, second_task, proposal_id=second_proposal['id'],
+                                   proposal_sha256=second_proposal['proposal_sha256'],
+                                   authenticated_owner=owner.user_id, now=now)
+                    conn.execute('SAVEPOINT cancellation')
+                    cancel_locked(conn, task, proposal_id=proposal['id'], authenticated_owner=owner.user_id, now=now)
+                    with pytest.raises(ProposalUnavailable):
+                        consume_locked(conn, task, proposal_id=proposal['id'], now=now, is_cancelled=lambda: False)
+                    conn.execute('ROLLBACK TO cancellation')
+                    conn.execute('RELEASE cancellation')
+                    with pytest.raises(ProposalUnavailable):
+                        consume_locked(conn, task, proposal_id=proposal['id'], now=now, is_cancelled=lambda: True)
+                    first = consume_locked(conn, task, proposal_id=proposal['id'], now=now, is_cancelled=lambda: False)
+                    second = consume_locked(conn, task, proposal_id=proposal['id'], now=now, is_cancelled=lambda: False)
+                    assert first['status'] == 'created' and second['status'] == 'already_consumed'
+                    assert first['id'] == second['id']
+                    with pytest.raises(ProposalUnavailable, match='prior_intent_already_consumed'):
+                        consume_locked(conn, second_task, proposal_id=second_proposal['id'], now=now,
+                                       is_cancelled=lambda: False)
+                    assert conn.execute('SELECT COUNT(*) FROM owner_desktop_reminders WHERE owner_id=?',
+                                        (owner.user_id,)).fetchone()[0] == 1
+
+                    conn.execute('DELETE FROM v2_conversation_events WHERE source_message_id=?',
+                                 (f'outbound:owner:{message_id}',))
+                    with pytest.raises(ValueError, match='owner_question_context_unavailable'):
+                        load_bound_owner_exchange(conn, task)
+                    with pytest.raises(ValueError, match='owner_question_context_unavailable'):
+                        consume_locked(conn, task, proposal_id=proposal['id'], now=now, is_cancelled=lambda: False)
+                    conn.rollback()
                 # The earlier question remains waiting_user; the reply is a new task.
                 with queue._connect() as conn:
                     raw = json.loads(conn.execute('SELECT task_state_json FROM v2_task_checkpoints WHERE task_id=?',

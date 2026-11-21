@@ -19,6 +19,9 @@ WEB_SEARCH_TOOL_ID = "native.web_search"
 WEB_FETCH_TOOL_ID = "native.web_fetch"
 WEB_SEARCH_TOOL_NAME = "web_search"
 WEB_FETCH_TOOL_NAME = "web_fetch"
+# Bound the entire serialized fetch result, including metadata and UTF-8 text.
+# Leave room beneath the owner loop's observation ceiling for future framing.
+WEB_FETCH_RESULT_MAX_BYTES = 47000
 
 WEB_SEARCH_ARGUMENT_SCHEMA: dict[str, Any] = {"type": "object", "additionalProperties": False, "properties": {
     "query": {"type": "string", "description": "Search query."}, "limit": {"type": "integer", "description": "Maximum results (1-20)."},
@@ -78,7 +81,33 @@ def execute_web_fetch(arguments: dict[str, Any], *, settings: WebToolsSettings) 
     if parser: parser.feed(text); title, text = parser.title, parser.text()
     else: title, text = "", _compact(text)
     max_chars = min(_limit(arguments.get("max_chars"), settings.fetch_max_chars), settings.fetch_max_chars)
-    return {"url": url, "final_url": str(response.url or url), "status_code": response.status_code, "content_type": content_type, "title": title, "text": text[:max_chars].rstrip(), "truncated": len(text) > max_chars}
+    result = {"url": url, "final_url": str(response.url or url), "status_code": response.status_code, "content_type": content_type, "title": title, "text": text[:max_chars].rstrip(), "truncated": len(text) > max_chars}
+    return _bounded_fetch_result(result)
+
+
+def _bounded_fetch_result(result: dict[str, Any]) -> dict[str, Any]:
+    """Bound actual JSON bytes, retaining the longest prefix and truthful truncation."""
+    def size(value: dict[str, Any]) -> int:
+        return len(json.dumps(value, ensure_ascii=False, sort_keys=True, allow_nan=False).encode('utf-8'))
+    try:
+        if size(result) <= WEB_FETCH_RESULT_MAX_BYTES:
+            return result
+        text = result['text']
+        candidate = {**result, 'text': '', 'truncated': True}
+        if size(candidate) > WEB_FETCH_RESULT_MAX_BYTES:
+            return _failed('web_fetch_output_too_large', 'Web page metadata exceeds the output limit.')
+        low, high = 0, len(text)
+        while low < high:
+            middle = (low + high + 1) // 2
+            candidate['text'] = text[:middle]
+            if size(candidate) <= WEB_FETCH_RESULT_MAX_BYTES:
+                low = middle
+            else:
+                high = middle - 1
+        candidate['text'] = text[:low].rstrip()
+        return candidate
+    except (KeyError, TypeError, ValueError, UnicodeError):
+        return _failed('web_fetch_output_invalid', 'Web page content could not be safely represented.')
 
 
 def _safe_get(url: str, *, timeout: float) -> requests.Response:

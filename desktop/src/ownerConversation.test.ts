@@ -1,9 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
-import { OwnerConversation, ownerAcceptedAt, ownerBusyFor, ownerUnavailableMessage, type OwnerRequest } from "./ownerConversation";
+import { OwnerConversation, ownerAcceptedAt, ownerBusyFor, ownerFailureMessage, ownerUnavailableMessage, type OwnerRequest } from "./ownerConversation";
 import { avatarState } from "./layoutState";
 
 const id = "a".repeat(32);
 const token = "b".repeat(32);
+
+it("distinguishes known usage overrun from unconfirmed usage", () => {
+  expect(ownerFailureMessage("usage_limit_exceeded")).toContain("exceeded");
+  expect(ownerFailureMessage("usage_unconfirmed")).toContain("could not be verified");
+  expect(ownerFailureMessage("action_limit")).toContain("action limit");
+});
 
 it("uses the accepted server instant even when the response arrives after midnight", () => {
   const beforeMidnight = "2026-11-16T05:59:59+00:00";
@@ -129,6 +135,21 @@ describe("explicit owner conversation transport", () => {
     expect(client.hasPending()).toBe(false);
   });
 
+  it("passes verified cancellation uncertainty to the conversation", async () => {
+    const effect = { kind: "scheduled_task_cancelled", schedule_id: "fixture", name: "Pantry", execution_may_have_started: true };
+    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === "experimental_owner_status") return params?.message_id ? { status: "ready" } : { processing_ready: true };
+      if (method === "experimental_owner_ingress") return { message_id: id };
+      if (method === "experimental_owner_take_draft") return { message_id: id, message: "Listo.", committed_effect: effect, acknowledgement_token: token, delivery_status: "started_unconfirmed" };
+      return { status: "client_acknowledged" };
+    });
+    const client = new OwnerConversation(request as OwnerRequest);
+    const seen = vi.fn();
+    await client.send("Cancel the check");
+    await client.poll(seen);
+    expect(seen).toHaveBeenCalledExactlyOnceWith(id, "Listo.", "answer", effect);
+  });
+
   it("does not display or acknowledge an unknown pickup kind", async () => {
     const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
       if (method === "experimental_owner_status") return params?.message_id ? { status: "ready" } : { processing_ready: true };
@@ -181,6 +202,32 @@ describe("explicit owner conversation transport", () => {
     await expect(client.poll(() => {})).rejects.toThrow("source could not be verified as complete");
     expect(request.mock.calls.filter(([method]) => method === "experimental_owner_take_draft")).toHaveLength(0);
     expect(client.hasPending()).toBe(false);
+  });
+
+  it("explains when a follow-up question cannot be checked", async () => {
+    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === "experimental_owner_status") return params?.message_id
+        ? { status: "failed", failure_code: "clarification_unverified" } : { processing_ready: true };
+      if (method === "experimental_owner_ingress") return { message_id: id };
+      throw new Error("unexpected request");
+    });
+    const client = new OwnerConversation(request as OwnerRequest);
+    await client.send("hello");
+    await expect(client.poll(() => {})).rejects.toThrow("follow-up question could not be checked");
+    expect(request.mock.calls.filter(([method]) => method === "experimental_owner_take_draft")).toHaveLength(0);
+  });
+
+  it("distinguishes an unavailable clarification check", async () => {
+    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === "experimental_owner_status") return params?.message_id
+        ? { status: "failed", failure_code: "clarification_review_unavailable" } : { processing_ready: true };
+      if (method === "experimental_owner_ingress") return { message_id: id };
+      throw new Error("unexpected request");
+    });
+    const client = new OwnerConversation(request as OwnerRequest);
+    await client.send("hello");
+    await expect(client.poll(() => {})).rejects.toThrow("clarification check is unavailable");
+    expect(request.mock.calls.filter(([method]) => method === "experimental_owner_take_draft")).toHaveLength(0);
   });
 
   it("never displays an unknown backend failure string", async () => {

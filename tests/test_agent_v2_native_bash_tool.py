@@ -106,6 +106,53 @@ def test_bash_timeout_terminates_entire_process_group(tmp_path) -> None:
     assert marker.read_text() == "terminated"
 
 
+def test_bash_stops_running_process_when_cancellation_monitor_fails(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from alphonse.agent_v2.core.tools.registry.native import bash
+    original = bash.subprocess.Popen
+    processes = []
+    def start(*args, **kwargs):
+        process = original(*args, **kwargs)
+        processes.append(process)
+        return process
+    checks = 0
+    def monitor():
+        nonlocal checks
+        checks += 1
+        if checks == 1:
+            return False
+        raise RuntimeError('lost authority monitor')
+    monkeypatch.setattr(bash.subprocess, 'Popen', start)
+    result = bash.execute_bash({'command': 'sleep 60', 'cwd': str(tmp_path)},
+                               context=SimpleNamespace(cancellation_checker=monitor))
+    assert result['cancelled'] is True
+    assert result['exit_code'] == -1
+    assert len(processes) == 1 and processes[0].poll() is not None
+
+
+def test_bash_stops_running_process_on_unexpected_output_error(monkeypatch, tmp_path):
+    from alphonse.agent_v2.core.tools.registry.native import bash
+    original_start = bash.subprocess.Popen
+    original_collect = bash._collect_output_until_exit
+    processes = []
+    def start(*args, **kwargs):
+        process = original_start(*args, **kwargs)
+        processes.append(process)
+        return process
+    first = True
+    def collect(*args, **kwargs):
+        nonlocal first
+        if first:
+            first = False
+            raise OSError('synthetic output failure')
+        return original_collect(*args, **kwargs)
+    monkeypatch.setattr(bash.subprocess, 'Popen', start)
+    monkeypatch.setattr(bash, '_collect_output_until_exit', collect)
+    with pytest.raises(OSError, match='synthetic output failure'):
+        bash.execute_bash({'command': 'sleep 60', 'cwd': str(tmp_path)})
+    assert len(processes) == 1 and processes[0].poll() is not None
+
+
 def test_bash_tool_preserves_explicit_timeout_without_product_cap() -> None:
     result = execute_bash({"command": "printf uncapped", "timeout_seconds": 999})
 
@@ -132,6 +179,47 @@ def test_bash_tool_truncates_large_output() -> None:
 
     assert len(result["stdout"]) < MAX_OUTPUT_CHARS + 40
     assert result["stdout"].endswith("... [truncated]")
+
+
+def test_bash_drains_both_flooded_streams_with_bounded_capture() -> None:
+    result = execute_bash({'command': "python3 -c 'import sys; sys.stdout.write(\"x\"*5000000); sys.stderr.write(\"y\"*5000000)'",
+                           'timeout_seconds': 10})
+    assert result['exit_code'] == 0
+    assert result['stdout'].endswith('... [truncated]')
+    assert result['stderr'].endswith('... [truncated]')
+    assert len(result['stdout']) < MAX_OUTPUT_CHARS + 40
+    assert len(result['stderr']) < MAX_OUTPUT_CHARS + 40
+
+
+def test_bash_withholds_overflowed_stream_if_secret_crosses_cutoff() -> None:
+    from alphonse.agent_v2.core.tools.registry.native.bash import MAX_CAPTURE_BYTES, _execute_bash
+    from alphonse.agent_v2.skill_bindings import ExecutionBindings
+    secret = 'synthetic-private-token'
+    prepared = ExecutionBindings({}, (secret,))
+    command = f"python3 -c 'import sys; sys.stdout.write(\"x\"*{MAX_CAPTURE_BYTES - 3}+\"{secret}\")'"
+    result = _execute_bash({'command': command}, context=None, prepared=prepared)
+    assert result['stdout'] == '[output withheld: exceeded capture limit]\n... [truncated]'
+    assert secret not in result['stdout']
+
+
+def test_bash_timeout_with_unbounded_output_stops_and_reports_truncation() -> None:
+    result = execute_bash({'command': "python3 -c 'import sys;\nwhile True: sys.stdout.write(\"x\"*8192); sys.stdout.flush()'",
+                           'timeout_seconds': 0.1})
+    assert result['timed_out'] is True
+    assert result['stdout'].endswith('... [truncated]')
+    assert len(result['stdout']) < MAX_OUTPUT_CHARS + 40
+
+
+def test_unverifiable_process_group_cleanup_is_not_reported_as_success(monkeypatch):
+    from types import SimpleNamespace
+    from alphonse.agent_v2.core.tools.registry.native import bash
+    monkeypatch.setattr(bash, '_signal_process_group', lambda *_: None)
+    monkeypatch.setattr(bash, '_collect_output_until_exit', lambda *_args, **_kwargs: None)
+    def forbidden(_pid):
+        raise PermissionError('unverifiable')
+    monkeypatch.setattr(bash, '_process_group_exists', forbidden)
+    with pytest.raises(PermissionError):
+        bash._stop_process_group(SimpleNamespace(pid=1), bash._OutputBuffer(), bash._OutputBuffer())
 
 
 def test_bash_tool_honors_optional_cwd(tmp_path) -> None:

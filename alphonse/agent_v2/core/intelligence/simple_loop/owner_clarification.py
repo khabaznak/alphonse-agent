@@ -10,6 +10,7 @@ import hmac
 import json
 import os
 import re
+from dataclasses import dataclass
 from typing import Any
 
 
@@ -44,9 +45,7 @@ def resolve_owner_question(conn: Any, owner: str, message_id: str) -> tuple[str,
         envelope = metadata[STATE_KEY]
         state = CandidateState.restore(envelope['state'])
         budget = TaskBudget.from_dict(envelope['budget'])
-        if any(item['kind'] == 'model' and item['status'] == 'settled'
-               and any(item['actual'][key] > item['reserved'][key] for key in ('input_tokens', 'output_tokens'))
-               for item in budget.to_dict()['reservations'].values()):
+        if not budget.within_work_limits():
             raise ValueError('owner_question_context_unavailable')
         selected = metadata['owner_read_selected_draft']
         pickup = metadata['owner_read_desktop_pickup_started']
@@ -127,3 +126,56 @@ def load_bound_owner_question(conn: Any, owner: str, binding: Any) -> tuple[str,
     if not hmac.compare_digest(digest, binding['sha256']):
         raise ValueError('owner_question_context_unavailable')
     return prompt, question
+
+
+@dataclass(frozen=True)
+class BoundOwnerExchange:
+    """A snapshot of separate owner turns, not authority to perform an action."""
+    prior_message_id: str
+    reply_message_id: str
+    prior_user_message: str
+    assistant_question: str
+    owner_reply: str
+    sha256: str
+
+
+def load_bound_owner_exchange(conn: Any, task: Any) -> BoundOwnerExchange:
+    """Revalidate both turns inside the caller's live owner-claim transaction.
+
+    The queue's claim transaction authenticates the active owner and current
+    ingress before and after the caller's work. This function does not replace
+    that check, interpret either turn, or grant authority to create an effect.
+    The returned digest binds the exact source turns without fabricating a
+    concatenated owner utterance.
+    """
+    try:
+        if not conn.in_transaction:
+            raise ValueError('owner_question_context_unavailable')
+        owner = task.user
+        reply_id = task.message_id
+        reply = task.goal
+        metadata = task.metadata
+        if (not isinstance(owner, str) or not owner or not isinstance(reply, str) or not reply.strip()
+                or not isinstance(reply_id, str) or re.fullmatch(r'[0-9a-f]{32}', reply_id) is None
+                or not isinstance(metadata, dict)):
+            raise ValueError('owner_question_context_unavailable')
+        binding = metadata.get('owner_clarification')
+        if not isinstance(binding, dict) or binding.get('message_id') == reply_id:
+            raise ValueError('owner_question_context_unavailable')
+        # Defense in depth. The enclosing claim transaction checks this
+        # immutable ingress record, peer and payload digest at both ends.
+        row = conn.execute('''SELECT prompt,user_id,metadata_json FROM v2_inbound_messages
+                              WHERE message_id=?''', (reply_id,)).fetchone()
+        if (row is None or row['user_id'] != owner or row['prompt'] != reply
+                or json.loads(row['metadata_json']) != metadata):
+            raise ValueError('owner_question_context_unavailable')
+        prior, question = load_bound_owner_question(conn, owner, binding)
+        payload = json.dumps([owner, binding['message_id'], binding['sha256'], prior,
+                              question, reply_id, reply], ensure_ascii=False,
+                             separators=(',', ':')).encode('utf-8')
+        if len(payload) > 32768:
+            raise ValueError('owner_question_context_unavailable')
+        return BoundOwnerExchange(binding['message_id'], reply_id, prior, question, reply,
+                                  hashlib.sha256(payload).hexdigest())
+    except Exception:
+        raise ValueError('owner_question_context_unavailable') from None
