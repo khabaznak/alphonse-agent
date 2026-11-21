@@ -84,12 +84,43 @@ def test_rejects_effectful_descriptors_and_does_not_trust_model_usage():
     assert chooser('goal', 512)['usage'] == {'input_tokens': None, 'output_tokens': None}
 
 
+def test_disposable_bash_is_opt_in_and_does_not_allow_other_mutations():
+    from alphonse.agent_v2.core.tools.registry.native.bash import build_bash_tool_definition
+    descriptor = build_bash_tool_definition().descriptor_with_schema()
+    router = make_router(ScriptedProvider([]))
+    task = TaskState(task_id='task', user='owner')
+    with pytest.raises(ValueError, match='tools_invalid'):
+        RouterCandidateChooser(router=router, task=task, tools=(descriptor,), max_input_tokens=8192)
+    chooser = RouterCandidateChooser(router=router, task=task, tools=(descriptor,),
+                                    max_input_tokens=8192, allow_disposable_bash=True)
+    assert chooser._tool_ids == frozenset({'native.bash'})
+    with pytest.raises(ValueError, match='tools_invalid'):
+        RouterCandidateChooser(router=router, task=task, tools=(ToolDescriptor('native.send', 'send', ToolKind.NATIVE),),
+                               max_input_tokens=8192, allow_disposable_bash=True)
+
+
+def test_trusted_host_bash_is_an_explicit_opt_in_only():
+    from alphonse.agent_v2.core.tools.registry.native.bash import build_bash_tool_definition
+    descriptor = build_bash_tool_definition().descriptor_with_schema()
+    router = make_router(ScriptedProvider([]))
+    task = TaskState(task_id='task', user='owner')
+    with pytest.raises(ValueError, match='tools_invalid'):
+        RouterCandidateChooser(router=router, task=task, tools=(descriptor,), max_input_tokens=8192)
+    chooser = RouterCandidateChooser(router=router, task=task, tools=(descriptor,), max_input_tokens=8192,
+                                     allow_owner_host_bash=True)
+    assert chooser._tool_ids == frozenset({'native.bash'})
+    with pytest.raises(ValueError, match='tools_invalid'):
+        RouterCandidateChooser(router=router, task=task,
+            tools=(ToolDescriptor('native.send', 'send', ToolKind.NATIVE),), max_input_tokens=8192,
+            allow_owner_host_bash=True)
+
+
 def test_codex_usage_settles_durable_budget_for_multi_step_candidate(tmp_path, monkeypatch):
     from alphonse.agent_v2.core.inference.openai_codex import OpenAICodexProvider
     descriptor = ToolDescriptor('native.read_note', 'read_note', ToolKind.NATIVE, read_only=True,
         description='Read a note.', argument_schema={'type': 'object', 'properties': {}})
     decisions = iter([
-        {'kind': 'tool', 'tool_id': 'native.read_note', 'arguments': {}, 'text': None},
+        {'kind': 'tool', 'tool_id': 'native.read_note', 'arguments': '{}', 'text': None},
         {'kind': 'answer', 'tool_id': None, 'arguments': None, 'text': 'observed'},
     ])
     def run(command, **_kwargs):

@@ -325,7 +325,7 @@ def test_recovery_refuses_revoked_owner_and_missing_receipt(setup):
         restore_owner_read_observations(atomic, ctx, expected_version=initial.version)
 
 
-@pytest.mark.parametrize('input_tokens', [None, 101])
+@pytest.mark.parametrize('input_tokens', [None, 524289])
 def test_recovery_refuses_unknown_or_overrun_model_usage(setup, input_tokens):
     atomic, initial, ctx, _, _ = setup
     pending = atomic.reserve(expected_version=initial.version, reservation_id='model-1', kind='model',
@@ -337,6 +337,19 @@ def test_recovery_refuses_unknown_or_overrun_model_usage(setup, input_tokens):
     settled = atomic.save_state(settled.state, consume_decision=True)
     with pytest.raises(OwnerRecoveryUnavailable):
         restore_owner_read_observations(atomic, ctx, expected_version=settled.version)
+
+
+def test_recovery_accepts_known_usage_over_forecast_within_task_budget(setup):
+    atomic, initial, ctx, _, _ = setup
+    pending = atomic.reserve(expected_version=initial.version, reservation_id='model-1', kind='model',
+        amounts=dict(actions=0, model_calls=1, input_tokens=100, output_tokens=20), now_ms=initial.budget.started_at_ms)
+    settled = atomic.settle_model(expected_version=pending.version, reservation_id='model-1', outcome='success',
+                                  input_tokens=101, output_tokens=10)
+    settled.state.invalid_decision_retries = 1
+    settled.state.decision_format_pending = True
+    settled = atomic.save_state(settled.state, consume_decision=True)
+    recovered, _ = restore_owner_read_observations(atomic, ctx, expected_version=settled.version)
+    assert recovered.budget.usage()['charged']['input_tokens'] == 101
 
 
 def test_recovery_refuses_uncommitted_model_decision(setup):

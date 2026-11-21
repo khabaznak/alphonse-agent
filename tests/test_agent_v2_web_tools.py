@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import pytest
@@ -55,6 +56,35 @@ def test_fetch_extracts_public_html(monkeypatch: pytest.MonkeyPatch) -> None:
     result = web.execute_web_fetch({"url": "https://example.com", "max_chars": 10}, settings=WebToolsSettings(enabled=True, searxng_base_url="http://127.0.0.1:8080"))
     assert result["title"] == "Example"
     assert result["truncated"] is True
+
+
+def test_fetch_bounds_multibyte_content_and_reports_truncation(monkeypatch: pytest.MonkeyPatch) -> None:
+    class LargePage(_Response):
+        headers = {'content-type': 'text/plain'}
+        text = '🌎' * 30000
+    monkeypatch.setattr(web, '_validate_public_url', lambda _url: None)
+    monkeypatch.setattr(web, '_safe_get', lambda *_args, **_kwargs: LargePage())
+    result = web.execute_web_fetch({'url': 'https://example.com'},
+        settings=WebToolsSettings(enabled=True, searxng_base_url='http://127.0.0.1:8080', fetch_max_chars=100000))
+    assert result['truncated'] is True
+    assert result['text'] and LargePage.text.startswith(result['text'])
+    assert len(json.dumps(result, ensure_ascii=False, sort_keys=True).encode('utf-8')) <= web.WEB_FETCH_RESULT_MAX_BYTES
+    # The owner loop uses a separate checkpoint limit; ensure the capped
+    # native result is accepted rather than becoming an opaque failure.
+    from types import SimpleNamespace
+    from alphonse.agent_v2.core.intelligence.simple_loop.owner_web import valid_web_observation
+    registry = build_native_tool_registry(WebToolsSettings(enabled=True, searxng_base_url='http://127.0.0.1:8080'))
+    context = SimpleNamespace(tools=registry, is_cancelled=lambda: False)
+    assert valid_web_observation('owner', 'native.web_fetch', {'url': 'https://example.com'}, result,
+                                 context=context, task=SimpleNamespace(user='owner'))
+
+
+def test_fetch_preserves_small_content_and_rejects_oversize_metadata() -> None:
+    small = {'url': 'u', 'final_url': 'u', 'status_code': 200, 'content_type': 'text/plain',
+             'title': 't', 'text': 'whole page', 'truncated': False}
+    assert web._bounded_fetch_result(small) == small
+    oversized = {**small, 'title': 'x' * web.WEB_FETCH_RESULT_MAX_BYTES}
+    assert web._bounded_fetch_result(oversized)['exception']['code'] == 'web_fetch_output_too_large'
 
 
 def test_fetch_revalidates_redirect(monkeypatch: pytest.MonkeyPatch) -> None:

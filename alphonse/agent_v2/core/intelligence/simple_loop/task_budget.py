@@ -172,6 +172,17 @@ class TaskBudget:
                 unknown.append(key)
         return {"charged": used, "in_flight": unresolved, "unknown_usage": unknown}
 
+    def within_work_limits(self) -> bool:
+        """Check actual aggregate usage against work limits, retaining final reserve.
+
+        Reservations are forecasts, not provider-enforced per-call caps. An
+        overestimate or underestimate does not change the task-wide limits.
+        Unknown usage is handled separately by the caller and reservation code.
+        """
+        charged = self.usage()['charged']
+        return all(charged[key] <= self.limits.total[key] - self.limits.final_reserve[key]
+                   for key in DIMENSIONS)
+
     def reserve(self, reservation_id: str, *, kind: str, amounts: Mapping[str, int],
                 now_ms: int, lane: str = "work", cancelled: bool = False,
                 _synthetic_allow_settled_unknown: bool = False) -> int:

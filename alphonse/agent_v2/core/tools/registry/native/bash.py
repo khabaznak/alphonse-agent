@@ -20,6 +20,9 @@ from alphonse.agent_v2.core.tools.registry import ToolDefinition
 BASH_TOOL_ID = "native.bash"
 BASH_TOOL_NAME = "bash"
 MAX_OUTPUT_CHARS = 12000
+# UTF-8 has at most four bytes per character. Capture a small, fixed prefix;
+# continue draining beyond it so a noisy child cannot block on a full pipe.
+MAX_CAPTURE_BYTES = MAX_OUTPUT_CHARS * 4 + 4
 TERMINATION_GRACE_SECONDS = 0.25
 
 BASH_ARGUMENT_SCHEMA: dict[str, Any] = {
@@ -116,7 +119,8 @@ def build_bash_tool_definition() -> ToolDefinition:
     )
 
 
-def execute_bash(arguments: dict[str, Any], *, context: ToolExecutionContext | None = None) -> dict[str, Any]:
+def execute_bash(arguments: dict[str, Any], *, context: ToolExecutionContext | None = None,
+                 _binding_observer: Callable[[Any], None] | None = None) -> dict[str, Any]:
     """Execute a bash command and return a JSON-safe result."""
     from alphonse.agent_v2.skill_bindings import ExecutionBindings
 
@@ -132,6 +136,11 @@ def execute_bash(arguments: dict[str, Any], *, context: ToolExecutionContext | N
         if skill_id not in selection.get("selected_skill_ids", []):
             raise PermissionError("skill_binding_skill_not_selected")
         prepared = context.skill_bindings.prepare(actor_id=str(context.task.user or ""), skill_id=skill_id, names=names)
+    if _binding_observer is not None:
+        if not callable(_binding_observer):
+            raise ValueError('bash_binding_observer_invalid')
+        # Runtime-only hook for a trusted host checkpoint, never a tool argument.
+        _binding_observer(prepared)
     try:
         return prepared.redact(_execute_bash(arguments, context=context, prepared=prepared))
     except Exception as exc:
@@ -153,8 +162,15 @@ def execute_bash(arguments: dict[str, Any], *, context: ToolExecutionContext | N
 
 
 def _execute_bash(arguments: dict[str, Any], *, context: ToolExecutionContext | None, prepared: Any) -> dict[str, Any]:
-    def output(value: Any) -> str:
-        return _truncate_output(prepared.redact(_coerce_output(value)))
+    def output(buffer: '_OutputBuffer') -> str:
+        if buffer.overflow and prepared.secret_values:
+            # A secret may start before the capture boundary and finish beyond
+            # it. Withhold the whole stream instead of leaking a partial token.
+            return '[output withheld: exceeded capture limit]\n... [truncated]'
+        rendered = _truncate_output(prepared.redact(_coerce_output(bytes(buffer.data))))
+        if buffer.overflow and not rendered.endswith('... [truncated]'):
+            rendered += '\n... [truncated]'
+        return rendered
 
     command = str(arguments.get("command") or "").strip()
     if not command:
@@ -196,7 +212,7 @@ def _execute_bash(arguments: dict[str, Any], *, context: ToolExecutionContext | 
         environment["ALPHONSE_SKILL_BINDINGS"] = json.dumps(prepared.values, ensure_ascii=True)
     timeout_seconds = _coerce_timeout(arguments.get("timeout_seconds"))
     cancelled = context.cancellation_checker if context else None
-    if cancelled and cancelled():
+    if _cancellation_requested(cancelled):
         return {"exit_code": -1, "stdout": "", "stderr": "Command cancelled before dispatch.",
                 "cancelled": True, "timed_out": False, "cwd": cwd, "timeout_seconds": timeout_seconds, "duration_ms": 0}
     verification = before = None
@@ -206,11 +222,12 @@ def _execute_bash(arguments: dict[str, Any], *, context: ToolExecutionContext | 
         before = observe(verification, before=True, context=context)
         if verification['nonce']:
             environment['ALPHONSE_VERIFICATION_NONCE'] = verification['nonce']
-        if cancelled and cancelled():
+        if _cancellation_requested(cancelled):
             return {"exit_code": -1, "stdout": "", "stderr": "Command cancelled before dispatch.",
                     "cancelled": True, "timed_out": False, "cwd": cwd, "timeout_seconds": timeout_seconds, "duration_ms": 0}
     started_at = time.monotonic()
 
+    stdout_buffer, stderr_buffer = _OutputBuffer(), _OutputBuffer()
     try:
         process = subprocess.Popen(
             [bash_bin, "-lc", command],
@@ -220,24 +237,31 @@ def _execute_bash(arguments: dict[str, Any], *, context: ToolExecutionContext | 
             stderr=subprocess.PIPE,
             start_new_session=True,
         )
-        stdout, stderr = _collect_output_until_exit(process, timeout_seconds, cancelled)
+        _collect_output_until_exit(process, timeout_seconds, cancelled, stdout_buffer, stderr_buffer)
     except subprocess.TimeoutExpired as exc:
-        stdout, stderr = _stop_process_group(process, exc)
+        _stop_process_group(process, stdout_buffer, stderr_buffer)
+        stderr = output(stderr_buffer)
         return {
             "exit_code": -1,
-            "stdout": output(stdout),
-            "stderr": output(stderr or ("Command cancelled." if isinstance(exc, _CommandCancelled) else f"Command timed out after {timeout_seconds:g} seconds.")),
+            "stdout": output(stdout_buffer),
+            "stderr": stderr or ("Command cancelled." if isinstance(exc, _CommandCancelled) else f"Command timed out after {timeout_seconds:g} seconds."),
             "timed_out": not isinstance(exc, _CommandCancelled),
             "cancelled": isinstance(exc, _CommandCancelled),
             "cwd": cwd,
             "timeout_seconds": timeout_seconds,
             "duration_ms": _duration_ms(started_at),
         }
+    except BaseException:
+        # Once started, any unexpected monitor or output failure leaves the
+        # command's effects uncertain. Do not leave its process group running.
+        if 'process' in locals():
+            _stop_process_group(process, stdout_buffer, stderr_buffer)
+        raise
 
     result = {
         "exit_code": int(process.returncode),
-        "stdout": output(stdout),
-        "stderr": output(stderr),
+        "stdout": output(stdout_buffer),
+        "stderr": output(stderr_buffer),
         "cancelled": False,
         "timed_out": False,
         "cwd": cwd,
@@ -249,10 +273,10 @@ def _execute_bash(arguments: dict[str, Any], *, context: ToolExecutionContext | 
             from .bash_verification import finish_verification, observe, output_reports_failure
             if output_reports_failure(result['stdout'], result['stderr']):
                 raise ValueError('verification_action_reported_failure')
-            if cancelled and cancelled():
+            if _cancellation_requested(cancelled):
                 raise ValueError('verification_cancelled')
             after = observe(verification, before=False, context=context)
-            if cancelled and cancelled():
+            if _cancellation_requested(cancelled):
                 raise ValueError('verification_cancelled')
             result['verification'] = finish_verification(verification, before, after, context)
         except Exception:
@@ -265,6 +289,16 @@ def _execute_bash(arguments: dict[str, Any], *, context: ToolExecutionContext | 
 
 class _CommandCancelled(subprocess.TimeoutExpired):
     """Internal signal carrying captured output through process-group cleanup."""
+
+
+def _cancellation_requested(checker: Callable[[], bool] | None) -> bool:
+    """A missing checker is allowed; a broken or ambiguous checker is not."""
+    if checker is None:
+        return False
+    try:
+        return checker() is not False
+    except Exception:
+        return True
 
 
 def _skill_root(skill_id: str, context: ToolExecutionContext | None) -> Path:
@@ -307,98 +341,107 @@ def _resolve_runtime(value: Any, root: Path) -> str | None:
     return str(Path(candidate).absolute())
 
 
-def _stop_process_group(
-    process: subprocess.Popen[bytes],
-    timeout_error: subprocess.TimeoutExpired,
-) -> tuple[str, str]:
-    """Stop the shell and every child that inherited its captured streams."""
+class _OutputBuffer:
+    def __init__(self) -> None:
+        self.data = bytearray()
+        self.overflow = False
+
+    def append(self, chunk: bytes) -> None:
+        remaining = max(0, MAX_CAPTURE_BYTES - len(self.data))
+        self.data.extend(chunk[:remaining])
+        self.overflow = self.overflow or len(chunk) > remaining
+
+
+def _stop_process_group(process: subprocess.Popen[bytes], stdout: _OutputBuffer,
+                        stderr: _OutputBuffer) -> None:
+    """Stop and drain the group without accumulating unbounded output."""
     _signal_process_group(process.pid, signal.SIGTERM)
     try:
-        stdout, stderr = process.communicate(timeout=TERMINATION_GRACE_SECONDS)
+        _collect_output_until_exit(process, TERMINATION_GRACE_SECONDS, None, stdout, stderr,
+                                   wait_for_eof=True)
     except subprocess.TimeoutExpired:
         _signal_process_group(process.pid, signal.SIGKILL)
-        stdout, stderr = process.communicate()
+        try:
+            _collect_output_until_exit(process, 1.0, None, stdout, stderr, wait_for_eof=True)
+        except subprocess.TimeoutExpired:
+            # The shell/descendants may still be running; never report clean
+            # cancellation or silently leave an uncertain process behind.
+            for stream in (process.stdout, process.stderr):
+                if stream is not None and not stream.closed:
+                    stream.close()
+            raise RuntimeError('bash_process_group_termination_unconfirmed') from None
     else:
         if _process_group_exists(process.pid):
             _signal_process_group(process.pid, signal.SIGKILL)
-    return (
-        _merge_output(timeout_error.stdout, stdout),
-        _merge_output(timeout_error.stderr, stderr),
-    )
 
 
 def _collect_output_until_exit(
     process: subprocess.Popen[bytes],
     timeout_seconds: float | None,
     cancelled: Callable[[], bool] | None = None,
-) -> tuple[str, str]:
+    stdout: _OutputBuffer | None = None,
+    stderr: _OutputBuffer | None = None,
+    *, wait_for_eof: bool = False,
+) -> None:
     """Read available output until the shell exits, without awaiting orphaned pipe writers."""
-    stdout_chunks: list[bytes] = []
-    stderr_chunks: list[bytes] = []
-    streams = {
-        process.stdout: stdout_chunks,
-        process.stderr: stderr_chunks,
-    }
+    stdout = stdout if stdout is not None else _OutputBuffer()
+    stderr = stderr if stderr is not None else _OutputBuffer()
+    streams = {process.stdout: stdout, process.stderr: stderr}
     deadline = None if timeout_seconds is None else time.monotonic() + timeout_seconds
 
     with selectors.DefaultSelector() as selector:
         for stream in streams:
-            if stream is None:
+            if stream is None or stream.closed:
                 continue
             os.set_blocking(stream.fileno(), False)
             selector.register(stream, selectors.EVENT_READ)
 
         while True:
-            if cancelled and cancelled():
-                raise _CommandCancelled(process.args, timeout_seconds, output=b"".join(stdout_chunks), stderr=b"".join(stderr_chunks))
+            if _cancellation_requested(cancelled):
+                raise _CommandCancelled(process.args, timeout_seconds)
             exited = process.poll() is not None
-            if exited:
+            if exited and (not wait_for_eof or not selector.get_map()):
                 wait_seconds = 0
             elif deadline is None:
                 wait_seconds = 0.02
             else:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    raise subprocess.TimeoutExpired(
-                        process.args,
-                        timeout_seconds,
-                        output=b"".join(stdout_chunks),
-                        stderr=b"".join(stderr_chunks),
-                    )
+                    raise subprocess.TimeoutExpired(process.args, timeout_seconds)
                 wait_seconds = min(remaining, 0.02)
             ready = selector.select(wait_seconds)
             for key, _ in ready:
                 stream = key.fileobj
-                chunks = streams[stream]
-                while True:
-                    try:
-                        chunk = os.read(stream.fileno(), 65_536)
-                    except BlockingIOError:
-                        break
-                    if not chunk:
-                        selector.unregister(stream)
-                        break
-                    chunks.append(chunk)
+                buffer = streams[stream]
+                try:
+                    chunk = os.read(stream.fileno(), 65_536)
+                except BlockingIOError:
+                    continue
+                if not chunk:
+                    selector.unregister(stream)
+                    continue
+                buffer.append(chunk)
 
-            if exited:
+            if exited and (not wait_for_eof or not selector.get_map()):
                 # The shell's own writes are buffered by now. Do not wait for EOF
                 # from a background descendant that inherited either pipe.
-                for stream, chunks in streams.items():
-                    if stream is None:
+                for stream, buffer in streams.items():
+                    if stream is None or stream.closed:
                         continue
-                    while True:
+                    # Do not let a background descendant keep a pipe readable
+                    # forever after the shell itself has exited.
+                    for _ in range(16):
                         try:
                             chunk = os.read(stream.fileno(), 65_536)
                         except BlockingIOError:
                             break
                         if not chunk:
                             break
-                        chunks.append(chunk)
+                        buffer.append(chunk)
+                    else:
+                        buffer.overflow = True
                     stream.close()
-                return (
-                    _coerce_output(b"".join(stdout_chunks)),
-                    _coerce_output(b"".join(stderr_chunks)),
-                )
+                return
 
 
 def _signal_process_group(process_group_id: int, requested_signal: signal.Signals) -> None:

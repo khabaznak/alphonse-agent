@@ -1,11 +1,12 @@
 /** Opt-in owner-conversation transport; the daemon remains the authority. */
+import type { CommittedEffect } from "./types";
 export type OwnerRequest = <T>(method: string, params?: Record<string, unknown>) => Promise<T>;
 
 type Pending = { messageId: string; pickupStarted: boolean; acknowledgementToken?: string; acknowledgementInFlight?: boolean; acknowledgementRetryAttempted?: boolean };
 type Status = "pending" | "ready" | "started_unconfirmed" | "client_acknowledged" | "failed" | "unavailable";
 export type OwnerCapability = { owner_only?: boolean; processing_ready?: boolean; blocking_reason?: string | null; paused_legacy_requests?: number };
 type StatusReply = OwnerCapability & { status?: Status; failure_code?: string };
-type Pickup = { message_id: string; message: string; acknowledgement_token: string; delivery_status: string; kind?: "answer" | "question" };
+type Pickup = { message_id: string; message: string; acknowledgement_token: string; delivery_status: string; kind?: "answer" | "question"; committed_effect?: CommittedEffect };
 type OwnerIngressReply = { message_id: string; accepted_at?: string };
 
 /** Prefer the daemon's durable ingress instant; older daemons may omit it. */
@@ -39,12 +40,16 @@ export function ownerFailureMessage(code?: string): string {
     cancel_requested: "Cancellation was requested. Check unfinished requests before trying again.",
     time_limit: "This request exceeded its time limit. Check unfinished requests before trying again.",
     model_unavailable: "The model could not complete this request. Check unfinished requests before trying again.",
-    usage_unconfirmed: "Model usage could not be verified or exceeded the request limit. Check unfinished requests before trying again.",
+    usage_unconfirmed: "Model usage could not be verified. Check unfinished requests before trying again.",
+    usage_limit_exceeded: "The model exceeded the request's usage limit. Check unfinished requests before trying again.",
     source_unavailable: "A needed source was unavailable or access was denied. Check access and unfinished requests before trying again.",
     source_changed: "A source changed or access was revoked during the request. Check unfinished requests before trying again.",
     source_incomplete: "A source could not be verified as complete. Check unfinished requests before trying again.",
     unsupported_operation: "This request needs an operation that is not available in owner conversation mode.",
+    action_limit: "I reached the action limit before finishing. Check unfinished requests before trying again.",
     answer_unverified: "I could not verify enough source information to answer. Check unfinished requests before trying again.",
+    clarification_unverified: "The follow-up question could not be checked, so it was not sent. Check unfinished requests before trying again.",
+    clarification_review_unavailable: "The clarification check is unavailable, so the follow-up question was not sent. Check unfinished requests before trying again.",
   };
   return (code && Object.prototype.hasOwnProperty.call(messages, code))
     ? messages[code] : "This conversation needs attention; its result may be unavailable or unconfirmed.";
@@ -111,7 +116,7 @@ export class OwnerConversation {
     }
   }
 
-  async poll(onAnswer: (messageId: string, answer: string, kind: "answer" | "question") => void): Promise<boolean> {
+  async poll(onAnswer: (messageId: string, answer: string, kind: "answer" | "question", effect?: CommittedEffect) => void): Promise<boolean> {
     let acknowledgementRecovered = false;
     for (const pending of this.pending.values()) {
       if (pending.pickupStarted) {
@@ -167,10 +172,16 @@ export class OwnerConversation {
       }
       if (!pickup || pickup.message_id !== pending.messageId || typeof pickup.message !== "string"
           || typeof pickup.acknowledgement_token !== "string" || pickup.delivery_status !== "started_unconfirmed"
-          || (pickup.kind !== undefined && pickup.kind !== "answer" && pickup.kind !== "question")) {
+          || (pickup.kind !== undefined && pickup.kind !== "answer" && pickup.kind !== "question")
+          || (pickup.committed_effect !== undefined && (!pickup.committed_effect
+            || pickup.committed_effect.kind !== "scheduled_task_cancelled"
+            || typeof pickup.committed_effect.name !== "string"
+            || typeof pickup.committed_effect.schedule_id !== "string"
+            || typeof pickup.committed_effect.execution_may_have_started !== "boolean"))) {
         throw new Error("The answer could not be confirmed. It will not be fetched again automatically.");
       }
-      onAnswer(pending.messageId, pickup.message, pickup.kind ?? "answer");
+      if (pickup.committed_effect) onAnswer(pending.messageId, pickup.message, pickup.kind ?? "answer", pickup.committed_effect);
+      else onAnswer(pending.messageId, pickup.message, pickup.kind ?? "answer");
       pending.acknowledgementToken = pickup.acknowledgement_token;
       await this.acknowledge(pending);
     }

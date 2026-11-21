@@ -49,6 +49,26 @@ describe("owner request recovery", () => {
     expect(html).not.toContain("Show answer");
   });
 
+  it("shows an unresolved action without offering replay or stop", () => {
+    const html = renderToStaticMarkup(<OwnerRecovery items={[
+      { message_id: id, prompt: "Synthetic request", status: "action_unconfirmed", can_abandon: false },
+    ]} stopping="" onStop={() => {}} onShow={() => {}} />);
+    expect(html).toContain("An action may have run; its effects are unconfirmed");
+    expect(html).toContain("check the result before trying again");
+    expect(html).not.toContain("Show answer");
+    expect(html).toContain("disabled");
+  });
+
+  it("shows a committed cancellation and possible earlier execution", () => {
+    const html = renderToStaticMarkup(<OwnerRecovery items={[{
+      message_id: id, prompt: "Cancel the check", status: "effect_committed", can_abandon: false,
+      committed_effect: { kind: "scheduled_task_cancelled", schedule_id: "fixture", name: "Pantry", execution_may_have_started: true },
+    }]} stopping="" onStop={() => {}} onShow={() => {}} />);
+    expect(html).toContain("scheduled task was cancelled");
+    expect(html).toContain("may already have started");
+    expect(html).toContain("disabled");
+  });
+
   it("rejects malformed discovery results instead of offering a stop", async () => {
     const request = vi.fn(async () => ({ items: [{ message_id: id, prompt: "x", status: "pending", can_abandon: "yes" }] }));
     await expect(listOwnerRecovery(request as OwnerRequest)).rejects.toThrow("could not be checked");

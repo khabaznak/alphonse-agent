@@ -7,6 +7,15 @@ import type { ChatMessage } from "./types";
 const render = (message: ChatMessage, renderMarkdown = true) => renderToStaticMarkup(<ConversationMessage message={message} timezone="America/Mexico_City" projectName="Trip" renderMarkdown={renderMarkdown} />);
 
 describe("conversation content", () => {
+  it("shows a verified cancellation and running-work uncertainty even if prose omits it", () => {
+    const html = render({ id: "a", role: "assistant", content: "Listo.", committed_effect: {
+      kind: "scheduled_task_cancelled", schedule_id: "fixture", name: "Pantry",
+      execution_may_have_started: true,
+    } });
+    expect(html).toContain("Listo.");
+    expect(html).toContain("Scheduled task cancelled: Pantry.");
+    expect(html).toContain("The task may already have started.");
+  });
   it("keeps user input literal while rendering assistant GFM and accessible media", () => {
     const content = "## Plan\n\n- [x] Booked\n\n| Item | Cost |\n| --- | --- |\n| Rail | 20 |\n\n![Receipt](/receipt.png)\n\n[Itinerary](https://example.com/trip.pdf)";
     const assistant = render({ id: "a", role: "assistant", content });

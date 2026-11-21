@@ -92,6 +92,13 @@ export type MediaToolsSettings = {
   stt: { enabled: boolean; executable_path: string; model: string; default_language: string; available: boolean; verification: VerificationState };
 };
 
+export type CommittedEffect = {
+  kind: "scheduled_task_cancelled";
+  schedule_id: string;
+  name: string;
+  execution_may_have_started: boolean;
+};
+
 export type ChatMessage = {
   id: string;
   role: "user" | "assistant" | "system";
@@ -100,4 +107,5 @@ export type ChatMessage = {
   source?: string;
   project_id?: string;
   sequence?: number;
+  committed_effect?: CommittedEffect;
 };

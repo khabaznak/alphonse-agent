@@ -21,7 +21,7 @@ from alphonse.agent_v2.runtime import build_runtime_host
 from alphonse.agent_v2.users import V2UserStore
 
 
-def worker(tmp_path, monkeypatch, *, use_clock=True, goal=None, args=None, interrupt=False, on_commit=None, decision_override=None):
+def worker(tmp_path, monkeypatch, *, use_clock=True, goal=None, args=None, interrupt=False, on_commit=None, decision_override=None, question_judgment=None, recover_clock=False):
     due = (datetime.now(timezone.utc) + timedelta(hours=1)).replace(microsecond=0).isoformat()
     goal = goal or f'Please remind me to call the plumber at {due}'
     args = args or {'message': 'call the plumber', 'due_at': due, 'request_quote': goal}
@@ -33,7 +33,7 @@ def worker(tmp_path, monkeypatch, *, use_clock=True, goal=None, args=None, inter
             self.calls += 1
             if decision_override is not None:
                 decision = decision_override
-            elif use_clock and self.calls == 1:
+            elif (use_clock and self.calls == 1) or (recover_clock and self.calls == 2):
                 decision = {'kind': 'tool', 'tool_id': 'native.owner_clock', 'arguments': {}, 'text': None}
             else:
                 if interrupt:
@@ -54,6 +54,8 @@ def worker(tmp_path, monkeypatch, *, use_clock=True, goal=None, args=None, inter
         conversation_store=conversations, outbox=SQLiteOutboundStore(path), tools=tools,
         inference=InferenceRouter(provider=Provider(), default_profile=ModelProfile('test', 'fixture', 'offline')),
         coding_skill_service=object(), experimental_owner_read=True, owner_selected_draft_sink=lambda *_: None)
+    if question_judgment is not None:
+        runtime.core.system_one = SimpleNamespace(review_clarification_effect_claim=question_judgment)
     daemon = V2Daemon(runtime, daemon_id='fixture', experimental_owner_only=True)
     holder.update(daemon=daemon, owner=owner)
     if on_commit is not None:
@@ -119,6 +121,20 @@ def test_one_minute_relative_reminder_can_be_saved(tmp_path, monkeypatch):
         reminders = OwnerDesktopReminders(str(path)).list_open(owner.user_id)
         assert len(reminders) == 1 and reminders[0]['due_at'] == due
         assert daemon.take_owner_desktop_draft(message_id)['message'].startswith('Reminder saved: drink water')
+    finally:
+        daemon.stop()
+
+
+def test_reminder_missing_clock_recovers_before_creating_exactly_one_effect(tmp_path, monkeypatch):
+    # First model decision attempts a reminder; after the host reports the
+    # missing prerequisite, the next decision reads the clock and retries.
+    daemon, owner, message_id, status, path, _ = worker(
+        tmp_path, monkeypatch, use_clock=False, recover_clock=True)
+    try:
+        assert status == 'ready'
+        reminders = OwnerDesktopReminders(str(path)).list_open(owner.user_id)
+        assert len(reminders) == 1 and reminders[0]['message'] == 'call the plumber'
+        assert daemon.take_owner_desktop_draft(message_id)['message'].startswith('Reminder saved:')
     finally:
         daemon.stop()
 
@@ -196,11 +212,53 @@ def test_model_cannot_claim_reminder_without_committed_effect(tmp_path, monkeypa
 
 def test_reminder_clarification_is_available_without_effect(tmp_path, monkeypatch):
     decision = {'kind': 'question', 'tool_id': None, 'arguments': None,
-                'text': 'What time would you like the reminder?'}
-    daemon, owner, message_id, status, path, _ = worker(tmp_path, monkeypatch, decision_override=decision)
+                'text': 'When would you like me to remind you to call the plumber?'}
+    daemon, owner, message_id, status, path, _ = worker(tmp_path, monkeypatch, decision_override=decision,
+                                                        question_judgment=lambda **_: True)
     try:
         assert status == 'ready'
         assert daemon.take_owner_desktop_draft(message_id)['message'] == decision['text']
+        assert OwnerDesktopReminders(str(path)).list_open(owner.user_id) == []
+    finally:
+        daemon.stop()
+
+
+@pytest.mark.parametrize('goal,text,verdict,ready', [
+    ('Remind me to call the dentist', 'When should I remind you to call the dentist?', True, True),
+    ('Recuérdame llamar al dentista', '¿Cuándo quieres que te recuerde llamar al dentista?', True, True),
+    ('Remind me to call the dentist', "I've set your reminder. Is that okay?", False, False),
+    ('Recuérdame llamar al dentista', 'Ya programé tu recordatorio. ¿Está bien?', False, False),
+    ('Remind me to call the dentist', 'When should I remind you?', None, False),
+])
+def test_clarification_screen_is_language_independent(tmp_path, monkeypatch, goal, text, verdict, ready):
+    decision = {'kind': 'question', 'tool_id': None, 'arguments': None, 'text': text}
+    judge = None if verdict is None else lambda **_: verdict
+    daemon, owner, message_id, status, path, _ = worker(
+        tmp_path, monkeypatch, goal=goal, decision_override=decision, question_judgment=judge)
+    try:
+        assert (status == 'ready') is ready
+        if ready:
+            assert daemon.take_owner_desktop_draft(message_id)['message'] == text
+        else:
+            expected = 'clarification_review_unavailable' if verdict is None else 'clarification_unverified'
+            assert daemon.owner_message_status_payload(message_id)['failure_code'] == expected
+        assert OwnerDesktopReminders(str(path)).list_open(owner.user_id) == []
+    finally:
+        daemon.stop()
+
+
+def test_clarification_reviewer_failure_does_not_publish_unchecked_text(tmp_path, monkeypatch):
+    def unavailable(**_):
+        raise RuntimeError('private error details')
+    decision = {'kind': 'question', 'tool_id': None, 'arguments': None,
+                'text': 'When should I remind you?'}
+    daemon, owner, message_id, status, path, _ = worker(
+        tmp_path, monkeypatch, decision_override=decision, question_judgment=unavailable)
+    try:
+        assert status == 'failed'
+        result = daemon.owner_message_status_payload(message_id)
+        assert result['failure_code'] == 'clarification_review_unavailable'
+        assert 'private error details' not in str(result)
         assert OwnerDesktopReminders(str(path)).list_open(owner.user_id) == []
     finally:
         daemon.stop()

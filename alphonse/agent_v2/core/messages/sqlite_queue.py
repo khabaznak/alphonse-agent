@@ -7,6 +7,7 @@ from contextlib import contextmanager, nullcontext
 import hashlib
 import hmac
 import os
+import re
 import sqlite3
 import time
 from threading import RLock
@@ -34,6 +35,9 @@ class SQLiteMessageQueue:
         if experimental_claim_fencing and self.db_path == ":memory:":
             raise ValueError("claim_fencing_file_database_required")
         self.experimental_claim_fencing = experimental_claim_fencing
+        # Production uses wall time. A disposable harness may inject a clock
+        # for due-time checks; claim lease checks always use the real clock.
+        self._owner_schedule_clock = lambda: datetime.now(timezone.utc)
         self._memory_connection: sqlite3.Connection | None = None
         if self.db_path == ":memory:":
             self._memory_connection = sqlite3.connect(":memory:", check_same_thread=False)
@@ -99,7 +103,8 @@ class SQLiteMessageQueue:
 
     def enqueue_trusted_local_owner(self, *, prompt: str, peer_uid: int,
                                     reply_to_message_id: str | None = None,
-                                    return_receipt: bool = False) -> str | dict[str, str]:
+                                    return_receipt: bool = False,
+                                    _authority_binding: tuple[str, str] | None = None) -> str | dict[str, str]:
         """Atomically bind a local-peer ingress to its newly created queue row.
 
         The caller must independently verify the peer UID. This record is not
@@ -113,7 +118,14 @@ class SQLiteMessageQueue:
             raise ValueError('prompt_required')
         if type(return_receipt) is not bool:
             raise ValueError('owner_ingress_receipt_invalid')
-        message_id = uuid4().hex
+        if _authority_binding is not None:
+            if (not isinstance(_authority_binding, tuple) or len(_authority_binding) != 2
+                    or any(not isinstance(value, str) or re.fullmatch(r'[0-9a-f]{32}', value) is None
+                           for value in _authority_binding)):
+                raise ValueError('owner_authority_binding_invalid')
+            message_id, authority_request_id = _authority_binding
+        else:
+            message_id, authority_request_id = uuid4().hex, None
         timestamp = _now_iso()
         with self._connect() as conn:
             conn.execute('BEGIN IMMEDIATE')
@@ -156,6 +168,14 @@ class SQLiteMessageQueue:
             conn.execute('''INSERT INTO v2_trusted_owner_ingress
                 (message_id,owner_id,peer_uid,payload_sha256,created_at,history_version,history_event_id)
                 VALUES (?,?,?,?,?,?,?)''', (message_id, actor, peer_uid, digest, timestamp, 1, event.event_id))
+            if authority_request_id is not None:
+                # This linkage is recovery metadata, not protected authority:
+                # the service must independently bind request, owner, message
+                # ID and goal before the worker can use the request.
+                conn.execute('''CREATE TABLE IF NOT EXISTS v2_authority_ingress_bindings (
+                    message_id TEXT PRIMARY KEY, request_id TEXT NOT NULL UNIQUE) STRICT''')
+                conn.execute('INSERT INTO v2_authority_ingress_bindings(message_id,request_id) VALUES (?,?)',
+                             (message_id, authority_request_id))
         return {'message_id': message_id, 'accepted_at': timestamp} if return_receipt else message_id
 
     @contextmanager
@@ -215,6 +235,48 @@ class SQLiteMessageQueue:
         """
         try:
             with self.trusted_local_owner_claim_transaction(receipt, task, clock=clock):
+                return True
+        except Exception:
+            return False
+
+    @contextmanager
+    def trusted_scheduled_owner_claim_transaction(self, receipt: Any, task: Any, *, clock=None, _finalize=None):
+        """Fence one distinct, due owner-schedule occurrence and its queue claim.
+
+        This verifies an occurrence, not a direct owner request. Tool-specific
+        authority and result delivery must be checked separately.
+        """
+        from alphonse.agent_v2.core.messages.claim_fence import ClaimFenceUnavailable, ClaimReceipt, fenced_claim_transaction
+        from alphonse.agent_v2.core.intelligence.simple_loop.owner_schedule_origin import verified_occurrence_locked
+        now_fn = clock or (lambda: datetime.now(timezone.utc))
+        if (not self.experimental_claim_fencing or not isinstance(receipt, ClaimReceipt)
+                or getattr(task, 'task_id', None) != receipt.message_id
+                or getattr(task, 'message_id', None) != receipt.message_id
+                or getattr(task, 'user', None) != receipt.user_id
+                or getattr(task, 'intelligence_engine', None) != 'single_loop_experimental'
+                or type(getattr(task, 'intelligence_schema_version', None)) is not int
+                or task.intelligence_schema_version != 1):
+            raise ClaimFenceUnavailable('scheduled_claim_authorization_unavailable')
+
+        def check(conn):
+            if not verified_occurrence_locked(conn, receipt.message_id, now=self._owner_schedule_clock()):
+                raise ClaimFenceUnavailable('scheduled_claim_authorization_unavailable')
+            row = conn.execute('SELECT * FROM v2_inbound_messages WHERE message_id=?', (receipt.message_id,)).fetchone()
+            if (row is None or row['user_id'] != receipt.user_id or getattr(task, 'goal', None) != row['prompt']
+                    or any(getattr(task, key, None) != row[key]
+                           for key in ('project_id', 'tag', 'correlation_id', 'memory_session_id'))
+                    or json.dumps(getattr(task, 'metadata', None), sort_keys=True) != row['metadata_json']):
+                raise ClaimFenceUnavailable('scheduled_claim_authorization_unavailable')
+
+        with self._connect() as conn:
+            with fenced_claim_transaction(conn, receipt, clock=now_fn, _finalize=_finalize):
+                check(conn)
+                yield conn
+                check(conn)
+
+    def verify_trusted_scheduled_owner_claim(self, receipt: Any, task: Any, *, clock=None) -> bool:
+        try:
+            with self.trusted_scheduled_owner_claim_transaction(receipt, task, clock=clock):
                 return True
         except Exception:
             return False
@@ -307,6 +369,12 @@ class SQLiteMessageQueue:
                 WHERE q.message_id=?""", (message_id,)).fetchone()
             if row is None or row['owner_id'] != row['user_id'] or row['peer_uid'] != os.getuid():
                 raise ValueError('owner_abandon_unavailable')
+            # A cancellation may have committed before the language response
+            # was generated. Never classify that effect as an abandoned read.
+            has_cancellations = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_owner_schedule_cancellations'").fetchone()
+            if has_cancellations and conn.execute('SELECT 1 FROM v2_owner_schedule_cancellations WHERE request_id=? AND owner_id=?',
+                                                  (message_id, row['user_id'])).fetchone():
+                raise ValueError('owner_abandon_effect_committed')
             has_outbox = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_outbox'").fetchone()
             if not has_outbox or conn.execute('SELECT 1 FROM v2_outbox WHERE task_id=? LIMIT 1', (message_id,)).fetchone():
                 raise ValueError('owner_abandon_unavailable')

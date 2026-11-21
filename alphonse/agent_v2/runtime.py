@@ -111,6 +111,7 @@ class V2RuntimeHost:
     question_store: SQLiteQuestionStore
     project_store: ProjectStore
     schedule_store: ScheduledTaskStore
+    owner_schedule_store: ScheduledTaskStore | None
     outbox: SQLiteOutboundStore
     identity_resolver: V2IdentityResolver
     integration_store: SQLiteIntegrationStore
@@ -294,6 +295,8 @@ def build_runtime_host(
         artifact_resources.ensure_repository()
     # Legacy rows remain solely for migration/provenance and privacy guards.
     schedule_store = schedule_store or ScheduledTaskStore()
+    owner_schedule_store = (ScheduledTaskStore(queue.db_path)
+        if experimental_owner_read and getattr(queue, 'db_path', ':memory:') != ':memory:' else None)
     def _scheduled_delivery_allowed(message: Any) -> bool:
         metadata = message.metadata
         scheduled = schedule_store.get_task(str(metadata.get("scheduled_task_id") or ""))
@@ -488,6 +491,7 @@ def build_runtime_host(
         question_store=question_store,
         project_store=project_store,
         schedule_store=schedule_store,
+        owner_schedule_store=owner_schedule_store,
         outbox=outbox,
         identity_resolver=identity_resolver,
         integration_store=integration_store,

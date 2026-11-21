@@ -17,9 +17,25 @@ def execute_owner_schedules(arguments, *, context):
     owner = context.task.user
     rows = (context.schedule_store.list_tasks(owner_user_id=owner, status='active', limit=MAX_SCHEDULES + 1)
             + context.schedule_store.list_tasks(owner_user_id=owner, status='paused', limit=MAX_SCHEDULES + 1))
+    owner_store = getattr(context, 'owner_schedule_store', None)
+    owner_ids = set()
+    owner_execution_states = {}
+    if isinstance(owner_store, ScheduledTaskStore):
+        from .owner_schedule_recovery import list_schedule_attention
+        with owner_store._connect() as conn:
+            table = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_owner_schedule_origins'").fetchone()
+            if table:
+                owner_ids = {row[0] for row in conn.execute('SELECT scheduled_task_id FROM v2_owner_schedule_origins WHERE owner_id=?', (owner,))}
+        owner_rows = (owner_store.list_tasks(owner_user_id=owner, status='active', limit=MAX_SCHEDULES + 1)
+                      + owner_store.list_tasks(owner_user_id=owner, status='paused', limit=MAX_SCHEDULES + 1)
+                      + owner_store.list_tasks(owner_user_id=owner, status='failed', limit=MAX_SCHEDULES + 1))
+        owner_execution_states = list_schedule_attention(owner_store, owner)
+        rows = [row for row in rows if row.scheduled_task_id not in owner_ids]
+        rows += [row for row in owner_rows if row.scheduled_task_id in owner_ids]
     if context.task.user != owner or context.cancellation_checker() is not False:
         raise ValueError('owner_schedules_unavailable')
-    with context.schedule_store._connect() as conn:
+    reminder_store = owner_store if isinstance(owner_store, ScheduledTaskStore) else context.schedule_store
+    with reminder_store._connect() as conn:
         table = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='owner_desktop_reminders'").fetchone()
         reminders = conn.execute("SELECT id,message,due_at,state FROM owner_desktop_reminders WHERE owner_id=? AND state IN ('pending','offered') ORDER BY due_at,id LIMIT 101", (owner,)).fetchall() if table else []
     if context.task.user != owner or context.cancellation_checker() is not False:
@@ -35,7 +51,9 @@ def execute_owner_schedules(arguments, *, context):
                               for row in reminders], 'schedules': [
         {'id': row.scheduled_task_id, 'name': row.name, 'description': row.description,
          'prompt': row.prompt, 'project_id': row.project_id, 'schedule': schedule_summary(row.schedule),
-         'timezone': row.timezone, 'next_run_at': row.next_run_at, 'status': row.status}
+         'timezone': row.timezone, 'next_run_at': row.next_run_at, 'status': row.status,
+         **({'execution': 'owner_worker', 'execution_state': owner_execution_states.get(row.scheduled_task_id, 'uncertain')}
+            if row.scheduled_task_id in owner_ids else {})}
         for row in rows]}
 
 
@@ -52,7 +70,8 @@ def valid_schedules_observation(actor, arguments, observation, *, context):
 def build_owner_schedules_tool_definition():
     schema = {'type': 'object', 'properties': {}, 'additionalProperties': False}
     return ToolDefinition(descriptor=ToolDescriptor(tool_id=OWNER_SCHEDULES_TOOL_ID, name='owner_schedules',
-        kind=ToolKind.NATIVE, description='List the owner’s active or paused older schedules and new Desktop reminders. '
+        kind=ToolKind.NATIVE, description='List the owner’s new scheduled tasks, active or paused older schedules, and Desktop reminders. '
+        'An uncertain execution needs attention; it does not prove whether any effect happened. '
         'Older schedules are paused; new Desktop reminders appear only while Desktop is open. More than 100 records are unavailable; '
         'this tool cannot create or change schedules.', argument_schema=schema,
         capabilities=('scheduling',), read_only=True), callable=execute_owner_schedules,

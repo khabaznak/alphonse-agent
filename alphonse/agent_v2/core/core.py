@@ -197,6 +197,7 @@ class ToolExecutionContext:
     question_store: Any | None = None
     project_store: Any | None = None
     schedule_store: Any | None = None
+    owner_schedule_store: Any | None = None
     delivery_sink: Callable[[dict[str, Any]], Any] | None = None
     user_context_provider: Callable[[str], str] | None = None
     user_timezone_provider: Callable[[str], str] | None = None
@@ -233,6 +234,8 @@ class CoreLoopContext:
     question_store: Any | None = None
     project_store: Any | None = None
     schedule_store: Any | None = None
+    owner_schedule_store: Any | None = None
+    owner_schedule_creation_enabled: bool = False
     delivery_sink: Callable[[dict[str, Any]], Any] | None = None
     user_context_provider: Callable[[str], str] | None = None
     user_timezone_provider: Callable[[str], str] | None = None
@@ -311,6 +314,7 @@ class CoreLoopContext:
             question_store=self.question_store,
             project_store=self.project_store,
             schedule_store=self.schedule_store,
+            owner_schedule_store=self.owner_schedule_store,
             delivery_sink=self.delivery_sink,
             memory=self.memory,
             conversation_store=self.conversation_store,

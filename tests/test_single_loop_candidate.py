@@ -71,6 +71,74 @@ def test_read_then_grounded_answer_uses_projection_budget_and_real_invocation(fi
     assert any(x['inflight'].startswith('tool-') for x in fixture.snapshots)
 
 
+def test_current_candidate_blocks_native_bash_without_dispatch(fixture):
+    from alphonse.agent_v2.core.tools.registry.native.bash import build_bash_tool_definition
+    bash = build_bash_tool_definition()
+    fixture.registry.register(ToolDefinition(bash.descriptor,
+        lambda *_args, **_kwargs: pytest.fail('unapproved Bash must not execute'),
+        argument_schema=bash.argument_schema, accepts_context=True))
+    host = replace(fixture.host, choose=lambda *_: {
+        'kind': 'tool', 'tool_id': 'native.bash', 'arguments': {'command': 'printf dojo'},
+        'usage': {'input_tokens': 100, 'output_tokens': 20}})
+    result = run_candidate(fixture.state, host)
+    assert (result.status, result.blocker) == ('blocked', 'candidate_requires_read_only_native_tool')
+
+
+def test_disposable_bash_uses_explicit_host_callback_and_observes_failure(fixture):
+    from alphonse.agent_v2.core.tools.registry.native.bash import build_bash_tool_definition
+    bash = build_bash_tool_definition()
+    fixture.registry.register(ToolDefinition(bash.descriptor,
+        lambda *_args, **_kwargs: pytest.fail('host Bash must not execute'), argument_schema=bash.argument_schema))
+    decisions = iter([
+        {'kind': 'tool', 'tool_id': 'native.bash', 'arguments': {'command': 'false'},
+         'usage': {'input_tokens': 100, 'output_tokens': 20}},
+        {'kind': 'answer', 'text': 'The command failed.', 'usage': {'input_tokens': 100, 'output_tokens': 20}},
+    ])
+    calls = []
+    def execute(actor, tool, args):
+        calls.append((actor, tool, args))
+        return {'status': 'success', 'result': {'candidate_complete': True, 'exit_code': 1, 'stdout': '', 'stderr': 'failed'}}
+    host = replace(fixture.host, choose=lambda *_: next(decisions),
+        authorize_disposable_tool=lambda actor, tool, args: actor == 'fixture-user' and tool == 'native.bash',
+        execute_disposable_tool=execute,
+        verify_response=lambda actor, text, refs: text == 'The command failed.' and len(refs) == 1)
+    result = run_candidate(fixture.state, host)
+    assert result.status == 'completed' and result.response == 'The command failed.'
+    assert calls == [('fixture-user', 'native.bash', {'command': 'false'})]
+    assert '"exit_code": 1' in fixture.sources[result.evidence_sources[0]]
+    assert host.budgets.load('task').usage()['charged']['actions'] == 1
+
+
+def test_disposable_bash_exception_preserves_unknown_inflight_and_never_replays(fixture):
+    from alphonse.agent_v2.core.tools.registry.native.bash import build_bash_tool_definition
+    fixture.registry.register(build_bash_tool_definition())
+    calls = []
+    def execute(*_):
+        calls.append('executed')
+        raise RuntimeError('fixture execution unavailable')
+    host = replace(fixture.host, choose=lambda *_: {
+        'kind': 'tool', 'tool_id': 'native.bash', 'arguments': {'command': 'printf dojo'},
+        'usage': {'input_tokens': 100, 'output_tokens': 20}},
+        authorize_disposable_tool=lambda *_: True, execute_disposable_tool=execute)
+    result = run_candidate(fixture.state, host)
+    assert result.blocker == 'candidate_disposable_effect_unconfirmed'
+    assert result.inflight and host.budgets.load('task').usage()['in_flight'] == [result.inflight]
+    restored = CandidateState.restore({**result.snapshot(), 'status': 'running', 'blocker': ''})
+    assert run_candidate(restored, host).blocker == 'candidate_unresolved_inflight'
+    assert calls == ['executed']
+
+
+def test_disposable_bash_denied_before_dispatch(fixture):
+    from alphonse.agent_v2.core.tools.registry.native.bash import build_bash_tool_definition
+    fixture.registry.register(build_bash_tool_definition())
+    host = replace(fixture.host, choose=lambda *_: {
+        'kind': 'tool', 'tool_id': 'native.bash', 'arguments': {'command': 'printf dojo'},
+        'usage': {'input_tokens': 100, 'output_tokens': 20}},
+        authorize_disposable_tool=lambda *_: False,
+        execute_disposable_tool=lambda *_: pytest.fail('denied action executed'))
+    assert run_candidate(fixture.state, host).blocker == 'candidate_read_denied'
+
+
 def test_partial_result_cannot_complete(fixture):
     fixture.registry.register(ToolDefinition(ToolDescriptor('native.read', 'read', ToolKind.NATIVE, read_only=True),
                                              lambda args: {'candidate_complete': False, 'value': '42'}))
@@ -408,7 +476,8 @@ def test_cancellation_prevents_format_repair_call(fixture):
 def test_older_candidate_snapshots_restore_without_format_retries():
     snapshot = CandidateState('task', 'actor', 'goal').snapshot()
     for version in (1, 2, 3):
-        old = {key: value for key, value in snapshot.items() if key != 'answer_review_state'}
+        old = {key: value for key, value in snapshot.items()
+               if key not in {'answer_review_state', 'prerequisite_feedback', 'prerequisite_retries'}}
         if version < 3:
             old.pop('invalid_decision_retries')
             old.pop('decision_format_pending')
@@ -628,13 +697,35 @@ def test_changed_evidence_during_answer_verification_prevents_completion(fixture
     assert result.blocker == 'candidate_evidence_changed_or_revoked'
 
 
-def test_model_output_overrun_cannot_complete(fixture):
+def test_model_output_over_forecast_can_complete_within_task_budget(fixture):
     host = replace(fixture.host, choose=lambda _, cap: {'kind': 'answer', 'text': 'unsupported',
         'usage': {'input_tokens': 10, 'output_tokens': cap + 1}}, verify_response=lambda *args: True)
     result = run_candidate(fixture.state, host)
-    assert result.status == 'blocked'
-    assert result.blocker == 'candidate_model_usage_unknown_or_overrun'
+    assert result.status == 'completed'
     assert host.budgets.load('task').usage()['charged']['output_tokens'] == host.output_reservation + 1
+
+
+def test_model_input_over_forecast_is_accounted_and_tool_can_run_within_budget(fixture):
+    decisions = iter([
+        {'kind': 'tool', 'tool_id': 'native.read', 'arguments': {'key': 'x'},
+         'usage': {'input_tokens': fixture.host.input_reservation + 1, 'output_tokens': 10}},
+        {'kind': 'answer', 'text': 'The value is 42.', 'usage': {'input_tokens': 10, 'output_tokens': 10}},
+    ])
+    host = replace(fixture.host, choose=lambda *_: next(decisions))
+    result = run_candidate(fixture.state, host)
+    usage = host.budgets.load('task').usage()
+    assert result.status == 'completed'
+    assert usage['charged']['input_tokens'] == host.input_reservation + 11
+    assert usage['unknown_usage'] == [] and fixture.calls == [{'key': 'x'}]
+
+
+def test_model_actual_usage_over_work_budget_never_dispatches_tool(fixture):
+    host = replace(fixture.host, choose=lambda *_: {'kind': 'tool', 'tool_id': 'native.read',
+        'arguments': {'key': 'x'}, 'usage': {'input_tokens': 2901, 'output_tokens': 10}})
+    result = run_candidate(fixture.state, host)
+    assert result.status == 'blocked' and result.blocker == 'candidate_model_usage_overrun'
+    assert host.budgets.load('task').usage()['charged']['input_tokens'] == 2901
+    assert fixture.calls == []
 
 
 def test_projection_larger_than_reservation_never_calls_model(fixture):

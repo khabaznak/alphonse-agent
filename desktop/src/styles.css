@@ -1713,6 +1713,7 @@ button.mockup-skill-card > p { flex: 1; }
 /* A due reminder is an overlay, so the conversation keeps its full workspace. */
 .owner-reminder-alert { position: fixed; z-index: 100; right: 24px; bottom: 24px; max-width: min(400px, calc(100vw - 48px)); padding: 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-raised); box-shadow: 0 8px 24px var(--shadow); color: var(--text); }
 .owner-reminder-alert button { margin-left: 12px; }
+.owner-scheduled-results { max-height: 50vh; overflow-y: auto; }
 .attention-recovery { display: grid; gap: 12px; }
 .attention-recovery h2 { margin: 0; font-size: 17px; }
 .attention-recovery p { margin: 0; }

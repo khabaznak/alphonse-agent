@@ -22,12 +22,14 @@ import { onAction } from "@tauri-apps/plugin-notification";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { daemonRequest, ensureDaemon, playAlertSound, showInFinder, stopDaemon } from "./api";
+import { TrustedLocalBashSettings } from "./TrustedLocalBashSettings";
 import { legacyNotificationReviewMessage, OwnerConversation, ownerAcceptedAt, ownerBusyFor, ownerUnavailableMessage, type OwnerCapability } from "./ownerConversation";
 import { abandonOwnerRequest, listOwnerRecovery, type OwnerRecoveryItem } from "./ownerRecovery";
 import { OwnerRecovery } from "./OwnerRecoveryPanel";
 import { LegacyStateInventory } from "./LegacyStateInventory";
 import { LegacyNotificationReview } from "./LegacyNotificationReview";
 import { OwnerReminders } from "./OwnerReminders";
+import { OwnerScheduledResults } from "./OwnerScheduledResults";
 import { LegacyMigrationPreview } from "./LegacyMigrationPreview";
 import { OwnerQuestionSelector } from "./OwnerQuestionSelector";
 import { listOwnerQuestions, type OwnerQuestion } from "./ownerQuestions";
@@ -446,12 +448,12 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       if (ownerConversation) {
         try {
           let sawQuestion = false;
-          const acknowledgementRecovered = await ownerConversation.poll((messageId, answer, kind) => {
+          const acknowledgementRecovered = await ownerConversation.poll((messageId, answer, kind, committedEffect) => {
             appendMessage({
               // Match the daemon's durable outbound:owner:<message_id> source
               // identity so a later history refresh does not duplicate it.
               id: `owner:${messageId}`, role: "assistant", content: answer,
-              created_at: new Date().toISOString(), project_id: "",
+              created_at: new Date().toISOString(), project_id: "", committed_effect: committedEffect,
             });
             sawQuestion = kind === "question";
             setOwnerClarificationNotice(kind === "question"
@@ -806,6 +808,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
         <div className="shell-toolbar"><div className="workspace-breadcrumb"><span>Personal view</span><ChevronRight aria-hidden="true" /><strong>{workspace === "settings" ? "Settings" : workspace === "projects" ? "Projects & Tasks" : workspace === "household" ? "Household" : workspace === "agenda" ? "Agenda" : workspace === "attention" ? "Needs your attention" : "Conversation"}</strong></div><button ref={drawerToggleRef} aria-label="Toggle At hand" aria-controls="at-hand" aria-expanded={atHandOpen} disabled={!user} onClick={() => changeDrawer({ type: "visibility", open: !atHandOpen })}>{atHandOpen ? <PanelRightClose /> : <PanelRightOpen />} At hand</button></div>
         {widgetItem?.member === user && (workspace === "agenda" && ["appointments", "reminders"].includes(widgetItem.family) || workspace === "projects" && ["todos", "shopping"].includes(widgetItem.family)) && <section className="card widget-item-detail" aria-label="Widget item details"><button onClick={() => setWidgetItem(undefined)}>Close item</button><h2>Selected item</h2>{selectedWidgetData && selectedWidgetItem ? <CoordinationList data={{ ...selectedWidgetData, items: [selectedWidgetItem] }} timezone={timezone} onAgenda={() => navigate("agenda")} onWork={() => navigate("projects")} onRequest={(draft) => { setPrompt((current) => appendWidgetDraft(current, draft)); navigate("conversation"); }} /> : <p role="status">Item unavailable. Refresh the source or check access.</p>}</section>}
         <OwnerReminders key={user} request={daemonRequest} active={isAdmin && connected} ownerId={user} managementTarget={reminderRecoveryTarget} onAttentionChange={setReminderNeedsAttention} />
+        <OwnerScheduledResults key={`scheduled:${user}`} request={daemonRequest} active={isAdmin && connected} onPresented={appendMessage} />
         <section className="workspace-panel" tabIndex={-1} aria-label="Conversation workspace" hidden={workspace !== "conversation"}>
         <section className="conversation">
         <header className="topbar">
@@ -953,6 +956,7 @@ function SettingsWorkspace({ isAdmin, user, initialTab, workspaceRequired, enter
     </div>}
     {visitedSections.has("appearance") && <div hidden={tab !== "appearance"}><AppearanceSettingsSection value={desktopStyle} onChange={onDesktopStyleChange} mascotMotion={mascotMotion} onMascotMotionChange={onMascotMotionChange} onSkills={isAdmin ? () => onNavigate("skills") : undefined} onWidgets={onWidgets} /></div>}
     {visitedSections.has("tools") && isAdmin && <div hidden={tab !== "tools"} className="tools-settings">
+      <TrustedLocalBashSettings />
       <CodeModeSettingsSection user={user} />
       <section className="setting-group">
         <div className="setting-group-heading"><h3>Web Tools</h3><p>Run SearXNG separately in Docker with JSON output enabled. Alphonse connects to it; it does not manage Docker.</p></div>

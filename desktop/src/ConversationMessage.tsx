@@ -25,6 +25,10 @@ export function ConversationMessage({ message, timezone, projectName = "", rende
     {message.source && !["desktop", "ledger"].includes(message.source) && <small className="message-source" title={`Sent from ${message.source}`}>↗ {sourceLabel(message.source)}</small>}
     {message.project_id && <small className="message-project-association" title="Task project context">Project · {projectName || message.project_id}</small>}
     {message.role === "assistant" && renderMarkdown ? <div className="message-markdown"><ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={MARKDOWN_COMPONENTS}>{message.content}</ReactMarkdown></div> : message.content}
+    {message.committed_effect?.kind === "scheduled_task_cancelled" && <aside aria-label="Verified cancellation">
+      Scheduled task cancelled: {message.committed_effect.name}.
+      {message.committed_effect.execution_may_have_started && " The task may already have started."}
+    </aside>}
     {timestamp && <time className="message-timestamp" dateTime={message.created_at} title={timestamp.tooltip}>{timestamp.visible}</time>}
   </article>;
 }

@@ -1,0 +1,1 @@
+{"answer": "Mérida.", "expected_location_mentioned": false, "limitations": ["Synthetic prior turns; no live weather or Desktop UI.", "A location match alone does not prove the answer is correct.", "Provider behavior outside this fixture is not assessed."], "passed": null, "response_semantics": "requires_manual_review", "status": "ready"}

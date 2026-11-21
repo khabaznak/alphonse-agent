@@ -4,7 +4,7 @@ import os
 import threading
 import tempfile
 from types import SimpleNamespace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -61,6 +61,33 @@ def reserve_selected_tool(atomic, start, tool_id, arguments):
         amounts={'actions': 1, 'model_calls': 0, 'input_tokens': 0, 'output_tokens': 0}, now_ms=101,
         tool_id=tool_id, arguments=arguments, selected_decision=decision, projection_fingerprint=projection)
 
+
+def test_disposable_bash_observation_requires_same_live_session(setup):
+    from alphonse.agent_v2.evaluation.dojo_bash import DojoBash
+    from alphonse.agent_v2.core.intelligence.simple_loop.owner_read_recovery import OwnerRecoveryUnavailable, restore_owner_read_observations
+    _, _, _, queue, acquired, task, _, atomic = setup
+    start = atomic.initialize(CandidateState(task.task_id, task.user, 'goal'), make_budget())
+    args = {'command': 'printf fixture'}
+    reserved = reserve_selected_tool(atomic, start, 'native.bash', args)
+    ctx = CoreLoopContext(messages=queue, claim_receipt=acquired.claim_receipt,
+        conversation_store=SQLiteConversationStore(queue.db_path), cancellation_checker=lambda: False)
+    shell = object.__new__(DojoBash)
+    shell._active = True
+    ctx._dojo_bash_service = shell
+    ctx._dojo_bash_session = 'a' * 32
+    observation = {'candidate_complete': True, 'status': 'completed', 'exit_code': 0,
+        'stdout': 'fixture', 'stderr': '', 'truncated': False, 'cleanup_verified': None, 'duration_ms': 1}
+    with pytest.raises(ValueError, match='owner_atomic_dojo_bash_invalid'):
+        atomic.settle_dojo_bash(expected_version=reserved.version, reservation_id='read-1', arguments=args,
+            evidence_ref='e1', observation=observation, session_id='b' * 32, context=ctx)
+    result = atomic.settle_dojo_bash(expected_version=reserved.version, reservation_id='read-1', arguments=args,
+        evidence_ref='e1', observation=observation, session_id='a' * 32, context=ctx)
+    checkpoint, bindings = restore_owner_read_observations(atomic, ctx, expected_version=result.version)
+    assert checkpoint.state.inflight == '' and bindings['e1']['observation'] == observation
+    shell._active = False
+    with pytest.raises(OwnerRecoveryUnavailable):
+        restore_owner_read_observations(atomic, ctx, expected_version=result.version)
+
 def test_reservation_and_observation_are_atomic_and_reloadable(setup):
     _, _, _, _, _, task, _, atomic = setup
     start = atomic.initialize(CandidateState(task.task_id, task.user, 'goal'), make_budget())
@@ -82,6 +109,300 @@ def test_reservation_and_observation_are_atomic_and_reloadable(setup):
                                  'observation_sha256': observation_digest({'text': 'x'})}
 
 
+def test_bash_return_is_unreconciled_and_cannot_be_settled_as_read(setup):
+    _, _, _, queue, acquired, task, store, atomic = setup
+    start = atomic.initialize(CandidateState(task.task_id, task.user, 'goal'), make_budget())
+    args = {'command': 'printf synthetic'}
+    reserved = reserve_selected_tool(atomic, start, 'native.bash', args)
+    with pytest.raises(ValueError, match='owner_atomic_shell_not_read'):
+        atomic.settle_read(expected_version=reserved.version, reservation_id='read-1', tool_id='native.bash',
+                           arguments=args, evidence_ref='e1', observation={'exit_code': 0})
+    recorded = atomic.record_bash_return(expected_version=reserved.version, reservation_id='read-1',
+        arguments=args, exit_code=0, timed_out=False, cancelled=False,
+        stdout='synthetic-private-output', stderr='')
+    # This is caller-reported process evidence, not proof of completion or effect.
+    with queue._connect() as conn:
+        raw = json.loads(conn.execute('SELECT task_state_json FROM v2_task_checkpoints WHERE task_id=?',
+                                      (task.task_id,)).fetchone()[0])
+    assert 'synthetic-private-output' not in json.dumps(raw)
+    marker = raw['metadata']['owner_bash_return_unreconciled']
+    assert marker['effect_status'] == 'unverified' and marker['exit_code'] == 0
+    assert marker['stdout_bytes'] == len('synthetic-private-output')
+    restored_atomic = OwnerAtomicCheckpoint(queue, store, task, acquired.claim_receipt,
+                                             clock=lambda: datetime.now(timezone.utc))
+    saved, observations = restored_atomic.load(expected_version=recorded.version)
+    assert saved.state.inflight == 'read-1' and saved.budget.usage()['in_flight'] == ['read-1']
+    assert observations == {}
+    future = lambda: datetime.now(timezone.utc) + timedelta(days=1)
+    assert queue.can_abandon_trusted_owner_message(task.message_id, clock=future) is False
+    with pytest.raises(ValueError, match='owner_abandon_unavailable'):
+        queue.abandon_trusted_owner_message(task.message_id, clock=future)
+    with pytest.raises(CheckpointConflict, match='owner_atomic_inflight_requires_reconciliation'):
+        restored_atomic.reserve(expected_version=recorded.version, reservation_id='another', kind='model',
+            amounts={'actions': 0, 'model_calls': 1, 'input_tokens': 100, 'output_tokens': 50}, now_ms=102)
+    with pytest.raises(CheckpointConflict, match='owner_atomic_bash_return_unavailable'):
+        restored_atomic.record_bash_return(expected_version=recorded.version, reservation_id='read-1',
+            arguments=args, exit_code=0, timed_out=False, cancelled=False, stdout='different', stderr='')
+
+
+def test_staged_host_bash_executes_once_and_keeps_effect_unverified(setup):
+    from alphonse.agent_v2.core.intelligence.simple_loop.owner_host_bash import dispatch_owner_host_bash
+    root, _, owner, queue, acquired, task, store, atomic = setup
+    start = atomic.initialize(CandidateState(task.task_id, owner.user_id, 'goal'), make_budget())
+    args = {'command': 'printf x >> result.txt; cat result.txt', 'cwd': str(root)}
+    reserve_selected_tool(atomic, start, 'native.bash', args)
+    context = CoreLoopContext(messages=queue, claim_receipt=acquired.claim_receipt,
+                              cancellation_checker=lambda: False)
+    authorize = lambda actor, task_id, command: (actor == owner.user_id and task_id == task.task_id and command == args)
+    result = dispatch_owner_host_bash(atomic=atomic, context=context, arguments=args,
+                                      reservation_id='read-1', authorize=authorize)
+    assert result == {'exit_code': 0, 'stdout': 'x', 'stderr': '', 'timed_out': False,
+                      'cancelled': False, 'effect_status': 'unverified'}
+    assert (root / 'result.txt').read_text() == 'x'
+    saved, observations = atomic.load(expected_version=atomic.version)
+    assert saved.state.inflight == 'read-1' and observations == {}
+    with pytest.raises(CheckpointConflict, match='owner_atomic_bash_dispatch_unavailable'):
+        dispatch_owner_host_bash(atomic=atomic, context=context, arguments=args,
+                                 reservation_id='read-1', authorize=authorize)
+    assert (root / 'result.txt').read_text() == 'x'
+    # A replacement object cannot replay the already-reserved action either.
+    replacement = OwnerAtomicCheckpoint(queue, store, task, acquired.claim_receipt,
+                                        clock=lambda: datetime.now(timezone.utc))
+    replacement.version = atomic.version
+    with pytest.raises(CheckpointConflict, match='owner_atomic_bash_dispatch_unavailable'):
+        dispatch_owner_host_bash(atomic=replacement, context=context, arguments=args,
+                                 reservation_id='read-1', authorize=authorize)
+    assert (root / 'result.txt').read_text() == 'x'
+    with pytest.raises(CheckpointConflict, match='owner_atomic_bash_read_unavailable'):
+        atomic.settle_host_bash_return(expected_version=atomic.version, reservation_id='read-1',
+            arguments=args, evidence_ref='host-output', authorize=lambda *_: False,
+            cancellation_checker=lambda: False)
+    settled = atomic.settle_host_bash_return(expected_version=atomic.version, reservation_id='read-1',
+        arguments=args, evidence_ref='host-output', authorize=authorize, cancellation_checker=lambda: False)
+    saved, observations = atomic.load(expected_version=settled.version)
+    assert saved.state.inflight == '' and saved.state.evidence_sources == ['host-output']
+    assert observations['host-output']['host_bash_observation']['stdout'] == 'x'
+    assert observations['host-output']['host_bash_observation']['effect_status'] == 'unverified'
+    with queue._connect() as conn:
+        raw = json.loads(conn.execute('SELECT task_state_json FROM v2_task_checkpoints WHERE task_id=?',
+                                      (task.task_id,)).fetchone()[0])
+    assert raw['metadata']['owner_host_bash_history'][0]['effect_status'] == 'unverified'
+    from alphonse.agent_v2.core.intelligence.simple_loop.owner_host_bash import valid_host_binding
+    context._owner_host_bash_enabled = True
+    binding = observations['host-output']
+    assert valid_host_binding(atomic, context, binding, raw['metadata']['owner_host_bash_history'])
+    altered = dict(binding)
+    altered['host_bash_observation'] = {**binding['host_bash_observation'], 'stdout': 'invented'}
+    assert not valid_host_binding(atomic, context, altered, raw['metadata']['owner_host_bash_history'])
+    context._owner_host_bash_enabled = False
+    assert not valid_host_binding(atomic, context, binding, raw['metadata']['owner_host_bash_history'])
+    assert queue.can_abandon_trusted_owner_message(task.message_id,
+        clock=lambda: datetime.now(timezone.utc) + timedelta(days=1)) is False
+
+
+def test_staged_host_bash_refuses_denial_and_never_replays_uncertain_dispatch(setup, monkeypatch):
+    from alphonse.agent_v2.core.intelligence.simple_loop import owner_host_bash
+    root, _, owner, queue, acquired, task, _, atomic = setup
+    start = atomic.initialize(CandidateState(task.task_id, owner.user_id, 'goal'), make_budget())
+    args = {'command': 'printf x > result.txt', 'cwd': str(root)}
+    reserve_selected_tool(atomic, start, 'native.bash', args)
+    context = CoreLoopContext(messages=queue, claim_receipt=acquired.claim_receipt,
+                              cancellation_checker=lambda: False)
+    with pytest.raises(PermissionError, match='owner_host_bash_unavailable'):
+        owner_host_bash.dispatch_owner_host_bash(atomic=atomic, context=context, arguments=args,
+            reservation_id='read-1', authorize=lambda *_: False)
+    assert not (root / 'result.txt').exists()
+    def uncertain(*_args, **_kwargs):
+        raise RuntimeError('synthetic dispatch interruption')
+    monkeypatch.setattr(owner_host_bash, 'execute_bash', uncertain)
+    with pytest.raises(RuntimeError, match='synthetic dispatch interruption'):
+        owner_host_bash.dispatch_owner_host_bash(atomic=atomic, context=context, arguments=args,
+            reservation_id='read-1', authorize=lambda *_: True)
+    with pytest.raises(CheckpointConflict, match='owner_atomic_bash_dispatch_unavailable'):
+        owner_host_bash.dispatch_owner_host_bash(atomic=atomic, context=context, arguments=args,
+            reservation_id='read-1', authorize=lambda *_: True)
+    assert not (root / 'result.txt').exists()
+
+
+def test_bash_return_rejects_different_action_and_stale_claim(setup):
+    _, _, _, queue, acquired, task, store, atomic = setup
+    start = atomic.initialize(CandidateState(task.task_id, task.user, 'goal'), make_budget())
+    args = {'command': 'printf synthetic'}
+    reserved = reserve_selected_tool(atomic, start, 'native.bash', args)
+    with pytest.raises(CheckpointConflict, match='owner_atomic_bash_return_unavailable'):
+        atomic.record_bash_return(expected_version=reserved.version, reservation_id='read-1',
+            arguments={'command': 'different'}, exit_code=0, timed_out=False, cancelled=False, stdout='', stderr='')
+    with queue._connect() as conn:
+        conn.execute("UPDATE v2_inbound_messages SET status='pending', lease_owner='', lease_expires_at='' WHERE message_id=?", (task.message_id,))
+    replacement = queue.claim_next(lease_owner='replacement')
+    assert replacement.claim_receipt.claim_generation != acquired.claim_receipt.claim_generation
+    new_worker = OwnerAtomicCheckpoint(queue, store, task, replacement.claim_receipt,
+                                       clock=lambda: datetime.now(timezone.utc))
+    with pytest.raises(CheckpointConflict, match='owner_atomic_bash_return_unavailable'):
+        new_worker.record_bash_return(expected_version=reserved.version, reservation_id='read-1',
+            arguments=args, exit_code=0, timed_out=False, cancelled=False, stdout='', stderr='')
+
+
+def test_redacted_bash_return_requires_live_claim_action_and_authorization(setup):
+    from alphonse.agent_v2.skill_bindings import ExecutionBindings
+    from alphonse.agent_v2.core.messages.claim_fence import ClaimSuperseded
+    _, _, _, queue, acquired, task, store, atomic = setup
+    start = atomic.initialize(CandidateState(task.task_id, task.user, 'goal'), make_budget())
+    args = {'command': 'synthetic'}
+    reserved = reserve_selected_tool(atomic, start, 'native.bash', args)
+    secret = 'fixture-secret-123'
+    recorded = atomic.record_bash_return(expected_version=reserved.version, reservation_id='read-1',
+        arguments=args, exit_code=0, timed_out=False, cancelled=False,
+        stdout='owner output ' + secret, stderr='diagnostic ' + secret,
+        output_bindings=ExecutionBindings({}, (secret,)))
+    with queue._connect() as conn:
+        raw = conn.execute('SELECT task_state_json FROM v2_task_checkpoints WHERE task_id=?', (task.task_id,)).fetchone()[0]
+    assert secret not in raw
+    authorize = lambda actor, task_id, action: actor == task.user and task_id == task.task_id and action == args
+    read_args = dict(expected_version=recorded.version, reservation_id='read-1', arguments=args,
+                     authorize=authorize, cancellation_checker=lambda: False)
+    result = atomic.read_bash_return(**read_args)
+    assert result == {'exit_code': 0, 'timed_out': False, 'cancelled': False,
+                      'effect_status': 'unverified', 'stdout': 'owner output [REDACTED]',
+                      'stderr': 'diagnostic [REDACTED]'}
+    saved, _ = atomic.load(expected_version=recorded.version)
+    assert saved.state.inflight == 'read-1' and saved.budget.usage()['in_flight'] == ['read-1']
+    for overrides in ({'authorize': lambda *_: False}, {'cancellation_checker': lambda: True},
+                      {'arguments': {'command': 'other'}}, {'reservation_id': 'other'},
+                      {'expected_version': reserved.version}):
+        with pytest.raises((CheckpointConflict, ValueError)):
+            atomic.read_bash_return(**{**read_args, **overrides})
+    expired = OwnerAtomicCheckpoint(queue, store, task, acquired.claim_receipt,
+                                    clock=lambda: datetime.now(timezone.utc) + timedelta(days=1))
+    with pytest.raises(ClaimSuperseded):
+        expired.read_bash_return(**read_args)
+
+
+def test_redacted_bash_return_denies_inactive_actor_and_replaced_claim(setup):
+    from alphonse.agent_v2.skill_bindings import ExecutionBindings
+    from alphonse.agent_v2.core.messages.claim_fence import ClaimFenceUnavailable, ClaimSuperseded
+    _, users, owner, queue, acquired, task, store, atomic = setup
+    start = atomic.initialize(CandidateState(task.task_id, task.user, 'goal'), make_budget())
+    args = {'command': 'fixture'}
+    reserved = reserve_selected_tool(atomic, start, 'native.bash', args)
+    recorded = atomic.record_bash_return(expected_version=reserved.version, reservation_id='read-1',
+        arguments=args, exit_code=0, timed_out=False, cancelled=False, stdout='private', stderr='',
+        output_bindings=ExecutionBindings({}, ()))
+    read_args = dict(expected_version=recorded.version, reservation_id='read-1', arguments=args,
+                     authorize=lambda *_: True, cancellation_checker=lambda: False)
+    with queue._connect() as conn:
+        conn.execute('UPDATE v2_users SET is_active=0 WHERE user_id=?', (owner.user_id,))
+    with pytest.raises(ClaimFenceUnavailable):
+        atomic.read_bash_return(**read_args)
+    with queue._connect() as conn:
+        conn.execute('UPDATE v2_users SET is_active=1 WHERE user_id=?', (owner.user_id,))
+        conn.execute("UPDATE v2_inbound_messages SET status='pending', lease_owner='', lease_expires_at='' WHERE message_id=?", (task.message_id,))
+    replacement = queue.claim_next(lease_owner='replacement')
+    with pytest.raises(ClaimSuperseded):
+        atomic.read_bash_return(**read_args)
+    new_worker = OwnerAtomicCheckpoint(queue, store, task, replacement.claim_receipt,
+                                       clock=lambda: datetime.now(timezone.utc))
+    with pytest.raises(CheckpointConflict, match='owner_atomic_bash_read_unavailable'):
+        new_worker.read_bash_return(**read_args)
+
+
+def test_bash_output_read_refuses_tampering_and_revoked_access(setup):
+    from alphonse.agent_v2.skill_bindings import ExecutionBindings
+    _, _, _, queue, _, task, _, atomic = setup
+    start = atomic.initialize(CandidateState(task.task_id, task.user, 'goal'), make_budget())
+    args = {'command': 'fixture'}
+    reserved = reserve_selected_tool(atomic, start, 'native.bash', args)
+    recorded = atomic.record_bash_return(expected_version=reserved.version, reservation_id='read-1',
+        arguments=args, exit_code=1, timed_out=False, cancelled=False, stdout='partial', stderr='failure',
+        output_bindings=ExecutionBindings({}, ()))
+    calls = []
+    def revoked_after_read(*_):
+        calls.append(1)
+        return len(calls) < 2
+    with pytest.raises(CheckpointConflict, match='owner_atomic_bash_read_unavailable'):
+        atomic.read_bash_return(expected_version=recorded.version, reservation_id='read-1', arguments=args,
+                                authorize=revoked_after_read, cancellation_checker=lambda: False)
+    with queue._connect() as conn:
+        row = conn.execute('SELECT task_state_json FROM v2_task_checkpoints WHERE task_id=?', (task.task_id,)).fetchone()
+        raw = json.loads(row[0])
+        raw['metadata']['owner_bash_return_unreconciled']['redacted_output']['stdout'] = 'tampered'
+        conn.execute('UPDATE v2_task_checkpoints SET task_state_json=? WHERE task_id=?', (json.dumps(raw), task.task_id))
+    with pytest.raises(CheckpointConflict, match='owner_atomic_bash_read_unavailable'):
+        atomic.read_bash_return(expected_version=recorded.version, reservation_id='read-1', arguments=args,
+                                authorize=lambda *_: True, cancellation_checker=lambda: False)
+
+
+@pytest.mark.parametrize('change', ['actor', 'receipt'])
+def test_bash_output_read_rechecks_claim_and_receipt_after_authorization_io(setup, change):
+    from alphonse.agent_v2.skill_bindings import ExecutionBindings
+    from alphonse.agent_v2.core.messages.claim_fence import ClaimFenceUnavailable
+    _, _, owner, queue, _, task, _, atomic = setup
+    start = atomic.initialize(CandidateState(task.task_id, task.user, 'goal'), make_budget())
+    args = {'command': 'fixture'}
+    reserved = reserve_selected_tool(atomic, start, 'native.bash', args)
+    recorded = atomic.record_bash_return(expected_version=reserved.version, reservation_id='read-1',
+        arguments=args, exit_code=0, timed_out=False, cancelled=False, stdout='private', stderr='',
+        output_bindings=ExecutionBindings({}, ()))
+    calls = []
+    def authorize(*_):
+        calls.append(1)
+        if len(calls) == 2:
+            with queue._connect() as conn:
+                if change == 'actor':
+                    conn.execute('UPDATE v2_users SET is_active=0 WHERE user_id=?', (owner.user_id,))
+                else:
+                    row = conn.execute('SELECT task_state_json FROM v2_task_checkpoints WHERE task_id=?', (task.task_id,)).fetchone()
+                    raw = json.loads(row[0])
+                    raw['metadata']['owner_bash_return_unreconciled']['exit_code'] = 9
+                    conn.execute('UPDATE v2_task_checkpoints SET task_state_json=? WHERE task_id=?', (json.dumps(raw), task.task_id))
+        return True
+    with pytest.raises((CheckpointConflict, ClaimFenceUnavailable)):
+        atomic.read_bash_return(expected_version=recorded.version, reservation_id='read-1', arguments=args,
+                                authorize=authorize, cancellation_checker=lambda: False)
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize(('exit_code', 'timed_out', 'cancelled'), [(1, False, False), (-1, True, False), (-1, False, True)])
+def test_bash_failure_or_interruption_never_settles_an_effect(setup, exit_code, timed_out, cancelled):
+    _, _, _, _, _, task, _, atomic = setup
+    start = atomic.initialize(CandidateState(task.task_id, task.user, 'goal'), make_budget())
+    args = {'command': 'fixture'}
+    reserved = reserve_selected_tool(atomic, start, 'native.bash', args)
+    result = atomic.record_bash_return(expected_version=reserved.version, reservation_id='read-1',
+        arguments=args, exit_code=exit_code, timed_out=timed_out, cancelled=cancelled, stdout='', stderr='')
+    saved, _ = atomic.load(expected_version=result.version)
+    assert saved.state.inflight == 'read-1' and saved.budget.usage()['in_flight'] == ['read-1']
+
+
+@pytest.mark.parametrize(('exit_code', 'timed_out', 'cancelled'), [(0, True, False), (0, False, True), (-1, True, True)])
+def test_bash_return_rejects_contradictory_exit_status(setup, exit_code, timed_out, cancelled):
+    _, _, _, _, _, task, _, atomic = setup
+    start = atomic.initialize(CandidateState(task.task_id, task.user, 'goal'), make_budget())
+    args = {'command': 'fixture'}
+    reserved = reserve_selected_tool(atomic, start, 'native.bash', args)
+    with pytest.raises(ValueError, match='owner_atomic_bash_return_invalid'):
+        atomic.record_bash_return(expected_version=reserved.version, reservation_id='read-1',
+            arguments=args, exit_code=exit_code, timed_out=timed_out, cancelled=cancelled, stdout='', stderr='')
+    saved, _ = atomic.load(expected_version=reserved.version)
+    assert saved.state.inflight == 'read-1'
+
+
+def test_bash_return_accepts_bounded_multibyte_output_without_persisting_it(setup):
+    _, _, _, queue, _, task, _, atomic = setup
+    start = atomic.initialize(CandidateState(task.task_id, task.user, 'goal'), make_budget())
+    args = {'command': 'fixture'}
+    reserved = reserve_selected_tool(atomic, start, 'native.bash', args)
+    output = '水' * 12000 + '\n... [truncated]'
+    recorded = atomic.record_bash_return(expected_version=reserved.version, reservation_id='read-1',
+        arguments=args, exit_code=0, timed_out=False, cancelled=False, stdout=output, stderr='')
+    with queue._connect() as conn:
+        raw = conn.execute('SELECT task_state_json FROM v2_task_checkpoints WHERE task_id=?', (task.task_id,)).fetchone()[0]
+    assert output not in raw
+    assert json.loads(raw)['metadata']['owner_bash_return_unreconciled']['stdout_bytes'] == len(output.encode())
+    saved, _ = atomic.load(expected_version=recorded.version)
+    assert saved.state.inflight == 'read-1'
+
+
 def test_replacement_claim_cannot_settle_prior_reservation(setup):
     _, _, _, queue, acquired, task, store, atomic = setup
     start = atomic.initialize(CandidateState(task.task_id, task.user, 'goal'), make_budget())
@@ -99,17 +420,43 @@ def test_replacement_claim_cannot_settle_prior_reservation(setup):
     assert loaded.state.inflight == 'm1'
 
 
-def test_overrun_cannot_start_another_action(setup):
+@pytest.mark.parametrize('actual,allowed', [(101, True), (901, False)])
+def test_actual_usage_controls_atomic_tool_dispatch(setup, actual, allowed):
     _, _, _, _, _, task, _, atomic = setup
     start = atomic.initialize(CandidateState(task.task_id, task.user, 'goal'), make_budget())
     reserved = atomic.reserve(expected_version=start.version, reservation_id='m1', kind='model',
         amounts={'actions': 0, 'model_calls': 1, 'input_tokens': 100, 'output_tokens': 50}, now_ms=101)
+    decision = {'kind': 'tool', 'tool_id': 'native.read_memory_source',
+                'arguments': {'source_id': 'conversation:fixture'}}
     settled = atomic.settle_model(expected_version=reserved.version, reservation_id='m1', outcome='success',
-                                  input_tokens=101, output_tokens=1)
-    with pytest.raises(CheckpointConflict, match='owner_atomic_model_reservation_overrun'):
+                                  input_tokens=actual, output_tokens=1, decision=decision,
+                                  projection_fingerprint='a' * 64)
+    def reserve():
         atomic.reserve(expected_version=settled.version, reservation_id='read', kind='tool',
             amounts={'actions': 1, 'model_calls': 0, 'input_tokens': 0, 'output_tokens': 0}, now_ms=102,
-            tool_id='native.read_memory_source', arguments={'source_id': 'conversation:fixture'})
+            tool_id='native.read_memory_source', arguments=decision['arguments'],
+            selected_decision=decision, projection_fingerprint='a' * 64)
+    if allowed:
+        reserve()
+    else:
+        with pytest.raises(BudgetExhausted, match='input_tokens'):
+            reserve()
+
+
+@pytest.mark.parametrize('actual', [None, 901])
+def test_atomic_answer_cannot_complete_with_unknown_or_exhausted_budget(setup, actual):
+    _, _, _, _, _, task, _, atomic = setup
+    start = atomic.initialize(CandidateState(task.task_id, task.user, 'goal'), make_budget())
+    pending = atomic.reserve(expected_version=start.version, reservation_id='m1', kind='model',
+        amounts={'actions': 0, 'model_calls': 1, 'input_tokens': 100, 'output_tokens': 50}, now_ms=101)
+    decision = {'kind': 'answer', 'text': 'A synthetic answer.'}
+    settled = atomic.settle_model(expected_version=pending.version, reservation_id='m1', outcome='success',
+        input_tokens=actual, output_tokens=1, decision=decision, projection_fingerprint='a' * 64)
+    settled.state.status = 'completed'
+    settled.state.response = decision['text']
+    with pytest.raises(CheckpointConflict, match='owner_atomic_model_budget_unavailable'):
+        atomic.save_state(settled.state, consume_decision=True, selected_decision=decision,
+                          projection_fingerprint='a' * 64)
 
 
 def test_crash_after_model_settlement_does_not_replay_lost_decision(setup):

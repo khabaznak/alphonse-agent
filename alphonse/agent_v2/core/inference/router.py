@@ -37,6 +37,15 @@ def _simple_loop_failure_category(exc: Exception) -> str:
     return 'provider_error'
 
 
+def _simple_loop_failure_detail(exc: Exception) -> str | None:
+    """Report only a fixed parse stage, never provider text or arbitrary attrs."""
+    if _simple_loop_failure_category(exc) != 'invalid_response':
+        return None
+    stage = getattr(exc, 'response_stage', None)
+    allowed = {'outer_object', 'arguments_not_string', 'arguments_invalid_json', 'arguments_not_object'}
+    return stage if type(stage) is str and stage in allowed else None
+
+
 class InferenceProvider(Protocol):
     """Provider boundary for model-backed CAPD node calls."""
 
@@ -114,6 +123,9 @@ class InferenceRouter:
                 error = f"simple_loop_{category}"
                 # No exception text, traceback, prompts, responses or credentials.
                 logger.warning("simple_loop_inference_failed category=%s", category)
+                detail = _simple_loop_failure_detail(exc)
+                if detail is not None:
+                    logger.warning("simple_loop_inference_invalid_response stage=%s", detail)
             else:
                 error = f"{type(exc).__name__}: {exc}"
             self._emit(resolved, None, started, status="failed", error=error)

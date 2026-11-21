@@ -1,0 +1,5 @@
+{"case": "owner-dojo-claim-loss", "event": "started", "inference": "scripted", "scope": "synthetic owner IPC, disposable database and isolated container"}
+{"event": "bash_started"}
+{"event": "claim_expired_after_observed_dispatch"}
+{"error_type": "PermissionError", "event": "bash_error"}
+{"case": "owner-dojo-claim-loss", "checks": {"claim_expired_after_start": true, "command_start_observed": true, "container_cleanup_verified": true, "no_ready_draft": true, "shell_cancelled": false, "single_model_call": true, "unresolved_action_preserved": true}, "elapsed_seconds": 0.663, "event": "finished", "limitations": ["Scripted inference; this does not establish model behavior.", "Uses injected disposable container Bash, not household host Bash.", "Checks preserved in-flight state, not cross-restart reconciliation.", "Container cleanup cannot undo an external effect in a real host environment."], "passed": false, "provider_calls": 1, "shell_results": [{"error_type": "PermissionError", "status": "error"}], "status": "failed"}
