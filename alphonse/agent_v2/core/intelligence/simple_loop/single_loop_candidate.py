@@ -208,6 +208,16 @@ def _deadline_elapsed(host: CandidateHost) -> bool:
         return True
 
 
+def _mark_steering_included(host: CandidateHost, decision: dict, fingerprint: str) -> bool:
+    if host.atomic_checkpoint is None:
+        return True
+    try:
+        host.atomic_checkpoint.mark_steering_included(decision, fingerprint, host.context.cancellation_checker)
+        return True
+    except Exception:
+        return False
+
+
 def _project(host: CandidateHost, state: CandidateState):
     sources = [EvidenceSource(state.goal_source, 'goal')]
     sources.extend(EvidenceSource(ref, 'observation', required=True) for ref in state.evidence_sources)
@@ -303,7 +313,8 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
                                      kind='model', amounts=amounts, now_ms=host.now_ms())
             else:
                 host.atomic_checkpoint.reserve(expected_version=host.atomic_checkpoint.version,
-                    reservation_id=call_id, kind='model', amounts=amounts, now_ms=host.now_ms())
+                    reservation_id=call_id, kind='model', amounts=amounts, now_ms=host.now_ms(),
+                    projection_fingerprint=fingerprint)
             state.inflight = call_id
             # Consume the single review before dispatch and persist together
             # with the model marker. Crashes cannot silently replay it.
@@ -355,6 +366,11 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
             return _terminal(host, state, 'blocked', 'candidate_model_usage_unknown_or_overrun')
         if not budget.within_work_limits():
             return _terminal(host, state, 'blocked', 'candidate_model_usage_overrun')
+        if host.atomic_checkpoint is not None and getattr(host.atomic_checkpoint, 'steering_decision_stale', False):
+            # Usage was settled, but a user correction arrived during the
+            # model call. The atomic checkpoint intentionally kept no selected
+            # decision; re-project the current goal before any action.
+            continue
         # A still-authorized source may nevertheless have changed during inference.
         if not _is_fresh(host, state, fingerprint):
             return _terminal(host, state, 'blocked', 'candidate_evidence_changed_or_revoked')
@@ -389,6 +405,8 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
                         return _terminal(host, state, 'blocked', 'candidate_question_not_verified')
                 if _deadline_elapsed(host):
                     return _terminal(host, state, 'blocked', 'candidate_deadline_exceeded')
+                if not _mark_steering_included(host, decision, fingerprint):
+                    return _terminal(host, state, 'blocked', 'candidate_steering_unavailable')
                 return _terminal(host, state, 'waiting_user', 'question_delivery_not_integrated', text,
                                  selected_decision=decision, projection_fingerprint=fingerprint)
             if host.synthetic_preanswer_review and state.answer_review_state == 'not_started':
@@ -424,6 +442,8 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
                     _save(host, state, consume_decision=True)
                     continue
                 return _terminal(host, state, 'blocked', 'candidate_answer_unsupported')
+            if not _mark_steering_included(host, decision, fingerprint):
+                return _terminal(host, state, 'blocked', 'candidate_steering_unavailable')
             return _terminal(host, state, 'completed', response=text, selected_decision=decision,
                              projection_fingerprint=fingerprint)
         if kind != 'tool' or not isinstance(decision.get('tool_id'), str) or not isinstance(decision.get('arguments'), dict):
@@ -449,6 +469,8 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
                     or not _is_fresh(host, state, fingerprint)):
                 return _terminal(host, state, 'blocked', unavailable)
             try:
+                if not _mark_steering_included(host, decision, fingerprint):
+                    return _terminal(host, state, 'blocked', 'candidate_steering_unavailable')
                 committed = commit(state, decision, fingerprint)
                 if (tool_id == 'native.scheduled_task' and args.get('operation') == 'cancel'
                         and isinstance(committed, CandidateState) and committed.status == 'running'):
@@ -489,6 +511,8 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
             return _terminal(host, state, 'blocked', 'candidate_read_denied')
         if _cancelled(host):
             return _terminal(host, state, 'cancelled', 'cancelled')
+        if not _mark_steering_included(host, decision, fingerprint):
+            return _terminal(host, state, 'blocked', 'candidate_steering_unavailable')
         action_id = 'tool-' + uuid4().hex
         try:
             amounts = {'actions': 1, 'model_calls': 0, 'input_tokens': 0, 'output_tokens': 0}

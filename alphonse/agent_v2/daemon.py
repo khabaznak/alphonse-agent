@@ -504,6 +504,17 @@ class V2Daemon:
             acquired = task = None
             scheduled_occurrence = False
             try:
+                # A held follow-up can become trusted ingress only after its
+                # predecessor has a verified, acknowledged conversation turn.
+                # The store serializes release with ingress and removal. No
+                # failed, cancelled or uncertain predecessor is replayed.
+                with queue._connect() as conn:
+                    has_followups = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_owner_held_followups'").fetchone()
+                if has_followups:
+                    from alphonse.agent_v2.owner_followups import OwnerFollowups
+                    owner = self.runtime.user_store.admin_user()
+                    if owner is not None and owner.is_active is True and owner.role in ('admin', 'owner'):
+                        OwnerFollowups(queue, owner.user_id, os.getuid()).release_next()
                 # Only schedules created by the current owner path have the
                 # separate provenance row. Legacy schedules remain paused.
                 from alphonse.agent_v2.core.intelligence.simple_loop.owner_schedule_origin import stage_due_occurrence_locked
@@ -754,7 +765,8 @@ class V2Daemon:
                     md = raw['metadata']
                     selected, marker = md.get('owner_read_selected_draft'), md.get('owner_read_ready_handoff')
                     allowed = set(task.metadata) | {STATE_KEY, 'owner_read_observations',
-                                                    'owner_read_selected_draft', 'owner_read_ready_handoff'}
+                                                    'owner_read_selected_draft', 'owner_read_ready_handoff',
+                                                    'owner_steering_included_projection'}
                     outbox_exists = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_outbox'").fetchone()
                     if (state.status not in {'completed', 'waiting_user'} or state.inflight
                             or budget.usage()['in_flight'] or budget.usage()['unknown_usage']

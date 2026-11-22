@@ -3,6 +3,7 @@ import json
 import os
 import tempfile
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -42,6 +43,10 @@ def test_opt_in_owner_can_use_host_process_and_read_back_without_default_exposur
                 assert 'prospects.txt' in request.prompt
                 decision = {'kind': 'tool', 'tool_id': 'native.bash',
                             'arguments': {'command': 'cat prospects.txt'}, 'text': None}
+            elif self.calls == 5:
+                assert 'The note contains synthetic lead.' in request.prompt
+                decision = {'kind': 'tool', 'tool_id': 'native.bash',
+                            'arguments': {'command': 'cat prospects.txt'}, 'text': None}
             else:
                 assert 'synthetic lead' in request.prompt
                 assert 'unverified' in request.prompt
@@ -63,6 +68,7 @@ def test_opt_in_owner_can_use_host_process_and_read_back_without_default_exposur
         conversation_store=conversation, outbox=SQLiteOutboundStore(path), tools=registry,
         inference=InferenceRouter(provider=Provider(), default_profile=ModelProfile('test', 'fixture', 'offline')),
         coding_skill_service=object(), experimental_owner_read=True, owner_selected_draft_sink=lambda *_: None)
+    runtime.core.system_one = SimpleNamespace(review_freeform_effect_claim=lambda **_: True)
     candidate = runtime.processor.owner_read_candidate
     assert candidate._owner_host_bash_enabled is False
     if trusted_local:
@@ -103,6 +109,10 @@ def test_opt_in_owner_can_use_host_process_and_read_back_without_default_exposur
             time.sleep(.01)
         assert status == 'ready'
         assert (users.ordinary_workspace(owner.user_id) / 'prospects.txt').read_text() == 'synthetic lead\n'
+        from alphonse.agent_v2.owner_followups import OwnerFollowups
+        held = OwnerFollowups(queue, owner.user_id, os.getuid())
+        followup_id = 'd' * 32
+        assert held.add(message_id, 'What does the note contain?', followup_id)['status'] == 'queued'
         draft = (client.request('experimental_owner_take_draft', message_id=message_id)
                  if through_ipc else daemon.take_owner_desktop_draft(message_id))
         assert draft['message'] == 'The note contains synthetic lead.'
@@ -112,6 +122,32 @@ def test_opt_in_owner_can_use_host_process_and_read_back_without_default_exposur
             assert client.request('experimental_owner_status', message_id=message_id)['status'] == 'client_acknowledged'
         else:
             daemon.acknowledge_owner_desktop_draft(message_id, draft['acknowledgement_token'])
+        from alphonse.agent_v2.core.intelligence.simple_loop.owner_clarification import bind_owner_followup
+        with queue._connect() as conn:
+            assert bind_owner_followup(conn, owner.user_id, message_id)['message_id'] == message_id
+            conn.execute('BEGIN')
+            raw = json.loads(conn.execute('SELECT task_state_json FROM v2_task_checkpoints WHERE task_id=?', (message_id,)).fetchone()[0])
+            for alteration in ('verified', 'missing', 'empty'):
+                changed = json.loads(json.dumps(raw))
+                if alteration == 'verified':
+                    changed['metadata']['owner_host_bash_history'][0]['effect_status'] = 'verified'
+                elif alteration == 'missing':
+                    del changed['metadata']['owner_host_bash_history']
+                else:
+                    changed['metadata']['owner_host_bash_history'] = []
+                conn.execute('UPDATE v2_task_checkpoints SET task_state_json=? WHERE task_id=?', (json.dumps(changed), message_id))
+                with pytest.raises(ValueError, match='owner_question_context_unavailable'):
+                    bind_owner_followup(conn, owner.user_id, message_id)
+            conn.rollback()
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline:
+            status = daemon.owner_message_status(followup_id)
+            if status not in {'unavailable', 'pending', 'processing'}:
+                break
+            time.sleep(.01)
+        assert status == 'ready'
+        followup = daemon.take_owner_desktop_draft(followup_id)
+        daemon.acknowledge_owner_desktop_draft(followup_id, followup['acknowledgement_token'])
     finally:
         daemon.stop()
         if socket_directory is not None:
