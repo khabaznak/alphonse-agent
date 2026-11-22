@@ -641,6 +641,17 @@ def _require_owner_copies_reconciled(conn: sqlite3.Connection, event: sqlite3.Ro
     if match is None:
         return
     message_id, owner = match.group(1), str(event["owner_user_id"] or "")
+    drafts_table = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_owner_composer_drafts'").fetchone()
+    if drafts_table and conn.execute("SELECT 1 FROM v2_owner_composer_drafts WHERE owner_id=? AND (active_message_id=? OR id=?) LIMIT 1", (owner, message_id, message_id)).fetchone():
+        raise ValueError("owner_conversation_deletion_requires_reconciliation")
+    held_table = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_owner_held_followups'").fetchone()
+    if held_table and conn.execute("SELECT 1 FROM v2_owner_held_followups WHERE active_message_id=? AND owner_id=? AND status='queued' LIMIT 1",
+                                   (message_id, owner)).fetchone():
+        raise ValueError("owner_conversation_deletion_requires_reconciliation")
+    steer_table = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_owner_steering'").fetchone()
+    if steer_table and conn.execute("SELECT 1 FROM v2_owner_steering WHERE message_id=? AND owner_id=? AND status!='removed' LIMIT 1",
+                                    (message_id, owner)).fetchone():
+        raise ValueError("owner_conversation_deletion_requires_reconciliation")
     tables = {str(row[0]) for row in conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name IN "
         "('v2_trusted_owner_ingress','v2_inbound_messages','v2_task_checkpoints')"

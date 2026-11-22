@@ -72,6 +72,36 @@ export class OwnerConversation {
 
   hasPending(): boolean { return this.submitting || this.submissionUncertain || this.pending.size > 0; }
   hasUncertainSubmission(): boolean { return this.submissionUncertain; }
+  activeMessageId(): string | undefined {
+    if (this.blockingState() !== "working" || this.submitting) return undefined;
+    return [...this.pending.values()].find((item) => !item.pickupStarted)?.messageId;
+  }
+
+  async queueFollowup(prompt: string, activeMessageId: string, requestId: string): Promise<"queued" | "late"> {
+    const result = await this.request<{ status?: string }>("experimental_owner_followup_add", {
+      active_message_id: activeMessageId, prompt, request_id: requestId,
+    });
+    if (result?.status !== "queued" && result?.status !== "late") throw new Error("Follow-up submission could not be confirmed. Review the follow-up list before sending again.");
+    return result.status;
+  }
+
+  /** Adopt only a server-confirmed ready released item; never repick an uncertain delivery. */
+  async adoptReleased(messageId: string): Promise<boolean> {
+    if (this.hasPending()) return false;
+    const status = await this.request<StatusReply>("experimental_owner_status", { message_id: messageId });
+    if (status.status !== "ready" || this.hasPending()) return false;
+    this.adoptReady(messageId);
+    return true;
+  }
+
+
+  /** Distinguish active work from a one-shot delivery requiring recovery. */
+  blockingState(): "idle" | "working" | "acknowledgement" | "uncertain" {
+    if (this.submissionUncertain) return "uncertain";
+    if (this.submitting || [...this.pending.values()].some((item) => !item.pickupStarted)) return "working";
+    if ([...this.pending.values()].some((item) => !item.acknowledgementToken)) return "uncertain";
+    return this.pending.size ? "acknowledgement" : "idle";
+  }
 
   /** Remove a locally tracked request only after the server confirms a stop. */
   forgetAbandoned(messageId: string): void { this.pending.delete(messageId); }
@@ -88,7 +118,10 @@ export class OwnerConversation {
   }
 
   async send(prompt: string, replyToMessageId?: string): Promise<OwnerIngressReply> {
-    if (this.hasPending()) throw new Error("Wait for the current conversation to finish or resolve its uncertain result.");
+    const blocked = this.blockingState();
+    if (blocked === "working") throw new Error("Wait for the current conversation to finish.");
+    if (blocked === "acknowledgement") throw new Error("The answer is shown, but saving it to conversation history is not confirmed. Check earlier work and recovery before sending another message.");
+    if (blocked === "uncertain") throw new Error("The previous message or answer has an uncertain result. Check earlier work and recovery before sending another message.");
     if (replyToMessageId !== undefined && !/^[0-9a-f]{32}$/.test(replyToMessageId)) {
       throw new Error("This question could not be selected for a reply.");
     }
@@ -186,6 +219,14 @@ export class OwnerConversation {
       await this.acknowledge(pending);
     }
     return acknowledgementRecovered;
+  }
+
+  /** Retry only a previously received exact token; never repeat pickup or execution. */
+  async retryAcknowledgement(): Promise<boolean> {
+    const pending = [...this.pending.values()].find((item) => item.pickupStarted && item.acknowledgementToken);
+    if (!pending || pending.acknowledgementInFlight) return false;
+    await this.acknowledge(pending);
+    return !this.pending.has(pending.messageId);
   }
 
   private async acknowledge(pending: Pending): Promise<void> {

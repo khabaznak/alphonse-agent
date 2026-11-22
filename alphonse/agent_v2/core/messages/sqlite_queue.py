@@ -1286,6 +1286,8 @@ def finalized_owner_history_matches(conn: sqlite3.Connection, message_id: str, o
         source_metadata = {key: metadata[key] for key in ('intelligence_engine', 'intelligence_schema_version', 'routing_disposition')}
         if 'owner_clarification' in metadata:
             source_metadata['owner_clarification'] = metadata['owner_clarification']
+        if 'owner_followup' in metadata:
+            source_metadata['owner_followup'] = metadata['owner_followup']
         payload = [message_id, origin['created_at'], raw['goal'], raw['user'], raw['project_id'],
                    raw['tag'], raw['correlation_id'], raw['memory_session_id'], json.dumps(source_metadata, sort_keys=True)]
         if version == 0:
