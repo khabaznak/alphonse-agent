@@ -3601,6 +3601,22 @@ class V2Daemon:
         return rendered
 
     def _inbound_queue_status(self) -> dict[str, int]:
+        if self.experimental_owner_only:
+            # Owner-only processing does not reclaim arbitrary legacy or
+            # unresolved rows. Report the worker's active task and the pending
+            # ingress it can actually claim, not every retained processing row.
+            with self.runtime.queue._connect() as conn:
+                tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+                eligible = []
+                if 'v2_trusted_owner_ingress' in tables:
+                    eligible.append('EXISTS (SELECT 1 FROM v2_trusted_owner_ingress o WHERE o.message_id=q.message_id)')
+                if 'v2_owner_schedule_occurrences' in tables:
+                    eligible.append("EXISTS (SELECT 1 FROM v2_owner_schedule_occurrences x WHERE x.message_id=q.message_id AND x.state='queued')")
+                if self._owner_telegram_listener is not None and 'v2_owner_telegram_ingress' in tables:
+                    eligible.append('EXISTS (SELECT 1 FROM v2_owner_telegram_ingress t WHERE t.message_id=q.message_id)')
+                ready = conn.execute("SELECT count(*) FROM v2_inbound_messages q WHERE q.status='pending' AND ("
+                                     + ' OR '.join(eligible) + ')').fetchone()[0] if eligible else 0
+            return {'ready': int(ready), 'processing': int(self.kill_switch.active() is not None), 'retry_wait': 0}
         counts = getattr(self.runtime.queue, "status_counts", lambda: {})()
         values = dict(counts) if isinstance(counts, dict) else {}
         ready = int(self.runtime.queue.size() or 0)
