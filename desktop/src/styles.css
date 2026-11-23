@@ -382,6 +382,19 @@ a { color: var(--accent); }
   white-space: nowrap;
 }
 .message.user .message-timestamp { color: var(--muted); }
+.conversation-activity { display: flex; align-items: center; align-self: flex-start; gap: 12px; padding: 8px 0 16px; }
+.conversation-activity-mascot { width: 44px; height: 44px; }
+.conversation-activity-body { display: grid; gap: 4px; }
+.conversation-activity-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; color: var(--text); font-size: 12px; }
+.conversation-activity-pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 4px var(--success-soft); animation: conversation-activity-breathe 1.7s ease-in-out infinite; }
+.conversation-activity-grid { display: grid; grid-template-columns: repeat(3, 3px); grid-template-rows: repeat(3, 3px); gap: 2px; }
+.conversation-activity-grid i { background: var(--success); border-radius: 1px; animation: conversation-activity-pixel 1.3s ease-in-out infinite; }
+.conversation-activity-grid i:nth-child(2n) { animation-delay: .2s; }
+.conversation-activity-grid i:nth-child(3n) { animation-delay: .4s; }
+.conversation-activity-time, .conversation-activity-subtitle { color: var(--muted); font-size: 11px; }
+.conversation-activity-time { font-variant-numeric: tabular-nums; }
+@keyframes conversation-activity-breathe { 50% { opacity: .55; } }
+@keyframes conversation-activity-pixel { 50% { opacity: .25; transform: scale(.75); } }
 .task-progress-bubble { width: min(100%, 70ch); max-width: 100%; padding: 0; overflow: hidden; border: 1px solid var(--warning); background: var(--warning-soft); }
 .task-progress-content { display: grid; gap: 10px; padding: 15px 16px; color: var(--text); }
 .task-progress-heading { display: flex; align-items: center; gap: 8px; color: var(--warning); font-size: 13px; }

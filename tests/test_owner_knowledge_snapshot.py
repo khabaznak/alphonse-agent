@@ -55,6 +55,39 @@ def test_valid_snapshot_and_changed_source(fixture):
     assert snapshot().status == 'incomplete'
 
 
+def test_telegram_owner_snapshot_respects_live_sender_and_sources(tmp_path):
+    from alphonse.agent_v2.core.intelligence.simple_loop.owner_telegram_ingress import enqueue_telegram_owner
+    from alphonse.agent_v2.integrations.store import SQLiteIntegrationStore
+    path = tmp_path / 'telegram.sqlite'
+    users = V2UserStore(path)
+    owner = users.onboard(display_name='Fixture', users_root=tmp_path / 'users')
+    users.bind_address(user_id=owner.user_id, integration_id='telegram-fixture', provider_key='telegram', provider_user_id='123')
+    SQLiteIntegrationStore(path).upsert(integration_id='telegram-fixture', provider_key='telegram', display_name='Telegram', enabled=True)
+    conversations = SQLiteConversationStore(path)
+    KnowledgeStore(path)
+    queue = SQLiteMessageQueue(path, experimental_claim_fencing=True)
+    source = conversations.record(owner_user_id=owner.user_id, role='user', content='Apples are red',
+                                  source='fixture', source_message_id='earlier')
+    mid = enqueue_telegram_owner(queue, integration_id='telegram-fixture', update={'update_id': 42,
+        'message': {'message_id': 9, 'text': 'What color are apples?', 'from': {'id': 123},
+                    'chat': {'id': 123, 'type': 'private'}}})
+    acquired = queue.claim_next()
+    task = TaskState.from_message(acquired.message, message_id=mid); task.task_id = mid
+    item = conversation_item(source, owner.user_id)
+    record = KnowledgeRecord(memory_id='m00', content='Apples are red', access=AccessScope(owner.user_id),
+        sources=(item.source,), recorded_at=source.created_at, kind='fact', subjects=('apples',),
+        claim_key='apple', basis='user_report', quotes=('Apples are red',), source_binding_version=1,
+        source_snapshot_digests=(_source_snapshot_digest(item),))
+    with queue._connect() as conn:
+        conn.execute('INSERT INTO memory_knowledge VALUES (?,?,?,?,?,?)',
+                     (record.memory_id, owner.user_id, record.claim_key, json.dumps(record.to_dict()), record.status, '[]'))
+    snapshot = lambda: snapshot_owner_knowledge(queue, acquired.claim_receipt, task, cancellation_checker=lambda: False)
+    assert [item.content for item in snapshot().items] == ['Apples are red']
+    with queue._connect() as conn:
+        conn.execute('UPDATE v2_user_addresses SET is_active=0')
+    assert snapshot().status == 'unavailable'
+
+
 def test_cached_descendants_cannot_bypass_depth_limit(fixture):
     _, _, _, record, insert, snapshot = fixture
     for i in range(17):

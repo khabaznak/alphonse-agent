@@ -88,6 +88,72 @@ def start_worker(f, tmp_path, monkeypatch, wire, *, ask_question=False, unit=Non
     return daemon, message_id, status, provider
 
 
+@pytest.mark.parametrize('revoke_before_answer', [False, True])
+def test_telegram_owner_can_read_authorized_gmail_and_send_verified_count(f, tmp_path, monkeypatch, revoke_before_answer):
+    from alphonse.agent_v2.core.intelligence.simple_loop.owner_telegram_ingress import enqueue_telegram_owner
+    from alphonse.agent_v2.core.intelligence.simple_loop import owner_telegram_listener as module
+    connect(f); grant(f, 'one', 'grant')
+    f.accounts.users.bind_address(user_id='owner', integration_id='telegram-test', provider_key='telegram', provider_user_id='123')
+    f.store.upsert(integration_id='telegram-test', provider_key='telegram', display_name='Telegram', enabled=True)
+    path = Path(f.accounts.users.db_path)
+    queue = SQLiteMessageQueue(path, experimental_claim_fencing=True)
+    conversation = SQLiteConversationStore(path)
+    tools = InMemoryToolRegistry()
+    tools.register(build_search_memory_tool_definition())
+    tools.register(build_read_memory_source_tool_definition())
+    wire = Wire({'id': 'INBOX', 'messagesUnread': 4})
+    sent = []
+    class Listener:
+        def __init__(self, *_): pass
+        def start(self): pass
+        def stop(self, **_): return True
+        def send_reply(self, **values): sent.append(values); return '99'
+    monkeypatch.setattr(module, 'TelegramOwnerListener', Listener)
+    class Provider:
+        supports_image_input = False
+        calls = 0
+        def generate_json(self, request):
+            self.calls += 1
+            assert 'native.owner_gmail_unread' in request.prompt
+            if self.calls == 2 and revoke_before_answer:
+                f.accounts.revoke_grant(f.owner, grant_id='grant', expected_revision=1)
+            value = ({'kind': 'tool', 'tool_id': 'native.owner_gmail_unread', 'arguments': {}, 'text': None}
+                     if self.calls == 1 else {'kind': 'answer', 'tool_id': None, 'arguments': None, 'text': 'Done.'})
+            return InferenceResult(json_value=value, raw_response=json.dumps(value),
+                                   usage={'input_tokens': 100, 'output_tokens': 20})
+    provider = Provider()
+    runtime = build_runtime_host(user_store=f.accounts.users, integration_store=f.store, messages=queue,
+        question_store=SQLiteQuestionStore(path), conversation_store=conversation, outbox=SQLiteOutboundStore(path),
+        tools=tools, inference=InferenceRouter(provider=provider, default_profile=ModelProfile('test', 'fixture', 'offline')),
+        coding_skill_service=object(), experimental_owner_read=True, owner_selected_draft_sink=lambda *_: None)
+    runtime.owner_gmail_service = OwnerGmailService(f.accounts, lambda _: f.service, transport=wire)
+    daemon = V2Daemon(runtime, daemon_id='telegram-gmail-fixture', experimental_owner_only=True, owner_telegram_enabled=True)
+    monkeypatch.setattr(daemon, '_acquire_single_instance_lock', lambda: None)
+    monkeypatch.setattr(daemon, '_release_single_instance_lock', lambda: None)
+    monkeypatch.setattr(daemon.ipc, 'start', lambda: None)
+    monkeypatch.setattr(daemon.ipc, 'stop', lambda: None)
+    daemon.start()
+    try:
+        mid = enqueue_telegram_owner(queue, integration_id='telegram-test', update={'update_id': 123,
+            'message': {'message_id': 123, 'text': 'How many unread inbox messages?', 'from': {'id': 123},
+                        'chat': {'id': 123, 'type': 'private'}}})
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline and not sent and daemon._owner_statuses.get(mid) != 'failed':
+            time.sleep(.02)
+        if revoke_before_answer:
+            assert daemon._owner_statuses.get(mid) == 'failed'
+            assert not sent
+            assert len(wire.calls) == 1
+            return
+        assert sent and sent[0]['chat_id'] == '123'
+        assert 'Gmail INBOX unread messages: 4' in sent[0]['text']
+        assert len(wire.calls) == 1
+        with queue._connect() as conn:
+            assert conn.execute('SELECT status FROM v2_owner_telegram_replies WHERE message_id=?', (mid,)).fetchone()[0] in ('provider_accepted', 'finalized')
+    finally:
+        daemon.stop()
+
+
 @pytest.mark.parametrize('unit, count, expected', [
     ('threads', 1, 'thread'), ('threads', 3, 'threads'), ('messages', 1, 'message'),
 ])

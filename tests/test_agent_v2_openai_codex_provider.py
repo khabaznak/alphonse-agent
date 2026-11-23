@@ -150,6 +150,7 @@ def test_simple_loop_provider_returns_cli_reported_usage_without_raw_trace(monke
             return SimpleNamespace(returncode=0, stdout='Logged in using ChatGPT', stderr='')
         assert '--json' in command
         assert '--ignore-user-config' in command and '--sandbox' in command
+        assert ('-c', 'web_search="disabled"') in list(zip(command, command[1:]))
         assert ('--disable', 'shell_tool') in list(zip(command, command[1:]))
         assert ('--disable', 'unified_exec') in list(zip(command, command[1:]))
         for feature in ('apps', 'browser_use', 'tool_suggest'):

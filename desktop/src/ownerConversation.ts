@@ -2,9 +2,9 @@
 import type { CommittedEffect } from "./types";
 export type OwnerRequest = <T>(method: string, params?: Record<string, unknown>) => Promise<T>;
 
-type Pending = { messageId: string; pickupStarted: boolean; acknowledgementToken?: string; acknowledgementInFlight?: boolean; acknowledgementRetryAttempted?: boolean };
-type Status = "pending" | "ready" | "started_unconfirmed" | "client_acknowledged" | "failed" | "unavailable";
-export type OwnerCapability = { owner_only?: boolean; processing_ready?: boolean; blocking_reason?: string | null; paused_legacy_requests?: number };
+type Pending = { messageId: string; pickupStarted: boolean; paused?: boolean; acknowledgementToken?: string; acknowledgementInFlight?: boolean; acknowledgementRetryAttempted?: boolean };
+type Status = "pending" | "continuation_paused" | "continuation_accepted" | "continuation_declined" | "ready" | "started_unconfirmed" | "client_acknowledged" | "failed" | "unavailable";
+export type OwnerCapability = { owner_only?: boolean; processing_ready?: boolean; continuation_available?: boolean; blocking_reason?: string | null; paused_legacy_requests?: number };
 type StatusReply = OwnerCapability & { status?: Status; failure_code?: string };
 type Pickup = { message_id: string; message: string; acknowledgement_token: string; delivery_status: string; kind?: "answer" | "question"; committed_effect?: CommittedEffect };
 type OwnerIngressReply = { message_id: string; accepted_at?: string };
@@ -71,6 +71,8 @@ export class OwnerConversation {
   constructor(private readonly request: OwnerRequest) {}
 
   hasPending(): boolean { return this.submitting || this.submissionUncertain || this.pending.size > 0; }
+  /** Only claim active work while submission or an uncollected request is pending. */
+  isWorking(): boolean { return this.submitting || [...this.pending.values()].some((item) => !item.pickupStarted && !item.paused); }
   hasUncertainSubmission(): boolean { return this.submissionUncertain; }
 
   /** Remove a locally tracked request only after the server confirms a stop. */
@@ -153,7 +155,11 @@ export class OwnerConversation {
       // Poll cycles can overlap; another cycle may have started the pickup
       // while this status call was in flight.
       if (!this.pending.has(pending.messageId) || pending.pickupStarted) continue;
-      if (state.status === "pending") continue;
+      if (state.status === "pending" || state.status === "continuation_accepted" || state.status === "continuation_paused") {
+        pending.paused = state.status === "continuation_paused";
+        continue;
+      }
+      if (state.status === "continuation_declined") { this.pending.delete(pending.messageId); continue; }
       if (state.status !== "ready") {
         if (state.status === "failed") this.pending.delete(pending.messageId);
         pending.pickupStarted = true;

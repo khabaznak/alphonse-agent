@@ -1,4 +1,4 @@
-"""Opt-in direct-owner host Bash dispatch, not enabled by default.
+"""Opt-in owner host Bash dispatch, not enabled by default.
 
 Bash runs as the daemon's OS user with its host files, network and environment.
 A same-user process can reach authority state; this adapter is not a sandbox or
@@ -16,6 +16,7 @@ from dataclasses import replace
 from alphonse.agent_v2.core.core import CoreLoopContext
 from alphonse.agent_v2.core.tools.registry.native.bash import execute_bash
 from .owner_atomic_checkpoint import OwnerAtomicCheckpoint
+from .owner_direct_claim import verify_owner_execution_claim
 
 
 def authorized_host_skill_context(context, task, arguments):
@@ -72,14 +73,69 @@ def valid_host_binding(checkpoint, context, binding, history):
     try:
         args, output = binding['arguments'], binding['host_bash_observation']
         digest = observation_digest(output)
+        valid_claims = {_claim_digest(checkpoint.receipt)}
+        # A trusted continuation transaction binds a new worker generation to
+        # the original paused claim. Preserve that historical provenance; never
+        # rewrite a dispatched command's receipt to match the new worker.
+        # The original claim needs no lineage lookup; this also keeps ordinary
+        # same-claim reads independent of continuation storage.
+        needs_lineage = not any(isinstance(item, dict) and item.get('claim_digest') in valid_claims
+                                and item.get('arguments_sha256') == _decision_digest(args)
+                                and item.get('observation_sha256') == digest
+                                and item.get('effect_status') == 'unverified' for item in history)
+        if needs_lineage:
+            with checkpoint._transaction() as conn:
+                row = checkpoint.store._row(conn, checkpoint.task.task_id)
+                raw = checkpoint.store._validate_identity(row, checkpoint.task.task_id, checkpoint.task.user, row['version'])
+                md = raw['metadata']
+                lineage = md.get('owner_continuation_reclaim')
+                if (isinstance(lineage, dict) and lineage.get('current_claim_digest') in valid_claims
+                        and isinstance(md.get('owner_continuation_pause'), dict)
+                        and lineage.get('original_claim_digest') == md['owner_continuation_pause'].get('claim_digest')
+                        and lineage.get('pause_sha256') == _decision_digest(md['owner_continuation_pause'])
+                        and lineage.get('grant_sha256') == _decision_digest(md.get('owner_continuation_grant'))):
+                    valid_claims.add(lineage['original_claim_digest'])
+                crash_history = md.get('owner_continuation_crash_lineage', [])
+                if not isinstance(crash_history, list):
+                    return False
+                for crash in reversed(crash_history):
+                    if (not isinstance(crash, dict) or set(crash) != {'from','to','grant_sha256'}
+                            or crash['to'] not in valid_claims or not isinstance(crash['from'], str)):
+                        return False
+                    valid_claims.add(crash['from'])
+                continuation_history = md.get('owner_continuation_history', [])
+                if not isinstance(continuation_history, list):
+                    return False
+                # Walk newest to oldest so multiple continuations retain earlier
+                # action receipts while each handoff remains explicitly linked.
+                for entry in reversed(continuation_history):
+                    if not isinstance(entry, dict):
+                        return False
+                    link = entry.get('reclaim')
+                    if link is not None and (not isinstance(link, dict) or link.get('current_claim_digest') not in valid_claims
+                            or not isinstance(entry.get('pause'), dict)
+                            or link.get('original_claim_digest') != entry['pause'].get('claim_digest')
+                            or link.get('pause_sha256') != _decision_digest(entry['pause'])
+                            or link.get('grant_sha256') != _decision_digest(entry.get('grant'))):
+                        return False
+                    if link is not None:
+                        valid_claims.add(link['original_claim_digest'])
+                    prior_crashes = entry.get('crash_before_pause', [])
+                    if not isinstance(prior_crashes, list):
+                        return False
+                    for crash in reversed(prior_crashes):
+                        if (not isinstance(crash, dict) or set(crash) != {'from','to','grant_sha256'}
+                                or crash['to'] not in valid_claims or not isinstance(crash['from'], str)):
+                            return False
+                        valid_claims.add(crash['from'])
         return (context_authority_active(context) and getattr(context, '_owner_host_bash_enabled', False) is True
             and context.cancellation_checker() is False
-            and checkpoint.queue.verify_trusted_local_owner_claim(checkpoint.receipt, checkpoint.task)
+            and verify_owner_execution_claim(checkpoint.queue, checkpoint.receipt, checkpoint.task)
             and binding['actor'] == checkpoint.task.user and binding['tool_id'] == 'native.bash'
             and isinstance(args, dict) and authorized_host_skill_context(context, checkpoint.task, args)
             and valid_host_output(output)
             and binding['observation_sha256'] == digest and isinstance(history, list)
-            and any(isinstance(item, dict) and item.get('claim_digest') == _claim_digest(checkpoint.receipt)
+            and any(isinstance(item, dict) and item.get('claim_digest') in valid_claims
                 and item.get('arguments_sha256') == _decision_digest(args)
                 and item.get('observation_sha256') == digest and item.get('effect_status') == 'unverified'
                 for item in history))
@@ -104,7 +160,7 @@ def dispatch_owner_host_bash(*, atomic, context, arguments, reservation_id, auth
     def stop():
         try:
             return (context.is_cancelled() is not False
-                    or atomic.queue.verify_trusted_local_owner_claim(atomic.receipt, task) is not True
+                    or verify_owner_execution_claim(atomic.queue, atomic.receipt, task) is not True
                     or authorize(task.user, task.task_id, deepcopy(arguments)) is not True
                     or atomic.check_claim(reservation_id, 'tool', tool_id='native.bash', arguments=arguments) is not True)
         except Exception:

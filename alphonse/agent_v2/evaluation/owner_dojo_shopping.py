@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import shlex
 import socket
@@ -38,6 +39,24 @@ from alphonse.agent_v2.inference_settings import InferenceSettingsRecord, build_
 from alphonse.agent_v2.ipc import V2DaemonClient, V2DaemonServer
 from alphonse.agent_v2.runtime import build_runtime_host
 from alphonse.agent_v2.users import V2UserStore
+
+
+def _provider_event_types(jsonl):
+    """Project only machine-readable event type names from synthetic runs."""
+    events = []
+    for line in jsonl.splitlines():
+        event = json.loads(line)
+        if not isinstance(event, dict):
+            raise ValueError('provider_event_invalid')
+        event_type = event.get('type')
+        item = event.get('item')
+        item_type = item.get('type') if isinstance(item, dict) else None
+        if (not isinstance(event_type, str) or not re.fullmatch(r'[a-z0-9_.-]{1,80}', event_type)
+                or (item_type is not None and (not isinstance(item_type, str)
+                    or not re.fullmatch(r'[a-z0-9_.-]{1,80}', item_type)))):
+            raise ValueError('provider_event_invalid')
+        events.append({'event': 'provider_event_type', 'event_type': event_type, 'item_type': item_type})
+    return events
 
 
 class ScriptedProvider:
@@ -151,7 +170,23 @@ def run(*, image_id: str, docker_socket: str, emit, model: str | None = None,
                 except (ValueError, IndexError):
                     pass
                 try:
-                    result = original_generate(request)
+                    # Only synthetic Dojo scenarios may retain a projection of
+                    # the CLI event stream. Do not log prompts, commands,
+                    # arguments, source content or other provider payloads.
+                    if scenario is not None and getattr(scenario, 'record_provider_event_types', False):
+                        from alphonse.agent_v2.core.inference import openai_codex
+                        original_usage = openai_codex._reported_codex_usage
+                        def observe_usage(jsonl):
+                            try:
+                                for event in _provider_event_types(jsonl):
+                                    emit(event)
+                            except (TypeError, ValueError):
+                                emit({'event': 'provider_event_types_unavailable'})
+                            return original_usage(jsonl)
+                        with patch.object(openai_codex, '_reported_codex_usage', observe_usage):
+                            result = original_generate(request)
+                    else:
+                        result = original_generate(request)
                 except Exception as exc:
                     category = provider_failure_category(exc)
                     provider_failures.append(category)

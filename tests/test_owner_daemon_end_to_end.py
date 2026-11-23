@@ -25,6 +25,7 @@ from alphonse.agent_v2.users import V2UserStore
 
 def test_owner_failure_codes_are_allowlisted_and_do_not_disclose_errors():
     assert _owner_public_failure_code('candidate_observation_incomplete') == 'source_incomplete'
+    assert _owner_public_failure_code('candidate_retry_deferred') == 'source_unavailable'
     assert _owner_public_failure_code('candidate_deadline_exceeded') == 'time_limit'
     assert _owner_public_failure_code('candidate_model_usage_overrun') == 'usage_limit_exceeded'
     assert _owner_public_failure_code('BudgetExhausted:budget_exhausted:actions') == 'action_limit'

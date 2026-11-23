@@ -118,10 +118,12 @@ def test_opt_in_owner_can_use_host_process_and_read_back_without_default_exposur
             socket_directory.cleanup()
 
 
-def test_historical_host_output_loses_access_after_skill_revocation_or_change(tmp_path):
+def test_historical_host_output_loses_access_after_skill_revocation_or_change(tmp_path, monkeypatch):
     from types import SimpleNamespace
     from alphonse.agent_v2.core.intelligence.simple_loop.owner_atomic_checkpoint import _decision_digest, observation_digest
     from alphonse.agent_v2.core.intelligence.simple_loop.owner_host_bash import valid_host_binding, authorized_host_skill_context
+    monkeypatch.setattr('alphonse.agent_v2.core.intelligence.simple_loop.owner_host_bash.verify_owner_execution_claim',
+                        lambda queue, receipt, task: queue.verify_trusted_local_owner_claim(receipt, task))
     from alphonse.agent_v2.core.messages.claim_fence import ClaimReceipt
     from alphonse.agent_v2.core.messages.experimental_claim_checkpoint import _claim_digest
     from alphonse.agent_v2.skill_resources import package_revision

@@ -51,10 +51,21 @@ def list_schedule_attention(queue, owner_id, *, now=None):
             LEFT JOIN v2_owner_schedule_occurrences x ON x.schedule_id=o.scheduled_task_id AND x.owner_id=o.owner_id
             LEFT JOIN v2_inbound_messages q ON q.message_id=x.message_id AND q.user_id=o.owner_id
             WHERE o.owner_id=?''', (owner_id,)).fetchall()
+        telegram_table = conn.execute("SELECT 1 FROM sqlite_master WHERE name='v2_owner_schedule_telegram_origins'").fetchone()
+        invalid_telegram = set()
+        if telegram_table:
+            from .owner_schedule_origin import verified_schedule_origin_locked
+            telegram_ids = {row[0] for row in conn.execute('SELECT scheduled_task_id FROM v2_owner_schedule_telegram_origins')}
+            for row in rows:
+                schedule_id = row['scheduled_task_id']
+                if schedule_id in telegram_ids and verified_schedule_origin_locked(conn, schedule_id) is None:
+                    invalid_telegram.add(schedule_id)
     result = {}
     for row in rows:
         state = row['occurrence_status']
-        if state in {'completed', 'failed', 'cancelled'}:
+        if row['scheduled_task_id'] in invalid_telegram and state not in {'completed', 'failed', 'cancelled'}:
+            result[row['scheduled_task_id']] = 'uncertain'
+        elif state in {'completed', 'failed', 'cancelled'}:
             result[row['scheduled_task_id']] = state
         elif state is None:
             result[row['scheduled_task_id']] = row['schedule_status']

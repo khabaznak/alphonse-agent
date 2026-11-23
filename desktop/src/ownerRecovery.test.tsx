@@ -59,6 +59,17 @@ describe("owner request recovery", () => {
     expect(html).toContain("disabled");
   });
 
+  it("distinguishes unconfirmed Telegram sends from accepted replies needing reconciliation", () => {
+    const html = renderToStaticMarkup(<OwnerRecovery items={[
+      { message_id: id, prompt: "Telegram response", status: "telegram_delivery_unconfirmed", can_abandon: false },
+      { message_id: "b".repeat(32), prompt: "Telegram response", status: "telegram_reconciliation_required", can_abandon: false },
+    ]} stopping="" onStop={() => {}} onShow={() => {}} />);
+    expect(html).toContain("Telegram delivery is unconfirmed");
+    expect(html).toContain("Telegram accepted the response; saving its history is unconfirmed");
+    expect(html).toContain("will not be sent again automatically");
+    expect(html).not.toContain("Show answer");
+  });
+
   it("shows a committed cancellation and possible earlier execution", () => {
     const html = renderToStaticMarkup(<OwnerRecovery items={[{
       message_id: id, prompt: "Cancel the check", status: "effect_committed", can_abandon: false,

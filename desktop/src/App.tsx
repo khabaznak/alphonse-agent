@@ -9,6 +9,7 @@ import { SkillMascot, SkillAppearanceSettings, SkillAppearancePreview, MascotIma
 import { BASE_CONTEXT, type AppearanceContext, type SkillAppearance } from "./skillAppearances";
 import { HouseholdWorkspace } from "./HouseholdWorkspace";
 import { ConversationTimelineMessage } from "./ConversationTimelineMessage";
+import { ConversationActivity } from "./ConversationActivity";
 import { WorkOverview } from "./WorkOverview";
 import { ProjectActivityDialog } from "./ProjectActivityDialog";
 import { TaskProgressBubble } from "./TaskProgressBubble";
@@ -26,6 +27,8 @@ import { TrustedLocalBashSettings } from "./TrustedLocalBashSettings";
 import { legacyNotificationReviewMessage, OwnerConversation, ownerAcceptedAt, ownerBusyFor, ownerUnavailableMessage, type OwnerCapability } from "./ownerConversation";
 import { abandonOwnerRequest, listOwnerRecovery, type OwnerRecoveryItem } from "./ownerRecovery";
 import { OwnerRecovery } from "./OwnerRecoveryPanel";
+import { OwnerContinuation } from "./OwnerContinuation";
+import { OwnerContinuationSettings } from "./OwnerContinuationSettings";
 import { LegacyStateInventory } from "./LegacyStateInventory";
 import { LegacyNotificationReview } from "./LegacyNotificationReview";
 import { OwnerReminders } from "./OwnerReminders";
@@ -151,6 +154,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const [user, setUser] = useState("");
   const [ownerWorkerReady, setOwnerWorkerReady] = useState(false);
   const [ownerOnly, setOwnerOnly] = useState(false);
+  const [ownerContinuationAvailable, setOwnerContinuationAvailable] = useState(false);
   const [ownerBlockingReason, setOwnerBlockingReason] = useState<string | null>(null);
   const [pausedLegacyRequests, setPausedLegacyRequests] = useState<number | null>(null);
   const [ownerBusySnapshot, setOwnerBusySnapshot] = useState<{ conversation: OwnerConversation | null; busy: boolean }>({ conversation: null, busy: false });
@@ -177,18 +181,19 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   };
   const ownerConversationNotice = useRef("");
   useEffect(() => {
-    if (!isAdmin) { setOwnerWorkerReady(false); setOwnerOnly(false); setOwnerBlockingReason(null); setPausedLegacyRequests(null); return; }
+    if (!isAdmin) { setOwnerWorkerReady(false); setOwnerOnly(false); setOwnerContinuationAvailable(false); setOwnerBlockingReason(null); setPausedLegacyRequests(null); return; }
     let active = true;
     const check = () => void daemonRequest<OwnerCapability>("experimental_owner_status", {})
       .then((status) => { if (active) {
         setOwnerWorkerReady(status.processing_ready === true);
+        setOwnerContinuationAvailable(status.continuation_available === true);
         // Older owner daemons did not send owner_only, but a ready owner
         // worker still implies their generic queue cannot process messages.
         setOwnerOnly(status.owner_only === true || status.processing_ready === true);
         setOwnerBlockingReason(typeof status.blocking_reason === "string" ? status.blocking_reason : null);
         setPausedLegacyRequests(Number.isSafeInteger(status.paused_legacy_requests) && (status.paused_legacy_requests ?? -1) >= 0 ? status.paused_legacy_requests! : null);
       } })
-      .catch(() => { if (active) { setOwnerWorkerReady(false); setOwnerOnly(false); setOwnerBlockingReason(null); setPausedLegacyRequests(null); } });
+      .catch(() => { if (active) { setOwnerWorkerReady(false); setOwnerOnly(false); setOwnerContinuationAvailable(false); setOwnerBlockingReason(null); setPausedLegacyRequests(null); } });
     check();
     const interval = window.setInterval(check, 10000);
     return () => { active = false; window.clearInterval(interval); };
@@ -262,6 +267,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const questionFocusRef = useRef("");
   const [workspaceRequired, setWorkspaceRequired] = useState(false);
   const [error, setError] = useState("");
+  const ownerConversationWorking = ownerConversationBusy && connected && !error && Boolean(ownerConversation?.isWorking());
   const [surfaces, setSurfaces] = useState<Record<string, import("./a2ui").A2uiSurface>>({});
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [navigationQuery, setNavigationQuery] = useState("");
@@ -627,7 +633,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
     const element = timelineRef.current;
     if (!element || workspaceRef.current !== "conversation") return;
     element.scrollTop = element.scrollHeight;
-  }, [messages]);
+  }, [messages, ownerConversationWorking]);
 
   useEffect(() => {
     const unseen = progressTaskIds.filter((taskId) => !autoScrolledProgressTaskIdsRef.current.has(taskId));
@@ -659,7 +665,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
           appendMessage({
             id: `killswitch:${crypto.randomUUID()}`,
             role: "assistant",
-            content: result.status === "cancel_requested" ? "Kill switch engaged. The active task is being cancelled." : "Kill switch checked: no active task is running.",
+            content: result.status === "cancel_requested" ? "Kill switch engaged. The active task is being cancelled." : result.status === "cancel_unconfirmed" ? "Cancellation was requested, but recovery protection could not be confirmed." : "Kill switch checked: no active task is running.",
             created_at: new Date().toISOString(),
             project_id: "",
           });
@@ -823,6 +829,8 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
         {error && <div className="error" role="alert">{error}</div>}
         <div className="timeline" ref={timelineRef} aria-live="polite">
           {timelineNodes}
+          {ownerConversationWorking && conversationDay === localDay(timezone) && <ConversationActivity />}
+          <OwnerContinuation key={user} request={daemonRequest} active={isAdmin && connected && ownerContinuationAvailable && conversationDay === localDay(timezone)} />
         </div>
         <section className="input-dock">
           {activeSurface && (
@@ -957,6 +965,7 @@ function SettingsWorkspace({ isAdmin, user, initialTab, workspaceRequired, enter
     {visitedSections.has("appearance") && <div hidden={tab !== "appearance"}><AppearanceSettingsSection value={desktopStyle} onChange={onDesktopStyleChange} mascotMotion={mascotMotion} onMascotMotionChange={onMascotMotionChange} onSkills={isAdmin ? () => onNavigate("skills") : undefined} onWidgets={onWidgets} /></div>}
     {visitedSections.has("tools") && isAdmin && <div hidden={tab !== "tools"} className="tools-settings">
       <TrustedLocalBashSettings />
+      <OwnerContinuationSettings />
       <CodeModeSettingsSection user={user} />
       <section className="setting-group">
         <div className="setting-group-heading"><h3>Web Tools</h3><p>Run SearXNG separately in Docker with JSON output enabled. Alphonse connects to it; it does not manage Docker.</p></div>

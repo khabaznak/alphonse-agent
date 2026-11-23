@@ -1,0 +1,5 @@
+# Progress and continuation: real-model observation
+
+The journal in `evidence/dojo-progress-continuation-20261123-01.json` records one real `gpt-6-luna` attempt through the owner worker. The synthetic owner asked for a reading stored in a disposable file. The model chose `native.bash` to read it, the owner loop paused at the configured one-action checkpoint, and the programmatically simulated owner approved continuation. The model resumed and gave the correct value and unit; the file was unchanged.
+
+The bounded progress judge in this experiment was a **fake** that always returned 0.9. Its disclosure permission was also synthetic and applied only to this disposable fixture. The fake received one recorded observation and the checkpoint reported a positive preliminary assessment. This verifies the integration path with a real reasoning model; it does not assess Jev's judgment quality or establish an owner disclosure grant. A real TypeSafe evaluation requires the appropriate permission and experiment budget. One run cannot establish reliability. Trusted local Bash was unrestricted host execution; the file was disposable, not a sandbox.

@@ -80,7 +80,11 @@ def snapshot_owner_knowledge(queue: SQLiteMessageQueue, receipt: object, task: o
         return unavailable
     now_fn = clock or (lambda: datetime.now(timezone.utc))
     try:
-        with queue.trusted_local_owner_claim_transaction(receipt, task, clock=lambda: now_fn()) as conn:
+        from .owner_telegram_ingress import telegram_owner_claim_transaction, verify_telegram_owner_claim
+        transaction = (telegram_owner_claim_transaction(queue, receipt, task, clock=now_fn)
+                       if verify_telegram_owner_claim(queue, receipt, task, clock=now_fn)
+                       else queue.trusted_local_owner_claim_transaction(receipt, task, clock=now_fn))
+        with transaction as conn:
             return snapshot_owner_knowledge_locked(conn, task, cancellation_checker=cancellation_checker, clock=now_fn)
     except Exception:
         return unavailable

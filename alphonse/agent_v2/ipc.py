@@ -453,6 +453,10 @@ class V2DaemonServer:
                     result = self._owner_abandon(connection, request)
                 elif isinstance(request, dict) and request.get('method') == 'experimental_owner_recovery_list':
                     result = self._owner_recovery_list(connection, request)
+                elif isinstance(request, dict) and request.get('method') in {'experimental_owner_continuation_list', 'experimental_owner_continuation_choose'}:
+                    result = self._owner_continuation(connection, request)
+                elif isinstance(request, dict) and request.get('method') in {'get_owner_continuation_settings', 'set_owner_continuation_settings'}:
+                    result = self._owner_continuation_settings(connection, request)
                 elif isinstance(request, dict) and request.get('method') == 'experimental_owner_questions':
                     result = self._owner_questions(connection, request)
                 elif isinstance(request, dict) and request.get('method') in {
@@ -682,6 +686,7 @@ class V2DaemonServer:
             reason = self.daemon.owner_processing_blocking_reason()
             return {'owner_only': getattr(self.daemon, 'experimental_owner_only', False) is True,
                     'processing_ready': reason is None,
+                    'continuation_available': reason is None and getattr(self.daemon, '_continuation_experimental_enabled', False) is True,
                     'blocking_reason': reason,
                     'paused_legacy_requests': self.daemon.owner_paused_legacy_requests()}
         return self.daemon.owner_message_status_payload(params['message_id'])
@@ -695,6 +700,38 @@ class V2DaemonServer:
             raise ValueError('owner_recovery_payload_denied')
         self._local_peer_uid(connection)
         return {'items': self.daemon.owner_recovery_list()}
+
+    def _owner_continuation(self, connection, request):
+        if (not self.experimental_owner_ingress or not getattr(self.daemon, 'experimental_owner_only', False)
+                or not getattr(self.daemon, '_continuation_experimental_enabled', False)):
+            raise PermissionError('owner_continuation_unavailable')
+        if request.get('version') != PROTOCOL_VERSION:
+            raise ValueError('daemon_protocol_version_unsupported')
+        params = request.get('params')
+        self._local_peer_uid(connection)
+        if request.get('method') == 'experimental_owner_continuation_list':
+            if params != {}:
+                raise ValueError('owner_continuation_payload_denied')
+            return {'items': self.daemon.owner_continuation_list()}
+        if (not isinstance(params, dict) or set(params) != {'message_id', 'checkpoint_version', 'approve'}
+                or not isinstance(params['message_id'], str)
+                or type(params['checkpoint_version']) is not int or params['checkpoint_version'] < 1
+                or type(params['approve']) is not bool):
+            raise ValueError('owner_continuation_payload_denied')
+        return self.daemon.owner_continuation_choose(params['message_id'], params['checkpoint_version'], params['approve'])
+
+    def _owner_continuation_settings(self, connection, request):
+        if not self.experimental_owner_ingress or not getattr(self.daemon, 'experimental_owner_only', False):
+            raise PermissionError('owner_continuation_unavailable')
+        if request.get('version') != PROTOCOL_VERSION:
+            raise ValueError('daemon_protocol_version_unsupported')
+        self._local_peer_uid(connection)
+        params = request.get('params')
+        if request.get('method') == 'get_owner_continuation_settings':
+            if params != {}:
+                raise ValueError('owner_continuation_payload_denied')
+            return self.daemon.owner_continuation_settings()
+        return self.daemon.set_owner_continuation_settings(params)
 
     def _owner_abandon(self, connection, request):
         if not self.experimental_owner_ingress:

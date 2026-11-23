@@ -6,8 +6,13 @@ const labels: Record<string, string> = {
   failed: "Needs attention",
   started_unconfirmed: "Answer delivery is unconfirmed",
   action_unconfirmed: "An action may have run; its effects are unconfirmed",
+  telegram_delivery_unconfirmed: "Telegram delivery is unconfirmed",
+  telegram_reconciliation_required: "Telegram accepted the response; saving its history is unconfirmed",
   effect_committed: "The scheduled task was cancelled; the response is unavailable",
   unavailable: "Result unavailable",
+  continuation_declined: "You chose not to continue; earlier work remains recorded",
+  continuation_accepted: "Continuation accepted; waiting for the worker",
+  continuation_expired: "Continuation expired before the worker resumed; earlier work needs review",
 };
 
 export function OwnerRecovery({ items, stopping, onStop, onShow }: {
@@ -30,7 +35,10 @@ export function OwnerRecovery({ items, stopping, onStop, onShow }: {
         {stopping === item.message_id ? "Stopping…" : "Stop request"}
       </button>
       {!item.can_abandon && <span> {item.status === "action_unconfirmed"
-        ? "(check the result before trying again)" : "(still running or unavailable to stop)"}</span>}
+        ? "(check the result before trying again)" : item.status === "telegram_delivery_unconfirmed"
+          ? "(the response may have been sent; it will not be sent again automatically)"
+          : item.status === "telegram_reconciliation_required" ? "(it will not be sent again automatically)"
+          : "(still running or unavailable to stop)"}</span>}
     </li>)}</ul>
   </section>;
 }

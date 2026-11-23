@@ -13,6 +13,7 @@ from alphonse.agent_v2.core.tools.registry import ToolDefinition
 from alphonse.agent_v2.integrations.gmail import ALL_MAIL, SCOPE
 from alphonse.agent_v2.integrations.gmail_unread import GmailUnreadService
 from alphonse.agent_v2.services.project_check_worker import CheckStopped
+from .owner_direct_claim import verify_owner_execution_claim
 
 OWNER_GMAIL_TOOL_ID = 'native.owner_gmail_unread'
 _SCHEMA = {'type': 'object', 'properties': {
@@ -77,7 +78,7 @@ def _authorized(actor: str, context: Any) -> bool:
     cancelled = getattr(context, 'cancellation_checker', None)
     return bool(actor and actor == getattr(task, 'user', None) and type(queue) is SQLiteMessageQueue
                 and callable(cancelled) and cancelled() is False and getattr(task, 'status', '') != 'cancelled'
-                and queue.verify_trusted_local_owner_claim(getattr(context, 'claim_receipt', None), task))
+                and verify_owner_execution_claim(queue, getattr(context, 'claim_receipt', None), task))
 
 
 def execute_owner_gmail(arguments: dict[str, Any], *, context: Any) -> dict[str, Any]:

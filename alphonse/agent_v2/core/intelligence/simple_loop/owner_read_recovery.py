@@ -121,7 +121,9 @@ def restore_owner_read_observations(checkpoint: OwnerAtomicCheckpoint, context: 
                 if host_bash:
                     from .owner_host_bash import valid_host_binding
                     with checkpoint._transaction() as conn:
-                        _, raw, _, _ = checkpoint._load(conn, expected_version)
+                        # Recovery may inspect a paused checkpoint, but cannot
+                        # mutate it or dispatch while its pause marker exists.
+                        _, raw, _, _ = checkpoint._load(conn, expected_version, allow_paused=True)
                         history = raw['metadata'].get('owner_host_bash_history', [])
                     if not valid_host_binding(checkpoint, context, item, history):
                         raise OwnerRecoveryUnavailable('owner_recovery_unavailable')
