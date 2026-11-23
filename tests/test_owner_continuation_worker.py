@@ -3,6 +3,7 @@ import json
 import os
 import time
 import tempfile
+import threading
 from pathlib import Path
 import pytest
 
@@ -18,19 +19,31 @@ from alphonse.agent_v2.runtime import build_runtime_host
 from alphonse.agent_v2.users import V2UserStore
 
 
-@pytest.mark.parametrize('use_bash,crash_after_activation,fail_reclaim,with_progress', [(False, False, False, False), (True, False, False, False), (True, True, False, False), (False, False, True, False), (True, False, False, True)])
-def test_owner_conversation_checkpoint_after_restart(tmp_path, monkeypatch, use_bash, crash_after_activation, fail_reclaim, with_progress):
+@pytest.mark.parametrize('use_bash,crash_after_activation,fail_reclaim,with_progress,with_steering', [(False, False, False, False, False), (True, False, False, False, False), (True, True, False, False, False), (False, False, True, False, False), (True, False, False, True, False), (False, False, False, False, True)])
+def test_owner_conversation_checkpoint_after_restart(tmp_path, monkeypatch, use_bash, crash_after_activation, fail_reclaim, with_progress, with_steering):
     output = tmp_path / 'result.txt'
+    steering_ready = threading.Event()
+    steering_input = {}
     class Provider:
         supports_image_input = False
         calls = 0
         def generate_json(self, request):
             self.calls += 1
+            if with_steering and self.calls == 1:
+                assert steering_ready.wait(5)
+                from alphonse.agent_v2.owner_steering import submit
+                assert submit(steering_input['queue'], owner=steering_input['owner'], peer_uid=os.getuid(),
+                    daemon_id='before-restart', message_id=steering_input['message'],
+                    request_id='a' * 32, content='Use the local clock.')['status'] == 'accepted'
+                return InferenceResult(json_value={'kind': 'answer', 'tool_id': None, 'arguments': None,
+                    'text': 'Stale answer.'}, raw_response='{}', usage={'input_tokens': 100, 'output_tokens': 20})
+            if with_steering:
+                assert 'Use the local clock.' in request.prompt
             if use_bash and self.calls in (1, 2):
                 command = 'printf x >> result.txt' if self.calls == 1 else 'cat result.txt'
                 decision = {'kind': 'tool', 'tool_id': 'native.bash',
                             'arguments': {'command': command, 'cwd': str(tmp_path)}, 'text': None}
-            elif not use_bash and self.calls == 1:
+            elif not use_bash and self.calls == (2 if with_steering else 1):
                 decision = {'kind': 'tool', 'tool_id': 'native.owner_clock', 'arguments': {}, 'text': None}
             else:
                 decision = {'kind': 'answer', 'tool_id': None, 'arguments': None, 'text': 'The observed result is x.' if use_bash else 'I observed the clock.'}
@@ -40,7 +53,7 @@ def test_owner_conversation_checkpoint_after_restart(tmp_path, monkeypatch, use_
     path = tmp_path / 'owner.sqlite'
     users = V2UserStore(path)
     users.set_workspace_root(tmp_path / 'workspace')
-    users.onboard(display_name='Synthetic owner', users_root=tmp_path / 'users')
+    owner = users.onboard(display_name='Synthetic owner', users_root=tmp_path / 'users')
     users._set_setting('owner_continuation_checkpoint', json.dumps({'metric': 'actions', 'interval': 1}))
     queue = SQLiteMessageQueue(path, experimental_claim_fencing=True)
     provider = Provider()
@@ -48,6 +61,9 @@ def test_owner_conversation_checkpoint_after_restart(tmp_path, monkeypatch, use_
         conversation_store=SQLiteConversationStore(path), outbox=SQLiteOutboundStore(path),
         inference=InferenceRouter(provider=provider, default_profile=ModelProfile('test', 'fixture', 'offline')),
         experimental_owner_read=True, owner_selected_draft_sink=lambda *_: None)
+    if with_steering:
+        from types import SimpleNamespace
+        runtime.core.system_one = SimpleNamespace(review_freeform_effect_claim=lambda **_: True)
     judgments = []
     if with_progress:
         from types import SimpleNamespace
@@ -76,12 +92,14 @@ def test_owner_conversation_checkpoint_after_restart(tmp_path, monkeypatch, use_
 
     first = daemon('before-restart')
     message = queue.enqueue_trusted_local_owner(prompt='Report the current clock.', peer_uid=os.getuid())
+    steering_input.update(queue=queue, owner=owner.user_id, message=message)
+    steering_ready.set()
     try:
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline and first.owner_message_status(message) != 'continuation_paused':
             time.sleep(.02)
         assert first.owner_message_status(message) == 'continuation_paused'
-        assert provider.calls == 1
+        assert provider.calls == (2 if with_steering else 1)
         if use_bash:
             assert output.read_text() == 'x'
     finally:
@@ -149,7 +167,7 @@ def test_owner_conversation_checkpoint_after_restart(tmp_path, monkeypatch, use_
         while time.monotonic() < deadline and second.owner_message_status(message) not in {'ready', 'failed'}:
             time.sleep(.02)
         assert second.owner_message_status(message) == 'ready'
-        assert provider.calls == (3 if use_bash else 2)
+        assert provider.calls == (3 if use_bash or with_steering else 2)
         draft = second.take_owner_desktop_draft(message)
         assert ('The observed result is x.' if use_bash else 'I observed the clock.') in draft['message']
         if use_bash:

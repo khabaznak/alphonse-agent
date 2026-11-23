@@ -451,6 +451,14 @@ class V2UserStore:
             remove_directory_beneath(users_root, (identity,), error="user_profile_symlink")
             conn.execute("DELETE FROM v2_user_addresses WHERE user_id=?", (identity,))
             conn.execute("DELETE FROM v2_user_aliases WHERE user_id=?", (identity,))
+            if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_owner_steering'").fetchone():
+                conn.execute("DELETE FROM v2_owner_steering WHERE owner_id=?", (identity,))
+            if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_owner_composer_tombstones'").fetchone():
+                conn.execute("DELETE FROM v2_owner_composer_tombstones WHERE owner_id=?", (identity,))
+            if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_owner_composer_drafts'").fetchone():
+                conn.execute("DELETE FROM v2_owner_composer_drafts WHERE owner_id=?", (identity,))
+            if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_owner_held_followups'").fetchone():
+                conn.execute("DELETE FROM v2_owner_held_followups WHERE owner_id=?", (identity,))
             deleted = conn.execute("DELETE FROM v2_users WHERE user_id=?", (identity,)).rowcount > 0
         return deleted
 

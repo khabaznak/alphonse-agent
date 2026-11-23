@@ -88,7 +88,7 @@ def test_daemon_main_always_selects_simple_loop(monkeypatch, tmp_path, old_flag)
     assert callable(captured['runtime']['owner_selected_draft_sink'])
 
 
-@pytest.mark.parametrize('mode', ['answer', 'question', 'question_context_changed', 'cancel', 'abandon', 'unknown_effect', 'unknown_outbox', 'bad_schema', 'bad_status'])
+@pytest.mark.parametrize('mode', ['answer', 'effect_claim', 'effect_missing', 'effect_uncertain', 'steer', 'steer_question', 'steer_cancel', 'question', 'question_context_changed', 'cancel', 'abandon', 'unknown_effect', 'unknown_outbox', 'bad_schema', 'bad_status'])
 def test_explicit_owner_worker_routes_to_socket_and_saves_history(tmp_path, monkeypatch, mode):
     holder = {}
     class Provider:
@@ -99,22 +99,37 @@ def test_explicit_owner_worker_routes_to_socket_and_saves_history(tmp_path, monk
         def generate_json(self, request):
             self.calls += 1
             self.last_prompt = request.prompt
-            if self.calls == 1:
+            if mode in {'steer', 'steer_question', 'steer_cancel'} and self.calls == 1:
+                assert holder['id_ready'].wait(5)
+                from alphonse.agent_v2.owner_steering import submit
+                assert submit(holder['queue'], owner=holder['owner_id'], peer_uid=os.getuid(), daemon_id='fixture',
+                              message_id=holder['message_id'], request_id='f' * 32,
+                              content='Focus on the blue apples.')['status'] == 'accepted'
+                if mode == 'steer_cancel':
+                    from alphonse.agent_v2.owner_followups import OwnerFollowups
+                    assert OwnerFollowups(holder['queue'], holder['owner_id'], os.getuid()).add(
+                        holder['message_id'], 'Next question', 'e' * 32)['status'] == 'queued'
+                    assert holder['daemon'].trigger_killswitch(actor_user_id=holder['owner_id'])['status'] == 'cancel_requested'
+                value = {'kind': 'answer', 'tool_id': None, 'arguments': None, 'text': 'Stale answer.'}
+            elif self.calls == (2 if mode in {'steer', 'steer_question'} else 1):
+                if mode in {'steer', 'steer_question'}:
+                    assert 'Focus on the blue apples.' in request.prompt
                 value = {'kind': 'tool', 'tool_id': 'native.search_memory', 'arguments': {
                     'query': 'apples', 'source_types': ['conversation']}, 'text': None}
-            elif self.calls == 2:
+            elif self.calls == (3 if mode in {'steer', 'steer_question'} else 2):
                 value = {'kind': 'tool', 'tool_id': 'native.read_memory_source', 'arguments': {
                     'source_id': self.source_id, 'neighbors': 0}, 'text': None}
             else:
-                if self.calls == 3:
+                if self.calls == (4 if mode in {'steer', 'steer_question'} else 3):
                     assert 'Synthetic apples.' in request.prompt
                 if mode == 'cancel':
                     outcome = holder['daemon'].trigger_killswitch(actor_user_id=holder['owner_id'])
                     assert outcome['status'] == 'cancel_requested'
                     assert outcome['notification_error'] == 'owner_notice_unavailable'
-                question = mode in {'question', 'question_context_changed'} and self.calls == 3
+                question = (mode in {'question', 'question_context_changed'} and self.calls == 3) or (mode == 'steer_question' and self.calls == 4)
                 value = {'kind': 'question' if question else 'answer', 'tool_id': None,
-                         'arguments': None, 'text': 'Which apples?' if question else 'Synthetic answer.'}
+                         'arguments': None, 'text': ('Which apples?' if question else
+                            'I saved the shopping list.' if mode in {'effect_claim', 'effect_missing', 'effect_uncertain'} and self.calls > 3 else 'Synthetic answer.')}
             return InferenceResult(json_value=value, raw_response=json.dumps(value),
                                    usage={'input_tokens': 100, 'output_tokens': 20})
 
@@ -123,6 +138,8 @@ def test_explicit_owner_worker_routes_to_socket_and_saves_history(tmp_path, monk
     owner = users.onboard(display_name='Synthetic owner', users_root=tmp_path / 'users')
     holder['owner_id'] = owner.user_id
     queue = SQLiteMessageQueue(path, experimental_claim_fencing=True)
+    holder['queue'] = queue
+    holder['id_ready'] = threading.Event()
     conversation = SQLiteConversationStore(path)
     source = conversation.record(owner_user_id=owner.user_id, role='user', content='Synthetic apples.',
                                  source='test', source_message_id='source-fixture')
@@ -134,9 +151,15 @@ def test_explicit_owner_worker_routes_to_socket_and_saves_history(tmp_path, monk
     runtime = build_runtime_host(user_store=users, messages=queue, question_store=SQLiteQuestionStore(path),
         conversation_store=conversation, outbox=SQLiteOutboundStore(path), tools=tools, inference=router, coding_skill_service=object(),
         experimental_owner_read=True, owner_selected_draft_sink=lambda *_: None)
-    if mode in {'question', 'question_context_changed'}:
-        # This fixture tests IPC correlation, not Jev's semantic judgment.
-        runtime.core.system_one = SimpleNamespace(review_clarification_effect_claim=lambda **_: True)
+    # This fixture tests plumbing, not Jev's semantic judgment.
+    reviews = []
+    def effect_review(**kwargs):
+        reviews.append(kwargs)
+        if mode == 'effect_missing':
+            raise RuntimeError('judgment unavailable')
+        return mode not in {'effect_claim', 'effect_uncertain'}
+    runtime.core.system_one = SimpleNamespace(review_clarification_effect_claim=lambda **_: True,
+                                               review_freeform_effect_claim=effect_review)
     daemon = V2Daemon(runtime, daemon_id='fixture', experimental_owner_only=True)
     holder['daemon'] = daemon
     # The exclusive owner worker must retain the same protected package and
@@ -215,7 +238,8 @@ def test_explicit_owner_worker_routes_to_socket_and_saves_history(tmp_path, monk
                     message_id='legacy-queued')
                 assert client.request('experimental_owner_status') == {
                     'owner_only': True, 'processing_ready': False,
-                    'blocking_reason': 'legacy_claim_conflict', 'paused_legacy_requests': 2}
+                    'blocking_reason': 'legacy_claim_conflict', 'paused_legacy_requests': 2,
+                    'continuation_available': False}
                 with pytest.raises(RuntimeError, match='owner_worker_unavailable'):
                     client.request('experimental_owner_ingress', prompt='Must not queue')
                 # Recheck atomically even when the preflight races a claim.
@@ -230,7 +254,8 @@ def test_explicit_owner_worker_routes_to_socket_and_saves_history(tmp_path, monk
                 assert legacy.ack('legacy-conflict')
                 assert client.request('experimental_owner_status') == {
                     'owner_only': True, 'processing_ready': True,
-                    'blocking_reason': None, 'paused_legacy_requests': 1}
+                    'blocking_reason': None, 'paused_legacy_requests': 1,
+                    'continuation_available': True}
                 monkeypatch.setattr(runtime.question_store, 'list_for_conversation',
                                     lambda *_args, **_kwargs: pytest.fail('legacy question backfill'))
                 monkeypatch.setattr(runtime.conversation_store, 'import_legacy_events',
@@ -246,13 +271,25 @@ def test_explicit_owner_worker_routes_to_socket_and_saves_history(tmp_path, monk
                 with runtime.outbox._connect() as conn:
                     assert conn.execute("SELECT status FROM v2_outbox WHERE outbox_message_id='legacy'").fetchone()[0] == 'pending'
             message_id = client.request('experimental_owner_ingress', prompt='Find the apples note.')['message_id']
+            holder['message_id'] = message_id
+            holder['id_ready'].set()
             deadline = time.monotonic() + 5
             while time.monotonic() < deadline:
                 status = client.request('experimental_owner_status', message_id=message_id)['status']
                 if status != 'pending':
                     break
                 time.sleep(.02)
-            assert provider.calls == 3
+            assert provider.calls == (1 if mode == 'steer_cancel' else 4 if mode in {'steer', 'steer_question'} else 3)
+            if mode == 'steer_cancel':
+                assert status == 'failed'
+                steers = client.request('experimental_owner_steer_list')['items']
+                followups = client.request('experimental_owner_followup_list')['items']
+                assert steers[0]['status'] == 'needs_attention'
+                assert followups[0]['status'] == 'needs_attention'
+                assert followups[0]['can_remove'] is True
+                with queue._connect() as conn:
+                    assert conn.execute('SELECT count(*) FROM v2_inbound_messages WHERE message_id=?', ('e' * 32,)).fetchone()[0] == 0
+                return
             if mode == 'cancel':
                 assert status == 'failed'
                 assert client.request('experimental_owner_status', message_id=message_id) == {
@@ -265,13 +302,37 @@ def test_explicit_owner_worker_routes_to_socket_and_saves_history(tmp_path, monk
                     assert outbox_conn.execute('SELECT COUNT(*) FROM v2_outbox').fetchone()[0] == 0
                 return
             assert status == 'ready'
+            if mode in {'effect_claim', 'effect_missing', 'effect_uncertain'}:
+                from alphonse.agent_v2.owner_followups import OwnerFollowups
+                held = OwnerFollowups(queue, owner.user_id, os.getuid())
+                assert held.add(message_id, 'Save it to the shopping list.', 'e' * 32)['status'] == 'queued'
+            if mode == 'steer':
+                with queue._connect() as conn:
+                    assert conn.execute("SELECT status FROM v2_owner_steering WHERE id=?", ('f' * 32,)).fetchone()[0] == 'included_in_planning'
+                    conn.execute("UPDATE v2_owner_steering SET content='tampered' WHERE id=?", ('f' * 32,))
+                with pytest.raises(RuntimeError, match='owner_steering_binding_unavailable'):
+                    client.request('experimental_owner_take_draft', message_id=message_id)
+                with queue._connect() as conn:
+                    conn.execute("UPDATE v2_owner_steering SET content='Focus on the blue apples.' WHERE id=?", ('f' * 32,))
+                from alphonse.agent_v2.owner_followups import OwnerFollowups
+                held = OwnerFollowups(queue, owner.user_id, os.getuid())
+                steer_followup_id = 'e' * 32
+                assert held.add(message_id, 'What about the correction?', steer_followup_id)['status'] == 'queued'
+            if mode == 'answer':
+                from alphonse.agent_v2.owner_followups import OwnerFollowups
+                held = OwnerFollowups(queue, owner.user_id, os.getuid())
+                followup_id = 'd' * 32
+                assert held.add(message_id, 'What about those apples?', followup_id)['status'] == 'queued'
+                second_followup_id = 'e' * 32
+                assert held.add(message_id, 'And the other ones?', second_followup_id)['status'] == 'queued'
+                assert held.release_next() is None
             recovery = client.request('experimental_owner_recovery_list')['items']
             assert recovery == [{'message_id': message_id, 'prompt': 'Find the apples note.',
                                  'status': 'ready', 'can_abandon': False}]
             with pytest.raises(RuntimeError, match='owner_abandon_live_claim'):
                 client.request('experimental_owner_abandon', message_id=message_id)
             draft = client.request('experimental_owner_take_draft', message_id=message_id)
-            is_question = mode in {'question', 'question_context_changed'}
+            is_question = mode in {'question', 'question_context_changed', 'steer_question'}
             assert draft['message'] == ('Which apples?' if is_question else 'Synthetic answer.')
             assert draft['kind'] == ('question' if is_question else 'answer')
             assert [(item.role, item.content) for item in conversation.list(owner_user_id=owner.user_id)] == [
@@ -327,6 +388,52 @@ def test_explicit_owner_worker_routes_to_socket_and_saves_history(tmp_path, monk
             assert [(event.role, event.content) for event in conversation.list(owner_user_id=owner.user_id)] == [
                 ('user', 'Synthetic apples.'), ('user', 'Find the apples note.'),
                 ('assistant', 'Which apples?' if is_question else 'Synthetic answer.')]
+            if mode in {'effect_claim', 'effect_missing', 'effect_uncertain'}:
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline:
+                    next_status = client.request('experimental_owner_status', message_id='e' * 32)['status']
+                    if next_status not in {'pending', 'unavailable'}:
+                        break
+                    time.sleep(.02)
+                assert next_status == 'failed'
+                assert client.request('experimental_owner_status', message_id='e' * 32)['failure_code'] == 'answer_unverified'
+                assert reviews and reviews[-1]['response_text'] == 'I saved the shopping list.'
+                with pytest.raises(RuntimeError, match='owner_desktop_pickup_unavailable'):
+                    client.request('experimental_owner_take_draft', message_id='e' * 32)
+                return
+            if mode == 'steer_question':
+                from alphonse.agent_v2.core.intelligence.simple_loop.owner_clarification import bind_owner_question
+                from alphonse.agent_v2.owner_steering import remove_steering
+                with queue._connect() as conn:
+                    binding = bind_owner_question(conn, owner.user_id, message_id)
+                    conn.execute('BEGIN')
+                    conn.execute("UPDATE v2_owner_steering SET content='tampered' WHERE id=?", ('f' * 32,))
+                    with pytest.raises(ValueError):
+                        bind_owner_question(conn, owner.user_id, message_id)
+                    conn.rollback()
+                reply_id = client.request('experimental_owner_ingress', prompt='The smaller ones.',
+                                          reply_to_message_id=message_id)['message_id']
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline:
+                    reply_status = client.request('experimental_owner_status', message_id=reply_id)['status']
+                    if reply_status != 'pending':
+                        break
+                    time.sleep(.02)
+                assert reply_status == 'ready'
+                assert 'Focus on the blue apples.' in provider.last_prompt
+                with pytest.raises(ValueError, match='owner_steer_dependent_followups'):
+                    remove_steering(queue, owner=owner.user_id, peer_uid=os.getuid(), steering_id='f' * 32)
+                reply = client.request('experimental_owner_take_draft', message_id=reply_id)
+                client.request('experimental_owner_ack_draft', message_id=reply_id,
+                               acknowledgement_token=reply['acknowledgement_token'])
+                return
+            if mode == 'answer':
+                from alphonse.agent_v2.core.intelligence.simple_loop.owner_clarification import bind_owner_followup, load_bound_owner_followup
+                with queue._connect() as conn:
+                    binding = bind_owner_followup(conn, owner.user_id, message_id)
+                    assert load_bound_owner_followup(conn, owner.user_id, binding) == ('Find the apples note.', 'Synthetic answer.')
+                    with pytest.raises(ValueError):
+                        bind_owner_followup(conn, 'other-owner', message_id)
             if is_question:
                 assert client.request('experimental_owner_questions')['questions'] == [
                     {'message_id': message_id, 'question': 'Which apples?'}]
@@ -482,6 +589,19 @@ def test_explicit_owner_worker_routes_to_socket_and_saves_history(tmp_path, monk
                 assert reply['kind'] == 'answer'
                 client.request('experimental_owner_ack_draft', message_id=reply_id,
                                acknowledgement_token=reply['acknowledgement_token'])
+            if mode == 'steer':
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline:
+                    next_status = client.request('experimental_owner_status', message_id=steer_followup_id)['status']
+                    if next_status not in {'pending', 'unavailable'}:
+                        break
+                    time.sleep(.02)
+                assert next_status == 'ready'
+                assert 'Focus on the blue apples.' in provider.last_prompt
+                assert 'Focus on the blue apples.' in reviews[-1]['request_context']
+                followup = client.request('experimental_owner_take_draft', message_id=steer_followup_id)
+                client.request('experimental_owner_ack_draft', message_id=steer_followup_id,
+                               acknowledgement_token=followup['acknowledgement_token'])
             assert not SQLiteMessageQueue(path).claim_mode_blocked()
             if mode == 'answer':
                 # Owner mode leaves the earlier V3-stamped request untouched;
@@ -491,6 +611,37 @@ def test_explicit_owner_worker_routes_to_socket_and_saves_history(tmp_path, monk
                 assert restored.message.prompt == 'Legacy queued work'
                 assert restored.message.metadata['intelligence_engine'] == 'hierarchical_v3'
                 assert legacy.ack('legacy-queued')
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline:
+                    next_status = client.request('experimental_owner_status', message_id=followup_id)['status']
+                    if next_status not in {'pending', 'unavailable'}:
+                        break
+                    time.sleep(.02)
+                assert next_status == 'ready'
+                assert 'What about those apples?' in provider.last_prompt
+                assert 'Synthetic answer.' in provider.last_prompt
+                followup = client.request('experimental_owner_take_draft', message_id=followup_id)
+                client.request('experimental_owner_ack_draft', message_id=followup_id,
+                               acknowledgement_token=followup['acknowledgement_token'])
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline:
+                    next_status = client.request('experimental_owner_status', message_id=second_followup_id)['status']
+                    if next_status not in {'pending', 'unavailable'}:
+                        break
+                    time.sleep(.02)
+                assert next_status == 'ready'
+                assert 'What about those apples?' in provider.last_prompt
+                second = client.request('experimental_owner_take_draft', message_id=second_followup_id)
+                client.request('experimental_owner_ack_draft', message_id=second_followup_id,
+                               acknowledgement_token=second['acknowledgement_token'])
+                assert [item['status'] for item in held.list()['items']] == ['completed', 'completed']
+                with queue._connect() as conn:
+                    conn.execute('BEGIN')
+                    conn.execute("UPDATE v2_conversation_events SET content='tampered' WHERE source_message_id=?",
+                                 ('outbound:owner:' + message_id,))
+                    with pytest.raises(ValueError):
+                        bind_owner_followup(conn, owner.user_id, second_followup_id)
+                    conn.rollback()
             users.update_user(owner.user_id, is_active=False)
             assert client.request('experimental_owner_status', message_id=message_id)['status'] == 'unavailable'
             assert client.request('experimental_owner_recovery_list')['items'] == []

@@ -437,6 +437,13 @@ class V2DaemonServer:
                     result = self._optional_management(connection, request)
                 elif isinstance(request, dict) and request.get('method') == 'experimental_owner_ingress':
                     result = self._owner_ingress(connection, request)
+                elif isinstance(request, dict) and request.get('method') in {
+                        'experimental_owner_followup_add', 'experimental_owner_followup_list',
+                        'experimental_owner_followup_remove', 'experimental_owner_composer_save',
+                        'experimental_owner_composer_list', 'experimental_owner_composer_delete',
+                        'experimental_owner_composer_reconcile', 'experimental_owner_steer_add',
+                        'experimental_owner_steer_list', 'experimental_owner_steer_remove'}:
+                    result = self._owner_followups(connection, request)
                 elif isinstance(request, dict) and request.get('method') == 'experimental_owner_take_draft':
                     result = self._owner_take_draft(connection, request)
                 elif isinstance(request, dict) and request.get('method') == 'experimental_owner_ack_draft':
@@ -486,6 +493,78 @@ class V2DaemonServer:
                 encoded = (json.dumps({"version": PROTOCOL_VERSION, "request_id": _request_id(request),
                     "ok": False, "error": "daemon_response_unavailable"}) + "\n").encode("utf-8")
             connection.sendall(encoded)
+
+    def _owner_followups(self, connection, request):
+        """Manage held follow-ups; this endpoint never dispatches work."""
+        if not self.experimental_owner_ingress or getattr(self.daemon, 'experimental_owner_only', False) is not True:
+            raise PermissionError('owner_followup_unavailable')
+        if request.get('version') != PROTOCOL_VERSION:
+            raise ValueError('daemon_protocol_version_unsupported')
+        method, params = request.get('method'), request.get('params')
+        expected = {'experimental_owner_followup_add': {'active_message_id', 'prompt', 'request_id'},
+                    'experimental_owner_followup_list': set(),
+                    'experimental_owner_followup_remove': {'id'},
+                    'experimental_owner_composer_save': {'id', 'active_message_id', 'prompt'},
+                    'experimental_owner_composer_list': set(),
+                    'experimental_owner_composer_delete': {'id'},
+                    'experimental_owner_composer_reconcile': {'id'},
+                    'experimental_owner_steer_add': {'active_message_id','request_id','prompt'},
+                    'experimental_owner_steer_list': set(),
+                    'experimental_owner_steer_remove': {'id'}}[method]
+        if not isinstance(params, dict) or set(params) != expected:
+            raise ValueError('owner_followup_payload_denied')
+        uid = self._local_peer_uid(connection)
+        users = self.daemon.runtime.user_store
+        owner = users.admin_user()
+        if (owner is None or owner.is_active is not True or owner.role not in ('admin', 'owner')
+                or not users.is_admin(owner.user_id)):
+            raise PermissionError('owner_followup_unavailable')
+        queue = self.daemon.runtime.queue
+        if (not users.db_path or users.db_path == ':memory:'
+                or os.path.realpath(str(users.db_path)) != os.path.realpath(str(queue.db_path))):
+            raise PermissionError('owner_followup_unavailable')
+        from alphonse.agent_v2.owner_followups import OwnerFollowups
+        if method.startswith('experimental_owner_steer_'):
+            from alphonse.agent_v2.owner_steering import submit, list_steering, remove_steering
+            if method == 'experimental_owner_steer_add':
+                return submit(queue, owner=owner.user_id, peer_uid=uid, daemon_id=self.daemon.daemon_id,
+                              message_id=params['active_message_id'], request_id=params['request_id'], content=params['prompt'])
+            if method == 'experimental_owner_steer_remove':
+                return remove_steering(queue, owner=owner.user_id, peer_uid=uid, steering_id=params['id'])
+            result = list_steering(queue, owner=owner.user_id, peer_uid=uid)
+            for item in result['items']:
+                status = self.daemon.owner_message_status(item['active_message_id'])
+                item['request_status'] = status
+                if item['status'] == 'accepted' and status in {'failed', 'unavailable', 'abandoned', 'started_unconfirmed'}:
+                    item['status'] = 'needs_attention'
+            return result
+        if method.startswith('experimental_owner_composer_'):
+            from alphonse.agent_v2.owner_composer_drafts import OwnerComposerDrafts
+            drafts = OwnerComposerDrafts(queue, owner.user_id, uid)
+            if method == 'experimental_owner_composer_save':
+                return drafts.save(params['id'], params['active_message_id'], params['prompt'])
+            if method == 'experimental_owner_composer_reconcile':
+                return drafts.reconcile(params['id'])
+            if method == 'experimental_owner_composer_delete':
+                return drafts.delete_draft(params['id'])
+            return drafts.list_drafts()
+        followups = OwnerFollowups(queue, owner.user_id, uid)
+        if method == 'experimental_owner_followup_add':
+            return followups.add(params['active_message_id'], params['prompt'], params['request_id'])
+        if method == 'experimental_owner_followup_remove':
+            return followups.remove(params['id'])
+        result = followups.list()
+        for item in result['items']:
+            if item['status'] == 'queued' and item['predecessor_active']:
+                status = self.daemon.owner_message_status(item['predecessor_message_id'])
+                if status in {'failed', 'unavailable', 'abandoned', 'started_unconfirmed'}:
+                    item['status'] = 'needs_attention'
+            if item['status'] == 'released':
+                status = self.daemon.owner_message_status(item['id'])
+                item['request_status'] = status
+                if status in {'failed', 'unavailable', 'abandoned', 'started_unconfirmed'}:
+                    item['status'] = 'needs_attention'
+        return result
 
     def _owner_reminders(self, connection, request):
         """Restrict reminder mutation and pickup to the trusted local owner."""

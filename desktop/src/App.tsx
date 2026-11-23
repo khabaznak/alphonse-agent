@@ -29,6 +29,10 @@ import { abandonOwnerRequest, listOwnerRecovery, type OwnerRecoveryItem } from "
 import { OwnerRecovery } from "./OwnerRecoveryPanel";
 import { OwnerContinuation } from "./OwnerContinuation";
 import { OwnerContinuationSettings } from "./OwnerContinuationSettings";
+import { OwnerConversationRecoveryNotice } from "./OwnerConversationRecoveryNotice";
+import { OwnerFollowups, type OwnerFollowup } from "./OwnerFollowups";
+import { OwnerSavedDrafts } from "./OwnerSavedDrafts";
+import { OwnerSteering, type OwnerSteer } from "./OwnerSteering";
 import { LegacyStateInventory } from "./LegacyStateInventory";
 import { LegacyNotificationReview } from "./LegacyNotificationReview";
 import { OwnerReminders } from "./OwnerReminders";
@@ -162,6 +166,14 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const [reminderRecoveryTarget, setReminderRecoveryTarget] = useState<HTMLDivElement | null>(null);
   const [reminderNeedsAttention, setReminderNeedsAttention] = useState(false);
   const [ownerRecoveryNotice, setOwnerRecoveryNotice] = useState("");
+  const [ownerDraftSnapshot, setOwnerDraftSnapshot] = useState<{ conversation: OwnerConversation | null; items: {id: string; active_message_id: string; prompt: string; resolution: "unresolved" | "not_submitted" | "submitted"}[] }>({ conversation: null, items: [] });
+  const [ownerSteering, setOwnerSteering] = useState<{user: string; items: OwnerSteer[]}>({user: "", items: []});
+  const [ownerFollowupSnapshot, setOwnerFollowupSnapshot] = useState<{ user: string; items: OwnerFollowup[] }>({ user: "", items: [] });
+  const ownerFollowups = ownerFollowupSnapshot.user === user ? ownerFollowupSnapshot.items : [];
+  const followupSubmitting = useRef(false);
+  const uncertainFollowup = useRef<{ user: string; id: string; prompt: string; activeId: string; mode: "queue" | "steer" } | null>(null);
+  const [ownerSendMode, setOwnerSendMode] = useState<"normal" | "queue" | "steer">("normal");
+  const [ownerAcknowledgementRetrying, setOwnerAcknowledgementRetrying] = useState(false);
   const [legacyNotificationNotice, setLegacyNotificationNotice] = useState("");
   const [ownerClarificationNotice, setOwnerClarificationNotice] = useState("");
   const [ownerQuestions, setOwnerQuestions] = useState<OwnerQuestion[]>([]);
@@ -175,11 +187,37 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
     [isAdmin, user]);
   const ownerConversationRef = useRef(ownerConversation);
   ownerConversationRef.current = ownerConversation;
+  const ownerDraftsLoaded = ownerConversation !== null && ownerDraftSnapshot.conversation === ownerConversation;
+  const ownerDrafts = ownerDraftsLoaded ? ownerDraftSnapshot.items : [];
   const ownerConversationBusy = ownerBusyFor(ownerBusySnapshot, ownerConversation);
   const setOwnerConversationBusy = (busy: boolean) => {
     if (ownerConversationRef.current === ownerConversation) setOwnerBusySnapshot({ conversation: ownerConversation, busy });
   };
   const ownerConversationNotice = useRef("");
+  const retryOwnerAcknowledgement = async () => {
+    if (!ownerConversation || ownerAcknowledgementRetrying) return;
+    const current = ownerConversation;
+    setOwnerAcknowledgementRetrying(true);
+    try {
+      const confirmed = await current.retryAcknowledgement();
+      if (ownerConversationRef.current !== current) return;
+      setOwnerConversationBusy(current.hasPending());
+      if (confirmed) {
+        ownerConversationNotice.current = "";
+        setError("");
+        void refreshOwnerQuestions();
+      }
+    } catch (cause) {
+      if (ownerConversationRef.current !== current) return;
+      const message = cause instanceof Error ? cause.message : "Saving the answer could not be confirmed.";
+      ownerConversationNotice.current = message;
+      setError(message);
+      setOwnerConversationBusy(current.hasPending());
+    } finally {
+      setOwnerAcknowledgementRetrying(false);
+    }
+  };
+
   useEffect(() => {
     if (!isAdmin) { setOwnerWorkerReady(false); setOwnerOnly(false); setOwnerContinuationAvailable(false); setOwnerBlockingReason(null); setPausedLegacyRequests(null); return; }
     let active = true;
@@ -453,6 +491,33 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       }
       if (ownerConversation) {
         try {
+          // Saved drafts are never automatically submitted after recovery.
+          try {
+            const drafts = await daemonRequest<{items: {id: string; active_message_id: string; prompt: string; resolution: "unresolved" | "not_submitted" | "submitted"}[]}>("experimental_owner_composer_list", {});
+            if (ownerConversationRef.current === ownerConversation) setOwnerDraftSnapshot({ conversation: ownerConversation, items: drafts.items });
+          } catch { /* Existing work can still be polled. */ }
+          try {
+            const steering = await daemonRequest<{items: OwnerSteer[]}>("experimental_owner_steer_list", {});
+            if (ownerConversationRef.current === ownerConversation) setOwnerSteering({user, items: steering.items});
+          } catch { /* Existing work can still be polled. */ }
+          // Follow-up discovery is independent of the original answer and its acknowledgement.
+          try {
+            const followupResult = await daemonRequest<{items: OwnerFollowup[]}>("experimental_owner_followup_list", {});
+            if (ownerConversationRef.current !== ownerConversation) return;
+            setOwnerFollowupSnapshot({ user, items: followupResult.items });
+            const attempt = uncertainFollowup.current;
+            if (attempt?.user === user && followupResult.items.some((item) => item.id === attempt.id)) {
+              uncertainFollowup.current = null;
+              setPrompt((current) => current === attempt.prompt ? "" : current);
+              setOwnerSendMode("normal");
+              ownerConversationNotice.current = "";
+              setError("");
+            }
+            const released = followupResult.items.find((item) => item.status === "released");
+            if (released && !ownerConversation.hasPending()) await ownerConversation.adoptReleased(released.id);
+          } catch {
+            // Preserve the last list and continue pickup/acknowledgement of existing work.
+          }
           let sawQuestion = false;
           const acknowledgementRecovered = await ownerConversation.poll((messageId, answer, kind, committedEffect) => {
             appendMessage({
@@ -687,13 +752,51 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
         if (ownerReplyTarget && (ownerQuestionScope !== user || !ownerQuestions.some((item) => item.message_id === ownerReplyTarget))) {
           throw new Error("The selected question is no longer available. Choose it again before sending.");
         }
+        if (!ownerDraftsLoaded) throw new Error("Saved message drafts could not be checked. Your draft was not sent.");
+        if (ownerDrafts.some((draft) => draft.resolution === "unresolved") || (ownerSendMode !== "queue" && uncertainFollowup.current?.user === user)) {
+          throw new Error("A message submission is uncertain. Review the follow-up list before sending another message; your draft is preserved.");
+        }
+        if (ownerSendMode === "queue" || ownerSendMode === "steer") {
+          const activeId = ownerConversation.activeMessageId();
+          if (!activeId) throw new Error("The active request has finished or needs recovery. Your draft was not sent.");
+          if (followupSubmitting.current) throw new Error("This message is still being sent.");
+          const previous = uncertainFollowup.current;
+          if (previous && previous.user === user && (previous.prompt !== messagePrompt || previous.activeId !== activeId || previous.mode !== ownerSendMode)) {
+            throw new Error("A previous message submission is uncertain. Review the follow-up list before sending another; your draft is preserved.");
+          }
+          const attempt = previous?.user === user ? previous : { user, id: crypto.randomUUID().replaceAll("-", ""), prompt: messagePrompt, activeId, mode: ownerSendMode };
+          uncertainFollowup.current = attempt;
+          let status: "queued" | "late" | "accepted" | "not_accepted" | "included_in_planning";
+          followupSubmitting.current = true;
+          try {
+            const saved = await daemonRequest<{id: string; status: string}>("experimental_owner_composer_save", { id: attempt.id, active_message_id: activeId, prompt: messagePrompt });
+            if (saved.id !== attempt.id || saved.status !== "saved") throw new Error("save unconfirmed");
+            if (ownerConversationRef.current !== ownerConversation) return;
+            status = ownerSendMode === "queue"
+              ? await ownerConversation.queueFollowup(messagePrompt, activeId, attempt.id)
+              : (await daemonRequest<{status: "accepted" | "not_accepted" | "included_in_planning"}>("experimental_owner_steer_add", { active_message_id: activeId, request_id: attempt.id, prompt: messagePrompt })).status;
+            if (ownerConversationRef.current !== ownerConversation) return;
+            uncertainFollowup.current = null;
+          } catch {
+            throw new Error("Message submission could not be confirmed. Review the follow-up list; retrying this same draft uses the same request. Your draft is preserved.");
+          } finally {
+            followupSubmitting.current = false;
+          }
+          if (status === "late" || status === "not_accepted") throw new Error("The active request could not accept this message. Your draft was not sent; check its saved submission before trying again.");
+          if (!["queued", "accepted", "included_in_planning"].includes(status)) throw new Error("Submission could not be confirmed. Check the saved submission before trying again.");
+          setPrompt((current) => current === messagePrompt ? "" : current);
+          setOwnerSendMode("normal");
+          // The saved draft is retained for review; it is not automatically replayed.
+          await poll();
+          return;
+        }
         setOwnerConversationBusy(true);
         const submittedAt = new Date().toISOString();
         const queued = await ownerConversation.send(messagePrompt, ownerReplyTarget || undefined);
         setOwnerClarificationNotice("");
         setOwnerReplyTarget("");
         setOwnerConversationBusy(true);
-        setPrompt("");
+        setPrompt((current) => current === messagePrompt ? "" : current);
         const acceptedAt = ownerAcceptedAt(queued.accepted_at, submittedAt);
         const acceptedDay = messageLocalDay(acceptedAt, timezone) || localDay(timezone);
         conversationDayRef.current = acceptedDay;
@@ -706,6 +809,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       }
       throw new Error("Conversation is available to the local owner only.");
     } catch (cause) {
+      if (ownerConversation && ownerConversationRef.current !== ownerConversation) return;
       const message = cause instanceof Error ? cause.message : "Message could not be queued";
       if (ownerConversation) {
         setOwnerConversationBusy(ownerConversation.hasPending());
@@ -836,12 +940,22 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
           {activeSurface && (
             <A2uiSurfaceView surface={activeSurface} clientId={clientId} user={user} onDone={poll} onDismiss={dismissScheduledSurface} onAction={(result) => { if (result.action === "view_scheduled_task" && typeof result.scheduled_task_id === "string") { dismissScheduledSurface(activeSurface.surfaceId); setScheduledTaskForView(result.scheduled_task_id); navigate("agenda"); } }} />
           )}
+          {(ownerConversation?.activeMessageId() || ownerSendMode !== "normal") && <fieldset className="composer-hint"><legend>While Alphonse works</legend>
+            <label><input type="radio" name="owner-send-mode" checked={ownerSendMode === "normal"} onChange={() => setOwnerSendMode("normal")} /> Send normally</label>{" "}
+            <label><input type="radio" name="owner-send-mode" disabled={!ownerConversation?.activeMessageId()} checked={ownerSendMode === "queue"} onChange={() => setOwnerSendMode("queue")} /> Queue follow-up</label>
+            <label><input type="radio" name="owner-send-mode" disabled={!ownerConversation?.activeMessageId()} checked={ownerSendMode === "steer"} onChange={() => setOwnerSendMode("steer")} /> Steer active request</label>
+            <p>Steering is accepted only at a safe point; inclusion in planning does not guarantee an outcome.</p></fieldset>}
+          <OwnerSavedDrafts items={ownerDrafts} prompt={prompt} onCheck={(draft) => { void daemonRequest("experimental_owner_composer_reconcile", {id: draft.id}).then(() => { if (uncertainFollowup.current?.id === draft.id) uncertainFollowup.current = null; return poll(); }).catch(() => setError("Submission could not be checked.")); }} onRestore={(draft) => { setPrompt(draft.prompt); setOwnerSendMode("normal"); }} onDelete={(draft) => { void daemonRequest("experimental_owner_composer_delete", {id: draft.id}).then(() => poll()).catch(() => setError("The saved draft could not be deleted.")); }} />
+          <p className="composer-hint">Draft edits are not saved until a steer or follow-up send is confirmed saved.</p>
+          <OwnerSteering items={ownerSteering.user === user ? ownerSteering.items : []} onRemove={(id) => { void daemonRequest("experimental_owner_steer_remove", {id}).then(() => poll()).catch(() => setError("Steering could not be cleared; the request or a dependent follow-up may still need it.")); }} />
+          <OwnerFollowups items={ownerFollowups} onRemove={(id) => { void daemonRequest("experimental_owner_followup_remove", { id }).then(() => poll()).catch(() => setError("The follow-up could not be removed; refresh its status.")); }} />
           <form className="composer" onSubmit={submit} onKeyDown={event => { if (event.key === "Escape" && commandMenuRef.current?.open) { event.preventDefault(); event.stopPropagation(); commandMenuRef.current.open = false; textareaRef.current?.focus(); } }}>
               {suggestions.length > 0 && <div className="suggestions">{suggestions.map((item) => <button type="button" key={item} onClick={() => setPrompt(item)}>{item}</button>)}</div>}
               <textarea ref={textareaRef} aria-label="Message Alphonse" value={prompt} onKeyDown={onComposerKeyDown} onChange={(event) => setPrompt(event.target.value)} placeholder="Ask Alphonse, or hand something over…" rows={1} />
               <div className="composer-bottom"><details ref={commandMenuRef} className="composer-command-menu"><summary aria-label="Conversation commands" title="Conversation commands"><Plus aria-hidden="true" /></summary><div><p>{prompt.trim() ? "Keep or send your draft before choosing a command." : "Choose a command to prepare in the composer."}</p>{DESKTOP_COMMANDS.map(command => <button key={command} type="button" disabled={Boolean(prompt.trim())} onClick={() => { setPrompt(command); if (commandMenuRef.current) commandMenuRef.current.open = false; textareaRef.current?.focus(); }}>{command}</button>)}</div></details><span className="composer-context">{composerProject ? <>Project: {composerProject.name} <button type="button" onClick={() => setComposerProject(null)} aria-label="Remove project from next message">×</button></> : "Everyday assistant"}</span><button className="send" type="submit" aria-label="Send" title="Send message"><ArrowUp aria-hidden="true" /></button></div>
           </form>
           <p className="composer-hint">Your conversation with Alphonse · {enterToSend ? "Enter to send · Shift+Enter for a new line" : "Use Send to send your message"}</p>
+          {ownerConversationBusy && ownerConversation && <OwnerConversationRecoveryNotice state={ownerConversation.blockingState()} retrying={ownerAcknowledgementRetrying} onRetry={() => void retryOwnerAcknowledgement()} />}
           {isAdmin && !ownerWorkerReady && <p className="composer-hint" role="status">{ownerUnavailableMessage(ownerBlockingReason)}</p>}
           {isAdmin && ownerQuestionScope === user && ownerQuestions.length > 0 && <p className="composer-hint">Choose a question below to include it as context for a reply.</p>}
           {isAdmin && ownerQuestionScope === user && <OwnerQuestionSelector questions={ownerQuestions} selectedId={ownerReplyTarget} disabled={ownerConversationBusy} onSelect={setOwnerReplyTarget} />}

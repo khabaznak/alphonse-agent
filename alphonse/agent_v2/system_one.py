@@ -782,6 +782,32 @@ class JevCriterionDecisionProvider:
         return (type(probability) in {int, float} and math.isfinite(probability)
                 and 0 <= probability <= 1 and probability <= self.settings.no_threshold)
 
+    def review_freeform_effect_claim(self, *, request_context: str, response_text: str) -> bool:
+        """Return true only when a free-form answer does not claim an external effect.
+
+        This is a linguistic screen, not evidence that any action occurred.
+        An unavailable, malformed, or uncertain judgment withholds the answer.
+        """
+        if (not isinstance(request_context, str) or len(request_context) > 65536
+                or not isinstance(response_text, str) or not response_text.strip()
+                or len(response_text) > 16384):
+            return False
+        response = self._evaluate(
+            purpose='freeform_effect_claim',
+            state={'request_context': request_context, 'response': response_text},
+            questions={'external_effect_claim': {
+                'type': 'noul',
+                'instructions': 'Does `response` state or imply that the assistant has already changed an external or persistent resource?',
+                'criteria': {
+                    'true': 'The response claims that a real resource, account, file, record, device, or external service was changed, even if it also contains a draft.',
+                    'false': 'The response gives only an in-conversation draft, hypothetical plan, explanation, or reports that an action was not completed.',
+                },
+            }}, timeout_seconds=3.0, retries=0)
+        answer = (response.get('answers') or {}).get('external_effect_claim')
+        probability = answer.get('noul') if isinstance(answer, dict) and answer.get('type') == 'noul' else None
+        return (type(probability) in {int, float} and math.isfinite(probability)
+                and 0 <= probability <= 1 and probability <= self.settings.no_threshold)
+
     def review_task_failure(self, *, message: str, explanation: str) -> bool:
         """Check failure wording without rejudging evidence or reopening work."""
         import math

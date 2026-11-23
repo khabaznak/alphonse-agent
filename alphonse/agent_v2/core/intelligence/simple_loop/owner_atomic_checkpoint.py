@@ -49,6 +49,53 @@ def _matches_decision(marker: Any, receipt: Any, decision: Any, fingerprint: str
         and marker['decision_sha256'] == _decision_digest(decision))
 
 
+def _steering_claim_in_lineage(metadata: dict, receipt: Any, claimed: str) -> bool:
+    """Keep accepted steering bound to its original claim across continuation."""
+    valid = {_claim_digest(receipt)}
+    if claimed in valid:
+        return True
+    try:
+        lineage = metadata.get('owner_continuation_reclaim')
+        if lineage is not None:
+            pause = metadata.get('owner_continuation_pause')
+            if (not isinstance(lineage, dict) or not isinstance(pause, dict)
+                    or lineage.get('current_claim_digest') not in valid
+                    or lineage.get('original_claim_digest') != pause.get('claim_digest')
+                    or lineage.get('pause_sha256') != _decision_digest(pause)
+                    or lineage.get('grant_sha256') != _decision_digest(metadata.get('owner_continuation_grant'))):
+                return False
+            valid.add(lineage['original_claim_digest'])
+        def add_crashes(crashes):
+            if not isinstance(crashes, list):
+                raise ValueError('invalid continuation lineage')
+            for crash in reversed(crashes):
+                if (not isinstance(crash, dict) or set(crash) != {'from', 'to', 'grant_sha256'}
+                        or crash['to'] not in valid or not isinstance(crash['from'], str)):
+                    raise ValueError('invalid continuation lineage')
+                valid.add(crash['from'])
+        add_crashes(metadata.get('owner_continuation_crash_lineage', []))
+        history = metadata.get('owner_continuation_history', [])
+        if not isinstance(history, list):
+            return False
+        for entry in reversed(history):
+            if not isinstance(entry, dict):
+                return False
+            link = entry.get('reclaim')
+            if link is not None:
+                pause = entry.get('pause')
+                if (not isinstance(link, dict) or not isinstance(pause, dict)
+                        or link.get('current_claim_digest') not in valid
+                        or link.get('original_claim_digest') != pause.get('claim_digest')
+                        or link.get('pause_sha256') != _decision_digest(pause)
+                        or link.get('grant_sha256') != _decision_digest(entry.get('grant'))):
+                    return False
+                valid.add(link['original_claim_digest'])
+            add_crashes(entry.get('crash_before_pause', []))
+        return claimed in valid
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
 def verify_finalized_owner_ack(queue: SQLiteMessageQueue, message_id: str, token: str) -> bool:
     """Verify a previously committed owner ack without recreating a claim.
 
@@ -166,6 +213,58 @@ class OwnerAtomicCheckpoint:
         except Exception:
             return False
 
+    def steering_context(self) -> list[str]:
+        """Read ordered steer text only under the current verified owner claim."""
+        with self._transaction() as conn:
+            _, raw, _, _ = self._load(conn, self.version)
+            if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_owner_steering'").fetchone():
+                return []
+            rows = conn.execute('''SELECT * FROM v2_owner_steering WHERE message_id=? AND owner_id=?
+                ORDER BY sequence''', (self.task.message_id, self.task.user)).fetchall()
+            result = []
+            for row in rows:
+                digest = hashlib.sha256((row['id'] + '\0' + row['content']).encode()).hexdigest()
+                if (row['peer_uid'] != os.getuid() or not _steering_claim_in_lineage(raw['metadata'], self.receipt, row['claim_digest'])
+                        or not hmac.compare_digest(row['content_digest'], digest)):
+                    raise CheckpointConflict('owner_steering_binding_unavailable')
+                result.append(row['content'])
+            return result
+
+    def mark_steering_included(self, decision: dict, fingerprint: str, cancellation_checker) -> None:
+        """Record validated model-input inclusion, never task/effect success."""
+        with self._transaction() as conn:
+            row, raw, state, budget = self._load(conn, self.version)
+            marker = raw['metadata'].get('owner_steering_pending_projection')
+            if marker is None:
+                return
+            selected = raw['metadata'].get('owner_read_pending_decision')
+            if (not callable(cancellation_checker) or cancellation_checker() is not False
+                    or state.status != 'running' or state.inflight
+                    or budget.usage()['unknown_usage'] or not budget.within_work_limits()
+                    or not isinstance(marker, dict)
+                    or marker.get('projection_sha256') != fingerprint
+                    or not _matches_decision(selected, self.receipt, decision, fingerprint)):
+                raise CheckpointConflict('owner_steering_projection_unavailable')
+            rows = conn.execute('''SELECT * FROM v2_owner_steering WHERE message_id=? AND owner_id=?
+                ORDER BY sequence''', (self.task.message_id, self.task.user)).fetchall()
+            ids = [item['id'] for item in rows]
+            if (ids != marker.get('steering_ids')
+                    or _decision_digest([[item['id'], item['content_digest']] for item in rows]) != marker.get('steering_sha256')):
+                raise CheckpointConflict('owner_steering_projection_unavailable')
+            for item in rows:
+                digest = hashlib.sha256((item['id'] + '\0' + item['content']).encode()).hexdigest()
+                if (item['peer_uid'] != os.getuid() or not _steering_claim_in_lineage(raw['metadata'], self.receipt, item['claim_digest'])
+                        or not hmac.compare_digest(item['content_digest'], digest)):
+                    raise CheckpointConflict('owner_steering_binding_unavailable')
+            conn.execute("UPDATE v2_owner_steering SET status='included_in_planning' WHERE message_id=? AND owner_id=? AND status='accepted'",
+                         (self.task.message_id, self.task.user))
+            raw['metadata']['owner_steering_included_projection'] = marker
+            del raw['metadata']['owner_steering_pending_projection']
+            if cancellation_checker() is not False:
+                raise CheckpointConflict('owner_steering_cancelled')
+            result = self.store._write(conn, row, raw, state, budget)
+        self.version = result.version
+
     def _load(self, conn, version, *, allow_paused=False):
         row = self.store._row(conn, self.task.task_id)
         raw = self.store._validate_identity(row, self.task.task_id, self.task.user, version)
@@ -273,8 +372,32 @@ class OwnerAtomicCheckpoint:
             if 'owner_clarification' in self.task.metadata:
                 from .owner_clarification import load_bound_owner_question
                 load_bound_owner_question(conn, self.task.user, self.task.metadata['owner_clarification'])
+            if 'owner_followup' in self.task.metadata:
+                from .owner_clarification import load_bound_owner_followup
+                load_bound_owner_followup(conn, self.task.user, self.task.metadata['owner_followup'])
             selected = metadata.get('owner_read_selected_draft')
             observations = metadata.get('owner_read_observations')
+            steer_marker = metadata.get('owner_steering_included_projection')
+            if (steer_marker is None and conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_owner_steering'").fetchone()
+                    and conn.execute('SELECT 1 FROM v2_owner_steering WHERE message_id=? AND owner_id=? LIMIT 1',
+                                     (self.task.message_id, self.task.user)).fetchone()):
+                raise CheckpointConflict('owner_steering_projection_unavailable')
+            if steer_marker is not None:
+                if not isinstance(steer_marker, dict) or not isinstance(selected, dict):
+                    raise CheckpointConflict('owner_steering_projection_unavailable')
+                steer_rows = conn.execute('''SELECT * FROM v2_owner_steering WHERE message_id=? AND owner_id=?
+                    ORDER BY sequence''', (self.task.message_id, self.task.user)).fetchall()
+                if (steer_marker.get('reservation_id') != selected.get('model_reservation_id')
+                        or steer_marker.get('projection_sha256') != selected.get('projection_sha256')
+                        or steer_marker.get('steering_ids') != [item['id'] for item in steer_rows]
+                        or steer_marker.get('steering_sha256') != _decision_digest([[item['id'], item['content_digest']] for item in steer_rows])):
+                    raise CheckpointConflict('owner_steering_projection_unavailable')
+                for item in steer_rows:
+                    digest = hashlib.sha256((item['id'] + '\0' + item['content']).encode()).hexdigest()
+                    if (item['status'] != 'included_in_planning' or item['peer_uid'] != os.getuid()
+                            or not _steering_claim_in_lineage(metadata, self.receipt, item['claim_digest'])
+                            or not hmac.compare_digest(item['content_digest'], digest)):
+                        raise CheckpointConflict('owner_steering_binding_unavailable')
             if (state.status not in {'completed', 'waiting_user'} or state.inflight or not state.response.strip()
                     or context.cancellation_checker() is not False
                     or 'owner_read_pending_decision' in metadata or 'owner_read_pending_action' in metadata
@@ -547,6 +670,7 @@ class OwnerAtomicCheckpoint:
                     'evidence_bindings_sha256': _decision_digest(observations),
                 }
             if consume_decision:
+                raw['metadata'].pop('owner_steering_pending_projection', None)
                 if marker is not None:
                     if not isinstance(marker, dict) or marker.get('claim_digest') != _claim_digest(self.receipt):
                         raise CheckpointConflict('owner_atomic_pending_decision_unavailable')
@@ -644,6 +768,17 @@ class OwnerAtomicCheckpoint:
                 state.inflight = reservation_id
                 if pending_decision is not None:
                     del raw['metadata']['owner_read_pending_decision']
+                if kind == 'model' and conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_owner_steering'").fetchone():
+                    steer_rows = conn.execute('''SELECT id,content,content_digest FROM v2_owner_steering
+                        WHERE message_id=? AND owner_id=? ORDER BY sequence''', (self.task.message_id, self.task.user)).fetchall()
+                    if steer_rows:
+                        if not re.fullmatch(r'[0-9a-f]{64}', projection_fingerprint):
+                            raise CheckpointConflict('owner_steering_projection_unavailable')
+                        raw['metadata']['owner_steering_model_projection'] = {
+                            'reservation_id': reservation_id, 'projection_sha256': projection_fingerprint,
+                            'steering_sha256': _decision_digest([[item['id'], item['content_digest']] for item in steer_rows]),
+                            'steering_ids': [item['id'] for item in steer_rows],
+                        }
                 raw['metadata']['owner_read_pending_action'] = {
                     'reservation_id': reservation_id, 'kind': kind,
                     'tool_id': tool_id, 'arguments': deepcopy(arguments), 'claim_digest': _claim_digest(self.receipt),
@@ -674,12 +809,42 @@ class OwnerAtomicCheckpoint:
             budget.settle(reservation_id, outcome=outcome, input_tokens=input_tokens, output_tokens=output_tokens)
             state.inflight = ''
             del raw['metadata']['owner_read_pending_action']
-            raw['metadata']['owner_read_pending_decision'] = {
-                'reservation_id': reservation_id, 'claim_digest': _claim_digest(self.receipt),
-                'decision_sha256': decision_digest, 'projection_sha256': projection_fingerprint,
-            }
+            # A steer accepted while this model call was outstanding makes
+            # its decision stale. Settlement still accounts for usage, but no
+            # selected decision survives to authorize a tool or final answer.
+            has_table = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_owner_steering'").fetchone()
+            steering = conn.execute('''SELECT * FROM v2_owner_steering WHERE message_id=? AND owner_id=?
+                ORDER BY sequence''', (self.task.message_id, self.task.user)).fetchall() if has_table else []
+            for item in steering:
+                digest = hashlib.sha256((item['id'] + '\0' + item['content']).encode()).hexdigest()
+                if (item['peer_uid'] != os.getuid() or not _steering_claim_in_lineage(raw['metadata'], self.receipt, item['claim_digest'])
+                        or not hmac.compare_digest(item['content_digest'], digest)):
+                    raise CheckpointConflict('owner_steering_binding_unavailable')
+            stale = any(item['reservation_id'] == reservation_id and item['status'] == 'accepted' for item in steering)
+            projection_marker = raw['metadata'].pop('owner_steering_model_projection', None)
+            if projection_marker is None and any(item['reservation_id'] != reservation_id for item in steering):
+                raise CheckpointConflict('owner_steering_projection_unavailable')
+            if projection_marker is not None:
+                if not isinstance(projection_marker, dict) or not isinstance(projection_marker.get('steering_ids'), list):
+                    raise CheckpointConflict('owner_steering_projection_unavailable')
+                included = [item for item in steering if item['id'] in projection_marker.get('steering_ids', [])]
+                if (set(projection_marker) != {'reservation_id', 'projection_sha256', 'steering_sha256', 'steering_ids'}
+                        or projection_marker['reservation_id'] != reservation_id
+                        or projection_marker['projection_sha256'] != projection_fingerprint
+                        or projection_marker['steering_ids'] != [item['id'] for item in included]
+                        or projection_marker['steering_ids'] != [item['id'] for item in steering if item['reservation_id'] != reservation_id]
+                        or projection_marker['steering_sha256'] != _decision_digest([[item['id'], item['content_digest']] for item in included])):
+                    raise CheckpointConflict('owner_steering_projection_unavailable')
+            if not stale:
+                raw['metadata']['owner_read_pending_decision'] = {
+                    'reservation_id': reservation_id, 'claim_digest': _claim_digest(self.receipt),
+                    'decision_sha256': decision_digest, 'projection_sha256': projection_fingerprint,
+                }
+                if projection_marker is not None:
+                    raw['metadata']['owner_steering_pending_projection'] = projection_marker
             result = self.store._write(conn, row, raw, state, budget)
         self.version = result.version
+        self.steering_decision_stale = stale
         return result
 
     def settle_read(self, *, expected_version: int, reservation_id: str, tool_id: str,

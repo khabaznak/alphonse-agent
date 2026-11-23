@@ -118,6 +118,7 @@ describe("explicit owner conversation transport", () => {
     });
     const client = new OwnerConversation(request as OwnerRequest);
     await expect(client.send("hello")).rejects.toThrow("could not be confirmed");
+    expect(client.blockingState()).toBe("uncertain");
     await expect(client.send("hello")).rejects.toThrow("uncertain result");
     expect(request.mock.calls.filter(([method]) => method === "experimental_owner_ingress")).toHaveLength(1);
   });
@@ -431,5 +432,93 @@ describe("explicit owner conversation transport", () => {
     await expect(client.poll(() => {})).rejects.toThrow("could not be confirmed");
     await expect(client.poll(() => {})).rejects.toThrow("could not be confirmed");
     expect(ackAttempts).toBe(2);
+  });
+});
+
+it("distinguishes active work from a visible answer whose acknowledgement failed", async () => {
+  const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+    if (method === "experimental_owner_status") return params?.message_id ? { status: "ready" } : { processing_ready: true };
+    if (method === "experimental_owner_ingress") return { message_id: id };
+    if (method === "experimental_owner_take_draft") return { message_id: id, message: "answer", acknowledgement_token: token, delivery_status: "started_unconfirmed" };
+    throw new Error("ack response lost");
+  });
+  const client = new OwnerConversation(request as OwnerRequest);
+  await client.send("first");
+  expect(client.blockingState()).toBe("working");
+  const seen = vi.fn();
+  await expect(client.poll(seen)).rejects.toThrow("saving it to conversation history");
+  expect(seen).toHaveBeenCalledOnce();
+  expect(client.blockingState()).toBe("acknowledgement");
+  await expect(client.send("second")).rejects.toThrow("answer is shown");
+  expect(request.mock.calls.filter(([method]) => method === "experimental_owner_ingress")).toHaveLength(1);
+});
+
+it("retries only the retained acknowledgement token on explicit recovery", async () => {
+  let failAck = true;
+  const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+    if (method === "experimental_owner_status") return params?.message_id ? { status: "ready" } : { processing_ready: true };
+    if (method === "experimental_owner_ingress") return { message_id: id };
+    if (method === "experimental_owner_take_draft") return { message_id: id, message: "answer", acknowledgement_token: token, delivery_status: "started_unconfirmed" };
+    if (failAck) throw new Error("lost acknowledgement");
+    return { status: "client_acknowledged" };
+  });
+  const client = new OwnerConversation(request as OwnerRequest);
+  await client.send("first");
+  await expect(client.poll(() => {})).rejects.toThrow("saving it to conversation history");
+  failAck = false;
+  expect(await client.retryAcknowledgement()).toBe(true);
+  expect(client.blockingState()).toBe("idle");
+  expect(request.mock.calls.filter(([method]) => method === "experimental_owner_take_draft")).toHaveLength(1);
+  expect(request.mock.calls.filter(([method]) => method === "experimental_owner_ack_draft")).toEqual([
+    ["experimental_owner_ack_draft", { message_id: id, acknowledgement_token: token }],
+    ["experimental_owner_ack_draft", { message_id: id, acknowledgement_token: token }],
+  ]);
+});
+
+it("does not claim recovery when acknowledgement is in flight or pickup lacks a token", async () => {
+  let finish!: (value: {status: string}) => void;
+  const waiting = new Promise<{status: string}>((resolve) => { finish = resolve; });
+  const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+    if (method === "experimental_owner_status") return params?.message_id ? { status: "ready" } : { processing_ready: true };
+    if (method === "experimental_owner_ingress") return { message_id: id };
+    if (method === "experimental_owner_take_draft") return { message_id: id, message: "answer", acknowledgement_token: token, delivery_status: "started_unconfirmed" };
+    return waiting;
+  });
+  const client = new OwnerConversation(request as OwnerRequest);
+  await client.send("first");
+  expect(await client.retryAcknowledgement()).toBe(false);
+  const polling = client.poll(() => {});
+  await vi.waitFor(() => expect(request.mock.calls.some(([method]) => method === "experimental_owner_ack_draft")).toBe(true));
+  expect(await client.retryAcknowledgement()).toBe(false);
+  finish({status: "client_acknowledged"});
+  await polling;
+  expect(client.hasPending()).toBe(false);
+});
+
+it("adopts only a released answer that is ready and never adopts uncertain delivery", async () => {
+  let state = "started_unconfirmed";
+  const request = vi.fn(async (method: string) => {
+    if (method === "experimental_owner_status") return {status: state};
+    if (method === "experimental_owner_take_draft") return {message_id: id, message: "follow-up answer", acknowledgement_token: token, delivery_status: "started_unconfirmed"};
+    return {status: "client_acknowledged"};
+  });
+  const client = new OwnerConversation(request as OwnerRequest);
+  expect(await client.adoptReleased(id)).toBe(false);
+  expect(client.hasPending()).toBe(false);
+  state = "ready";
+  expect(await client.adoptReleased(id)).toBe(true);
+  const seen = vi.fn();
+  await client.poll(seen);
+  expect(seen).toHaveBeenCalledExactlyOnceWith(id, "follow-up answer", "answer");
+  expect(client.hasPending()).toBe(false);
+  expect(request.mock.calls.filter(([method]) => method === "experimental_owner_take_draft")).toHaveLength(1);
+});
+
+it("uses the supplied stable id for follow-up submissions and reports a late race", async () => {
+  const request = vi.fn(async () => ({ status: "late" }));
+  const client = new OwnerConversation(request as OwnerRequest);
+  expect(await client.queueFollowup("Add apples", id, token)).toBe("late");
+  expect(request).toHaveBeenCalledExactlyOnceWith("experimental_owner_followup_add", {
+    active_message_id: id, prompt: "Add apples", request_id: token,
   });
 });
