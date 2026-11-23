@@ -62,6 +62,114 @@ def reserve_selected_tool(atomic, start, tool_id, arguments):
         tool_id=tool_id, arguments=arguments, selected_decision=decision, projection_fingerprint=projection)
 
 
+def test_pause_persists_quiescent_state_and_fences_later_reservation(setup):
+    _, _, _, queue, acquired, task, store, atomic = setup
+    start = atomic.initialize(CandidateState(task.task_id, task.user, 'goal'), make_budget())
+    args = {'source_id': 'conversation:fixture'}
+    reserved = reserve_selected_tool(atomic, start, 'native.read_memory_source', args)
+    with pytest.raises(CheckpointConflict, match='owner_pause_unavailable'):
+        atomic.pause_for_continuation(expected_version=reserved.version, metric='actions', interval=1,
+                                      last_checkpoint=0, cancellation_checker=lambda: False)
+    settled = atomic.settle_read(expected_version=reserved.version, reservation_id='read-1',
+        tool_id='native.read_memory_source', arguments=args, evidence_ref='e1', observation={'text': 'x'})
+    paused = atomic.pause_for_continuation(expected_version=settled.version, metric='actions', interval=1,
+                                            last_checkpoint=0, cancellation_checker=lambda: False)
+    # A new checkpoint object observes the same marker and cannot continue.
+    replacement = OwnerAtomicCheckpoint(queue, store, task, acquired.claim_receipt,
+                                        clock=lambda: datetime.now(timezone.utc))
+    restored, bindings = replacement.load(expected_version=paused.version)
+    assert restored.state.evidence_sources == ['e1'] and bindings['e1']['arguments'] == args
+    assert restored.budget.usage()['charged']['actions'] == 1
+    with pytest.raises(CheckpointConflict, match='owner_continuation_paused'):
+        replacement.reserve(expected_version=paused.version, reservation_id='new-model', kind='model',
+            amounts={'actions': 0, 'model_calls': 1, 'input_tokens': 100, 'output_tokens': 50}, now_ms=102)
+    replacement.version = paused.version
+    with pytest.raises(CheckpointConflict, match='owner_continuation_paused'):
+        replacement.save_state(restored.state)
+    ctx = CoreLoopContext(messages=queue, claim_receipt=acquired.claim_receipt,
+                          cancellation_checker=lambda: False)
+    from alphonse.agent_v2.core.intelligence.simple_loop.owner_reminder_create import OWNER_REMINDER_CREATE_TOOL_ID
+    from alphonse.agent_v2.core.intelligence.simple_loop.owner_schedule_create import SCHEDULED_TASK_TOOL_ID
+    for method, tool in ((replacement.commit_owner_reminder, OWNER_REMINDER_CREATE_TOOL_ID),
+                         (replacement.commit_owner_schedule, SCHEDULED_TASK_TOOL_ID)):
+        with pytest.raises(CheckpointConflict, match='owner_continuation_paused'):
+            method(context=ctx, decision={'kind': 'tool', 'tool_id': tool, 'arguments': {}},
+                   projection_fingerprint='', now_ms=102)
+    with pytest.raises(CheckpointConflict):
+        atomic.reserve(expected_version=settled.version, reservation_id='stale-model', kind='model',
+            amounts={'actions': 0, 'model_calls': 1, 'input_tokens': 100, 'output_tokens': 50}, now_ms=102)
+    with pytest.raises(CheckpointConflict, match='owner_continuation_paused'):
+        replacement.pause_for_continuation(expected_version=paused.version, metric='actions', interval=1,
+                                           last_checkpoint=0, cancellation_checker=lambda: False)
+
+
+def test_pause_requires_due_checkpoint_and_current_non_cancelled_claim(setup):
+    _, _, _, _, _, task, _, atomic = setup
+    start = atomic.initialize(CandidateState(task.task_id, task.user, 'goal'), make_budget())
+    with pytest.raises(CheckpointConflict, match='owner_pause_unavailable'):
+        atomic.pause_for_continuation(expected_version=start.version, metric='actions', interval=1,
+                                      last_checkpoint=0, cancellation_checker=lambda: False)
+    with pytest.raises(CheckpointConflict, match='owner_pause_unavailable'):
+        atomic.pause_for_continuation(expected_version=start.version, metric='actions', interval=1,
+                                      last_checkpoint=0, cancellation_checker=lambda: True)
+    args = {'source_id': 'conversation:fixture'}
+    reserved = reserve_selected_tool(atomic, start, 'native.read_memory_source', args)
+    settled = atomic.settle_read(expected_version=reserved.version, reservation_id='read-1',
+        tool_id='native.read_memory_source', arguments=args, evidence_ref='e1', observation={'text': 'x'})
+    for cancelled in (True, None):
+        with pytest.raises(CheckpointConflict, match='owner_pause_unavailable'):
+            atomic.pause_for_continuation(expected_version=settled.version, metric='actions', interval=1,
+                                          last_checkpoint=0, cancellation_checker=lambda: cancelled)
+    from alphonse.agent_v2.core.messages.claim_fence import ClaimSuperseded
+    atomic.clock = lambda: datetime.now(timezone.utc) + timedelta(days=1)
+    with pytest.raises(ClaimSuperseded):
+        atomic.pause_for_continuation(expected_version=settled.version, metric='actions', interval=1,
+                                      last_checkpoint=0, cancellation_checker=lambda: False)
+
+
+def test_acknowledged_choice_can_only_prepare_one_unexpired_held_handoff(setup):
+    from alphonse.agent_v2.core.intelligence.simple_loop.owner_continuation_question import (
+        start_question, acknowledge_question, record_choice)
+    from alphonse.agent_v2.core.intelligence.simple_loop.owner_continuation_grant import issue_grant, prepare_handoff
+    _, _, _, queue, _, task, _, atomic = setup
+    start = atomic.initialize(CandidateState(task.task_id, task.user, 'goal'), make_budget())
+    args = {'source_id': 'conversation:fixture'}
+    reserved = reserve_selected_tool(atomic, start, 'native.read_memory_source', args)
+    settled = atomic.settle_read(expected_version=reserved.version, reservation_id='read-1',
+        tool_id='native.read_memory_source', arguments=args, evidence_ref='e1', observation={'text': 'x'})
+    paused = atomic.pause_for_continuation(expected_version=settled.version, metric='actions', interval=1,
+                                            last_checkpoint=0, cancellation_checker=lambda: False)
+    with pytest.raises(CheckpointConflict, match='owner_continuation_grant_unavailable'):
+        issue_grant(atomic, expected_version=paused.version, now_ms=1000, lifetime_ms=100,
+                    cancellation_checker=lambda: False)
+    version, token = start_question(atomic, expected_version=paused.version, question='Continue?',
+                                    cancellation_checker=lambda: False)
+    version = acknowledge_question(atomic, expected_version=version, token=token, cancellation_checker=lambda: False)
+    version = record_choice(atomic, expected_version=version, peer_uid=os.getuid(), approve=True,
+                            cancellation_checker=lambda: False)
+    version = issue_grant(atomic, expected_version=version, now_ms=1000, lifetime_ms=100,
+                          cancellation_checker=lambda: False)
+    with pytest.raises(CheckpointConflict, match='owner_continuation_handoff_unavailable'):
+        prepare_handoff(atomic, expected_version=version, now_ms=1100, cancellation_checker=lambda: False)
+    with pytest.raises(CheckpointConflict, match='owner_continuation_question_unavailable'):
+        prepare_handoff(atomic, expected_version=version, now_ms=1001, cancellation_checker=lambda: True)
+    prepared_version = prepare_handoff(atomic, expected_version=version, now_ms=1001,
+                                       cancellation_checker=lambda: False)
+    with queue._connect() as conn:
+        record = conn.execute('SELECT status, claim_generation FROM v2_inbound_messages WHERE message_id=?',
+                              (task.message_id,)).fetchone()
+        raw = json.loads(conn.execute('SELECT task_state_json FROM v2_task_checkpoints WHERE task_id=?',
+                                      (task.task_id,)).fetchone()[0])
+    assert record['status'] == 'processing' and record['claim_generation'] == atomic.receipt.claim_generation
+    assert raw['metadata']['owner_continuation_grant']['status'] == 'consumed'
+    assert raw['metadata']['owner_continuation_handoff']['status'] == 'held'
+    with pytest.raises(CheckpointConflict, match='owner_continuation_handoff_unavailable'):
+        prepare_handoff(atomic, expected_version=prepared_version, now_ms=1002, cancellation_checker=lambda: False)
+    with pytest.raises(CheckpointConflict, match='owner_continuation_paused'):
+        atomic.reserve(expected_version=prepared_version, reservation_id='no-replay', kind='model',
+            amounts={'actions': 0, 'model_calls': 1, 'input_tokens': 100, 'output_tokens': 50}, now_ms=102)
+
+
 def test_disposable_bash_observation_requires_same_live_session(setup):
     from alphonse.agent_v2.evaluation.dojo_bash import DojoBash
     from alphonse.agent_v2.core.intelligence.simple_loop.owner_read_recovery import OwnerRecoveryUnavailable, restore_owner_read_observations

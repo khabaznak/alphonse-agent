@@ -21,6 +21,25 @@ it("uses the accepted server instant even when the response arrives after midnig
 });
 
 describe("explicit owner conversation transport", () => {
+  it("keeps the request without a working indicator while waiting for a continuation decision", async () => {
+    let status = "continuation_paused";
+    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === "experimental_owner_status") return params?.message_id ? { status } : { processing_ready: true };
+      if (method === "experimental_owner_ingress") return { message_id: id };
+      throw new Error("unexpected request");
+    });
+    const client = new OwnerConversation(request as OwnerRequest);
+    await client.send("Long task");
+    await client.poll(() => {});
+    expect(client.hasPending()).toBe(true);
+    expect(client.isWorking()).toBe(false);
+    status = "continuation_accepted";
+    await client.poll(() => {});
+    expect(client.isWorking()).toBe(true);
+    status = "continuation_declined";
+    await client.poll(() => {});
+    expect(client.hasPending()).toBe(false);
+  });
   it("keeps a request pending through polling, scopes it to the conversation, and clears it on acknowledgement", async () => {
     let status = "pending";
     const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
@@ -33,12 +52,14 @@ describe("explicit owner conversation transport", () => {
     const otherMember = new OwnerConversation(request as OwnerRequest);
     await client.send("hello");
     await client.poll(() => {});
+    expect(client.isWorking()).toBe(true);
     const snapshot = { conversation: client, busy: client.hasPending() };
     expect(avatarState(true, "", "idle", ownerBusyFor(snapshot, client))).toBe("pending");
     expect(avatarState(false, "", "idle", ownerBusyFor(snapshot, client))).toBe("disconnected");
     expect(ownerBusyFor(snapshot, otherMember)).toBe(false);
     status = "ready";
     await client.poll(() => {});
+    expect(client.isWorking()).toBe(false);
     expect(avatarState(true, "", "idle", client.hasPending())).toBe("idle");
   });
   it("binds a reply only when a question was explicitly selected", async () => {
@@ -330,6 +351,7 @@ describe("explicit owner conversation transport", () => {
     await client.send("hello");
     await expect(client.poll(seen)).rejects.toThrow("could not be confirmed");
     expect(client.hasPending()).toBe(true);
+    expect(client.isWorking()).toBe(false);
     await expect(client.poll(seen)).resolves.toBe(true);
     expect(client.hasPending()).toBe(false);
     expect(seen).toHaveBeenCalledTimes(1);

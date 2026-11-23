@@ -8,6 +8,7 @@ calls nor delivery are fenced by a SQLite transaction.
 from __future__ import annotations
 
 from copy import deepcopy
+from contextlib import contextmanager
 import hashlib
 import hmac
 import json
@@ -46,6 +47,53 @@ def _matches_decision(marker: Any, receipt: Any, decision: Any, fingerprint: str
         and isinstance(fingerprint, str) and re.fullmatch(r'[0-9a-f]{64}', fingerprint)
         and marker['projection_sha256'] == fingerprint
         and marker['decision_sha256'] == _decision_digest(decision))
+
+
+def _steering_claim_in_lineage(metadata: dict, receipt: Any, claimed: str) -> bool:
+    """Keep accepted steering bound to its original claim across continuation."""
+    valid = {_claim_digest(receipt)}
+    if claimed in valid:
+        return True
+    try:
+        lineage = metadata.get('owner_continuation_reclaim')
+        if lineage is not None:
+            pause = metadata.get('owner_continuation_pause')
+            if (not isinstance(lineage, dict) or not isinstance(pause, dict)
+                    or lineage.get('current_claim_digest') not in valid
+                    or lineage.get('original_claim_digest') != pause.get('claim_digest')
+                    or lineage.get('pause_sha256') != _decision_digest(pause)
+                    or lineage.get('grant_sha256') != _decision_digest(metadata.get('owner_continuation_grant'))):
+                return False
+            valid.add(lineage['original_claim_digest'])
+        def add_crashes(crashes):
+            if not isinstance(crashes, list):
+                raise ValueError('invalid continuation lineage')
+            for crash in reversed(crashes):
+                if (not isinstance(crash, dict) or set(crash) != {'from', 'to', 'grant_sha256'}
+                        or crash['to'] not in valid or not isinstance(crash['from'], str)):
+                    raise ValueError('invalid continuation lineage')
+                valid.add(crash['from'])
+        add_crashes(metadata.get('owner_continuation_crash_lineage', []))
+        history = metadata.get('owner_continuation_history', [])
+        if not isinstance(history, list):
+            return False
+        for entry in reversed(history):
+            if not isinstance(entry, dict):
+                return False
+            link = entry.get('reclaim')
+            if link is not None:
+                pause = entry.get('pause')
+                if (not isinstance(link, dict) or not isinstance(pause, dict)
+                        or link.get('current_claim_digest') not in valid
+                        or link.get('original_claim_digest') != pause.get('claim_digest')
+                        or link.get('pause_sha256') != _decision_digest(pause)
+                        or link.get('grant_sha256') != _decision_digest(entry.get('grant'))):
+                    return False
+                valid.add(link['original_claim_digest'])
+            add_crashes(entry.get('crash_before_pause', []))
+        return claimed in valid
+    except (KeyError, TypeError, ValueError):
+        return False
 
 
 def verify_finalized_owner_ack(queue: SQLiteMessageQueue, message_id: str, token: str) -> bool:
@@ -121,12 +169,31 @@ class OwnerAtomicCheckpoint:
             table = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_owner_schedule_occurrences'").fetchone()
             self.scheduled_origin = bool(table and conn.execute(
                 'SELECT 1 FROM v2_owner_schedule_occurrences WHERE message_id=?', (task.message_id,)).fetchone())
+            telegram_table = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_owner_telegram_ingress'").fetchone()
+            self.telegram_origin = bool(telegram_table and conn.execute(
+                'SELECT 1 FROM v2_owner_telegram_ingress WHERE message_id=?', (task.message_id,)).fetchone())
+            if self.scheduled_origin and self.telegram_origin:
+                raise ValueError('owner_atomic_checkpoint_origin_conflict')
         self.version = None
 
+    @contextmanager
     def _transaction(self, *, _finalize=None):
-        transaction = (self.queue.trusted_scheduled_owner_claim_transaction if self.scheduled_origin
-                       else self.queue.trusted_local_owner_claim_transaction)
-        return transaction(self.receipt, self.task, clock=self.clock, _finalize=_finalize)
+        if self.telegram_origin:
+            from .owner_telegram_ingress import telegram_owner_claim_transaction
+            transaction = telegram_owner_claim_transaction(self.queue, self.receipt, self.task, clock=self.clock, _finalize=_finalize)
+        else:
+            claim = (self.queue.trusted_scheduled_owner_claim_transaction if self.scheduled_origin
+                     else self.queue.trusted_local_owner_claim_transaction)
+            transaction = claim(self.receipt, self.task, clock=self.clock, _finalize=_finalize)
+        def check(conn):
+            exists = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_owner_continuation_cancellations'").fetchone()
+            if exists and conn.execute('SELECT 1 FROM v2_owner_continuation_cancellations WHERE message_id=?',
+                                       (self.task.message_id,)).fetchone():
+                raise CheckpointConflict('owner_continuation_cancelled')
+        with transaction as conn:
+            check(conn)
+            yield conn
+            check(conn)
 
     def check_claim(self, reservation_id: str, kind: str, *, tool_id: str = '', arguments: dict | None = None) -> bool:
         """Check the claim and exact active action immediately before dispatch.
@@ -149,7 +216,7 @@ class OwnerAtomicCheckpoint:
     def steering_context(self) -> list[str]:
         """Read ordered steer text only under the current verified owner claim."""
         with self._transaction() as conn:
-            self._load(conn, self.version)
+            _, raw, _, _ = self._load(conn, self.version)
             if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_owner_steering'").fetchone():
                 return []
             rows = conn.execute('''SELECT * FROM v2_owner_steering WHERE message_id=? AND owner_id=?
@@ -157,7 +224,7 @@ class OwnerAtomicCheckpoint:
             result = []
             for row in rows:
                 digest = hashlib.sha256((row['id'] + '\0' + row['content']).encode()).hexdigest()
-                if (row['peer_uid'] != os.getuid() or row['claim_digest'] != _claim_digest(self.receipt)
+                if (row['peer_uid'] != os.getuid() or not _steering_claim_in_lineage(raw['metadata'], self.receipt, row['claim_digest'])
                         or not hmac.compare_digest(row['content_digest'], digest)):
                     raise CheckpointConflict('owner_steering_binding_unavailable')
                 result.append(row['content'])
@@ -186,7 +253,7 @@ class OwnerAtomicCheckpoint:
                 raise CheckpointConflict('owner_steering_projection_unavailable')
             for item in rows:
                 digest = hashlib.sha256((item['id'] + '\0' + item['content']).encode()).hexdigest()
-                if (item['peer_uid'] != os.getuid() or item['claim_digest'] != _claim_digest(self.receipt)
+                if (item['peer_uid'] != os.getuid() or not _steering_claim_in_lineage(raw['metadata'], self.receipt, item['claim_digest'])
                         or not hmac.compare_digest(item['content_digest'], digest)):
                     raise CheckpointConflict('owner_steering_binding_unavailable')
             conn.execute("UPDATE v2_owner_steering SET status='included_in_planning' WHERE message_id=? AND owner_id=? AND status='accepted'",
@@ -198,11 +265,13 @@ class OwnerAtomicCheckpoint:
             result = self.store._write(conn, row, raw, state, budget)
         self.version = result.version
 
-    def _load(self, conn, version):
+    def _load(self, conn, version, *, allow_paused=False):
         row = self.store._row(conn, self.task.task_id)
         raw = self.store._validate_identity(row, self.task.task_id, self.task.user, version)
         if raw.get('message_id') != self.receipt.message_id:
             raise CheckpointConflict('owner_atomic_checkpoint_identity_mismatch')
+        if 'owner_continuation_pause' in raw['metadata'] and not allow_paused:
+            raise CheckpointConflict('owner_continuation_paused')
         envelope = raw['metadata'].get(STATE_KEY)
         if (not isinstance(envelope, dict) or set(envelope) != {'schema_version', 'state', 'budget'}
                 or type(envelope['schema_version']) is not int or envelope['schema_version'] != SCHEMA_VERSION):
@@ -235,7 +304,7 @@ class OwnerAtomicCheckpoint:
 
     def load(self, *, expected_version: int) -> tuple[Checkpoint, dict]:
         with self._transaction() as conn:
-            row, raw, state, budget = self._load(conn, expected_version)
+            row, raw, state, budget = self._load(conn, expected_version, allow_paused=True)
             if 'owner_read_pending_decision' in raw['metadata']:
                 raise CheckpointConflict('owner_atomic_pending_decision_unresolved')
             observations = raw['metadata'].get('owner_read_observations')
@@ -288,6 +357,8 @@ class OwnerAtomicCheckpoint:
         leaves delivery uncertain. This does not confirm user receipt, fence
         external I/O, authorize other channels, or enable the normal daemon.
         """
+        if self.telegram_origin:
+            raise CheckpointConflict('owner_desktop_pickup_unavailable')
         from .owner_authority_bridge import context_authority_active
         from .owner_read_recovery import restore_owner_read_observations
         if not context_authority_active(context):
@@ -324,7 +395,7 @@ class OwnerAtomicCheckpoint:
                 for item in steer_rows:
                     digest = hashlib.sha256((item['id'] + '\0' + item['content']).encode()).hexdigest()
                     if (item['status'] != 'included_in_planning' or item['peer_uid'] != os.getuid()
-                            or item['claim_digest'] != _claim_digest(self.receipt)
+                            or not _steering_claim_in_lineage(metadata, self.receipt, item['claim_digest'])
                             or not hmac.compare_digest(item['content_digest'], digest)):
                         raise CheckpointConflict('owner_steering_binding_unavailable')
             if (state.status not in {'completed', 'waiting_user'} or state.inflight or not state.response.strip()
@@ -397,6 +468,8 @@ class OwnerAtomicCheckpoint:
         conversation store must share the claim database so the record cannot
         commit independently of the live-claim and checkpoint checks.
         """
+        if self.telegram_origin:
+            raise CheckpointConflict('owner_desktop_ack_unavailable')
         from alphonse.agent_v2.conversations import SQLiteConversationStore
         if not isinstance(token, str) or re.fullmatch(r'[0-9a-f]{32}', token) is None:
             raise ValueError('owner_desktop_ack_unavailable')
@@ -538,6 +611,14 @@ class OwnerAtomicCheckpoint:
                     or 'owner_read_pending_decision' in raw['metadata']
                     or 'owner_read_pending_action' in raw['metadata']):
                 raise CheckpointConflict('owner_schedule_result_unavailable')
+            # Recheck Gmail's DB-backed account/grant at the exact publication
+            # transaction, after the separate source-refresh check above.
+            from .owner_gmail import OWNER_GMAIL_TOOL_ID, valid_owner_gmail_locked
+            for binding in bindings.values():
+                if (binding.get('tool_id') == OWNER_GMAIL_TOOL_ID
+                        and (state.status != 'completed' or not valid_owner_gmail_locked(
+                            conn, self.task.user, binding.get('gmail_observation'), context=context))):
+                    raise CheckpointConflict('owner_gmail_authority_unavailable')
             event = conversation.record(owner_user_id=self.task.user, role='assistant', source='scheduled',
                 content=display_response(state.response, bindings),
                 source_message_id='outbound:scheduled:' + self.task.message_id, connection=conn)
@@ -595,6 +676,56 @@ class OwnerAtomicCheckpoint:
                         raise CheckpointConflict('owner_atomic_pending_decision_unavailable')
                     del raw['metadata']['owner_read_pending_decision']
             result = self.store._write(conn, row, raw, state, budget)
+        self.version = result.version
+        return result
+
+    def pause_for_continuation(self, *, expected_version: int, metric: str, interval: int,
+                               last_checkpoint: int, cancellation_checker,
+                               progress_assessment: str = 'unknown') -> Checkpoint:
+        """Fence a quiescent checkpoint. This does not release or resume a claim.
+
+        The recorded counter comes from the durable ledger, not the caller.
+        Delivery, authenticated continuation and a fresh-claim handoff are not
+        implemented here; an active marker prevents further reservations.
+        """
+        if (metric not in {'actions', 'model_calls', 'input_tokens', 'output_tokens'}
+                or type(interval) is not int or interval <= 0
+                or type(last_checkpoint) is not int or last_checkpoint < 0
+                or not callable(cancellation_checker)
+                or progress_assessment not in {'progress', 'no_progress', 'unknown'}):
+            raise ValueError('owner_pause_invalid')
+        with self._transaction() as conn:
+            row, raw, state, budget = self._load(conn, expected_version)
+            md = raw['metadata']
+            usage = budget.usage()
+            current = usage['charged'][metric]
+            if (cancellation_checker() is not False or state.status != 'running'
+                    or state.inflight or usage['in_flight'] or usage['unknown_usage']
+                    or current < last_checkpoint or current - last_checkpoint < interval
+                    or any(key in md for key in ('owner_read_pending_action', 'owner_read_pending_decision',
+                        'owner_read_selected_draft', 'owner_read_desktop_pickup_started',
+                        'owner_read_ready_handoff', 'owner_bash_dispatch_started',
+                        'owner_bash_return_unreconciled', 'owner_continuation_pause'))):
+                raise CheckpointConflict('owner_pause_unavailable')
+            observations = md.get('owner_read_observations')
+            if not isinstance(observations, dict) or set(observations) != set(state.evidence_sources):
+                raise CheckpointConflict('owner_pause_unavailable')
+            paused_at = self.clock()
+            if paused_at.tzinfo is None or paused_at.utcoffset() is None:
+                raise CheckpointConflict('owner_pause_unavailable')
+            md['owner_continuation_pause'] = {
+                'schema_version': 2, 'claim_digest': _claim_digest(self.receipt),
+                'metric': metric, 'interval': interval, 'counter': current,
+                'previous_counter': last_checkpoint,
+                'paused_at_ms': int(paused_at.timestamp() * 1000),
+                'observations_sha256': _decision_digest(observations),
+                'state_sha256': _decision_digest(state.snapshot()),
+                'progress_assessment': progress_assessment,
+                'evidence_refs': list(state.evidence_sources),
+            }
+            result = self.store._write(conn, row, raw, state, budget)
+            if cancellation_checker() is not False:
+                raise CheckpointConflict('owner_pause_unavailable')
         self.version = result.version
         return result
 
@@ -686,7 +817,7 @@ class OwnerAtomicCheckpoint:
                 ORDER BY sequence''', (self.task.message_id, self.task.user)).fetchall() if has_table else []
             for item in steering:
                 digest = hashlib.sha256((item['id'] + '\0' + item['content']).encode()).hexdigest()
-                if (item['peer_uid'] != os.getuid() or item['claim_digest'] != _claim_digest(self.receipt)
+                if (item['peer_uid'] != os.getuid() or not _steering_claim_in_lineage(raw['metadata'], self.receipt, item['claim_digest'])
                         or not hmac.compare_digest(item['content_digest'], digest)):
                     raise CheckpointConflict('owner_steering_binding_unavailable')
             stale = any(item['reservation_id'] == reservation_id and item['status'] == 'accepted' for item in steering)
@@ -721,9 +852,9 @@ class OwnerAtomicCheckpoint:
                     knowledge_snapshot_digest: str | None = None, cancellation_checker=None) -> Checkpoint:
         """Store an already-validated read result, action binding, and budget together.
 
-        This deliberately cannot settle a failed or ambiguous action. Observation
-        validity and actor visibility must be established and revalidated by the
-        host; this API does not assert those semantic properties.
+        An explicit bounded native web read failure is settled as a failure;
+        other failed or ambiguous actions remain unsettled. Observation validity
+        and actor visibility are established and revalidated by the host.
         """
         if tool_id == 'native.bash':
             # Generic shell may have changed state even when it exits cleanly.
@@ -758,7 +889,11 @@ class OwnerAtomicCheckpoint:
                     raise CheckpointConflict('owner_knowledge_binding_unavailable')
             elif knowledge_snapshot_digest is not None:
                 raise CheckpointConflict('owner_knowledge_binding_unavailable')
-            budget.settle(reservation_id, outcome='success')
+            from .owner_web import WEB_TOOL_IDS, is_web_failure_observation
+            failed_web_read = is_web_failure_observation(tool_id, observation)
+            if observation.get('status') == 'failed' and not failed_web_read:
+                raise CheckpointConflict('owner_atomic_failed_observation_invalid')
+            budget.settle(reservation_id, outcome='failure' if failed_web_read else 'success')
             observations[evidence_ref] = {'actor': state.actor, 'tool_id': tool_id,
                                           'arguments': deepcopy(arguments),
                                           'observation_sha256': observation_digest(observation)}
@@ -770,7 +905,6 @@ class OwnerAtomicCheckpoint:
             from .owner_gmail import OWNER_GMAIL_TOOL_ID
             if tool_id == OWNER_GMAIL_TOOL_ID:
                 observations[evidence_ref]['gmail_observation'] = deepcopy(observation)
-            from .owner_web import WEB_TOOL_IDS
             if tool_id in WEB_TOOL_IDS:
                 observations[evidence_ref]['web_observation'] = deepcopy(observation)
             state.evidence_sources.append(evidence_ref)

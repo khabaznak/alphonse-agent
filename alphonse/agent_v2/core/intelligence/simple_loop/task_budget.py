@@ -7,7 +7,8 @@ an atomic check does not provide concurrency safety. Unknown or in-flight work
 is never automatically refunded after a crash, timeout, or restart.
 
 Elapsed time is wall time from task creation, including user/provider waits and
-process downtime. Clocks are injected by the caller as integer UTC milliseconds.
+process downtime, except for explicitly attested continuation pauses. Clocks
+are injected by the caller as integer UTC milliseconds.
 Budget decisions are not authorization, cancellation, or effect verification.
 """
 from __future__ import annotations
@@ -18,6 +19,8 @@ from typing import Any, Mapping
 from types import MappingProxyType
 
 SCHEMA_VERSION = 1
+CONTINUATION_SCHEMA_VERSION = 2
+_MAX_COUNTER = (1 << 63) - 1
 DIMENSIONS = ("actions", "model_calls", "input_tokens", "output_tokens")
 TOKEN_DIMENSIONS = ("input_tokens", "output_tokens")
 
@@ -91,18 +94,27 @@ class TaskBudget:
         self.revision = 0
         self.last_observed_at_ms = self.started_at_ms
         self._reservations: dict[str, dict[str, Any]] = {}
+        self._continuation_windows: list[dict[str, Any]] = []
+        self._excluded_pause_ms = 0
 
     def to_dict(self) -> dict[str, Any]:
-        return {"schema_version": SCHEMA_VERSION, "revision": self.revision,
+        result = {"schema_version": CONTINUATION_SCHEMA_VERSION if self._continuation_windows else SCHEMA_VERSION, "revision": self.revision,
                 "started_at_ms": self.started_at_ms, "last_observed_at_ms": self.last_observed_at_ms, "limits": self.limits.to_dict(),
                 "reservations": deepcopy(self._reservations)}
+        if self._continuation_windows:
+            result.update(continuation_windows=deepcopy(self._continuation_windows), excluded_pause_ms=self._excluded_pause_ms)
+        return result
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "TaskBudget":
-        if not isinstance(value, Mapping) or set(value) != {"schema_version", "revision", "started_at_ms", "last_observed_at_ms", "limits", "reservations"}:
+        base = {"schema_version", "revision", "started_at_ms", "last_observed_at_ms", "limits", "reservations"}
+        if not isinstance(value, Mapping):
             raise ValueError("budget_invalid:snapshot")
-        if type(value["schema_version"]) is not int or value["schema_version"] != SCHEMA_VERSION:
+        version = value.get("schema_version")
+        if type(version) is not int or version not in {SCHEMA_VERSION, CONTINUATION_SCHEMA_VERSION}:
             raise ValueError("budget_schema_unsupported")
+        if set(value) != base | ({"continuation_windows", "excluded_pause_ms"} if version == CONTINUATION_SCHEMA_VERSION else set()):
+            raise ValueError("budget_invalid:snapshot")
         obj = cls(BudgetLimits.from_dict(value["limits"]), started_at_ms=value["started_at_ms"])
         obj.revision = _integer(value["revision"], "revision")
         obj.last_observed_at_ms = _now(value["last_observed_at_ms"], obj.started_at_ms)
@@ -143,6 +155,41 @@ class TaskBudget:
             raise ValueError("budget_invalid:multiple_final_attempts")
         if obj.revision < len(rows):
             raise ValueError("budget_invalid:revision")
+        if version == CONTINUATION_SCHEMA_VERSION:
+            windows = value['continuation_windows']
+            if not isinstance(windows, list) or not windows:
+                raise ValueError('budget_invalid:continuation_windows')
+            previous_end = obj.started_at_ms
+            grants = set()
+            excluded = 0
+            added = {key: 0 for key in DIMENSIONS}
+            added_elapsed = 0
+            for window in windows:
+                if (not isinstance(window, dict) or set(window) != {'grant_id', 'pause_started_ms', 'resumed_ms', 'increment', 'elapsed_increment_ms'}
+                        or not isinstance(window['grant_id'], str) or not window['grant_id'].strip()
+                        or window['grant_id'] in grants):
+                    raise ValueError('budget_invalid:continuation_window')
+                begin = _integer(window['pause_started_ms'], 'pause_started_ms')
+                end = _integer(window['resumed_ms'], 'resumed_ms')
+                increment = _vector(window['increment'], 'increment')
+                extra_ms = _integer(window['elapsed_increment_ms'], 'elapsed_increment_ms')
+                if (begin < previous_end or end < begin or end > obj.last_observed_at_ms
+                        or end > _MAX_COUNTER or extra_ms > _MAX_COUNTER
+                        or any(x > _MAX_COUNTER for x in increment.values())):
+                    raise ValueError('budget_invalid:continuation_window')
+                grants.add(window['grant_id'])
+                excluded += end - begin
+                for key in DIMENSIONS:
+                    added[key] += increment[key]
+                added_elapsed += extra_ms
+                previous_end = end
+            if (type(value['excluded_pause_ms']) is not int or value['excluded_pause_ms'] != excluded
+                    or excluded > _MAX_COUNTER or obj.revision < len(rows) + len(windows)
+                    or any(added[key] > obj.limits.total[key] or obj.limits.total[key] > _MAX_COUNTER for key in DIMENSIONS)
+                    or added_elapsed > obj.limits.elapsed_ms or obj.limits.elapsed_ms > _MAX_COUNTER):
+                raise ValueError('budget_invalid:continuation_window')
+            obj._continuation_windows = deepcopy(windows)
+            obj._excluded_pause_ms = excluded
         return obj
 
     @staticmethod
@@ -214,7 +261,7 @@ class TaskBudget:
             raise BudgetExhausted(reason)
 
         elapsed_limit = self.limits.elapsed_ms - (self.limits.final_reserve_ms if lane == "work" else 0)
-        if now - self.started_at_ms >= elapsed_limit:
+        if now - self.started_at_ms - self._excluded_pause_ms >= elapsed_limit:
             exhausted("budget_elapsed_exhausted")
         if lane == "final" and any(r["lane"] == "final" and r["status"] != "released" for r in self._reservations.values()):
             exhausted("budget_final_attempt_used")
@@ -252,6 +299,51 @@ class TaskBudget:
         elif input_tokens is not None or output_tokens is not None:
             raise ValueError("budget_invalid:tool_token_usage")
         row.update(status="settled", actual=actual, unknown_tokens=unknown, outcome=outcome)
+        self.revision += 1
+        return self.revision
+
+    def apply_continuation_window(self, *, grant_id: str, pause_started_ms: int, resumed_ms: int,
+                                  increment: Mapping[str, int], increment_caps: Mapping[str, int],
+                                  elapsed_increment_ms: int, elapsed_increment_cap_ms: int) -> int:
+        """Apply one externally authenticated and bounded continuation grant.
+
+        Experimental and unwired. The caller MUST authenticate and atomically
+        consume a grant tied to this task/checkpoint, attest the exact quiescent
+        pause interval, enforce cancellation/effect checks, and persist this
+        revision before resuming. This method does none of those things. A grant
+        ID can only be used once within this snapshot. Final-response use is
+        terminal and cannot be reopened. All reservation records are preserved.
+        """
+        if not isinstance(grant_id, str) or not grant_id.strip() or len(grant_id) > 256:
+            raise ValueError('budget_invalid:grant_id')
+        if any(window['grant_id'] == grant_id for window in self._continuation_windows):
+            raise ValueError('budget_continuation_grant_used')
+        begin = _now(pause_started_ms, self.last_observed_at_ms)
+        end = _now(resumed_ms, begin)
+        increments = _vector(increment, 'increment')
+        caps = _vector(increment_caps, 'increment_caps')
+        elapsed = _integer(elapsed_increment_ms, 'elapsed_increment_ms')
+        elapsed_cap = _integer(elapsed_increment_cap_ms, 'elapsed_increment_cap_ms')
+        if (end > _MAX_COUNTER or elapsed > elapsed_cap or elapsed_cap > _MAX_COUNTER
+                or any(increments[k] > caps[k] or caps[k] > _MAX_COUNTER
+                       or self.limits.total[k] + increments[k] > _MAX_COUNTER for k in DIMENSIONS)
+                or self.limits.elapsed_ms + elapsed > _MAX_COUNTER
+                or self._excluded_pause_ms + end - begin > _MAX_COUNTER
+                or (not any(increments.values()) and elapsed == 0)):
+            raise ValueError('budget_invalid:continuation_bounds')
+        usage = self.usage()
+        if usage['in_flight'] or usage['unknown_usage']:
+            raise ValueError('budget_continuation_usage_unresolved')
+        if any(row['lane'] == 'final' and row['status'] != 'released' for row in self._reservations.values()):
+            raise ValueError('budget_continuation_final_started')
+        new_total = {k: self.limits.total[k] + increments[k] for k in DIMENSIONS}
+        new_limits = BudgetLimits(new_total, self.limits.final_reserve,
+                                  self.limits.elapsed_ms + elapsed, self.limits.final_reserve_ms)
+        self._continuation_windows.append({'grant_id': grant_id, 'pause_started_ms': begin, 'resumed_ms': end,
+                                           'increment': increments, 'elapsed_increment_ms': elapsed})
+        self._excluded_pause_ms += end - begin
+        self.last_observed_at_ms = end
+        self.limits = new_limits
         self.revision += 1
         return self.revision
 

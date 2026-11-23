@@ -129,7 +129,7 @@ def test_only_known_undispatched_reservation_may_be_released():
 
 def test_invalid_and_future_snapshots_are_rejected():
     state = budget().to_dict()
-    state['schema_version'] = 2
+    state['schema_version'] = 3
     with pytest.raises(ValueError, match='schema'):
         TaskBudget.from_dict(state)
     with pytest.raises(ValueError):

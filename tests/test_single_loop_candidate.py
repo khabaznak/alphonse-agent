@@ -71,6 +71,30 @@ def test_read_then_grounded_answer_uses_projection_budget_and_real_invocation(fi
     assert any(x['inflight'].startswith('tool-') for x in fixture.snapshots)
 
 
+def test_host_pause_occurs_between_settled_actions_without_replaying(fixture):
+    seen = []
+    def pause(state):
+        seen.append(state.snapshot())
+        return bool(state.evidence_sources)
+    paused = run_candidate(fixture.state, replace(fixture.host, checkpoint_pause=pause))
+    assert paused.status == 'running' and not paused.inflight
+    assert fixture.calls == [{'key': 'x'}]
+    assert len(paused.evidence_sources) == 1
+    assert fixture.host.budgets.load('task').usage()['in_flight'] == []
+    assert len(seen) == 2
+    result = run_candidate(paused, fixture.host)
+    assert result.status == 'completed'
+    assert fixture.calls == [{'key': 'x'}]
+
+
+def test_pause_callback_failure_never_dispatches_or_overwrites_state(fixture):
+    def fail(_state):
+        raise RuntimeError('pause unavailable')
+    with pytest.raises(RuntimeError, match='pause unavailable'):
+        run_candidate(fixture.state, replace(fixture.host, checkpoint_pause=fail))
+    assert fixture.calls == [] and fixture.seen == [] and fixture.snapshots == []
+
+
 def test_current_candidate_blocks_native_bash_without_dispatch(fixture):
     from alphonse.agent_v2.core.tools.registry.native.bash import build_bash_tool_definition
     bash = build_bash_tool_definition()
@@ -477,7 +501,7 @@ def test_older_candidate_snapshots_restore_without_format_retries():
     snapshot = CandidateState('task', 'actor', 'goal').snapshot()
     for version in (1, 2, 3):
         old = {key: value for key, value in snapshot.items()
-               if key not in {'answer_review_state', 'prerequisite_feedback', 'prerequisite_retries'}}
+               if key not in {'answer_review_state', 'prerequisite_feedback', 'prerequisite_retries', 'retry_feedback_pending'}}
         if version < 3:
             old.pop('invalid_decision_retries')
             old.pop('decision_format_pending')
@@ -488,6 +512,42 @@ def test_older_candidate_snapshots_restore_without_format_retries():
         restored = CandidateState.restore(old)
         assert restored.invalid_decision_retries == 0 and not restored.decision_format_pending
         assert restored.answer_review_state == 'not_started'
+
+
+def test_deferred_retry_survives_restore_and_stops_repeated_selection(fixture):
+    fixture.sources['prior'] = '{"status":"failed"}'
+    state = CandidateState('task', 'fixture-user', 'goal', evidence_sources=['prior'],
+                           retry_feedback_pending=True)
+    restored = CandidateState.restore(json.loads(json.dumps(state.snapshot(), sort_keys=True)))
+    assert restored.retry_feedback_pending is True
+    prompts = []
+    def choose(prompt, _cap):
+        prompts.append(prompt)
+        return {'kind': 'tool', 'tool_id': 'native.read', 'arguments': {'key': 'x'},
+                'usage': {'input_tokens': 10, 'output_tokens': 10}}
+    host = replace(fixture.host, choose=choose, input_reservation=1024,
+                   defer_identical_failed_read=lambda _actor, _tool, _args, refs: refs == ('prior',))
+    result = run_candidate(restored, host)
+    assert (result.status, result.blocker) == ('blocked', 'candidate_retry_deferred')
+    assert 'immediate repeat was not dispatched' in prompts[0]
+    assert fixture.calls == []
+
+
+def test_deferred_retry_allows_different_action_after_restore(fixture):
+    fixture.sources['prior'] = '{"status":"failed"}'
+    state = CandidateState.restore(CandidateState('task', 'fixture-user', 'goal',
+        evidence_sources=['prior'], retry_feedback_pending=True).snapshot())
+    decisions = iter([
+        {'kind': 'tool', 'tool_id': 'native.read', 'arguments': {'key': 'different'},
+         'usage': {'input_tokens': 10, 'output_tokens': 10}},
+        {'kind': 'answer', 'text': 'The value is 42.', 'usage': {'input_tokens': 10, 'output_tokens': 10}},
+    ])
+    host = replace(fixture.host, choose=lambda *_: next(decisions), input_reservation=1024,
+                   defer_identical_failed_read=lambda _actor, _tool, args, _refs: args == {'key': 'x'})
+    result = run_candidate(state, host)
+    assert result.status == 'completed'
+    assert fixture.calls == [{'key': 'different'}]
+    assert not result.retry_feedback_pending
 
 
 def test_answer_review_allows_relevant_read_without_forcing_distractors(fixture):

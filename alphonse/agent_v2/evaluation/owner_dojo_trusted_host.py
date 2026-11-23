@@ -6,6 +6,7 @@ host and network access. This is not a sandbox or a household security test.
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
 from dataclasses import replace
 import json
 import os
@@ -21,6 +22,7 @@ from alphonse.agent_v2.core.questions import SQLiteQuestionStore
 from alphonse.agent_v2.daemon import V2Daemon
 from alphonse.agent_v2.evaluation import dojo_lead_followup
 from alphonse.agent_v2.evaluation import dojo_host_recovery
+from alphonse.agent_v2.evaluation import dojo_host_device
 from alphonse.agent_v2.evaluation.owner_gym_smoke import provider_failure_category
 from alphonse.agent_v2.inference_settings import InferenceSettingsRecord, build_inference_router_from_settings
 from alphonse.agent_v2.ipc import V2DaemonClient, V2DaemonServer
@@ -30,10 +32,12 @@ from alphonse.agent_v2.users import V2UserStore
 
 def run(model: str, *, case: str = 'prospect-followup') -> dict:
     calls = {'started': 0, 'returned': 0, 'bash_decisions': 0, 'failures': []}
-    if case not in {'prospect-followup', 'host-unavailable-maintenance-report'}:
+    if case not in {'prospect-followup', 'host-unavailable-maintenance-report', dojo_host_device.CASE_ID}:
         raise ValueError('trusted_host_dojo_case_invalid')
     scenario = dojo_host_recovery if case == dojo_host_recovery.CASE_ID else dojo_lead_followup
-    with tempfile.TemporaryDirectory(prefix='alphonse-host-dojo-', dir='/private/tmp') as temp:
+    with tempfile.TemporaryDirectory(prefix='alphonse-host-dojo-', dir='/private/tmp') as temp, (dojo_host_device.DeviceFixture() if case == dojo_host_device.CASE_ID else nullcontext()) as device:
+        if device is not None:
+            scenario = device
         root = Path(temp)
         path = root / 'dojo.sqlite'
         users = V2UserStore(path)
@@ -106,7 +110,7 @@ def run(model: str, *, case: str = 'prospect-followup') -> dict:
                         process_results.append(entry)
         readback = scenario.readback(workspace)
         grade = (scenario.grade(readback, draft.get('message') if draft else None)
-                 if scenario is dojo_host_recovery else scenario.grade(readback))
+                 if scenario is dojo_host_recovery or device is not None else scenario.grade(readback))
         return {'case': case, 'mode': identity.get('owner_host_bash_mode'),
                 'loop': identity.get('loop'), 'status': status, 'client_acknowledged': acknowledged,
                 'model_calls': calls, 'effect_passed': grade.get('effect_passed'), 'checks': grade.get('checks'),
@@ -114,7 +118,7 @@ def run(model: str, *, case: str = 'prospect-followup') -> dict:
                 'host_bash_process_results_order': 'unspecified',
                 'target_status': grade.get('target_status'),
                 'answer_available': bool(draft and draft.get('message')),
-                'scenario_assessment': grade if scenario is dojo_host_recovery else None,
+                'scenario_assessment': grade if scenario is dojo_host_recovery or device is not None else None,
                 'limitations': ['Full host and network access, not a sandbox.',
                     'Readback checks fixture effects, not all possible host effects.',
                     'One attempt is not a reliability estimate.', 'Response semantics are unassessed.']}
@@ -124,7 +128,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--model', required=True)
     parser.add_argument('--journal', type=Path, required=True)
-    parser.add_argument('--case', choices=('prospect-followup', 'host-unavailable-maintenance-report'),
+    parser.add_argument('--case', choices=('prospect-followup', 'host-unavailable-maintenance-report', dojo_host_device.CASE_ID),
                         default='prospect-followup')
     parser.add_argument('--accept-trusted-host', action='store_true')
     args = parser.parse_args()

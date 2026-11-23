@@ -160,7 +160,12 @@ class OpenAICodexProvider:
                    if key in os.environ}
             if not env.get("HOME") or not env.get("PATH"):
                 raise ValueError("openai_codex_subscription_auth_unverified")
-            options = ["-c", 'model_provider="openai"', "-c", 'cli_auth_credentials_store="auto"']
+            # Codex otherwise exposes its own cached web search even with
+            # --ignore-user-config. Decisions must use the tools advertised by
+            # Alphonse, whose observations are fenced and recorded by the host.
+            # This does not disable Alphonse's native web tools.
+            options = ["-c", 'model_provider="openai"', "-c", 'cli_auth_credentials_store="auto"',
+                       "-c", 'web_search="disabled"']
         if fallback_path:
             if env is None:
                 env = dict(os.environ)

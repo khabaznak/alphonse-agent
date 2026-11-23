@@ -69,6 +69,10 @@ def test_ordinary_owner_followups_receive_prior_turns(tmp_path, monkeypatch):
         conversation.record(owner_user_id=owner.user_id, role='user',
             content='Synthetic long note: ' + ('x' * 2000) + ' Final correction: Bayport.',
             source='desktop', source_message_id='test:long-note')
+        for index in range(10):
+            conversation.record(owner_user_id=owner.user_id,
+                role='user' if index % 2 == 0 else 'assistant',
+                content=f'Intervening context {index}', source='desktop', source_message_id=f'test:intervening-{index}')
         for prompt in ('What is the temperature?', 'What about Bayport?', 'I mean the temperature there.'):
             message = queue.enqueue_trusted_local_owner(prompt=prompt, peer_uid=os.getuid())
             deadline = time.monotonic() + 8

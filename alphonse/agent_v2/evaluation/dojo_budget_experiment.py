@@ -44,12 +44,15 @@ def provider_event_counts(raw):
 
 
 def experiment_limits(original_total, final_reserve, elapsed_ms, final_reserve_ms, *, actions, model_calls):
-    expected = {'actions': 5, 'model_calls': 8, 'input_tokens': 524288, 'output_tokens': 131072}
-    if dict(original_total) != expected or type(actions) is not int or type(model_calls) is not int:
+    old = {'actions': 5, 'model_calls': 8, 'input_tokens': 524288, 'output_tokens': 131072}
+    current = {'actions': 10, 'model_calls': 12, 'input_tokens': 786432, 'output_tokens': 196608}
+    baseline = dict(original_total)
+    if baseline not in (old, current) or type(actions) is not int or type(model_calls) is not int:
         raise ValueError('dojo_budget_baseline_changed')
-    if not 5 <= actions <= 12 or not 8 <= model_calls <= 12:
+    max_actions, max_models = (12, 12) if baseline == old else (16, 18)
+    if not baseline['actions'] <= actions <= max_actions or not baseline['model_calls'] <= model_calls <= max_models:
         raise ValueError('dojo_budget_experiment_out_of_bounds')
-    total = {**expected, 'actions': actions, 'model_calls': model_calls}
+    total = {**baseline, 'actions': actions, 'model_calls': model_calls}
     return BudgetLimits(total, final_reserve, elapsed_ms, final_reserve_ms)
 
 
@@ -65,9 +68,9 @@ def main():
                         help='try CLI shell-tool feature flags; does not disable Alphonse Bash')
     args = parser.parse_args()
     # Validate before reserving a journal or contacting the model.
-    trial = experiment_limits({'actions': 5, 'model_calls': 8, 'input_tokens': 524288, 'output_tokens': 131072},
+    trial = experiment_limits({'actions': 10, 'model_calls': 12, 'input_tokens': 786432, 'output_tokens': 196608},
                               {'actions': 0, 'model_calls': 1, 'input_tokens': 65536, 'output_tokens': 16384},
-                              120000, 5000, actions=args.actions, model_calls=args.model_calls)
+                              165000, 5000, actions=args.actions, model_calls=args.model_calls)
     root = Path(__file__).resolve().parents[1]
     digest = hashlib.sha256()
     for path in sorted(root.rglob('*.py')):
@@ -108,7 +111,7 @@ def main():
                     wrapper.chmod(0o700)
                     stack.enter_context(patch.object(openai_codex, '_resolve_cli', return_value=(str(wrapper), None)))
                 result = run(image_id=args.image_id, docker_socket=args.docker_socket, emit=emit,
-                             model=args.model, timeout_seconds=120, scenario=dojo_device_service,
+                             model=args.model, timeout_seconds=180, scenario=dojo_device_service,
                              full_registry=True)
         except Exception as exc:
             emit({'event': 'finished', 'outcome': 'infrastructure_error', 'task_passed': None,

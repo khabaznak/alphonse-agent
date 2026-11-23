@@ -23,3 +23,13 @@ def test_provider_event_counts_never_retains_text_or_unknown_item_type():
     assert result == {'agent_message': 1, 'other': 1}
     assert 'private' not in str(result)
     assert provider_event_counts('{broken') == {'unavailable': 1}
+
+
+def test_experiment_supports_new_owner_baseline_without_loosening_bounds():
+    base = {'actions': 10, 'model_calls': 12, 'input_tokens': 786432, 'output_tokens': 196608}
+    final = {'actions': 0, 'model_calls': 1, 'input_tokens': 65536, 'output_tokens': 16384}
+    limits = experiment_limits(base, final, 165000, 5000, actions=12, model_calls=14)
+    assert limits.total == {**base, 'actions': 12, 'model_calls': 14}
+    assert limits.elapsed_ms == 165000
+    with pytest.raises(ValueError):
+        experiment_limits(base, final, 165000, 5000, actions=17, model_calls=14)

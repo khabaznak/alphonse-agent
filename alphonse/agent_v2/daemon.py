@@ -177,6 +177,7 @@ def _owner_public_failure_code(error: object, *, cancelled: bool = False) -> str
         'BudgetExhausted:budget_exhausted:actions': 'action_limit',
         'candidate_read_denied': 'source_unavailable',
         'candidate_read_revoked': 'source_unavailable',
+        'candidate_retry_deferred': 'source_unavailable',
         'candidate_evidence_changed_or_revoked': 'source_changed',
         'candidate_observation_incomplete': 'source_incomplete',
         'candidate_requires_read_only_native_tool': 'unsupported_operation',
@@ -232,6 +233,7 @@ class V2Daemon:
     event_store: EventAutomationStore | None = None
     daemon_id: str = ""
     experimental_owner_only: bool = False
+    owner_telegram_enabled: bool = False
 
     def __post_init__(self) -> None:
         self._identity_started_at = datetime.now(timezone.utc).isoformat()
@@ -248,6 +250,11 @@ class V2Daemon:
             self.runtime.queue.lease_owner = self.daemon_id
         self._stop = threading.Event()
         self._processor_thread: threading.Thread | None = None
+        self._owner_telegram_listener = None
+        # This only exposes the local opt-in controls. New tasks checkpoint only
+        # when the owner explicitly saves a continuation setting.
+        self._continuation_experimental_enabled = True
+        self._continuation_failed_reclaims: set[str] = set()
         self._memory_migration_thread: threading.Thread | None = None
         self._lock_file: Any | None = None
         self._database_lock_file: Any | None = None
@@ -402,6 +409,11 @@ class V2Daemon:
             host_bash_mode = 'blocked_missing_authority'
         else:
             host_bash_mode = 'unverified'
+        telegram = getattr(self, '_owner_telegram_listener', None)
+        telegram_thread = getattr(telegram, '_thread', None)
+        telegram_status = ('disabled' if telegram is None else
+            'error' if getattr(telegram, 'last_error', None) else
+            'running' if telegram_thread is not None and telegram_thread.is_alive() else 'stopped')
         return {
             'daemon_id': self.daemon_id, 'pid': os.getpid(), 'instance_created_at_utc': self._identity_started_at,
             'distribution_version': package_version, 'source_revision': None,
@@ -411,6 +423,7 @@ class V2Daemon:
             'loop_status': 'configured_worker_alive' if is_owner_worker and alive else
                            'configured_worker_not_alive' if is_owner_worker else 'unverified',
             'owner_host_bash_mode': host_bash_mode,
+            'owner_telegram_status': telegram_status,
             'loaded_code_sha256': fingerprints,
             'identity_scope': 'Selected loaded function code only; not a complete build fingerprint or proof of executed tasks.',
         }
@@ -435,6 +448,45 @@ class V2Daemon:
             raise ValueError('trusted_local_bash_setting_invalid')
         _write_trusted_local_bash_preference(enabled)
         return self.trusted_local_bash_settings()
+
+    def owner_continuation_settings(self) -> dict[str, Any]:
+        raw = self.runtime.user_store._setting('owner_continuation_checkpoint')
+        try:
+            value = json.loads(raw) if raw else None
+            if (not isinstance(value, dict) or set(value) != {'metric', 'interval'}
+                    or value['metric'] not in {'actions', 'model_calls'}
+                    or type(value['interval']) is not int
+                    or not 1 <= value['interval'] <= (9 if value['metric'] == 'actions' else 10)):
+                return {'enabled': False}
+            return {'enabled': True, **value}
+        except (ValueError, TypeError):
+            return {'enabled': False}
+
+    @staticmethod
+    def _owner_continuation_window(metric: str, interval: int) -> dict[str, Any]:
+        # A continuation grants one bounded execution window. The checkpoint
+        # metric remains owner-configurable; other limits are resource ceilings.
+        increment = {'actions': 10, 'model_calls': 12, 'input_tokens': 786432, 'output_tokens': 196608}
+        increment[metric] = interval
+        return {'increment': increment, 'increment_caps': dict(increment),
+                'elapsed_increment_ms': 165000, 'elapsed_increment_cap_ms': 165000,
+                'total_caps': None, 'total_elapsed_cap_ms': None}
+
+    def set_owner_continuation_settings(self, value: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(value, dict) or set(value) not in ({'enabled'}, {'enabled', 'metric', 'interval'}) or type(value.get('enabled')) is not bool:
+            raise ValueError('owner_continuation_settings_invalid')
+        if value['enabled']:
+            metric, interval = value.get('metric'), value.get('interval')
+            if (metric not in {'actions', 'model_calls'} or type(interval) is not int
+                    or not 1 <= interval <= (9 if metric == 'actions' else 10)):
+                raise ValueError('owner_continuation_settings_invalid')
+            encoded = json.dumps({'metric': metric, 'interval': interval})
+        else:
+            if set(value) != {'enabled'}:
+                raise ValueError('owner_continuation_settings_invalid')
+            encoded = ''
+        self.runtime.user_store._set_setting('owner_continuation_checkpoint', encoded)
+        return self.owner_continuation_settings()
 
     def _start_owner_only(self) -> None:
         """Start the explicitly selected read-only owner worker and socket.
@@ -466,6 +518,19 @@ class V2Daemon:
                 # an owner worker before either publishes its thread.
                 self._stop.clear()
                 processor.selected_draft_sink = self.register_owner_checkpoint
+                if self.owner_telegram_enabled:
+                    from alphonse.agent_v2.core.intelligence.simple_loop.owner_telegram_delivery import ensure_schema
+                    from alphonse.agent_v2.core.intelligence.simple_loop.owner_telegram_ingress import ensure_telegram_origin_schema
+                    from alphonse.agent_v2.core.intelligence.simple_loop.owner_telegram_listener import TelegramOwnerListener
+                    with self.runtime.queue._connect() as conn:
+                        ensure_telegram_origin_schema(conn)
+                        ensure_schema(conn)
+                    telegram = next((item for item in self.runtime.integration_store.list_enabled()
+                                     if item.provider_key == 'telegram'), None)
+                    if telegram is not None:
+                        self._owner_telegram_listener = TelegramOwnerListener(
+                            self.runtime.queue, self.runtime.integration_store, telegram.integration_id)
+                        self._owner_telegram_listener.start()
                 self.ipc.experimental_owner_ingress = True
                 self.ipc.start()
                 self._processor_thread = threading.Thread(target=self._owner_process_loop_with_release,
@@ -489,6 +554,10 @@ class V2Daemon:
         worker = self._processor_thread
         if worker is not None and worker.is_alive():
             worker.join()
+        listener = getattr(self, '_owner_telegram_listener', None)
+        if listener is not None:
+            while not listener.stop(timeout=60):
+                pass
         wait = getattr(self.ipc, 'wait_quiescent', None)
         if callable(wait) and wait():
             self._release_single_instance_lock()
@@ -504,6 +573,63 @@ class V2Daemon:
             acquired = task = None
             scheduled_occurrence = False
             try:
+                continuation_config = self.owner_continuation_settings()
+                continuation_config = ({'metric': continuation_config['metric'], 'interval': continuation_config['interval']}
+                                       if continuation_config['enabled'] and getattr(self, '_continuation_experimental_enabled', False) else None)
+                continuation_version = None
+                recovered_active = False
+                held = None
+                if getattr(self, '_continuation_experimental_enabled', False):
+                    with queue._connect() as conn:
+                        origin_exists = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_trusted_owner_ingress'").fetchone()
+                        held_rows = conn.execute('''SELECT q.message_id FROM v2_inbound_messages q
+                        JOIN v2_trusted_owner_ingress o ON o.message_id=q.message_id
+                        JOIN v2_task_checkpoints c ON c.task_id=q.message_id AND c.owner_id=q.user_id
+                        WHERE q.status='processing' AND json_valid(c.task_state_json)
+                          AND json_extract(c.task_state_json,'$.metadata.owner_continuation_handoff.status')='held'
+                          AND json_extract(c.task_state_json,'$.metadata.owner_continuation_grant.expires_at_ms')>?
+                        ORDER BY q.sequence LIMIT 100''', (int(datetime.now(timezone.utc).timestamp() * 1000),)).fetchall() if origin_exists else []
+                        held = next((item for item in held_rows if item['message_id'] not in self._continuation_failed_reclaims), None)
+                if held:
+                    from alphonse.agent_v2.core.intelligence.simple_loop.owner_continuation_reclaim import reclaim_approved_pause
+                    message_id = str(held['message_id'])
+                    try:
+                        acquired, continuation_version = reclaim_approved_pause(queue, processor.atomic_checkpoints,
+                            message_id, lease_owner=self.daemon_id,
+                            cancellation_checker=lambda: self._stop.is_set() or self.kill_switch.is_cancelled(message_id))
+                    except Exception:
+                        # A damaged held request must not prevent unrelated
+                        # owner messages from being claimed and processed.
+                        with self._owner_status_lock:
+                            self._owner_statuses[message_id] = 'failed'
+                            self._owner_failure_codes[message_id] = 'needs_attention'
+                        self._continuation_failed_reclaims.add(message_id)
+                        acquired = None
+                if acquired is None and getattr(self, '_continuation_experimental_enabled', False):
+                    with queue._connect() as conn:
+                        activated_rows = conn.execute('''SELECT q.message_id FROM v2_inbound_messages q
+                            JOIN v2_trusted_owner_ingress o ON o.message_id=q.message_id
+                            JOIN v2_task_checkpoints c ON c.task_id=q.message_id AND c.owner_id=q.user_id
+                            WHERE q.status='processing' AND datetime(q.lease_expires_at)<=datetime('now')
+                              AND json_valid(c.task_state_json)
+                              AND json_array_length(json_extract(c.task_state_json,'$.metadata.owner_continuation_history'))>0
+                              AND json_extract(c.task_state_json,'$.metadata.owner_continuation_pause') IS NULL
+                            ORDER BY q.sequence LIMIT 100''').fetchall() if origin_exists else []
+                        activated = next((item for item in activated_rows if item['message_id'] not in self._continuation_failed_reclaims), None)
+                    if activated:
+                        from alphonse.agent_v2.core.intelligence.simple_loop.owner_continuation_reclaim import reclaim_quiescent_activated
+                        message_id = str(activated['message_id'])
+                        try:
+                            acquired, continuation_version = reclaim_quiescent_activated(queue, processor.atomic_checkpoints,
+                                message_id, lease_owner=self.daemon_id,
+                                cancellation_checker=lambda: self._stop.is_set() or self.kill_switch.is_cancelled(message_id))
+                            recovered_active = True
+                        except Exception:
+                            with self._owner_status_lock:
+                                self._owner_statuses[message_id] = 'failed'
+                                self._owner_failure_codes[message_id] = 'needs_attention'
+                            self._continuation_failed_reclaims.add(message_id)
+                            acquired = None
                 # A held follow-up can become trusted ingress only after its
                 # predecessor has a verified, acknowledged conversation turn.
                 # The store serializes release with ingress and removal. No
@@ -546,14 +672,17 @@ class V2Daemon:
                         filters.append('EXISTS (SELECT 1 FROM v2_trusted_owner_ingress o WHERE o.message_id=q.message_id)')
                     if schedules:
                         filters.append("EXISTS (SELECT 1 FROM v2_owner_schedule_occurrences x WHERE x.message_id=q.message_id AND x.state='queued')")
+                    if self._owner_telegram_listener is not None:
+                        filters.append('EXISTS (SELECT 1 FROM v2_owner_telegram_ingress t WHERE t.message_id=q.message_id)')
                     row = conn.execute("SELECT q.message_id FROM v2_inbound_messages q WHERE q.status='pending' AND ("
                         + ' OR '.join(filters) + ") ORDER BY q.sequence LIMIT 1").fetchone() if filters else None
-                if row is None:
+                if row is None and acquired is None:
                     self._stop.wait(self.poll_interval_sec)
                     continue
-                message_id = str(row['message_id'])
-                acquired = queue.claim_next(selector=MessageSelector(message_id=message_id),
-                                            lease_owner=self.daemon_id, lease_seconds=180)
+                if acquired is None:
+                    message_id = str(row['message_id'])
+                    acquired = queue.claim_next(selector=MessageSelector(message_id=message_id),
+                                                lease_owner=self.daemon_id, lease_seconds=180)
                 if acquired is None:
                     self._stop.wait(self.poll_interval_sec)
                     continue
@@ -562,6 +691,8 @@ class V2Daemon:
                     self._owner_failure_codes.pop(message_id, None)
                 task = TaskState.from_message(acquired.message, message_id=message_id)
                 task.task_id = message_id
+                if continuation_version is not None:
+                    task._checkpoint_version = continuation_version
                 with queue._connect() as conn:
                     schedule_table = conn.execute("SELECT 1 FROM sqlite_master WHERE name='v2_owner_schedule_occurrences'").fetchone()
                     scheduled_occurrence = bool(schedule_table and conn.execute(
@@ -589,20 +720,63 @@ class V2Daemon:
                     user_timezone_provider=self.runtime.user_store.timezone,
                     owner_effect_commit=lambda commit: self.kill_switch.commit_if_active(message_id, commit),
                     cancellation_checker=is_cancelled)
+                if continuation_config is not None:
+                    context.owner_continuation_config = continuation_config
+                if continuation_version is not None:
+                    context.owner_continuation_resume = not recovered_active
+                    context.owner_continuation_recover_active = recovered_active
+                    with queue._connect() as conn:
+                        saved_row = conn.execute('SELECT task_state_json FROM v2_task_checkpoints WHERE task_id=?', (message_id,)).fetchone()
+                        metadata = json.loads(saved_row['task_state_json'])['metadata']
+                        pause = (metadata['owner_continuation_history'][-1]['pause'] if recovered_active
+                                 else metadata['owner_continuation_pause'])
+                    context.owner_continuation_config = {'metric': pause['metric'], 'interval': pause['interval']}
+                    context.owner_continuation_budget_window = self._owner_continuation_window(pause['metric'], pause['interval'])
                 result = None
                 scheduled_recorded = False
+                activity = None
+                listener = self._owner_telegram_listener
+                if listener is not None and callable(getattr(listener, 'begin_activity', None)):
+                    try:
+                        activity = listener.begin_activity(message_id, cancelled=is_cancelled)
+                    except Exception:
+                        # Feedback must never change task execution or delivery.
+                        pass
                 try:
                     result = processor.process(task, context)
                 finally:
+                    if activity is not None:
+                        activity.set()
                     with self._owner_checkpoint_lock:
                         selected_pair = self._owner_checkpoints.get(message_id)
+                    scheduled_delivery_error = None
+                    if (result is not None and result.status == ProcessingStatus.WAITING
+                            and selected_pair is not None and selected_pair[0].scheduled_origin
+                            and not self._stop.is_set() and not cancelled.is_set()):
+                        try:
+                            from alphonse.agent_v2.core.intelligence.simple_loop.owner_telegram_scheduled_delivery import (
+                                is_telegram_scheduled_origin, stage_scheduled_telegram_reply,
+                                dispatch_scheduled_telegram_reply,
+                            )
+                            telegram_schedule = is_telegram_scheduled_origin(selected_pair[0])
+                            if telegram_schedule is None:
+                                raise RuntimeError('scheduled_origin_unavailable')
+                            if telegram_schedule:
+                                if self._owner_telegram_listener is None:
+                                    raise RuntimeError('telegram_scheduled_delivery_unavailable')
+                                stage_scheduled_telegram_reply(selected_pair[0], selected_pair[1])
+                                dispatch_scheduled_telegram_reply(selected_pair[0], selected_pair[1],
+                                    send=self._owner_telegram_listener.send_reply)
+                        except Exception as exc:
+                            scheduled_delivery_error = exc
                     def finish_ready_handoff():
                         nonlocal scheduled_recorded
                         # This callback executes while cancellation is locked
                         # out by finish_handoff. A crash before the marker is
                         # committed must never make the draft recoverable.
                         if (result is not None and result.status == ProcessingStatus.WAITING
-                                and selected_pair is not None and not self._stop.is_set()):
+                                and selected_pair is not None and not self._stop.is_set()
+                                and scheduled_delivery_error is None):
                             if selected_pair[0].scheduled_origin:
                                 selected_pair[0].finalize_scheduled_result(selected_pair[1])
                                 scheduled_recorded = True
@@ -613,14 +787,32 @@ class V2Daemon:
                         message_id, release=finish_ready_handoff, cancel=lambda: True)
                     if cancelled_at_finish:
                         cancelled.set()
+                    if scheduled_delivery_error is not None:
+                        raise RuntimeError('scheduled_delivery_unavailable') from scheduled_delivery_error
                 with self._owner_checkpoint_lock:
                     if scheduled_recorded:
                         self._owner_checkpoints.pop(message_id, None)
                     ready = message_id in self._owner_checkpoints
+                    pair = self._owner_checkpoints.get(message_id)
+                telegram_status = None
+                if ready and pair is not None and pair[0].telegram_origin and not cancelled.is_set():
+                    from alphonse.agent_v2.core.intelligence.simple_loop.owner_telegram_handoff import (
+                        stage_telegram_reply, dispatch_telegram_reply, finalize_telegram_reply,
+                    )
+                    stage_telegram_reply(pair[0], pair[1])
+                    telegram_status = dispatch_telegram_reply(pair[0], pair[1], send=self._owner_telegram_listener.send_reply)
+                    if telegram_status == 'provider_accepted':
+                        finalize_telegram_reply(pair[0], pair[1])
+                        with self._owner_checkpoint_lock:
+                            self._owner_checkpoints.pop(message_id, None)
+                        ready = False
                 with self._owner_status_lock:
                     is_ready = ready and not cancelled.is_set() and result.status == ProcessingStatus.WAITING
-                    self._owner_statuses[message_id] = 'recorded' if scheduled_recorded else ('ready' if is_ready else 'failed')
-                    if not is_ready and not scheduled_recorded:
+                    is_paused = (not cancelled.is_set() and result.status == ProcessingStatus.WAITING
+                                 and result.snapshot.metadata.get('status') == 'continuation_paused')
+                    self._owner_statuses[message_id] = ('telegram_' + telegram_status if telegram_status else
+                        ('recorded' if scheduled_recorded else ('ready' if is_ready else ('continuation_paused' if is_paused else 'failed'))))
+                    if not is_ready and not is_paused and not scheduled_recorded and telegram_status is None:
                         self._owner_failure_codes[message_id] = _owner_public_failure_code(
                             result.error, cancelled=cancelled.is_set() or result.status == ProcessingStatus.CANCELLED)
                 if scheduled_occurrence and not is_ready and not scheduled_recorded:
@@ -826,6 +1018,28 @@ class V2Daemon:
                     return 'abandoned'
         except Exception:
             return 'unavailable'
+        if message_id in getattr(self, '_continuation_failed_reclaims', set()):
+            return 'failed'
+        try:
+            from .core.intelligence.simple_loop.owner_continuation_detached import open_detached_paused_checkpoint
+            paused = open_detached_paused_checkpoint(self.runtime.queue,
+                self.runtime.processor.owner_read_candidate.atomic_checkpoints, message_id)
+            with paused._transaction() as conn:
+                _, raw, _, _ = paused._load(conn, paused.version, allow_paused=True)
+                if 'owner_continuation_pause' in raw['metadata']:
+                    choice = raw['metadata'].get('owner_continuation_choice')
+                    if choice is None:
+                        return 'continuation_paused'
+                    if isinstance(choice, dict) and choice.get('approved') is False:
+                        return 'continuation_declined'
+                    if isinstance(choice, dict) and choice.get('approved') is True:
+                        grant = raw['metadata'].get('owner_continuation_grant')
+                        if isinstance(grant, dict) and type(grant.get('expires_at_ms')) is int:
+                            if grant['expires_at_ms'] <= int(datetime.now(timezone.utc).timestamp() * 1000):
+                                return 'continuation_expired'
+                            return 'continuation_accepted'
+        except Exception:
+            pass
         with self._owner_status_lock:
             status = self._owner_statuses.get(message_id)
         if not status and self._restore_owner_ready(message_id):
@@ -872,20 +1086,110 @@ class V2Daemon:
             self._owner_statuses[message_id] = 'abandoned'
         return result
 
+    def owner_continuation_list(self) -> list[dict[str, Any]]:
+        """List trusted-local, durably paused work without requiring its old lease.
+
+        Same-UID processes have the same authority as Desktop in local mode.
+        A continuation choice never comes from the model or a client actor ID.
+        """
+        from .core.intelligence.simple_loop.owner_continuation_detached import open_detached_paused_checkpoint
+        from .core.intelligence.simple_loop.owner_continuation_question import _paused, start_question, valid_question, render_window_question
+        processor = self.runtime.processor.owner_read_candidate
+        queue = self.runtime.queue
+        with queue._connect() as conn:
+            if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_trusted_owner_ingress'").fetchone():
+                return []
+            rows = conn.execute('''SELECT q.message_id FROM v2_inbound_messages q
+                JOIN v2_trusted_owner_ingress o ON o.message_id=q.message_id
+                JOIN v2_task_checkpoints c ON c.task_id=q.message_id AND c.owner_id=q.user_id
+                WHERE q.status='processing' AND o.owner_id=q.user_id ORDER BY q.sequence LIMIT 100''').fetchall()
+        items = []
+        for row in rows:
+            message_id = row['message_id']
+            cancelled = lambda: self._stop.is_set() or self.kill_switch.is_cancelled(message_id)
+            try:
+                checkpoint = open_detached_paused_checkpoint(queue, processor.atomic_checkpoints, message_id)
+                with checkpoint._transaction() as conn:
+                    _, raw, _, _, pause = _paused(checkpoint, conn, checkpoint.version, cancelled)
+                    question = raw['metadata'].get('owner_continuation_question')
+                    choice = raw['metadata'].get('owner_continuation_choice')
+                if choice is not None:
+                    continue
+                if question is None:
+                    # State the measured fact without asserting semantic progress.
+                    window = self._owner_continuation_window(pause['metric'], pause['interval'])
+                    text = render_window_question(pause, window)
+                    start_question(checkpoint, expected_version=checkpoint.version, question=text,
+                                   cancellation_checker=cancelled)
+                    with checkpoint._transaction() as conn:
+                        _, raw, _, _, pause = _paused(checkpoint, conn, checkpoint.version, cancelled)
+                        question = raw['metadata'].get('owner_continuation_question')
+                if valid_question(question, pause, 'started_unconfirmed'):
+                    items.append({'message_id': message_id, 'checkpoint_version': checkpoint.version,
+                                  'question': question['question']})
+            except Exception:
+                continue
+        return items
+
+    def owner_continuation_choose(self, message_id: str, checkpoint_version: int, approve: bool) -> dict[str, str]:
+        """Atomically acknowledge the displayed question and record the local choice."""
+        from .core.intelligence.simple_loop.owner_continuation_detached import open_detached_paused_checkpoint
+        from .core.intelligence.simple_loop.owner_continuation_question import _paused, valid_question
+        from .core.intelligence.simple_loop.owner_atomic_checkpoint import _decision_digest
+        from .core.intelligence.simple_loop.single_loop_checkpoint import CheckpointConflict
+        if (not isinstance(message_id, str) or re.fullmatch(r'[0-9a-f]{32}', message_id) is None
+                or type(checkpoint_version) is not int or checkpoint_version < 1 or type(approve) is not bool):
+            raise ValueError('owner_continuation_choice_unavailable')
+        checkpoint = open_detached_paused_checkpoint(self.runtime.queue,
+            self.runtime.processor.owner_read_candidate.atomic_checkpoints, message_id)
+        cancelled = lambda: self._stop.is_set() or self.kill_switch.is_cancelled(message_id)
+        with checkpoint._transaction() as conn:
+            row, raw, state, budget, pause = _paused(checkpoint, conn, checkpoint_version, cancelled)
+            md = raw['metadata']
+            q = md.get('owner_continuation_question')
+            if (not valid_question(q, pause, 'started_unconfirmed') or 'owner_continuation_choice' in md
+                    or 'owner_continuation_grant' in md or 'owner_continuation_handoff' in md):
+                raise CheckpointConflict('owner_continuation_choice_unavailable')
+            q['status'] = 'acknowledged'
+            choice = {'schema_version': 1, 'owner_id': checkpoint.task.user, 'message_id': message_id,
+                      'pause_version': q['pause_version'], 'pause_sha256': q['pause_sha256'],
+                      'question_sha256': q['question_sha256'], 'approved': approve}
+            md['owner_continuation_choice'] = choice
+            if approve:
+                now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+                grant = {'schema_version': 1, 'owner_id': checkpoint.task.user, 'message_id': message_id,
+                    'pause_version': choice['pause_version'], 'pause_sha256': choice['pause_sha256'],
+                    'choice_sha256': _decision_digest(choice), 'metric': pause['metric'],
+                    'checkpoint': pause['counter'], 'through': pause['counter'] + pause['interval'],
+                    'issued_at_ms': now_ms, 'expires_at_ms': now_ms + 300000, 'status': 'consumed'}
+                md['owner_continuation_grant'] = grant
+                md['owner_continuation_handoff'] = {'schema_version': 1, 'status': 'held',
+                    'grant_sha256': _decision_digest(grant), 'original_claim_digest': pause['claim_digest'],
+                    'prepared_at_ms': now_ms}
+            checkpoint.store._write(conn, row, raw, state, budget)
+            if cancelled():
+                raise CheckpointConflict('owner_continuation_choice_unavailable')
+        return {'status': 'accepted' if approve else 'declined'}
+
     def owner_recovery_list(self) -> list[dict[str, Any]]:
         """List current owner's unresolved requests without exposing claim tokens."""
         try:
             with self.runtime.queue._connect() as conn:
                 exists = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_trusted_owner_ingress'").fetchone()
-                if not exists:
-                    return []
                 rows = conn.execute("""SELECT q.message_id,q.user_id,q.prompt,q.status,q.lease_expires_at,c.task_state_json
                     FROM v2_inbound_messages q JOIN v2_trusted_owner_ingress o ON o.message_id=q.message_id
                     JOIN v2_user_settings s ON s.key='admin_user_id' AND s.value=q.user_id
                     JOIN v2_users u ON u.user_id=q.user_id AND u.role IN ('admin','owner') AND u.is_active=1
                     LEFT JOIN v2_task_checkpoints c ON c.task_id=q.message_id AND c.owner_id=q.user_id
                     WHERE o.owner_id=q.user_id AND o.peer_uid=? AND q.status IN ('pending','processing')
-                    ORDER BY q.sequence DESC LIMIT 50""", (os.getuid(),)).fetchall()
+                    ORDER BY q.sequence DESC LIMIT 50""", (os.getuid(),)).fetchall() if exists else []
+                telegram_table = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_owner_telegram_replies'").fetchone()
+                uncertain_telegram = conn.execute("""SELECT r.message_id,r.status FROM v2_owner_telegram_replies r
+                    JOIN v2_user_settings s ON s.key='admin_user_id' AND s.value=r.owner_id
+                    JOIN v2_users u ON u.user_id=r.owner_id AND u.role IN ('admin','owner') AND u.is_active=1
+                    WHERE r.status='started_unconfirmed' OR (r.status='provider_accepted' AND EXISTS
+                      (SELECT 1 FROM v2_inbound_messages q WHERE q.message_id=r.message_id))
+                    ORDER BY r.rowid DESC LIMIT 50""").fetchall() if telegram_table else []
             eligibility = self.runtime.queue.can_abandon_trusted_owner_messages([row['message_id'] for row in rows])
             items = []
             for row in rows:
@@ -915,6 +1219,10 @@ class V2Daemon:
                     if effect is not None:
                         item.update({'status': 'effect_committed', 'can_abandon': False, 'committed_effect': effect})
                 items.append(item)
+            items.extend({'message_id': row['message_id'], 'prompt': 'Telegram response',
+                          'status': ('telegram_delivery_unconfirmed' if row['status'] == 'started_unconfirmed'
+                                     else 'telegram_reconciliation_required'), 'can_abandon': False}
+                         for row in uncertain_telegram)
             return items
         except Exception:
             raise RuntimeError('owner_recovery_unavailable') from None
@@ -979,10 +1287,12 @@ class V2Daemon:
         self._stop.set()
         self.ipc.stop()
         if self.experimental_owner_only:
+            listener = getattr(self, '_owner_telegram_listener', None)
+            listener_stopped = listener is None or listener.stop(timeout=12)
             if self._processor_thread is not None and self._processor_thread.is_alive():
                 self._processor_thread.join(timeout=5)
             wait = getattr(self.ipc, 'wait_quiescent', None)
-            if ((self._processor_thread is None or not self._processor_thread.is_alive())
+            if (listener_stopped and (self._processor_thread is None or not self._processor_thread.is_alive())
                     and callable(wait) and wait(0)):
                 self._release_single_instance_lock()
             else:
@@ -1056,6 +1366,8 @@ class V2Daemon:
             return "Kill switch checked: no active task is running."
         if result["status"] == "effect_already_committed":
             return "The task's effect was already committed, so cancellation was too late."
+        if result["status"] == "cancel_unconfirmed":
+            return "Cancellation was requested, but durable recovery protection could not be confirmed."
         notice = "queued" if result.get("notification_outbox_id") else "could not be queued"
         return f"Kill switch engaged. Active task cancelled; owner security notice {notice}. Audit: {result['audit_id']}."
 
@@ -1075,6 +1387,20 @@ class V2Daemon:
         if active is None:
             audit_id = self.kill_switch_audit.record(actor_user_id=actor, source=source_value, active=None, status="no_active_task")
             return {"authorized": True, "status": "no_active_task", "active_task": {}, "audit_id": audit_id}
+        if self.experimental_owner_only:
+            try:
+                with self.runtime.queue._connect() as conn:
+                    exists = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_trusted_owner_ingress'").fetchone()
+                    local = exists and conn.execute('SELECT 1 FROM v2_trusted_owner_ingress WHERE message_id=? AND owner_id=?',
+                        (active.message_id, active.user_id)).fetchone()
+                if local:
+                    from .core.intelligence.simple_loop.owner_continuation_detached import persist_continuation_cancellation
+                    persist_continuation_cancellation(self.runtime.queue, active.message_id, active.user_id)
+            except Exception:
+                audit_id = self.kill_switch_audit.record(actor_user_id=actor, source=source_value, active=active, status='cancel_unconfirmed')
+                return {"authorized": True, "status": "cancel_unconfirmed", "active_task": {
+                    "message_id": active.message_id, "task_id": active.task_id, "user_id": active.user_id,
+                    "project_id": active.project_id}, "audit_id": audit_id}
         if self.experimental_owner_only:
             # This worker has no legacy outbox dispatcher; leave no delayed
             # unfenced notice that could be sent after switching modes.
@@ -2136,6 +2462,8 @@ class V2Daemon:
         with self._owner_checkpoint_lock:
             pair = self._owner_checkpoints.get(message_id)
             if pair is None:
+                raise ValueError('owner_desktop_pickup_unavailable')
+            if getattr(pair[0], 'telegram_origin', False):
                 raise ValueError('owner_desktop_pickup_unavailable')
             if getattr(self, 'experimental_owner_only', False):
                 with self._owner_status_lock:
@@ -4496,6 +4824,7 @@ def main() -> None:
             ),
             daemon_id=daemon_id,
             experimental_owner_only=True,
+            owner_telegram_enabled=True,
         )
         _configure_trusted_local_bash(daemon.runtime, enabled=_trusted_local_bash_enabled())
         logger.warning('Simple loop: owner-only read conversation; schedulers and integrations are disabled.')

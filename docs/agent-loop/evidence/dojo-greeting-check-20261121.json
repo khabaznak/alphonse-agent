@@ -1,0 +1,17 @@
+{
+  "record_type": "manually_transcribed_run_summary",
+  "case": "greeting-diagnostic",
+  "request": "Hi Alphonse",
+  "model": "gpt-6-luna",
+  "submitted_at_utc": "2026-11-21T06:14:15.549104+00:00",
+  "acknowledged_at_utc": "2026-11-21T06:14:23.990244+00:00",
+  "model_decision": {"kind": "answer", "text": "Hi! How can I help?", "tool_id": null, "arguments": null},
+  "input_tokens": 18347,
+  "output_tokens": 34,
+  "provider_calls": 1,
+  "bash_calls": 0,
+  "client_acknowledged": true,
+  "history_recorded": true,
+  "cleanup_verified": true,
+  "limitations": ["One disposable synthetic owner run does not establish reliability or explain the Desktop screenshot.", "Service-first socket authority used fake peers, not the protected installed Desktop and daemon.", "Bash was injected as an isolated container and was not invoked.", "The separate inference provider has its own environment.", "This summary was transcribed from tool output, not generated as a raw run journal."]
+}

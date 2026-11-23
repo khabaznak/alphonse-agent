@@ -61,9 +61,10 @@ class CandidateState:
     answer_review_state: str = 'not_started'
     prerequisite_feedback: str = ''
     prerequisite_retries: int = 0
+    retry_feedback_pending: bool = False
 
     def snapshot(self) -> dict[str, Any]:
-        return {'schema_version': 5, **deepcopy(asdict(self))}
+        return {'schema_version': 6, **deepcopy(asdict(self))}
 
     @classmethod
     def restore(cls, snapshot: dict[str, Any]) -> 'CandidateState':
@@ -71,7 +72,7 @@ class CandidateState:
             raise ValueError('candidate_checkpoint_invalid')
         version = snapshot.get('schema_version')
         base = {'schema_version', 'task_id', 'actor', 'goal_source', 'evidence_sources', 'status', 'response', 'blocker', 'inflight'}
-        if type(version) is not int or version not in (1, 2, 3, 4, 5):
+        if type(version) is not int or version not in (1, 2, 3, 4, 5, 6):
             raise ValueError('candidate_checkpoint_version_unsupported')
         expected = base if version == 1 else base | {'unsupported_retries', 'recovery_pending'}
         if version >= 3:
@@ -80,6 +81,8 @@ class CandidateState:
             expected |= {'answer_review_state'}
         if version >= 5:
             expected |= {'prerequisite_feedback', 'prerequisite_retries'}
+        if version >= 6:
+            expected |= {'retry_feedback_pending'}
         if set(snapshot) != expected:
             raise ValueError('candidate_checkpoint_invalid')
         state = cls(**{key: deepcopy(value) for key, value in snapshot.items() if key != 'schema_version'})
@@ -100,7 +103,8 @@ class CandidateState:
             raise ValueError('candidate_checkpoint_invalid')
         if (state.prerequisite_feedback not in {'', *FEEDBACK}
                 or type(state.prerequisite_retries) is not int or not 0 <= state.prerequisite_retries <= 2
-                or (state.prerequisite_feedback and not state.prerequisite_retries)):
+                or (state.prerequisite_feedback and not state.prerequisite_retries)
+                or type(state.retry_feedback_pending) is not bool):
             raise ValueError('candidate_checkpoint_invalid')
         return state
 
@@ -169,6 +173,10 @@ class CandidateHost:
     # process output, not verification that its requested effects occurred.
     authorize_host_bash: Callable[[str, str, dict[str, Any]], bool] | None = None
     execute_host_bash: Callable[[str, dict[str, Any], str], dict[str, Any]] | None = None
+    defer_identical_failed_read: Callable[[str, str, dict[str, Any], tuple[str, ...]], bool] | None = None
+    # The host may durably pause at a quiescent boundary. It must persist and
+    # fence the pause before returning True; this callback grants no authority.
+    checkpoint_pause: Callable[[CandidateState], bool] | None = None
 
 
 def _save(host: CandidateHost, state: CandidateState, *, consume_decision: bool = False,
@@ -268,6 +276,14 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
         # call after cancellation is already observable.
         if _cancelled(host):
             return _terminal(host, state, 'cancelled', 'cancelled')
+        if host.checkpoint_pause is not None:
+            # An exception must escape rather than dispatching more work or
+            # overwriting a pause that may already have been committed.
+            paused = host.checkpoint_pause(deepcopy(state))
+            if type(paused) is not bool:
+                raise ValueError('candidate_pause_result_invalid')
+            if paused:
+                return state
         try:
             projection = _project(host, state)
             fingerprint = _projection_fingerprint(projection)
@@ -288,6 +304,9 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
                                    'answering, or explain what prevents progress.')
             if state.prerequisite_feedback:
                 decision_input += '\n' + FEEDBACK[state.prerequisite_feedback]
+            if state.retry_feedback_pending:
+                decision_input += ('\nThe previous identical read failed, so its immediate repeat was not dispatched. '
+                                   'Consider another available route or explain what remains unavailable.')
             if state.decision_format_pending:
                 decision_input += ('\nThe previous decision had an invalid format and was not executed. '
                                    'Return one valid action: an answer or question with text, '
@@ -449,6 +468,22 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
         if kind != 'tool' or not isinstance(decision.get('tool_id'), str) or not isinstance(decision.get('arguments'), dict):
             return _terminal(host, state, 'blocked', 'candidate_decision_invalid')
         tool_id, args = decision['tool_id'], deepcopy(decision['arguments'])
+        if host.defer_identical_failed_read is not None:
+            try:
+                defer = host.defer_identical_failed_read(state.actor, tool_id, deepcopy(args), tuple(state.evidence_sources))
+                if type(defer) is not bool:
+                    raise ValueError('retry_policy_invalid')
+            except Exception:
+                return _terminal(host, state, 'blocked', 'candidate_retry_policy_unavailable')
+            if defer:
+                if state.retry_feedback_pending:
+                    return _terminal(host, state, 'blocked', 'candidate_retry_deferred')
+                state.retry_feedback_pending = True
+                _save(host, state, consume_decision=True)
+                continue
+        if state.retry_feedback_pending:
+            state.retry_feedback_pending = False
+            _save(host, state)
         registry = getattr(host.context, 'tools', None)
         descriptor = registry.get(tool_id) if registry is not None else None
         from .owner_knowledge_snapshot import OWNER_KNOWLEDGE_TOOL_ID
@@ -599,7 +634,14 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
         if not _is_fresh(host, state, fingerprint):
             return _terminal(host, state, 'blocked', 'candidate_evidence_changed_or_revoked')
         if result.get('status') != 'success':
-            return _terminal(host, state, 'blocked', 'candidate_tool_failed_or_waiting')
+            # Explicit, completed read-tool failures are useful observations.
+            # Uncaught exceptions, waiting results, and effectful tool failures
+            # remain unconfirmed and must not be retried implicitly.
+            from .owner_web import web_failure_observation
+            failure = web_failure_observation(tool_id, result)
+            if failure is None:
+                return _terminal(host, state, 'blocked', 'candidate_tool_failed_or_waiting')
+            result = {**result, 'result': failure}
         payload = result.get('result')
         # Tool-specific coverage/partial semantics must be verified by the host;
         # this prototype only accepts a deliberately explicit fixture contract.
