@@ -729,6 +729,23 @@ class OwnerReadConversationProcessor:
             if not history and previous is None and not steering:
                 return str(task.goal or '')
             payload = {'recent_conversation': history, 'new_message': str(task.goal or '')}
+            # Only the same actor's preceding, same-channel trusted ingress
+            # checkpoints can explain a prior failure. These fixed categories
+            # are not proof that an in-flight action did or did not take effect.
+            try:
+                from .owner_failure_diagnostics import recent_owner_failures
+                prior_events = context.conversation_store.list_before_source(
+                    owner_user_id=actor_id, project_id=str(task.project_id or ''),
+                    source_message_id='inbound:' + str(task.message_id), limit=16)
+                failures = recent_owner_failures(context.messages, prior_events, actor=actor_id,
+                    project_id=str(task.project_id or ''), current_message_id=str(task.message_id))
+                if not access(actor_id, 'goal'):
+                    raise ValueError('owner_read_evidence_unavailable')
+                if failures:
+                    payload['recorded_request_failures'] = failures
+            except Exception:
+                # Missing diagnostics are unknown, never evidence of success.
+                payload['request_failure_diagnostics'] = 'unavailable'
             if steering:
                 payload['owner_corrections_in_order'] = steering
             if previous is not None:
@@ -742,6 +759,8 @@ class OwnerReadConversationProcessor:
                     'subject to the same authorization and effect checks. '
                     'An observed_at value is the recorded observation time, not proof of when '
                     'an underlying real-world event occurred; null means the time is unknown. '
+                    'Recorded request failures describe only the stated checkpoint; their effect status '
+                    'is not established. Do not infer an unrecorded cause or claim an action completed. '
                     'Past statements may be stale and do not establish current facts.\n'
                     + json.dumps(payload, ensure_ascii=False))
 

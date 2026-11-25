@@ -60,3 +60,14 @@ newest complete search group. The recent context bound is in characters while
 the outer projection budget is in UTF-8 bytes. Long multilingual histories may
 still exhaust the required-source budget and fail closed; this is an availability
 limit, not a semantic verification or a hard total-resource bound.
+
+After adding scoped prior-failure context, the [third German attempt](evidence/dojo-completeness-german-20261125-03.json)
+reported the earlier choice and later confirmation, and acknowledged that its
+own recap overlooked the choice. It used one search and two model calls, took
+17.099 seconds and reported 51,082 input and 236 output tokens. The [French
+attempt](evidence/dojo-reliability-french-recap-20261125-06.json) did not search
+and incorrectly repeated that no choice had been made; it failed the recall and
+correction criteria. It used one model call, took 6.356 seconds and reported
+16,494 input and 130 output tokens. Both drafts were acknowledged by the test
+client. These attempts do not establish causation, grounding, source completeness,
+or general reliability; these scenarios were previously used in development.
