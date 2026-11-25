@@ -40,3 +40,21 @@ def test_provider_failure_is_retained_without_a_success_claim():
     assert result['answer'] is None and result['acknowledgement'] is None
     assert result['passed'] is None
     assert result['decisions'] == [{'status': 'provider_error'}]
+
+
+def test_owner_change_variant_preserves_later_owner_choice_without_claiming_semantic_pass():
+    class ChangedProvider:
+        supports_image_input = False
+
+        def generate_json(self, request):
+            decision = {'kind': 'answer', 'tool_id': None, 'arguments': None,
+                        'text': 'You later changed it to Moss Green in a satin finish; my recap was wrong.'}
+            return InferenceResult(json_value=decision, usage={'input_tokens': 100, 'output_tokens': 20})
+
+    router = InferenceRouter(provider=ChangedProvider(), default_profile=ModelProfile('test', 'scripted', 'fixture'))
+    result = run_historical_correction(router, timeout=10, owner_changed_choice=True)
+    assert result['case'] == 'historical-owner-change'
+    assert result['status'] == 'ready' and result['acknowledgement'] == 'client_acknowledged'
+    assert result['expected_fact_mentioned'] is True
+    assert result['decisions'][0]['historical_fact_visible_in_prompt'] is True
+    assert result['passed'] is None and result['response_semantics'] == 'requires_manual_review'

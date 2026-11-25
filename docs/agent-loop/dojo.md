@@ -34,6 +34,13 @@ unknowns, interruptions and resource costs alongside passes; do not silently
 retry. An independent observable outcome does not automatically prove the
 agent's reasoning, its grounding or its safety in a different environment.
 
+## Messages while work is active
+
+The [enqueue and steer exercises](dojo-enqueue-and-steer.md) use disposable data
+to observe held follow-ups and updates to an active request. Their default scripted
+provider checks plumbing only; consult the exercise guide for setup, independent
+review, optional configured-model attempts, and limitations.
+
 ## Historical conversation correction
 
 The existing conversation-context runner also has a `historical-correction`
@@ -53,6 +60,23 @@ Run a fresh journal with the configured model:
 .venv/bin/python -m alphonse.agent_v2.evaluation.dojo_conversation_context \
   /tmp/dojo-history.json --case historical-correction --model MODEL
 ```
+
+The contrasting `historical-owner-change` case uses the same older choice and
+misleading assistant recap, but the owner explicitly changes the choice before
+that recap. Run it with `--case historical-owner-change` and a separate fresh
+journal. The latest owner statement is evidence of the changed historical
+choice; do not treat the older choice as overriding it. Neither case proves what
+the household has done or decided outside the recorded conversation.
+
+For manual review, assess separately whether the answer (1) reports the relevant
+owner choice accurately and distinguishes the two choices when applicable,
+(2) attributes the misleading recap to the assistant and corrects its own error
+rather than presenting it as a new owner decision, and (3) avoids claiming
+current finality or real-world effects unsupported by the records. Record each
+criterion as pass, fail or unknown with the actual response as evidence; record
+ready status and client acknowledgement separately. These criteria do not demand
+a particular route or wording. Literal mentions, source visibility and model
+decisions do not establish semantic correctness or grounding.
 
 The receipt retains status, failure code, response and client acknowledgement,
 elapsed time, observed model decisions and provider-reported usage when supplied.
@@ -81,6 +105,46 @@ the response. It took 11.445 seconds and two model calls; reported usage totaled
 31,161 input and 159 output tokens. Whether the retrieved sources were complete
 and whether the answer meets the full correction goal remain unassessed. Prompt
 visibility and an observed search do not prove model grounding.
+
+After adding general source-attribution guidance, the [third attempt](evidence/dojo-historical-correction-20261125-03.json)
+retrieved the earlier choice and stated it correctly, but again called the
+assistant's recap a later note and speculated that the choice may have been
+reopened. It failed the attribution and correction criterion; current-state
+uncertainty alone remains appropriate. The [contrasting owner-change attempt](evidence/dojo-historical-owner-change-20261125-01.json)
+reported the later owner choice and identified the following assistant reply as
+contradictory. Both responses were acknowledged by the client. Their elapsed
+times were 10.395 and 6.301 seconds, with reported input/output usage of
+30,017/136 and 15,308/109 tokens, respectively. The latter choice was already
+visible in the first model prompt; it did not test historical retrieval.
+
+The [fourth attempt](evidence/dojo-historical-correction-20261125-04.json),
+instrumented to retain the synthetic recap's immediate prompt context, did not
+search. It answered that the color was not chosen, relying on the assistant's
+recap despite its speaker being visible and the earlier choice being absent from
+the model prompt. It failed the recall and correction criteria. The client
+acknowledged the answer; the attempt took 4.811 seconds and reported 13,985
+input and 44 output tokens. These outcomes do not prove why the model acted as
+it did or establish a reliability rate.
+
+After adding speaker labels to memory-search summaries and guidance to investigate
+an uncertain recap, the [fifth attempt](evidence/dojo-historical-correction-20261125-05.json)
+searched, recovered the choice and identified the other statement as an assistant
+message, but still did not correct the recap and incorrectly called it the next
+day. It took 13.476 seconds and reported 44,224 input and 212 output tokens.
+The [second owner-change attempt](evidence/dojo-historical-owner-change-20261125-02.json)
+correctly reported the later choice and called the assistant's following recap
+mistaken; it took 6.953 seconds and reported 14,043 input and 105 output tokens.
+The choice was visible in its first prompt, so historical retrieval was not tested.
+
+After further guidance to distinguish a correction to the recorded conversation
+from uncertainty about unrecorded changes, the [sixth historical attempt](evidence/dojo-historical-correction-20261125-06.json)
+searched and reported the original choice and correct dates, but again called
+the assistant's recap a later note and did not correct its own mistake. It took
+10.569 seconds and reported 30,235 input and 165 output tokens. Both historical
+attempts fail the explicit correction criterion; the owner-change attempt meets
+the stated response criteria for this fixture. All three test-client acknowledgements
+were recorded. Source completeness, grounding, broader reliability and behavior
+in the installed Desktop remain unassessed.
 
 ## First open-route challenge
 

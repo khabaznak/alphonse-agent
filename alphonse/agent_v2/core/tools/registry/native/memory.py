@@ -436,6 +436,9 @@ def execute_search_memory(arguments: dict[str, Any], *, context: ToolExecutionCo
     markdown = []
     for (_, hit), result in zip(page, results):
         label = "historical message, not current-state evidence" if hit.source_type == "conversation" else "historical evidence; not authorization or fresh current state"
+        if hit.source_type == "conversation":
+            role = hit.item.source.role
+            label += "; speaker=" + (role if role in {"user", "assistant"} else "unknown")
         if hit.knowledge:
             label += "; " + "; ".join(f"{key}={hit.knowledge[key]}" for key in ("kind", "basis", "status", "persistence"))
         markdown.append(f"- [{hit.source_id}; {label}; {hit.event_time or 'time unknown'}; {hit.item.source.provenance}] {result['excerpt']}")

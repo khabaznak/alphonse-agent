@@ -38,9 +38,13 @@ HISTORY = (
     ('assistant', 'We still need to choose the dining room paint color.'),
 )
 HISTORY_GOAL = 'Had we already chosen the dining room paint?'
+CHANGED_HISTORY = (*HISTORY[:-1],
+    ('user', 'We changed the dining room choice to Moss Green in a satin finish.'),
+    ('assistant', 'We still need to choose the dining room paint color.'))
 
 
-def run_historical_correction(router: InferenceRouter, *, timeout: float = 90) -> dict:
+def run_historical_correction(router: InferenceRouter, *, timeout: float = 90,
+                              owner_changed_choice: bool = False) -> dict:
     """Observe recovery of an older fact after an erroneous recent recap.
 
     Markers are diagnostics only. A human must assess the entire answer and
@@ -49,6 +53,9 @@ def run_historical_correction(router: InferenceRouter, *, timeout: float = 90) -
     started = time.monotonic()
     decisions = []
     original_generate = router.generate_json
+    history = CHANGED_HISTORY if owner_changed_choice else HISTORY
+    expected_fact = 'Moss Green' if owner_changed_choice else 'Harbor Blue'
+    case = 'historical-owner-change' if owner_changed_choice else 'historical-correction'
 
     def inspect_request(request):
         try:
@@ -57,9 +64,13 @@ def run_historical_correction(router: InferenceRouter, *, timeout: float = 90) -
             decisions.append({'status': 'provider_error'})
             raise
         value = result.json_value if isinstance(result.json_value, dict) else {}
+        recap = HISTORY[-1][1]
+        recap_at = request.prompt.find(recap)
         decisions.append({'status': 'returned', 'kind': value.get('kind'),
                           'tool_id': value.get('tool_id'), 'arguments': value.get('arguments'),
-                          'historical_fact_visible_in_prompt': 'Harbor Blue' in request.prompt,
+                          'historical_fact_visible_in_prompt': expected_fact in request.prompt,
+                          'recap_prompt_context': (request.prompt[max(0, recap_at - 160):recap_at + len(recap) + 80]
+                                                   if recap_at >= 0 else None),
                           'usage': dict(result.usage or {})})
         return result
 
@@ -73,8 +84,8 @@ def run_historical_correction(router: InferenceRouter, *, timeout: float = 90) -
             queue = SQLiteMessageQueue(path, experimental_claim_fencing=True)
             conversation = SQLiteConversationStore(path)
             now = datetime.now(timezone.utc)
-            for n, (role, content) in enumerate(HISTORY):
-                age = timedelta(days=8 if n < 2 else 1, minutes=len(HISTORY) - n)
+            for n, (role, content) in enumerate(history):
+                age = timedelta(days=8 if n < 2 else 1, minutes=len(history) - n)
                 conversation.record(owner_user_id=owner.user_id, role=role, content=content,
                                     source='desktop', source_message_id=f'dojo-history:{n}',
                                     created_at=(now - age).isoformat())
@@ -98,7 +109,7 @@ def run_historical_correction(router: InferenceRouter, *, timeout: float = 90) -
                     time.sleep(.05)
                 else:
                     status = {'status': 'timeout'}
-                report = {'case': 'historical-correction', 'status': status['status'],
+                report = {'case': case, 'status': status['status'],
                           'failure_code': status.get('failure_code'), 'answer': None,
                           'acknowledgement': None, 'expected_fact_mentioned': None,
                           'response_semantics': 'requires_manual_review', 'passed': None,
@@ -113,7 +124,7 @@ def run_historical_correction(router: InferenceRouter, *, timeout: float = 90) -
                     draft = client.request('experimental_owner_take_draft', message_id=message)
                     report['answer'] = draft['message']
                     report['answer_kind'] = draft.get('kind')
-                    report['expected_fact_mentioned'] = 'harbor blue' in draft['message'].casefold()
+                    report['expected_fact_mentioned'] = expected_fact.casefold() in draft['message'].casefold()
                     ack = client.request('experimental_owner_ack_draft', message_id=message,
                                          acknowledgement_token=draft['acknowledgement_token'])
                     report['acknowledgement'] = ack.get('status')
@@ -190,13 +201,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('journal', type=Path)
     parser.add_argument('--model', required=True)
-    parser.add_argument('--case', choices=('context', 'historical-correction'), default='context')
+    parser.add_argument('--case', choices=('context', 'historical-correction', 'historical-owner-change'), default='context')
     args = parser.parse_args()
     router = build_inference_router_from_settings(InferenceSettingsRecord(model_id=args.model))
     router.provider.config = replace(router.provider.config, timeout_seconds=40.0)
     with args.journal.open('x', encoding='utf-8') as journal:
         try:
-            result = run_historical_correction(router) if args.case == 'historical-correction' else run(router)
+            result = (run(router) if args.case == 'context' else
+                      run_historical_correction(router, owner_changed_choice=args.case == 'historical-owner-change'))
         except Exception as exc:
             json.dump({'case': args.case, 'status': 'infrastructure_error',
                        'error_type': type(exc).__name__, 'passed': None}, journal)
