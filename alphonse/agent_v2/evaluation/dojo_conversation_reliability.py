@@ -83,8 +83,13 @@ CASES = {
 }
 
 
-def run(router: InferenceRouter, case_id: str, *, timeout: float = 90) -> dict:
-    case = CASES[case_id]
+def run(router: InferenceRouter, case_id: str, *, timeout: float = 90,
+        case_override: Case | None = None) -> dict:
+    # Additional exercise modules may supply a case without mutating the shared
+    # registry, which would otherwise race with concurrent Dojo runs.
+    if case_override is not None and case_override.case_id != case_id:
+        raise ValueError('case_id_mismatch')
+    case = case_override if case_override is not None else CASES[case_id]
     history = (*case.older, *FILLER, *case.recent)
     decisions = []
     original_generate = router.generate_json

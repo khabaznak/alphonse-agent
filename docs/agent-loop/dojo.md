@@ -185,6 +185,12 @@ evaluation or evidence that field order caused the result. All three attempts
 record client acknowledgement; source completeness and grounding were not
 independently established, and the installed Desktop was not exercised.
 
+A separate [historical-correction pair](dojo-history-correction-pair.md) records
+an additional Dutch correction case and a consistent owner-revision control.
+Those observations used a coverage notice later merged in PR #268 and do not
+establish that it improved behavior. A [Jev message-suggestion assessment](jev-message-suggestion-assessment-2026-11-25.md)
+records bounded synthetic multilingual judgments separately from owner-loop Dojo runs.
+
 ## First open-route challenge
 
 `owner_gym_smoke --case dojo-clock` asks for the current UTC timestamp without

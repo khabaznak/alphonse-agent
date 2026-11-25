@@ -25,6 +25,13 @@ Desktop. Client acknowledgement does not prove human receipt. These cases do
 not establish general multilingual reliability, complete source coverage,
 authorization, or behavior after external effects.
 
+The observations below used a local experimental wording that explicitly described
+recent-window omissions and clipping. That wording was experimental at the time
+and was subsequently merged in PR #268. The receipts do not record a model
+identifier, so it cannot be independently recovered from these files. These
+attempts have no controlled comparison establishing that the wording improved
+behavior.
+
 With an explicit recent-window coverage notice, the [Dutch attempt](evidence/dojo-pair-dutch-20261125-01.json)
 reported the earlier choice and later owner confirmation and said the later
 answer was incorrect. It did not explicitly identify that incorrect answer as

@@ -37,3 +37,23 @@ def test_case_registry_restored_when_harness_fails(monkeypatch):
     with pytest.raises(RuntimeError):
         run(None, 'dutch-correction')
     assert base.CASES == original
+
+
+def test_mismatched_case_override_is_rejected_without_changing_registry():
+    original = dict(base.CASES)
+    with pytest.raises(ValueError, match='case_id_mismatch'):
+        base.run(None, 'wrong-id', case_override=CASES['dutch-correction'])
+    assert base.CASES == original
+
+
+def test_pair_case_is_passed_without_mutating_shared_registry(monkeypatch):
+    observed = {}
+
+    def observe(router, case_id, *, timeout, case_override):
+        observed.update(case_id=case_id, case=case_override, in_registry=case_id in base.CASES)
+        return {'limitations': []}
+
+    monkeypatch.setattr(base, 'run', observe)
+    result = run(None, 'dutch-correction', timeout=3)
+    assert observed == {'case_id': 'dutch-correction', 'case': CASES['dutch-correction'], 'in_registry': False}
+    assert result['limitations']
