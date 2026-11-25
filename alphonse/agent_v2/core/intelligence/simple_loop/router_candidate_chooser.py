@@ -14,7 +14,7 @@ from typing import Callable
 from alphonse.agent_v2.core.core import ToolDescriptor, ToolKind
 from alphonse.agent_v2.core.inference.models import InferenceResult
 from alphonse.agent_v2.core.inference.openai_codex import _json_envelope
-from alphonse.agent_v2.core.inference.router import InferenceRouter
+from alphonse.agent_v2.core.inference.router import InferenceRouter, _simple_loop_failure_category
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from .candidate_decision_policy import action_schema, make_request, normalize_action, validate_source_progress
 
@@ -105,13 +105,18 @@ class RouterCandidateChooser:
         # framing of another provider or hidden provider tokens.
         if len(_json_envelope(request).encode('utf-8')) > self.max_input_tokens:
             raise ValueError('candidate_router_input_exceeds_reservation')
-        failed = False
         try:
             result = self.router.generate_json(request)
-        except Exception:
-            failed = True
-        if failed:
-            raise ValueError('candidate_router_unavailable')
+        except Exception as exc:
+            # Forward only fixed categories, never raw provider output or
+            # exception strings, into the claim-bound failure checkpoint.
+            category = _simple_loop_failure_category(exc)
+            allowed = {'model_not_configured', 'cli_missing', 'subscription_auth_unverified',
+                       'authentication_required', 'cli_upgrade_required', 'provider_timeout',
+                       'empty_response', 'invalid_response', 'cancelled'}
+            if category in allowed:
+                raise ValueError('candidate_router_provider_' + category) from None
+            raise ValueError('candidate_router_unavailable') from None
         if self._cancelled():
             raise ValueError('candidate_router_cancelled')
         if (self._task.task_id, self._task.user, self._task.project_id) != self._identity:
