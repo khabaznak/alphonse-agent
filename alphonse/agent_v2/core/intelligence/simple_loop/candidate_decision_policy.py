@@ -6,6 +6,8 @@ from typing import Any
 
 from alphonse.agent_v2.core.inference.models import InferencePurpose, InferenceRequest
 
+ACTIVITY_INTENTS = frozenset({'find_information', 'check_state', 'make_change', 'other'})
+
 
 def action_schema(*, fixture_sources: tuple[str, ...] | None = None) -> dict[str, Any]:
     """Build the shared wire schema with an optional fixture source constraint."""
@@ -18,7 +20,9 @@ def action_schema(*, fixture_sources: tuple[str, ...] | None = None) -> dict[str
         'kind': {'type': 'string', 'enum': ['tool', 'answer', 'question']},
         'tool_id': {'type': ['string', 'null']}, 'arguments': arguments,
         'text': {'type': ['string', 'null']},
-    }, 'required': ['kind', 'tool_id', 'arguments', 'text'], 'additionalProperties': False}
+        'activity_intent': {'type': ['string', 'null'],
+                            'enum': ['find_information', 'check_state', 'make_change', 'other', None]},
+    }, 'required': ['kind', 'tool_id', 'arguments', 'text', 'activity_intent'], 'additionalProperties': False}
 
 
 def validate_source_progress(progress: Any) -> dict[str, list[str]]:
@@ -60,7 +64,9 @@ def make_request(*, projection: str, catalog: list[dict[str, Any]], cancellation
         'by itself arrange a request to do work or report it at a later time. Arrange the '
         'requested future action using an available capability, or explain what prevents it; '
         'do not silently substitute an immediate answer. '
-        'Always include kind, tool_id, arguments, and text; use null for fields not needed. '
+        'Always include kind, tool_id, arguments, text, and activity_intent; use null for fields not needed. '
+        'For a tool action, activity_intent is your intended purpose category, not a result: '
+        'find_information, check_state, make_change, or other. Use null when unsure and for other actions. '
         'Before claiming an action changed something, verify the outcome against the actual requested '
         'target using available observations or a separate readback; a command exit alone does not '
         'establish the intended effect. Do not repeat a mutation merely to check it. '
@@ -121,6 +127,20 @@ def make_request(*, projection: str, catalog: list[dict[str, Any]], cancellation
             'When the owner asks you to repeat or interpret a statement they just supplied, '
             'use that statement; do not require a separate memory search to confirm its wording. '
             'Distinguish what someone said from independently verified current external facts. '
+            'When conversation records appear to conflict, consider who made each statement and '
+            'whether it reports a new observation or decision, or merely summarizes earlier history. '
+            'An assistant recap is evidence of what the assistant said, not independent confirmation '
+            'of the underlying decision or that no earlier decision exists. When the user asks about '
+            'a prior decision or fact and the available recap leaves its basis uncertain, investigate '
+            'relevant authorized historical evidence before relying on that recap when possible. '
+            'Your own later recap is not by itself evidence that the owner changed a decision. '
+            'When an earlier recorded decision contradicts your recap, acknowledge that your recap '
+            'overlooked that recorded decision; distinguish this correction to the conversation '
+            'record from uncertainty about any later, unrecorded changes. Check dates against '
+            'the evidence rather than inferring an interval. '
+            'If the available records show that your recap was mistaken, acknowledge and correct it '
+            'using the earlier evidence. If the records do not resolve whether something actually '
+            'changed, describe that uncertainty; do not dismiss a later owner correction or new evidence. '
             'For questions about past conversations beyond the visible context, use search to discover candidate sources. '
             'A complete preview may provide the needed evidence; if it is shortened or missing '
             'material context, read the relevant source before answering. Select sources that '
@@ -149,7 +169,12 @@ def normalize_action(value: dict[str, Any], allowed_tool_ids: frozenset[str]) ->
     """Reject malformed actions; host invocation validates tool arguments and authority."""
     decision = dict(value)
     decision.pop('usage', None)  # Never trust model-authored accounting.
-    valid = set(decision) == {'kind', 'tool_id', 'arguments', 'text'}
+    # Accept the original four-field protocol for existing providers and
+    # fixtures; versioned intent is optional and can only be an enum or null.
+    base = {'kind', 'tool_id', 'arguments', 'text'}
+    valid = set(decision) in (base, base | {'activity_intent'})
+    intent = decision.get('activity_intent')
+    valid = valid and (intent is None or (isinstance(intent, str) and intent in ACTIVITY_INTENTS))
     kind = decision.get('kind')
     if kind == 'tool':
         valid = (valid and isinstance(decision.get('tool_id'), str)
@@ -157,7 +182,7 @@ def normalize_action(value: dict[str, Any], allowed_tool_ids: frozenset[str]) ->
                  and decision.get('text') is None)
     elif kind in ('answer', 'question'):
         valid = (valid and isinstance(decision.get('text'), str) and bool(decision['text'].strip())
-                 and decision.get('tool_id') is None and decision.get('arguments') is None)
+                 and decision.get('tool_id') is None and decision.get('arguments') is None and intent is None)
     else:
         valid = False
     return decision if valid else {'kind': 'invalid'}

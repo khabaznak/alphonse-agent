@@ -444,12 +444,16 @@ class V2DaemonServer:
                         'experimental_owner_composer_reconcile', 'experimental_owner_steer_add',
                         'experimental_owner_steer_list', 'experimental_owner_steer_remove'}:
                     result = self._owner_followups(connection, request)
+                elif isinstance(request, dict) and request.get('method') == 'experimental_owner_message_suggestion':
+                    result = self._owner_message_suggestion(connection, request)
                 elif isinstance(request, dict) and request.get('method') == 'experimental_owner_take_draft':
                     result = self._owner_take_draft(connection, request)
                 elif isinstance(request, dict) and request.get('method') == 'experimental_owner_ack_draft':
                     result = self._owner_ack_draft(connection, request)
                 elif isinstance(request, dict) and request.get('method') == 'experimental_owner_status':
                     result = self._owner_status(connection, request)
+                elif isinstance(request, dict) and request.get('method') == 'experimental_owner_work_log':
+                    result = self._owner_work_log(connection, request)
                 elif isinstance(request, dict) and request.get('method') == 'experimental_owner_cancel_schedule':
                     result = self._owner_cancel_schedule(connection, request)
                 elif isinstance(request, dict) and request.get('method') == 'legacy_state_inventory':
@@ -493,6 +497,41 @@ class V2DaemonServer:
                 encoded = (json.dumps({"version": PROTOCOL_VERSION, "request_id": _request_id(request),
                     "ok": False, "error": "daemon_response_unavailable"}) + "\n").encode("utf-8")
             connection.sendall(encoded)
+
+    def _owner_message_suggestion(self, connection, request):
+        """Suggest only for the authenticated local owner's live request."""
+        if not self.experimental_owner_ingress or getattr(self.daemon, 'experimental_owner_only', False) is not True:
+            raise PermissionError('owner_suggestion_unavailable')
+        if request.get('version') != PROTOCOL_VERSION:
+            raise ValueError('daemon_protocol_version_unsupported')
+        params = request.get('params')
+        if not isinstance(params, dict) or set(params) != {'active_message_id', 'prompt'}:
+            raise ValueError('owner_suggestion_payload_denied')
+        message_id, prompt = params['active_message_id'], params['prompt']
+        if (not isinstance(message_id, str) or re.fullmatch(r'[0-9a-f]{32}', message_id) is None
+                or not isinstance(prompt, str) or not prompt.strip() or len(prompt.encode('utf-8')) > 4096):
+            raise ValueError('owner_suggestion_payload_denied')
+        uid = self._local_peer_uid(connection)
+        users, queue = self.daemon.runtime.user_store, self.daemon.runtime.queue
+        owner = users.admin_user()
+        if (owner is None or owner.is_active is not True or owner.role not in ('admin', 'owner')
+                or not users.is_admin(owner.user_id) or not users.db_path or users.db_path == ':memory:'
+                or os.path.realpath(str(users.db_path)) != os.path.realpath(str(queue.db_path))):
+            raise PermissionError('owner_suggestion_unavailable')
+        if self.daemon.owner_message_status(message_id) != 'pending':
+            return {'suggestion': None}
+        with queue._connect() as conn:
+            row = conn.execute("""SELECT q.prompt FROM v2_inbound_messages q
+                JOIN v2_trusted_owner_ingress o ON o.message_id=q.message_id
+                WHERE q.message_id=? AND q.user_id=? AND o.owner_id=? AND o.peer_uid=?""",
+                (message_id, owner.user_id, owner.user_id, uid)).fetchone()
+        if row is None:
+            return {'suggestion': None}
+        from alphonse.agent_v2.owner_message_suggestion import suggest
+        suggestion = suggest(self.daemon.runtime.system_one_settings_store.get(), active_request=row['prompt'], draft=prompt)
+        if self.daemon.owner_message_status(message_id) != 'pending':
+            suggestion = None
+        return {'suggestion': suggestion}
 
     def _owner_followups(self, connection, request):
         """Manage held follow-ups; this endpoint never dispatches work."""
@@ -640,7 +679,7 @@ class V2DaemonServer:
         if request.get('version') != PROTOCOL_VERSION:
             raise ValueError('daemon_protocol_version_unsupported')
         params = request.get('params')
-        allowed_fields = {'prompt', 'reply_to_message_id'}
+        allowed_fields = {'prompt', 'reply_to_message_id', 'failed_request_message_id'}
         if self.experimental_authority_ingress:
             allowed_fields |= {'message_id', 'authority_request_id'}
         if (not isinstance(params, dict) or 'prompt' not in params
@@ -656,6 +695,11 @@ class V2DaemonServer:
                 (not isinstance(params['reply_to_message_id'], str)
                  or re.fullmatch(r'[0-9a-f]{32}', params['reply_to_message_id']) is None)):
             raise ValueError('owner_question_context_unavailable')
+        if ('failed_request_message_id' in params and
+                (not isinstance(params['failed_request_message_id'], str)
+                 or re.fullmatch(r'[0-9a-f]{32}', params['failed_request_message_id']) is None
+                 or 'reply_to_message_id' in params)):
+            raise ValueError('owner_failure_reference_unavailable')
         uid = self._local_peer_uid(connection)
         if (getattr(self.daemon, 'experimental_owner_only', False) is True
                 and not self.daemon.owner_processing_ready()):
@@ -665,7 +709,8 @@ class V2DaemonServer:
         if type(queue) is not SQLiteMessageQueue:
             raise PermissionError('owner_ingress_unavailable')
         return queue.enqueue_trusted_local_owner(prompt=params['prompt'], peer_uid=uid,
-                    reply_to_message_id=params.get('reply_to_message_id'), return_receipt=True,
+                    reply_to_message_id=params.get('reply_to_message_id'),
+                    failed_request_message_id=params.get('failed_request_message_id'), return_receipt=True,
                     _authority_binding=binding)
 
     def _legacy_notification_review(self, connection, request):
@@ -779,6 +824,22 @@ class V2DaemonServer:
             raise ValueError('owner_recovery_payload_denied')
         self._local_peer_uid(connection)
         return {'items': self.daemon.owner_recovery_list()}
+
+    def _owner_work_log(self, connection, request):
+        if not self.experimental_owner_ingress:
+            raise PermissionError('owner_work_log_unavailable')
+        if request.get('version') != PROTOCOL_VERSION:
+            raise ValueError('daemon_protocol_version_unsupported')
+        params = request.get('params')
+        if not isinstance(params, dict) or set(params) != {'message_id'}:
+            raise ValueError('owner_work_log_unavailable')
+        self._local_peer_uid(connection)
+        from .core.intelligence.simple_loop.owner_work_log import owner_work_log
+        try:
+            return owner_work_log(self.daemon.runtime.queue, params['message_id'])
+        except Exception:
+            # Do not expose database paths or checkpoint content over IPC.
+            raise ValueError('owner_work_log_unavailable') from None
 
     def _owner_continuation(self, connection, request):
         if (not self.experimental_owner_ingress or not getattr(self.daemon, 'experimental_owner_only', False)

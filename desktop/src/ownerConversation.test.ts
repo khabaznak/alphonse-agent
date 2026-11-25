@@ -73,6 +73,30 @@ describe("explicit owner conversation transport", () => {
     });
   });
 
+  it("submits an explicitly selected failed-request ID separately from question replies", async () => {
+    const request = vi.fn(async (method: string) => method === "experimental_owner_status" ? { processing_ready: true } : { message_id: id });
+    const client = new OwnerConversation(request as OwnerRequest);
+    await client.send("What happened?", undefined, "e".repeat(32));
+    expect(request).toHaveBeenCalledWith("experimental_owner_ingress", { prompt: "What happened?", failed_request_message_id: "e".repeat(32) });
+  });
+
+  it("reports an explicit pre-enqueue reference rejection without marking submission uncertain", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "experimental_owner_status") return { processing_ready: true };
+      throw new Error("ValueError: owner_failure_reference_unavailable");
+    });
+    const client = new OwnerConversation(request as OwnerRequest);
+    await expect(client.send("reply", undefined, "e".repeat(32))).rejects.toThrow("your draft was not sent");
+    expect(client.blockingState()).not.toBe("uncertain");
+  });
+
+  it("rejects malformed or conflicting failed-request references before submission", async () => {
+    const request = vi.fn(); const client = new OwnerConversation(request as OwnerRequest);
+    await expect(client.send("reply", undefined, "invalid")).rejects.toThrow("failed request could not be selected");
+    await expect(client.send("reply", "c".repeat(32), "e".repeat(32))).rejects.toThrow("failed request could not be selected");
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("rejects malformed question selection before making a request", async () => {
     const request = vi.fn();
     const client = new OwnerConversation(request as OwnerRequest);
@@ -221,7 +245,7 @@ describe("explicit owner conversation transport", () => {
     });
     const client = new OwnerConversation(request as OwnerRequest);
     await client.send("hello");
-    await expect(client.poll(() => {})).rejects.toThrow("source could not be verified as complete");
+    await expect(client.poll(() => {})).rejects.toMatchObject({ messageId: id, failureCode: "source_incomplete", message: expect.stringContaining("source could not be verified as complete") });
     expect(request.mock.calls.filter(([method]) => method === "experimental_owner_take_draft")).toHaveLength(0);
     expect(client.hasPending()).toBe(false);
   });

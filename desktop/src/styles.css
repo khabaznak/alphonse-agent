@@ -758,7 +758,10 @@ a { color: var(--accent); }
 .settings-panel { display: grid; gap: 12px; }
 .settings-panel h3 { margin: 0; }
 .settings-panel label:not(.setting-row) { display: grid; gap: 6px; color: var(--text); font-size: 12px; }
-.general-settings { display: grid; gap: 14px; }
+.general-settings { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
+.general-settings .setting-group { min-width: 0; grid-template-columns: minmax(0, 1fr); }
+.general-settings .setting-row { max-width: 100%; }
+.general-settings input, .general-settings select { min-width: 0; max-width: 100%; }
 .tools-settings { display: grid; gap: 14px; }
 .tools-settings button + button { margin-left: 10px; }
 .tools-settings .settings-save-actions button + button { margin-left: 0; }
@@ -1537,6 +1540,9 @@ a { color: var(--accent); }
 .settings-workspace-header h1 { margin: 14px 0 8px; font-size: 32px; letter-spacing: -1px; }
 .settings-workspace > div:not([hidden]) { width: 100%; max-width: 906px; align-self: center; padding: 20px 28px 32px; }
 .settings-workspace > .settings-skills-screen:not([hidden]) { max-width: none; }
+@media (max-width: 650px) {
+  .settings-workspace > .general-settings:not([hidden]) { padding-inline: 16px; }
+}
 .mockup-settings-rows { display: block; }
 .mockup-settings-row { min-height: 82px; display: flex; justify-content: space-between; align-items: center; gap: 20px; padding: 18px 0; border-bottom: 1px solid var(--border); }
 .mockup-settings-row h3 { margin: 0; font-size: 13px; }
@@ -1730,3 +1736,34 @@ button.mockup-skill-card > p { flex: 1; }
 .attention-recovery { display: grid; gap: 12px; }
 .attention-recovery h2 { margin: 0; font-size: 17px; }
 .attention-recovery p { margin: 0; }
+
+/* A failed request stays beside the message that caused it. */
+.conversation-failure { align-self: flex-end; max-width: min(100%, 70ch); padding: 12px 14px; border-inline-start: 3px solid var(--danger); border-radius: 6px; background: var(--danger-soft); font-size: 13px; }
+.conversation-failure strong { color: var(--danger); }
+.conversation-failure p { margin: 5px 0 10px; }
+.conversation-failure-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.conversation-failure button { cursor: pointer; }
+
+/* Conversation send choices while an owner request is active. */
+.conversation-active-task { margin: 8px 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.conversation-active-task strong { color: var(--text); font-weight: 600; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.desktop-shell .composer .send.conversation-send-active { display: inline-flex; flex: 0 1 auto; width: auto; height: auto; min-height: 32px; padding: 7px 12px; font-size: 12px; line-height: 1.25; }
+.conversation-send-alternative { margin: 6px 0 0; padding: 5px 2px; background: transparent; color: var(--accent); font-size: 12px; text-align: left; }
+.conversation-send-setting { min-width: 0; margin: 14px 0 0; padding: 0; border: 0; }
+.conversation-send-setting legend { margin-bottom: 6px; font-weight: 600; }
+.conversation-send-setting small { display: block; color: var(--muted); }
+
+.conversation-suggestion { position: relative; margin: 0 0 14px; padding: 14px 16px; border: 1px solid var(--border); border-radius: 14px; background: var(--accent-soft); color: var(--text); box-shadow: 0 8px 22px var(--shadow); font-size: 13px; }
+.conversation-suggestion::before, .conversation-suggestion::after { content: ""; position: absolute; top: 100%; left: 35px; border-left: 10px solid transparent; border-right: 10px solid transparent; border-top: 10px solid var(--border); }
+.conversation-suggestion::after { margin-top: -1px; border-top-color: var(--accent-soft); }
+.conversation-suggestion-speaker { display: block; color: var(--accent); font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; margin-bottom: 5px; }
+.conversation-suggestion p { margin: 2px 0 9px; }
+.conversation-suggestion button { padding: 6px 11px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-raised); color: var(--text); font-weight: 600; }
+.conversation-draft-review { margin: 8px 0; padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-subtle); font-size: 12px; }
+.conversation-draft-review button { margin-left: 4px; }
+.conversation-work-log { align-self: flex-start; max-width: min(42rem, 90%); margin: .25rem 0 .75rem; color: var(--text-muted, #64716a); font-size: .85rem; }
+.conversation-work-log summary { cursor: pointer; font-weight: 600; }
+.conversation-work-log ol { padding-left: 1.4rem; margin: .5rem 0; }
+.conversation-work-log li { margin: .25rem 0; }
+.conversation-work-log small { display: block; }
+.conversation-work-log summary:focus-visible, .conversation-failure button:focus-visible, .owner-recovery button:focus-visible, .owner-recovery li:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }

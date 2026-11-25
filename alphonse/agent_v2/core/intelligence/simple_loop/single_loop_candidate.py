@@ -35,6 +35,10 @@ _CHOOSER_FAILURES = {
     'candidate_router_result_invalid': 'result_invalid',
     'candidate_router_cancelled': 'cancelled',
     'candidate_router_unavailable': 'provider_unavailable',
+    **{'candidate_router_provider_' + category: 'provider_' + category for category in (
+        'model_not_configured', 'cli_missing', 'subscription_auth_unverified',
+        'authentication_required', 'cli_upgrade_required', 'provider_timeout',
+        'empty_response', 'invalid_response', 'cancelled')},
 }
 
 
@@ -349,10 +353,12 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
             return _terminal(host, state, 'blocked', 'candidate_deadline_exceeded')
         if host.atomic_checkpoint is not None and not host.atomic_checkpoint.check_claim(call_id, 'model'):
             return _terminal(host, state, 'blocked', 'candidate_claim_unavailable')
+        chooser_failure = ''
         try:
             decision = host.choose(decision_input, host.output_reservation)
         except Exception as exc:
-            logger.warning('simple_loop_decision_failed category=%s', _chooser_failure_category(exc))
+            chooser_failure = _chooser_failure_category(exc)
+            logger.warning('simple_loop_decision_failed category=%s', chooser_failure)
             decision = None
         usage = decision.get('usage', {}) if isinstance(decision, dict) else {}
         if not isinstance(usage, dict):
@@ -378,7 +384,20 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
         if _cancelled(host):
             return _terminal(host, state, 'cancelled', 'cancelled')
         if not isinstance(decision, dict):
-            return _terminal(host, state, 'blocked', 'candidate_model_unavailable')
+            reasons = {
+                'input_exceeds_reservation': 'candidate_input_reservation_too_small',
+                'output_exceeds_reservation': 'candidate_output_reservation_too_small',
+                'result_invalid': 'candidate_model_response_invalid',
+                'provider_model_not_configured': 'candidate_model_not_configured',
+                'provider_cli_missing': 'candidate_model_cli_missing',
+                'provider_subscription_auth_unverified': 'candidate_model_auth_unverified',
+                'provider_authentication_required': 'candidate_model_auth_required',
+                'provider_cli_upgrade_required': 'candidate_model_cli_upgrade_required',
+                'provider_provider_timeout': 'candidate_model_timeout',
+                'provider_empty_response': 'candidate_model_empty_response',
+                'provider_invalid_response': 'candidate_model_response_invalid',
+            }
+            return _terminal(host, state, 'blocked', reasons.get(chooser_failure, 'candidate_model_unavailable'))
         if any((value is not None and (type(value) is not int or value < 0))
                or (value is None and not host.synthetic_allow_unreported_usage)
                for value in (usage.get('input_tokens'), usage.get('output_tokens'))):

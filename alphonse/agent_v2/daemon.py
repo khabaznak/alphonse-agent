@@ -167,24 +167,8 @@ def _owner_public_failure_code(error: object, *, cancelled: bool = False) -> str
     Unknown exception strings are deliberately never returned to the client.
     A failure status does not imply an in-flight claim or effect was settled.
     """
-    if cancelled:
-        return 'cancel_requested'
-    return {
-        'candidate_deadline_exceeded': 'time_limit',
-        'candidate_model_unavailable': 'model_unavailable',
-        'candidate_model_usage_unknown_or_overrun': 'usage_unconfirmed',
-        'candidate_model_usage_overrun': 'usage_limit_exceeded',
-        'BudgetExhausted:budget_exhausted:actions': 'action_limit',
-        'candidate_read_denied': 'source_unavailable',
-        'candidate_read_revoked': 'source_unavailable',
-        'candidate_retry_deferred': 'source_unavailable',
-        'candidate_evidence_changed_or_revoked': 'source_changed',
-        'candidate_observation_incomplete': 'source_incomplete',
-        'candidate_requires_read_only_native_tool': 'unsupported_operation',
-        'candidate_answer_unsupported': 'answer_unverified',
-        'candidate_question_not_verified': 'clarification_unverified',
-        'candidate_question_review_unavailable': 'clarification_review_unavailable',
-    }.get(error, 'needs_attention') if isinstance(error, str) else 'needs_attention'
+    from .core.intelligence.simple_loop.owner_failure_diagnostics import public_failure_code
+    return public_failure_code(error, cancelled=cancelled)
 
 
 def _owner_bash_action_unconfirmed(raw: object, *, message_id: str, actor: str) -> bool:

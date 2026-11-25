@@ -1,0 +1,53 @@
+{
+  "scenario": "exact-failed-request-reference",
+  "first_status": {
+    "failure_code": "model_timeout",
+    "status": "failed"
+  },
+  "second_status": {
+    "failure_code": "model_unavailable",
+    "status": "failed"
+  },
+  "followup_status": {
+    "status": "ready"
+  },
+  "identical_prompts": true,
+  "different_request_ids": true,
+  "projection": {
+    "message_id": "f43aefc5e24c4650b074f86c1688e436",
+    "conversation_source_id": "conversation:b23bd7c3-bea2-407e-a9c7-70639d08ffd5",
+    "request_excerpt": "Please review the imaginary garden plan.",
+    "request_excerpt_truncated": false,
+    "observed_at": "2026-11-25T22:01:35.367049+00:00",
+    "description": "The model provider timed out.",
+    "effects": "not established by this diagnostic"
+  },
+  "selected_message_id": "f43aefc5e24c4650b074f86c1688e436",
+  "other_message_id": "d9f21c3312ac41e685310d75dc5ae1a6",
+  "matches_selected_first": true,
+  "matches_first_timeout": true,
+  "not_other_failure": true,
+  "foreign_rejection": "ValueError: owner_failure_reference_unavailable",
+  "stale_rejection": "ValueError: owner_failure_reference_unavailable",
+  "inbound_counts": {
+    "before_rejections": 3,
+    "after_foreign": 3,
+    "after_stale": 3
+  },
+  "original_status_after_followup": {
+    "failure_code": "model_timeout",
+    "status": "failed"
+  },
+  "model_call_count": 3,
+  "model_cost_usd": 0,
+  "elapsed_seconds": 0.358,
+  "model_provider": "scripted fixture",
+  "semantic_answer_verdict": "not_assessed",
+  "limitations": [
+    "Disposable owner-worker IPC and synthetic scripted provider; no real model or Desktop rendering.",
+    "The selected context is independently inspected, not evidence the model understood or accurately answered.",
+    "Foreign and stale references are tested at ingress; later revocation after enqueue is not assessed.",
+    "No external effects or retries are authorized; equal inbound counts show only that rejected sends were not enqueued.",
+    "One attempt does not establish general reliability or accessibility."
+  ]
+}

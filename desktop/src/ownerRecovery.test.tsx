@@ -54,7 +54,7 @@ describe("owner request recovery", () => {
       { message_id: id, prompt: "Synthetic request", status: "action_unconfirmed", can_abandon: false },
     ]} stopping="" onStop={() => {}} onShow={() => {}} />);
     expect(html).toContain("An action may have run; its effects are unconfirmed");
-    expect(html).toContain("check the result before trying again");
+    expect(html).toContain("This record cannot confirm what happened. Check the relevant service or device directly before taking further action.");
     expect(html).not.toContain("Show answer");
     expect(html).toContain("disabled");
   });

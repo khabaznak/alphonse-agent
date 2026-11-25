@@ -1,3 +1,8 @@
+import { draftQuestionAboutRequest, quotedRequestText } from "./conversationFollowup";
+import { FailedReferenceNotice } from "./FailedReferenceNotice";
+import { ConversationComposer } from "./ConversationComposer";
+import { ConversationSuggestion } from "./ConversationSuggestion";
+import { draftTaskChanged, readConversationSendMode, writeConversationSendMode, type ConversationSendMode, type DraftTask } from "./conversationSendMode";
 import { SkillFileTree } from "./SkillFileTree";
 import { IntegrationIcon } from "./IntegrationIcon";
 import { OptionalAccounts, ProjectCheckPanel, CheckAgenda } from "./OptionalIntegrations";
@@ -8,7 +13,8 @@ import { confirmedScheduleMutation } from "./scheduleMutation";
 import { SkillMascot, SkillAppearanceSettings, SkillAppearancePreview, MascotImage } from "./SkillMascot";
 import { BASE_CONTEXT, type AppearanceContext, type SkillAppearance } from "./skillAppearances";
 import { HouseholdWorkspace } from "./HouseholdWorkspace";
-import { ConversationTimelineMessage } from "./ConversationTimelineMessage";
+import { ConversationTimelineEntry } from "./ConversationTimelineEntry";
+import { readConversationFailures, saveConversationFailures, type ConversationFailureRecord } from "./conversationFailures";
 import { ConversationActivity } from "./ConversationActivity";
 import { WorkOverview } from "./WorkOverview";
 import { ProjectActivityDialog } from "./ProjectActivityDialog";
@@ -24,9 +30,9 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { daemonRequest, ensureDaemon, playAlertSound, showInFinder, stopDaemon } from "./api";
 import { TrustedLocalBashSettings } from "./TrustedLocalBashSettings";
-import { legacyNotificationReviewMessage, OwnerConversation, ownerAcceptedAt, ownerBusyFor, ownerUnavailableMessage, type OwnerCapability } from "./ownerConversation";
+import { legacyNotificationReviewMessage, FailedReferenceUnavailableError, OwnerConversation, OwnerRequestFailed, ownerAcceptedAt, ownerBusyFor, ownerUnavailableMessage, type OwnerCapability } from "./ownerConversation";
 import { abandonOwnerRequest, listOwnerRecovery, type OwnerRecoveryItem } from "./ownerRecovery";
-import { OwnerRecovery } from "./OwnerRecoveryPanel";
+import { focusConversationRequest, focusOwnerRecovery, OwnerRecovery } from "./OwnerRecoveryPanel";
 import { OwnerContinuation } from "./OwnerContinuation";
 import { OwnerContinuationSettings } from "./OwnerContinuationSettings";
 import { OwnerConversationRecoveryNotice } from "./OwnerConversationRecoveryNotice";
@@ -119,6 +125,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
     isNativeRuntime: () => "__TAURI_INTERNALS__" in window,
     playSound: playAlertSound,
   }));
+  const recoveryReturnMessageId = useRef("");
   const [messages, setMessages] = useState<ChatMessage[]>([{ id: "welcome", role: "assistant", content: "Alphonse Desktop is connected locally." }]);
   const [prompt, setPrompt] = useState("");
   const [composerProject, setComposerProject] = useState<{ id: string; name: string } | null>(null);
@@ -171,15 +178,24 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const [ownerFollowupSnapshot, setOwnerFollowupSnapshot] = useState<{ user: string; items: OwnerFollowup[] }>({ user: "", items: [] });
   const ownerFollowups = ownerFollowupSnapshot.user === user ? ownerFollowupSnapshot.items : [];
   const followupSubmitting = useRef(false);
-  const uncertainFollowup = useRef<{ user: string; id: string; prompt: string; activeId: string; mode: "queue" | "steer" } | null>(null);
-  const [ownerSendMode, setOwnerSendMode] = useState<"normal" | "queue" | "steer">("normal");
+  const uncertainFollowup = useRef<{ user: string; id: string; prompt: string; draftSnapshot: string; activeId: string; mode: "queue" | "steer" } | null>(null);
+  const [conversationSendMode, setConversationSendMode] = useState<ConversationSendMode>("queue");
+  useEffect(() => { setConversationSendMode(readConversationSendMode(window.localStorage, user)); }, [user]);
+  const changeConversationSendMode = (mode: ConversationSendMode) => {
+    setConversationSendMode(mode);
+    writeConversationSendMode(window.localStorage, user, mode);
+  };
   const [ownerAcknowledgementRetrying, setOwnerAcknowledgementRetrying] = useState(false);
   const [legacyNotificationNotice, setLegacyNotificationNotice] = useState("");
   const [ownerClarificationNotice, setOwnerClarificationNotice] = useState("");
   const [ownerQuestions, setOwnerQuestions] = useState<OwnerQuestion[]>([]);
   const [ownerQuestionScope, setOwnerQuestionScope] = useState("");
   const [ownerReplyTarget, setOwnerReplyTarget] = useState("");
+  const [failedReferenceError, setFailedReferenceError] = useState("");
+  const failedReferenceRemoveRef = useRef<HTMLButtonElement>(null);
+  const [failedReference, setFailedReference] = useState<{ owner: string; id: string; quote: string; createdAt?: string } | null>(null);
   const [ownerRecoveryStopping, setOwnerRecoveryStopping] = useState("");
+  const [ownerRecoveryFocus, setOwnerRecoveryFocus] = useState("");
   const ownerRecoveryGeneration = useRef(0);
   const ownerQuestionGeneration = useRef(0);
   const ownerConversation = useMemo(() =>
@@ -194,6 +210,16 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
     if (ownerConversationRef.current === ownerConversation) setOwnerBusySnapshot({ conversation: ownerConversation, busy });
   };
   const ownerConversationNotice = useRef("");
+  const [ownerFailureSnapshot, setOwnerFailureSnapshot] = useState<{user: string; items: ConversationFailureRecord[]}>({ user: "", items: [] });
+  const ownerFailures = ownerFailureSnapshot.user === user ? ownerFailureSnapshot.items : [];
+  useEffect(() => { setOwnerFailureSnapshot({ user, items: readConversationFailures(window.localStorage, user) }); }, [user]);
+  const updateOwnerFailures = (change: (items: ConversationFailureRecord[]) => ConversationFailureRecord[]) => {
+    setOwnerFailureSnapshot((current) => {
+      const items = change(current.user === user ? current.items : readConversationFailures(window.localStorage, user));
+      saveConversationFailures(window.localStorage, user, items);
+      return { user, items };
+    });
+  };
   const retryOwnerAcknowledgement = async () => {
     if (!ownerConversation || ownerAcknowledgementRetrying) return;
     const current = ownerConversation;
@@ -263,6 +289,8 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
     setOwnerQuestions([]);
     setOwnerQuestionScope("");
     setOwnerReplyTarget("");
+    setFailedReference(null);
+    setFailedReferenceError("");
     if (!isAdmin) {
       ++ownerRecoveryGeneration.current;
       ++ownerQuestionGeneration.current;
@@ -508,8 +536,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
             const attempt = uncertainFollowup.current;
             if (attempt?.user === user && followupResult.items.some((item) => item.id === attempt.id)) {
               uncertainFollowup.current = null;
-              setPrompt((current) => current === attempt.prompt ? "" : current);
-              setOwnerSendMode("normal");
+              setPrompt((current) => current === attempt.draftSnapshot ? "" : current);
               ownerConversationNotice.current = "";
               setError("");
             }
@@ -536,8 +563,15 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
           if (acknowledgementRecovered) { ownerConversationNotice.current = ""; setError(""); }
         } catch (cause) {
           setOwnerConversationBusy(ownerConversation.hasPending());
-          ownerConversationNotice.current = cause instanceof Error ? cause.message : "Owner conversation needs attention.";
-          setError(ownerConversationNotice.current);
+          if (cause instanceof OwnerRequestFailed) {
+            updateOwnerFailures((current) => [...current.filter((item) => item.messageId !== cause.messageId),
+              { messageId: cause.messageId, failureCode: cause.failureCode || "", dismissed: false }]);
+            ownerConversationNotice.current = "";
+            setError("");
+          } else {
+            ownerConversationNotice.current = cause instanceof Error ? cause.message : "Owner conversation needs attention.";
+            setError(ownerConversationNotice.current);
+          }
         }
       }
     } catch (cause) {
@@ -718,10 +752,24 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
     element.style.height = `${Math.min(element.scrollHeight, 4 * 22 + 24)}px`;
   }, [prompt, workspace]);
 
-  const submitPrompt = async () => {
-    const value = prompt.trim();
+  const activeConversationMessageId = ownerConversation?.isWorking() ? ownerConversation.activeMessageId() : undefined;
+  const [draftTask, setDraftTask] = useState<DraftTask>(undefined);
+  const [draftNeedsReview, setDraftNeedsReview] = useState(false);
+  const reviewDraft = Boolean(prompt.trim()) && (draftNeedsReview || draftTaskChanged(draftTask, activeConversationMessageId));
+  useEffect(() => {
+    if (!prompt.trim()) { setDraftTask(undefined); setDraftNeedsReview(false); }
+    else if (draftTask === undefined) setDraftTask(activeConversationMessageId ?? null);
+  }, [prompt, draftTask, activeConversationMessageId]);
+  const selectedFailure = failedReference?.owner === user && prompt.includes(failedReference.quote) ? failedReference : null;
+  useEffect(() => {
+    if (failedReference && (failedReference.owner !== user || !prompt.includes(failedReference.quote))) setFailedReference(null);
+  }, [failedReference, prompt, user]);
+
+  const submitPrompt = async (mode: ConversationSendMode | "normal", expectedActiveMessageId?: string) => {
+    const draftSnapshot = prompt;
+    const value = draftSnapshot.trim();
     if (!value) return;
-    if (value.startsWith("/")) {
+    if (value.startsWith("/") && !selectedFailure) {
       const command = value.split(/\s+/, 1)[0].toLowerCase();
       if (command === "/killswitch") {
         setPrompt("");
@@ -746,6 +794,11 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       }
     }
     try {
+      const liveTask = ownerConversation?.isWorking() ? ownerConversation.activeMessageId() : undefined;
+      if (reviewDraft || draftTaskChanged(draftTask, liveTask)) {
+        setDraftNeedsReview(true);
+        return;
+      }
       const messagePrompt = value;
       if (ownerConversation) {
         if (composerProject) throw new Error("Project conversations are not available in this owner conversation path.");
@@ -753,18 +806,19 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
           throw new Error("The selected question is no longer available. Choose it again before sending.");
         }
         if (!ownerDraftsLoaded) throw new Error("Saved message drafts could not be checked. Your draft was not sent.");
-        if (ownerDrafts.some((draft) => draft.resolution === "unresolved") || (ownerSendMode !== "queue" && uncertainFollowup.current?.user === user)) {
+        if (ownerDrafts.some((draft) => draft.resolution === "unresolved") || (mode !== "queue" && uncertainFollowup.current?.user === user)) {
           throw new Error("A message submission is uncertain. Review the follow-up list before sending another message; your draft is preserved.");
         }
-        if (ownerSendMode === "queue" || ownerSendMode === "steer") {
+        if (selectedFailure && (mode === "queue" || mode === "steer")) throw new Error("Remove the failed-request reference before steering or queueing. Your draft is preserved.");
+        if (mode === "queue" || mode === "steer") {
           const activeId = ownerConversation.activeMessageId();
-          if (!activeId) throw new Error("The active request has finished or needs recovery. Your draft was not sent.");
+          if (!ownerConversation.isWorking() || !activeId || activeId !== expectedActiveMessageId) throw new Error("The active request changed or finished. Your draft was not sent; review it before sending.");
           if (followupSubmitting.current) throw new Error("This message is still being sent.");
           const previous = uncertainFollowup.current;
-          if (previous && previous.user === user && (previous.prompt !== messagePrompt || previous.activeId !== activeId || previous.mode !== ownerSendMode)) {
+          if (previous && previous.user === user && (previous.prompt !== messagePrompt || previous.activeId !== activeId || previous.mode !== mode)) {
             throw new Error("A previous message submission is uncertain. Review the follow-up list before sending another; your draft is preserved.");
           }
-          const attempt = previous?.user === user ? previous : { user, id: crypto.randomUUID().replaceAll("-", ""), prompt: messagePrompt, activeId, mode: ownerSendMode };
+          const attempt = previous?.user === user ? { ...previous, draftSnapshot } : { user, id: crypto.randomUUID().replaceAll("-", ""), prompt: messagePrompt, draftSnapshot, activeId, mode };
           uncertainFollowup.current = attempt;
           let status: "queued" | "late" | "accepted" | "not_accepted" | "included_in_planning";
           followupSubmitting.current = true;
@@ -772,7 +826,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
             const saved = await daemonRequest<{id: string; status: string}>("experimental_owner_composer_save", { id: attempt.id, active_message_id: activeId, prompt: messagePrompt });
             if (saved.id !== attempt.id || saved.status !== "saved") throw new Error("save unconfirmed");
             if (ownerConversationRef.current !== ownerConversation) return;
-            status = ownerSendMode === "queue"
+            status = mode === "queue"
               ? await ownerConversation.queueFollowup(messagePrompt, activeId, attempt.id)
               : (await daemonRequest<{status: "accepted" | "not_accepted" | "included_in_planning"}>("experimental_owner_steer_add", { active_message_id: activeId, request_id: attempt.id, prompt: messagePrompt })).status;
             if (ownerConversationRef.current !== ownerConversation) return;
@@ -784,19 +838,19 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
           }
           if (status === "late" || status === "not_accepted") throw new Error("The active request could not accept this message. Your draft was not sent; check its saved submission before trying again.");
           if (!["queued", "accepted", "included_in_planning"].includes(status)) throw new Error("Submission could not be confirmed. Check the saved submission before trying again.");
-          setPrompt((current) => current === messagePrompt ? "" : current);
-          setOwnerSendMode("normal");
+          setPrompt((current) => current === draftSnapshot ? "" : current);
           // The saved draft is retained for review; it is not automatically replayed.
           await poll();
           return;
         }
         setOwnerConversationBusy(true);
         const submittedAt = new Date().toISOString();
-        const queued = await ownerConversation.send(messagePrompt, ownerReplyTarget || undefined);
+        const queued = await ownerConversation.send(messagePrompt, ownerReplyTarget || undefined, selectedFailure?.id);
         setOwnerClarificationNotice("");
         setOwnerReplyTarget("");
+        setFailedReference((current) => current === selectedFailure ? null : current);
         setOwnerConversationBusy(true);
-        setPrompt((current) => current === messagePrompt ? "" : current);
+        setPrompt((current) => current === draftSnapshot ? "" : current);
         const acceptedAt = ownerAcceptedAt(queued.accepted_at, submittedAt);
         const acceptedDay = messageLocalDay(acceptedAt, timezone) || localDay(timezone);
         conversationDayRef.current = acceptedDay;
@@ -811,23 +865,18 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
     } catch (cause) {
       if (ownerConversation && ownerConversationRef.current !== ownerConversation) return;
       const message = cause instanceof Error ? cause.message : "Message could not be queued";
+      if (cause instanceof FailedReferenceUnavailableError && selectedFailure) {
+        setOwnerConversationBusy(ownerConversation?.hasPending() || false);
+        setFailedReferenceError(selectedFailure.id);
+        window.requestAnimationFrame(() => failedReferenceRemoveRef.current?.focus());
+        return;
+      }
       if (ownerConversation) {
         setOwnerConversationBusy(ownerConversation.hasPending());
         ownerConversationNotice.current = message;
       }
       setError(message);
     }
-  };
-
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    await submitPrompt();
-  };
-
-  const onComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (!enterToSend || event.key !== "Enter" || event.shiftKey) return;
-    event.preventDefault();
-    void submitPrompt();
   };
 
   const runCommand = async (command: string) => {
@@ -865,12 +914,21 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       })),
     ).map((item) => {
       if (item.kind === "message") {
-        return <ConversationTimelineMessage key={item.key} message={item.message} questions={questions} user={user} timezone={timezone} onDone={poll} projectName={contextProjects.find((projectItem) => projectItem.project_id === item.message.project_id)?.name || ""} memoize={diagnosticBehavior.memoizesMessages} renderMarkdown={!diagnosticBehavior.plainTextMessages} />;
+        return <ConversationTimelineEntry key={item.key} message={item.message} questions={questions} user={user} timezone={timezone} onDone={poll} projectName={contextProjects.find((projectItem) => projectItem.project_id === item.message.project_id)?.name || ""} memoize={diagnosticBehavior.memoizesMessages} renderMarkdown={!diagnosticBehavior.plainTextMessages} failures={ownerFailures} workLogRequest={isAdmin && connected ? daemonRequest : undefined} active={ownerConversationWorking && item.message.id === activeConversationMessageId} onDraftQuestion={isAdmin ? (id, content, createdAt) => { setOwnerReplyTarget(""); setFailedReferenceError(""); setFailedReference({ owner: user, id, quote: quotedRequestText(content), createdAt }); setPrompt((current) => draftQuestionAboutRequest(current, content)); window.requestAnimationFrame(() => textareaRef.current?.focus()); } : undefined} onReviewRecovery={isAdmin && ownerRecoveryItems.some((entry) => entry.message_id === item.message.id) ? (id) => { recoveryReturnMessageId.current = id; setOwnerRecoveryFocus(id); navigate("attention"); } : undefined} onOpenModelSettings={isAdmin ? () => { setSettingsTab("model"); navigate("settings"); } : undefined} onFailureDismissedChange={(messageId, dismissed) => updateOwnerFailures((current) => current.map((entry) => entry.messageId === messageId ? { ...entry, dismissed } : entry))} />;
       }
       const archivedSurface = archivedProgress[item.taskId];
       const surface = archivedSurface || surfaces[`task-progress:${item.taskId}`];
       return surface ? <TaskProgressBubble key={item.key} surface={surface} archived={Boolean(archivedSurface)} connected={connected} timezone={timezone} /> : null;
-    }), [archivedProgress, clientId, connected, contextProjects, diagnosticBehavior.memoizesMessages, diagnosticBehavior.plainTextMessages, messages, poll, progressTaskIds, questionTaskIds, questions, surfaces, timelineRenderVersion, timezone, user]);
+    }), [archivedProgress, clientId, connected, contextProjects, diagnosticBehavior.memoizesMessages, diagnosticBehavior.plainTextMessages, messages, ownerConversation, ownerFailures, ownerRecoveryItems, ownerConversationWorking, activeConversationMessageId, isAdmin, poll, progressTaskIds, questionTaskIds, questions, surfaces, timelineRenderVersion, timezone, user]);
+
+  useEffect(() => {
+    if (workspace !== "attention" || !ownerRecoveryFocus) return;
+    const frame = window.requestAnimationFrame(() => {
+      focusOwnerRecovery(ownerRecoveryFocus);
+      setOwnerRecoveryFocus("");
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [workspace, ownerRecoveryFocus]);
 
   useEffect(() => {
     if (workspace !== "conversation" || !questionFocusRef.current) return;
@@ -931,7 +989,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
           </div>
         </header>
         {error && <div className="error" role="alert">{error}</div>}
-        <div className="timeline" ref={timelineRef} aria-live="polite">
+        <div id="conversation-timeline" className="timeline" ref={timelineRef} tabIndex={-1} aria-live="polite">
           {timelineNodes}
           {ownerConversationWorking && conversationDay === localDay(timezone) && <ConversationActivity />}
           <OwnerContinuation key={user} request={daemonRequest} active={isAdmin && connected && ownerContinuationAvailable && conversationDay === localDay(timezone)} />
@@ -940,25 +998,17 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
           {activeSurface && (
             <A2uiSurfaceView surface={activeSurface} clientId={clientId} user={user} onDone={poll} onDismiss={dismissScheduledSurface} onAction={(result) => { if (result.action === "view_scheduled_task" && typeof result.scheduled_task_id === "string") { dismissScheduledSurface(activeSurface.surfaceId); setScheduledTaskForView(result.scheduled_task_id); navigate("agenda"); } }} />
           )}
-          {(ownerConversation?.activeMessageId() || ownerSendMode !== "normal") && <fieldset className="composer-hint"><legend>While Alphonse works</legend>
-            <label><input type="radio" name="owner-send-mode" checked={ownerSendMode === "normal"} onChange={() => setOwnerSendMode("normal")} /> Send normally</label>{" "}
-            <label><input type="radio" name="owner-send-mode" disabled={!ownerConversation?.activeMessageId()} checked={ownerSendMode === "queue"} onChange={() => setOwnerSendMode("queue")} /> Queue follow-up</label>
-            <label><input type="radio" name="owner-send-mode" disabled={!ownerConversation?.activeMessageId()} checked={ownerSendMode === "steer"} onChange={() => setOwnerSendMode("steer")} /> Steer active request</label>
-            <p>Steering is accepted only at a safe point; inclusion in planning does not guarantee an outcome.</p></fieldset>}
-          <OwnerSavedDrafts items={ownerDrafts} prompt={prompt} onCheck={(draft) => { void daemonRequest("experimental_owner_composer_reconcile", {id: draft.id}).then(() => { if (uncertainFollowup.current?.id === draft.id) uncertainFollowup.current = null; return poll(); }).catch(() => setError("Submission could not be checked.")); }} onRestore={(draft) => { setPrompt(draft.prompt); setOwnerSendMode("normal"); }} onDelete={(draft) => { void daemonRequest("experimental_owner_composer_delete", {id: draft.id}).then(() => poll()).catch(() => setError("The saved draft could not be deleted.")); }} />
-          <p className="composer-hint">Draft edits are not saved until a steer or follow-up send is confirmed saved.</p>
+          {activeConversationMessageId && !connected && <p className="conversation-active-task" role="status">Connection lost. The status of this request is unknown until Alphonse reconnects.</p>}
+          <OwnerSavedDrafts items={ownerDrafts} prompt={prompt} onCheck={(draft) => { void daemonRequest("experimental_owner_composer_reconcile", {id: draft.id}).then(() => { if (uncertainFollowup.current?.id === draft.id) uncertainFollowup.current = null; return poll(); }).catch(() => setError("Submission could not be checked.")); }} onRestore={(draft) => { setPrompt(draft.prompt); }} onDelete={(draft) => { void daemonRequest("experimental_owner_composer_delete", {id: draft.id}).then(() => poll()).catch(() => setError("The saved draft could not be deleted.")); }} />
           <OwnerSteering items={ownerSteering.user === user ? ownerSteering.items : []} onRemove={(id) => { void daemonRequest("experimental_owner_steer_remove", {id}).then(() => poll()).catch(() => setError("Steering could not be cleared; the request or a dependent follow-up may still need it.")); }} />
           <OwnerFollowups items={ownerFollowups} onRemove={(id) => { void daemonRequest("experimental_owner_followup_remove", { id }).then(() => poll()).catch(() => setError("The follow-up could not be removed; refresh its status.")); }} />
-          <form className="composer" onSubmit={submit} onKeyDown={event => { if (event.key === "Escape" && commandMenuRef.current?.open) { event.preventDefault(); event.stopPropagation(); commandMenuRef.current.open = false; textareaRef.current?.focus(); } }}>
-              {suggestions.length > 0 && <div className="suggestions">{suggestions.map((item) => <button type="button" key={item} onClick={() => setPrompt(item)}>{item}</button>)}</div>}
-              <textarea ref={textareaRef} aria-label="Message Alphonse" value={prompt} onKeyDown={onComposerKeyDown} onChange={(event) => setPrompt(event.target.value)} placeholder="Ask Alphonse, or hand something over…" rows={1} />
-              <div className="composer-bottom"><details ref={commandMenuRef} className="composer-command-menu"><summary aria-label="Conversation commands" title="Conversation commands"><Plus aria-hidden="true" /></summary><div><p>{prompt.trim() ? "Keep or send your draft before choosing a command." : "Choose a command to prepare in the composer."}</p>{DESKTOP_COMMANDS.map(command => <button key={command} type="button" disabled={Boolean(prompt.trim())} onClick={() => { setPrompt(command); if (commandMenuRef.current) commandMenuRef.current.open = false; textareaRef.current?.focus(); }}>{command}</button>)}</div></details><span className="composer-context">{composerProject ? <>Project: {composerProject.name} <button type="button" onClick={() => setComposerProject(null)} aria-label="Remove project from next message">×</button></> : "Everyday assistant"}</span><button className="send" type="submit" aria-label="Send" title="Send message"><ArrowUp aria-hidden="true" /></button></div>
-          </form>
+          {selectedFailure && <FailedReferenceNotice id={selectedFailure.id} createdAt={selectedFailure.createdAt} timezone={timezone} unavailable={failedReferenceError === selectedFailure.id} removeRef={failedReferenceRemoveRef} onRemove={() => { setFailedReference(null); setFailedReferenceError(""); textareaRef.current?.focus(); }} />}
+          <ConversationComposer prompt={prompt} task={activeConversationMessageId} mode={conversationSendMode} enterToSend={enterToSend} reviewDraft={reviewDraft} textareaRef={textareaRef} commandMenuRef={commandMenuRef} suggestions={suggestions} commands={DESKTOP_COMMANDS} context={composerProject ? <>Project: {composerProject.name} <button type="button" onClick={() => setComposerProject(null)} aria-label="Remove project from next message">×</button></> : "Everyday assistant"} suggestion={<ConversationSuggestion request={daemonRequest} task={workspace === "conversation" && connected && !reviewDraft ? activeConversationMessageId : undefined} prompt={prompt} user={user} defaultMode={conversationSendMode} onSend={(mode, task) => void submitPrompt(mode, task)} />} onChange={(value) => { if (!prompt.trim() && value.trim()) setDraftTask(activeConversationMessageId ?? null); setPrompt(value); }} onSend={(mode, task) => void submitPrompt(mode, task)} onReview={() => { const current = ownerConversation?.isWorking() ? ownerConversation.activeMessageId() : undefined; setDraftTask(current ?? null); setDraftNeedsReview(false); textareaRef.current?.focus(); }} />
           <p className="composer-hint">Your conversation with Alphonse · {enterToSend ? "Enter to send · Shift+Enter for a new line" : "Use Send to send your message"}</p>
           {ownerConversationBusy && ownerConversation && <OwnerConversationRecoveryNotice state={ownerConversation.blockingState()} retrying={ownerAcknowledgementRetrying} onRetry={() => void retryOwnerAcknowledgement()} />}
           {isAdmin && !ownerWorkerReady && <p className="composer-hint" role="status">{ownerUnavailableMessage(ownerBlockingReason)}</p>}
           {isAdmin && ownerQuestionScope === user && ownerQuestions.length > 0 && <p className="composer-hint">Choose a question below to include it as context for a reply.</p>}
-          {isAdmin && ownerQuestionScope === user && <OwnerQuestionSelector questions={ownerQuestions} selectedId={ownerReplyTarget} disabled={ownerConversationBusy} onSelect={setOwnerReplyTarget} />}
+          {isAdmin && ownerQuestionScope === user && <OwnerQuestionSelector questions={ownerQuestions} selectedId={ownerReplyTarget} disabled={ownerConversationBusy} onSelect={(id) => { setOwnerReplyTarget(id); if (id) setFailedReference(null); }} />}
           {isAdmin && ownerClarificationNotice && <p className="composer-hint" role="status">{ownerClarificationNotice}</p>}
         </section>
         </section></section>
@@ -970,13 +1020,13 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
             {ownerOnly && pausedLegacyRequests === null && <p role="status">Earlier queued requests could not be checked.</p>}
             {ownerOnly && pausedLegacyRequests !== null && pausedLegacyRequests > 0 && <p role="status">{pausedLegacyRequests} earlier {pausedLegacyRequests === 1 ? "request is" : "requests are"} paused while the simpler conversation service is running.</p>}
             {legacyNotificationNotice && <><p role="status">{legacyNotificationNotice}</p><LegacyNotificationReview key={user} request={daemonRequest} onChanged={() => void poll()} /></>}
-            <OwnerRecovery items={ownerRecoveryItems} stopping={ownerRecoveryStopping} onStop={(id) => void stopOwnerRequest(id)} onShow={(id) => { navigate("conversation"); void showOwnerAnswer(id); }} />
+            <OwnerRecovery workLogRequest={connected ? daemonRequest : undefined} onReturnToConversation={() => { navigate("conversation"); window.requestAnimationFrame(() => focusConversationRequest(recoveryReturnMessageId.current)); }} items={ownerRecoveryItems} stopping={ownerRecoveryStopping} onStop={(id) => void stopOwnerRequest(id)} onShow={(id) => { navigate("conversation"); void showOwnerAnswer(id); }} />
             {ownerOnly && <LegacyStateInventory key={user} request={daemonRequest} actor={user} />}
             {ownerRecoveryNotice && <p role="status">{ownerRecoveryNotice}</p>}
             <div ref={setReminderRecoveryTarget} />
           </section>}
         </section>}
-      {visited.has("settings") && <section className="workspace-panel" tabIndex={-1} aria-label="Settings workspace" hidden={workspace !== "settings"}><SettingsWorkspace isAdmin={isAdmin} user={user} initialTab={settingsTab} workspaceRequired={workspaceRequired} enterToSend={enterToSend} desktopStyle={desktopStyle} desktopNotifications={desktopNotifications} onDesktopStyleChange={changeDesktopStyle} onDesktopNotificationsChange={setDesktopNotifications} onEnterToSendChange={setEnterToSend} onTimezoneChange={setTimezone} onWorkspaceConfigured={() => setWorkspaceRequired(false)} onTestDesktopNotification={() => void desktopNotifierRef.current.notify({ id: `test:${Date.now()}`, title: "Alphonse test alert", body: "Desktop notifications are ready." }, { ...desktopNotifications, onlyWhenUnfocused: false })} mascotMotion={mascotMotion} onMascotMotionChange={setMascotMotion} onNavigate={setSettingsTab} onWidgets={() => setWidgetCatalogOpen(true)} onClose={() => { navigate(returnWorkspace); }} /></section>}
+      {visited.has("settings") && <section className="workspace-panel" tabIndex={-1} aria-label="Settings workspace" hidden={workspace !== "settings"}><SettingsWorkspace isAdmin={isAdmin} user={user} initialTab={settingsTab} workspaceRequired={workspaceRequired} enterToSend={enterToSend} conversationSendMode={conversationSendMode} onConversationSendModeChange={changeConversationSendMode} desktopStyle={desktopStyle} desktopNotifications={desktopNotifications} onDesktopStyleChange={changeDesktopStyle} onDesktopNotificationsChange={setDesktopNotifications} onEnterToSendChange={setEnterToSend} onTimezoneChange={setTimezone} onWorkspaceConfigured={() => setWorkspaceRequired(false)} onTestDesktopNotification={() => void desktopNotifierRef.current.notify({ id: `test:${Date.now()}`, title: "Alphonse test alert", body: "Desktop notifications are ready." }, { ...desktopNotifications, onlyWhenUnfocused: false })} mascotMotion={mascotMotion} onMascotMotionChange={setMascotMotion} onNavigate={setSettingsTab} onWidgets={() => setWidgetCatalogOpen(true)} onClose={() => { navigate(returnWorkspace); }} /></section>}
       </div>
       {widgetCatalogOpen && <WidgetCatalogDialog state={drawer} act={changeDrawer} member={user} onClose={() => setWidgetCatalogOpen(false)} />}
       <AtHandDrawer activityMember={activityMember} queueSamples={queueHistory} state={{ ...drawer, open: atHandOpen }} act={changeDrawer} member={user} connected={connected} questionCount={questions.length} questionsMember={questionsMember} onAttention={() => navigate("attention")} onAgenda={(id) => { setScheduleViewRequest((value) => value + 1); setScheduledTaskForView(id || ""); navigate("agenda"); }} toggleRef={drawerToggleRef} saveFailed={drawerSaveFailed} widgetContext={widgetContext} timezone={timezone} onItem={(artifactId, itemId, family) => { setWidgetItem({ member: user, artifactId, itemId, family }); navigate(["appointments", "reminders"].includes(family) ? "agenda" : "projects"); }} onWork={(id, taskId) => { setWorkTaskForView(taskId || ""); setProjectForView((current) => ({ id: taskId ? "" : id, request: current.request + 1 })); navigate("projects"); }} onRequest={(draft) => { setPrompt((current) => appendWidgetDraft(current, draft)); setConversationDay(localDay(timezone)); navigate("conversation"); window.requestAnimationFrame(() => textareaRef.current?.focus()); }} />
@@ -997,7 +1047,7 @@ function OnboardingModal({ onComplete }: { onComplete: (userId: string) => void 
   return <ModalFrame title="Set up Alphonse" onClose={() => undefined}><p>Create the local administrator and choose Alphonse’s Workspace directory. This is the root for users, projects, skills, and agent configuration.</p><label>Workspace directory</label><div className="workspace-picker"><input aria-label="Selected Workspace directory" readOnly value={root} placeholder="Choose a folder in Finder" /><button type="button" onClick={() => void chooseRoot()}>Choose folder…</button></div><label>Your name<input value={name} onChange={(event) => setName(event.target.value)} placeholder="Your name" /></label><button disabled={!name.trim() || !root.trim()} onClick={() => void save()}>Create administrator</button><p>{error}</p></ModalFrame>;
 }
 
-function SettingsWorkspace({ isAdmin, user, initialTab, workspaceRequired, enterToSend, desktopStyle, desktopNotifications, onDesktopStyleChange, onDesktopNotificationsChange, onEnterToSendChange, onTimezoneChange, onWorkspaceConfigured, onTestDesktopNotification, onNavigate, onWidgets, mascotMotion, onMascotMotionChange, onClose }: { isAdmin: boolean; user: string; initialTab: SettingsTab; workspaceRequired: boolean; enterToSend: boolean; desktopStyle: DesktopStyle; desktopNotifications: DesktopNotificationPreferences; onDesktopStyleChange: (value: DesktopStyle) => void; onDesktopNotificationsChange: (value: DesktopNotificationPreferences) => void; onEnterToSendChange: (value: boolean) => void; onTimezoneChange: (value: string) => void; onWorkspaceConfigured: () => void; onTestDesktopNotification: () => void; onNavigate: (tab: SettingsTab) => void; onWidgets: () => void; mascotMotion: boolean; onMascotMotionChange: (enabled: boolean) => void; onClose: () => void }) {
+function SettingsWorkspace({ isAdmin, user, initialTab, workspaceRequired, enterToSend, conversationSendMode, onConversationSendModeChange, desktopStyle, desktopNotifications, onDesktopStyleChange, onDesktopNotificationsChange, onEnterToSendChange, onTimezoneChange, onWorkspaceConfigured, onTestDesktopNotification, onNavigate, onWidgets, mascotMotion, onMascotMotionChange, onClose }: { isAdmin: boolean; user: string; initialTab: SettingsTab; workspaceRequired: boolean; enterToSend: boolean; conversationSendMode: ConversationSendMode; onConversationSendModeChange: (mode: ConversationSendMode) => void; desktopStyle: DesktopStyle; desktopNotifications: DesktopNotificationPreferences; onDesktopStyleChange: (value: DesktopStyle) => void; onDesktopNotificationsChange: (value: DesktopNotificationPreferences) => void; onEnterToSendChange: (value: boolean) => void; onTimezoneChange: (value: string) => void; onWorkspaceConfigured: () => void; onTestDesktopNotification: () => void; onNavigate: (tab: SettingsTab) => void; onWidgets: () => void; mascotMotion: boolean; onMascotMotionChange: (enabled: boolean) => void; onClose: () => void }) {
   const [root, setRoot] = useState(""); const [timezone, setTimezone] = useState("UTC"); const [mirrorAutomationMessages, setMirrorAutomationMessages] = useState(false); const [notice, setNotice] = useState(""); const [workspaceNotice, setWorkspaceNotice] = useState(""); const [savingWorkspace, setSavingWorkspace] = useState(false); const tab = workspaceRequired ? "general" : initialTab;
   const [overviewRevision, setSettingsOverviewRevision] = useState(0);
   const [skillsEditor, setSkillsEditor] = useState<string | null>(null);
@@ -1040,6 +1090,12 @@ function SettingsWorkspace({ isAdmin, user, initialTab, workspaceRequired, enter
       <section className="setting-group">
         <div className="setting-group-heading"><h3>Messaging</h3><p>Choose how messages are sent from the desktop conversation.</p></div>
         <label className="setting-row"><input type="checkbox" checked={enterToSend} onChange={(event) => onEnterToSendChange(event.target.checked)} /> Enter sends message</label>
+        <fieldset className="conversation-send-setting"><legend>While Alphonse is working, default to</legend>
+          <label className="setting-row"><input type="radio" name="conversation-send-default" checked={conversationSendMode === "queue"} onChange={() => onConversationSendModeChange("queue")} /> Send after the current task</label>
+          <label className="setting-row"><input type="radio" name="conversation-send-default" checked={conversationSendMode === "steer"} onChange={() => onConversationSendModeChange("steer")} /> Send as an update to the current task</label>
+          <small>You can choose the other action for any message. This preference is saved on this device.</small>
+          <small>When Jev is configured, your unsent draft and the current request are sent to Jev after you pause typing to suggest an action. If Jev is unavailable, no suggestion appears.</small>
+        </fieldset>
       </section>
       {isAdmin && <><section className="setting-group">
         <div className="setting-group-heading"><h3>Workspace &amp; time</h3><p>Set the root directory Alphonse uses for users, projects, skills, and agent configuration. This must match the Workspace directory selected by the administrator.</p></div>

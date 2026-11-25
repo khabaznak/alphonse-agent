@@ -783,6 +783,28 @@ class OwnerAtomicCheckpoint:
                     'reservation_id': reservation_id, 'kind': kind,
                     'tool_id': tool_id, 'arguments': deepcopy(arguments), 'claim_digest': _claim_digest(self.receipt),
                 }
+                # A separate, bounded presentation record preserves the exact
+                # dispatch contract. It is never used to authorize the tool.
+                raw['metadata'].pop('owner_activity_intent', None)
+                if kind == 'tool':
+                    from .candidate_decision_policy import ACTIVITY_INTENTS
+                    intent = selected_decision.get('activity_intent')
+                    decision_keys = {'kind', 'tool_id', 'arguments', 'text', 'activity_intent'}
+                    usage = selected_decision.get('usage')
+                    valid_usage = (usage is None and 'usage' not in selected_decision) or (
+                        isinstance(usage, dict) and set(usage) == {'input_tokens', 'output_tokens'}
+                        and all(value is None or (type(value) is int and value >= 0) for value in usage.values()))
+                    if (isinstance(intent, str) and intent in ACTIVITY_INTENTS
+                            and selected_decision.get('text') is None and valid_usage
+                            and set(selected_decision) in (decision_keys, decision_keys | {'usage'})):
+                        raw['metadata']['owner_activity_intent'] = {
+                            'schema_version': 1, 'actor': state.actor, 'task_id': state.task_id,
+                            'reservation_id': reservation_id, 'tool_id': tool_id,
+                            'claim_digest': _claim_digest(self.receipt),
+                            'decision_sha256': _decision_digest(selected_decision),
+                            'projection_sha256': projection_fingerprint, 'intent': intent,
+                            'usage': deepcopy(usage), 'selection': deepcopy(pending_decision),
+                        }
                 result = self.store._write(conn, row, raw, state, budget)
         if result is not None:
             self.version = result.version
@@ -809,6 +831,7 @@ class OwnerAtomicCheckpoint:
             budget.settle(reservation_id, outcome=outcome, input_tokens=input_tokens, output_tokens=output_tokens)
             state.inflight = ''
             del raw['metadata']['owner_read_pending_action']
+            raw['metadata'].pop('owner_activity_intent', None)
             # A steer accepted while this model call was outstanding makes
             # its decision stale. Settlement still accounts for usage, but no
             # selected decision survives to authorize a tool or final answer.
@@ -910,6 +933,7 @@ class OwnerAtomicCheckpoint:
             state.evidence_sources.append(evidence_ref)
             state.inflight = ''
             del raw['metadata']['owner_read_pending_action']
+            raw['metadata'].pop('owner_activity_intent', None)
             result = self.store._write(conn, row, raw, state, budget)
         self.version = result.version
         return result
@@ -944,6 +968,7 @@ class OwnerAtomicCheckpoint:
             state.evidence_sources.append(evidence_ref)
             state.inflight = ''
             del raw['metadata']['owner_read_pending_action']
+            raw['metadata'].pop('owner_activity_intent', None)
             result = self.store._write(conn, row, raw, state, budget)
         self.version = result.version
         return result
@@ -1164,6 +1189,7 @@ class OwnerAtomicCheckpoint:
             state.evidence_sources.append(evidence_ref)
             state.inflight = ''
             del metadata['owner_read_pending_action']
+            metadata.pop('owner_activity_intent', None)
             del metadata['owner_bash_dispatch_started']
             del metadata['owner_bash_return_unreconciled']
             result = self.store._write(conn, row, raw, state, budget)
