@@ -73,6 +73,8 @@ def make_request(*, projection: str, catalog: list[dict[str, Any]], cancellation
         'For references to a current, named, or user-specific item, establish which item '
         'the request refers to from available evidence rather than assuming a match. '
         'A record being the only one found does not establish that it is the requested item. '
+        'A historical inventory or catalog entry records an association at the time it was made; '
+        'it does not by itself verify the current identity or state of a device or service. '
         'Resolve the item identity before applying a found or missing result to it; '
         'if available evidence cannot resolve it, report uncertainty or ask a useful question. '
         'Do not read a source whose description is clearly unrelated just because it is available. '

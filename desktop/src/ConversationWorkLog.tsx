@@ -3,8 +3,17 @@ import { ownerFailureMessage, type OwnerRequest } from "./ownerConversation";
 
 type WorkLog = { status: string; failure_code: string | null; notice: string; events: { label: string; outcome: string }[] };
 
+export function focusRequestWorkLog(messageId: string): boolean {
+  const details = document.getElementById(`conversation-work-log-${messageId}`);
+  if (!(details instanceof HTMLDetailsElement)) return false;
+  details.open = true;
+  const summary = details.querySelector<HTMLElement>("summary");
+  summary?.focus();
+  return document.activeElement === summary;
+}
+
 /** Only fixed, bounded descriptions from the owner-scoped endpoint are rendered. */
-export function ConversationWorkLog({ request, messageId, active }: { request: OwnerRequest; messageId: string; active: boolean }) {
+export function ConversationWorkLog({ request, messageId, active, summary = "Work log", showEvidenceLimits = false, labelContextId, disclosureId }: { request: OwnerRequest; messageId: string; active: boolean; summary?: string; showEvidenceLimits?: boolean; labelContextId?: string; disclosureId?: string }) {
   const [open, setOpen] = useState(active);
   const wasActive = useRef(active);
   const [log, setLog] = useState<WorkLog | null>(null);
@@ -33,8 +42,9 @@ export function ConversationWorkLog({ request, messageId, active }: { request: O
     const timer = active ? window.setInterval(() => void load(), 2000) : undefined;
     return () => { cancelled = true; if (timer) window.clearInterval(timer); };
   }, [request, messageId, active, open]);
-  return <details className="conversation-work-log" open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
-    <summary>Work log{active ? " · In progress" : ""}</summary>
+  return <details id={disclosureId} className="conversation-work-log" open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
+    <summary id={labelContextId ? `work-log-summary-${messageId}` : undefined} aria-labelledby={labelContextId ? `work-log-summary-${messageId} ${labelContextId}` : undefined}>{summary}{active ? " · In progress" : ""}</summary>
+    {showEvidenceLimits && <p>These are recorded observations, not source content or proof of an action’s effects.</p>}
     {unavailable ? <p>Work log is unavailable or not recorded for this request.</p> : !log ? <p>Checking recorded work…</p> : <>
       {log.status === "blocked" && <p>{ownerFailureMessage(log.failure_code || undefined)}</p>}
       {log.events.length ? <ol>{log.events.map((event, index) => <li key={index}>{event.label} · {event.outcome}</li>)}</ol>

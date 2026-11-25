@@ -26,3 +26,16 @@ it("collapses and restores details without resolving the failed request", async 
   await act(async () => root.unmount());
   container.remove();
 });
+
+it("keeps technical recovery and conditional effects guidance behind a disclosure", async () => {
+  const container = document.createElement("div"); document.body.appendChild(container);
+  const root = createRoot(container);
+  await act(async () => root.render(<ConversationFailure message="The specific reason was not recorded." dismissed={false} onDismissedChange={() => {}} onReviewRecovery={() => {}} onViewWorkLog={() => {}} onDraftQuestion={() => {}} hasWorkLog />));
+  const details = container.querySelector("details")!;
+  expect(details.open).toBe(false);
+  expect(details.querySelector("summary")?.textContent).toBe("More about this request");
+  expect(details.textContent).toContain("If the request involved a change");
+  expect(details.textContent).toContain("Review request status");
+  expect(container.querySelector("section > .conversation-failure-actions")?.textContent).not.toContain("Review request status");
+  await act(async () => root.unmount()); container.remove();
+});

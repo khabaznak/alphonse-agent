@@ -1,0 +1,12 @@
+.owner-recovery { min-width: 0; }
+.owner-request-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; list-style: none; margin: 14px 0 0; padding: 0; }
+.owner-request-card { min-width: 0; padding: 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-raised); overflow-wrap: anywhere; }
+.owner-request-card h3 { margin: 0 0 8px; font-size: 14px; line-height: 1.4; }
+.owner-request-card p { margin: 5px 0; font-size: 13px; }
+.owner-request-status { color: var(--text); }
+.owner-request-card-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.owner-request-card-actions:empty { display: none; }
+.owner-request-confirmation { margin-top: 12px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-subtle); }
+.owner-request-confirmation h4 { margin: 0 0 8px; font-size: 13px; }
+.owner-request-confirmation-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.owner-request-card button { max-width: 100%; white-space: normal; }

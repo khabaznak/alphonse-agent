@@ -143,6 +143,9 @@ class CandidateHost:
     # remains unknown and full reservations are charged; never enable for users.
     synthetic_allow_unreported_usage: bool = False
     remaining_advertised_evidence: Callable[[str, tuple[str, ...]], bool] | None = None
+    # Give the owner host one budgeted chance to reconsider a rejected answer.
+    # This never changes the verification, authority, cancellation or effect gates.
+    retry_unverified_answer: bool = False
     # Evaluation-only self-review, not independent verification or authority.
     synthetic_preanswer_review: bool = False
     # A real read may have an operation-specific completion contract instead
@@ -303,9 +306,10 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
             # the output cap must be enforced by the external transport.
             decision_input = projection.text
             if state.recovery_pending:
-                decision_input += ('\nA previous answer was not verified. Consider whether the available evidence '
-                                   'supports every part of the request; inspect relevant authorized sources before '
-                                   'answering, or explain what prevents progress.')
+                decision_input += ('\nA previous answer was not verified; the reason may be unknown. '
+                                   'Consider relevant authorized sources or another approach. If you cannot '
+                                   'make progress, explain the specific limitation or ask for information '
+                                   'only the user can supply. Do not claim an unverified effect.')
             if state.prerequisite_feedback:
                 decision_input += '\n' + FEEDBACK[state.prerequisite_feedback]
             if state.retry_feedback_pending:
@@ -474,6 +478,8 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
                         missing = host.remaining_advertised_evidence(state.actor, tuple(state.evidence_sources)) is True
                     except Exception:
                         missing = False
+                elif host.retry_unverified_answer and state.unsupported_retries == 0:
+                    missing = True
                 if missing:
                     state.unsupported_retries += 1
                     state.recovery_pending = True

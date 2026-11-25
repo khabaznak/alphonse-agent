@@ -27,9 +27,8 @@ describe("owner request recovery", () => {
     const html = renderToStaticMarkup(<OwnerRecovery items={[
       { message_id: id, prompt: "Find my note", status: "pending", can_abandon: false },
     ]} stopping="" onStop={() => {}} onShow={() => {}} />);
-    expect(html).toContain("not retried automatically");
-    expect(html).toContain("may already have been shown");
-    expect(html).toContain("disabled");
+    expect(html).toContain("not retry them automatically");
+    expect(html).not.toContain("Stop request");
     expect(html).toContain("Find my note");
   });
 
@@ -53,10 +52,10 @@ describe("owner request recovery", () => {
     const html = renderToStaticMarkup(<OwnerRecovery items={[
       { message_id: id, prompt: "Synthetic request", status: "action_unconfirmed", can_abandon: false },
     ]} stopping="" onStop={() => {}} onShow={() => {}} />);
-    expect(html).toContain("An action may have run; its effects are unconfirmed");
-    expect(html).toContain("check the result before trying again");
+    expect(html).toContain("An action may have happened; its result is unknown");
+    expect(html).toContain("Check the relevant device or service before trying again");
     expect(html).not.toContain("Show answer");
-    expect(html).toContain("disabled");
+    expect(html).not.toContain("Stop request");
   });
 
   it("distinguishes unconfirmed Telegram sends from accepted replies needing reconciliation", () => {
@@ -77,7 +76,7 @@ describe("owner request recovery", () => {
     }]} stopping="" onStop={() => {}} onShow={() => {}} />);
     expect(html).toContain("scheduled task was cancelled");
     expect(html).toContain("may already have started");
-    expect(html).toContain("disabled");
+    expect(html).not.toContain("Stop request");
   });
 
   it("rejects malformed discovery results instead of offering a stop", async () => {

@@ -30,7 +30,7 @@ import { daemonRequest, ensureDaemon, playAlertSound, showInFinder, stopDaemon }
 import { TrustedLocalBashSettings } from "./TrustedLocalBashSettings";
 import { legacyNotificationReviewMessage, OwnerConversation, OwnerRequestFailed, ownerAcceptedAt, ownerBusyFor, ownerUnavailableMessage, type OwnerCapability } from "./ownerConversation";
 import { abandonOwnerRequest, listOwnerRecovery, type OwnerRecoveryItem } from "./ownerRecovery";
-import { OwnerRecovery } from "./OwnerRecoveryPanel";
+import { focusConversationRequest, focusOwnerRecovery, OwnerRecovery } from "./OwnerRecoveryPanel";
 import { OwnerContinuation } from "./OwnerContinuation";
 import { OwnerContinuationSettings } from "./OwnerContinuationSettings";
 import { OwnerConversationRecoveryNotice } from "./OwnerConversationRecoveryNotice";
@@ -123,10 +123,12 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
     isNativeRuntime: () => "__TAURI_INTERNALS__" in window,
     playSound: playAlertSound,
   }));
+  const recoveryReturnMessageId = useRef("");
   const [messages, setMessages] = useState<ChatMessage[]>([{ id: "welcome", role: "assistant", content: "Alphonse Desktop is connected locally." }]);
   const [prompt, setPrompt] = useState("");
   const [composerProject, setComposerProject] = useState<{ id: string; name: string } | null>(null);
   const [connected, setConnected] = useState(false);
+  const connectedRef = useRef(false);
   const [activity, setActivity] = useState("idle");
   const [mascotContext, setMascotContext] = useState(BASE_CONTEXT);
   const [questions, setQuestions] = useState<Question[]>([]);
@@ -166,7 +168,9 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const [ownerBlockingReason, setOwnerBlockingReason] = useState<string | null>(null);
   const [pausedLegacyRequests, setPausedLegacyRequests] = useState<number | null>(null);
   const [ownerBusySnapshot, setOwnerBusySnapshot] = useState<{ conversation: OwnerConversation | null; busy: boolean }>({ conversation: null, busy: false });
-  const [ownerRecoveryItems, setOwnerRecoveryItems] = useState<OwnerRecoveryItem[]>([]);
+  const [ownerRecoverySnapshot, setOwnerRecoverySnapshot] = useState<{user: string; items: OwnerRecoveryItem[]}>({user: "", items: []});
+  const ownerRecoveryItems = ownerRecoverySnapshot.user === user ? ownerRecoverySnapshot.items : [];
+  const [ownerRecoveryCheck, setOwnerRecoveryCheck] = useState<{user: string; state: "loading" | "ready" | "failed"}>({user: "", state: "loading"});
   const [reminderRecoveryTarget, setReminderRecoveryTarget] = useState<HTMLDivElement | null>(null);
   const [reminderNeedsAttention, setReminderNeedsAttention] = useState(false);
   const [ownerRecoveryNotice, setOwnerRecoveryNotice] = useState("");
@@ -257,17 +261,19 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
     return () => { active = false; window.clearInterval(interval); };
   }, [isAdmin]);
   const refreshOwnerRecovery = useCallback(async () => {
+    if (!connectedRef.current || !user) return;
     const generation = ++ownerRecoveryGeneration.current;
     try {
       const items = await listOwnerRecovery(daemonRequest);
       if (generation === ownerRecoveryGeneration.current) {
-        setOwnerRecoveryItems(items);
-        setOwnerRecoveryNotice((notice) => notice === "Unfinished requests could not be checked." ? "" : notice);
+        setOwnerRecoverySnapshot({user, items});
+        setOwnerRecoveryCheck({user, state: "ready"});
+        setOwnerRecoveryNotice((notice) => ["Unfinished requests could not be checked.", "Checking request status…"].includes(notice) ? "" : notice);
       }
     } catch {
-      if (generation === ownerRecoveryGeneration.current) setOwnerRecoveryNotice("Unfinished requests could not be checked.");
+      if (generation === ownerRecoveryGeneration.current) { setOwnerRecoveryCheck({user, state: "failed"}); setOwnerRecoveryNotice("Unfinished requests could not be checked."); }
     }
-  }, []);
+  }, [user]);
   const refreshOwnerQuestions = useCallback(async () => {
     const generation = ++ownerQuestionGeneration.current;
     try {
@@ -286,7 +292,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
     if (!isAdmin) {
       ++ownerRecoveryGeneration.current;
       ++ownerQuestionGeneration.current;
-      setOwnerRecoveryItems([]);
+      setOwnerRecoverySnapshot({user, items: []});
       return;
     }
     void refreshOwnerRecovery();
@@ -423,7 +429,11 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
         surfacesRef.current = retainedSurfaces;
         setSurfaces(retainedSurfaces);
       }
+      const mustRefreshRecovery = !connectedRef.current || daemonChanged;
+      if (mustRefreshRecovery) { ++ownerRecoveryGeneration.current; setOwnerRecoveryCheck({user, state: "loading"}); }
+      connectedRef.current = true;
       setConnected(true);
+      if (mustRefreshRecovery && isAdmin) void refreshOwnerRecovery();
       setLegacyNotificationNotice(legacyNotificationReviewMessage(response.legacy_notification_review));
       setError(ownerConversationNotice.current);
       setQuestionsMember(user);
@@ -568,12 +578,15 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       }
     } catch (cause) {
       if (!diagnosticBehavior.commitsPollResponses) return;
+      connectedRef.current = false;
+      ++ownerRecoveryGeneration.current;
+      setOwnerRecoveryCheck({user, state: "loading"});
       setConnected(false);
       setMascotContext(BASE_CONTEXT);
       setError(cause instanceof Error ? cause.message : "Daemon connection lost");
       setActivity("idle");
     }
-  }, [appendMessage, clientId, contextProjects, desktopNotifications, diagnosticBehavior.commitsPollResponses, ownerConversation, pollTransport, reconcileWidgets, refreshOwnerQuestions, user]);
+  }, [appendMessage, clientId, contextProjects, desktopNotifications, diagnosticBehavior.commitsPollResponses, isAdmin, ownerConversation, pollTransport, reconcileWidgets, refreshOwnerQuestions, refreshOwnerRecovery, user]);
 
   const showOwnerAnswer = async (messageId: string) => {
     if (!ownerConversation) return;
@@ -894,21 +907,20 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       })),
     ).map((item) => {
       if (item.kind === "message") {
-        return <ConversationTimelineEntry key={item.key} message={item.message} questions={questions} user={user} timezone={timezone} onDone={poll} projectName={contextProjects.find((projectItem) => projectItem.project_id === item.message.project_id)?.name || ""} memoize={diagnosticBehavior.memoizesMessages} renderMarkdown={!diagnosticBehavior.plainTextMessages} failures={ownerFailures} workLogRequest={isAdmin && connected ? daemonRequest : undefined} active={ownerConversationWorking && item.message.id === activeConversationMessageId} onReviewRecovery={isAdmin && ownerRecoveryItems.some((entry) => entry.message_id === item.message.id) ? (id) => { setOwnerRecoveryFocus(id); navigate("attention"); } : undefined} onOpenModelSettings={isAdmin ? () => { setSettingsTab("model"); navigate("settings"); } : undefined} onFailureDismissedChange={(messageId, dismissed) => updateOwnerFailures((current) => current.map((entry) => entry.messageId === messageId ? { ...entry, dismissed } : entry))} />;
+        return <ConversationTimelineEntry key={item.key} message={item.message} questions={questions} user={user} timezone={timezone} onDone={poll} projectName={contextProjects.find((projectItem) => projectItem.project_id === item.message.project_id)?.name || ""} memoize={diagnosticBehavior.memoizesMessages} renderMarkdown={!diagnosticBehavior.plainTextMessages} failures={ownerFailures} workLogRequest={isAdmin && connected ? daemonRequest : undefined} active={ownerConversationWorking && item.message.id === activeConversationMessageId} onReviewRecovery={isAdmin && ownerRecoveryItems.some((entry) => entry.message_id === item.message.id) ? (id) => { recoveryReturnMessageId.current = id; setOwnerRecoverySnapshot({user, items: []}); setOwnerRecoveryCheck({user, state: "loading"}); setOwnerRecoveryNotice("Checking request status…"); setOwnerRecoveryFocus(id); navigate("attention"); void refreshOwnerRecovery(); } : undefined} onOpenModelSettings={isAdmin ? () => { setSettingsTab("model"); navigate("settings"); } : undefined} onFailureDismissedChange={(messageId, dismissed) => updateOwnerFailures((current) => current.map((entry) => entry.messageId === messageId ? { ...entry, dismissed } : entry))} />;
       }
       const archivedSurface = archivedProgress[item.taskId];
       const surface = archivedSurface || surfaces[`task-progress:${item.taskId}`];
       return surface ? <TaskProgressBubble key={item.key} surface={surface} archived={Boolean(archivedSurface)} connected={connected} timezone={timezone} /> : null;
-    }), [archivedProgress, clientId, connected, contextProjects, diagnosticBehavior.memoizesMessages, diagnosticBehavior.plainTextMessages, messages, ownerConversation, ownerFailures, ownerRecoveryItems, ownerConversationWorking, activeConversationMessageId, isAdmin, poll, progressTaskIds, questionTaskIds, questions, surfaces, timelineRenderVersion, timezone, user]);
+    }), [archivedProgress, clientId, connected, contextProjects, diagnosticBehavior.memoizesMessages, diagnosticBehavior.plainTextMessages, messages, ownerConversation, ownerFailures, ownerRecoveryItems, ownerConversationWorking, activeConversationMessageId, isAdmin, poll, refreshOwnerRecovery, progressTaskIds, questionTaskIds, questions, surfaces, timelineRenderVersion, timezone, user]);
 
   useEffect(() => {
     if (workspace !== "attention" || !ownerRecoveryFocus) return;
     const frame = window.requestAnimationFrame(() => {
-      document.getElementById(`owner-recovery-${ownerRecoveryFocus}`)?.focus();
-      setOwnerRecoveryFocus("");
+      if (focusOwnerRecovery(ownerRecoveryFocus)) setOwnerRecoveryFocus("");
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [workspace, ownerRecoveryFocus]);
+  }, [workspace, ownerRecoveryFocus, ownerRecoveryItems]);
 
   useEffect(() => {
     if (workspace !== "conversation" || !questionFocusRef.current) return;
@@ -994,14 +1006,18 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
         {visited.has("projects") && <section className="workspace-panel" tabIndex={-1} aria-label="Projects and tasks workspace" hidden={workspace !== "projects"}><ProjectsWorkspace active={workspace === "projects"} user={user} initialTaskId={workTaskForView} initialProjectId={projectForView.id} selectionRequest={projectForView.request} onAgenda={(id) => { setScheduledTaskForView(id); navigate("agenda"); }} onConversation={(day) => { if (day) setConversationDay(day); navigate("conversation"); }} onDelegate={(project) => { setComposerProject({ id: project.project_id, name: project.name }); setConversationDay(localDay(timezone)); navigate("conversation"); window.setTimeout(() => textareaRef.current?.focus(), 0); }} onQuestions={() => navigate("attention")} onClose={() => navigate("conversation")} /></section>}
         {visited.has("household") && <section className="workspace-panel" tabIndex={-1} aria-label="Household workspace" hidden={workspace !== "household"}><HouseholdWorkspace key={user} user={user} active={workspace === "household"} connected={connected} isAdmin={isAdmin} onProject={(id) => { setProjectForView((current) => ({ id, request: current.request + 1 })); navigate("projects"); }} onAgenda={(id) => { setScheduledTaskForView(id); navigate("agenda"); }} onConversation={(day) => { setConversationDay(day); navigate("conversation"); }} onQuestions={() => navigate("attention")} onMembers={() => { setSettingsTab("members"); navigate("settings"); }} /></section>}
         {visited.has("agenda") && <section className="workspace-panel" tabIndex={-1} aria-label="Agenda workspace" hidden={workspace !== "agenda"}><AgendaWorkspace key={user} selectionRequest={scheduleViewRequest} member={user} timezone={timezone} active={workspace === "agenda"} initialTaskId={scheduledTaskForView} onProjects={() => navigate("projects")} onConversation={() => navigate("conversation")} /></section>}
-        {visited.has("attention") && <section className="workspace-panel attention-workspace" tabIndex={-1} aria-label="Needs your attention workspace" hidden={workspace !== "attention"}><h1>Needs your attention</h1>{questions.length ? questions.map((question) => <article className="card" key={question.question_id}><p>{question.message}</p><button onClick={() => { questionFocusRef.current = question.question_id; const day = messageLocalDay(question.created_at, timezone); if (day) setConversationDay(day); navigate("conversation"); }}>View in conversation</button></article>) : <p>No pending questions.</p>}
-          {isAdmin && <section className="card attention-recovery" aria-label="Earlier work and recovery"><h2>Earlier work and recovery</h2>
-            {ownerOnly && pausedLegacyRequests === null && <p role="status">Earlier queued requests could not be checked.</p>}
-            {ownerOnly && pausedLegacyRequests !== null && pausedLegacyRequests > 0 && <p role="status">{pausedLegacyRequests} earlier {pausedLegacyRequests === 1 ? "request is" : "requests are"} paused while the simpler conversation service is running.</p>}
-            {legacyNotificationNotice && <><p role="status">{legacyNotificationNotice}</p><LegacyNotificationReview key={user} request={daemonRequest} onChanged={() => void poll()} /></>}
-            <OwnerRecovery items={ownerRecoveryItems} stopping={ownerRecoveryStopping} onStop={(id) => void stopOwnerRequest(id)} onShow={(id) => { navigate("conversation"); void showOwnerAnswer(id); }} />
-            {ownerOnly && <LegacyStateInventory key={user} request={daemonRequest} actor={user} />}
+        {visited.has("attention") && <section className="workspace-panel attention-workspace" tabIndex={-1} aria-label="Needs your attention workspace" hidden={workspace !== "attention"}><h1>Needs your attention</h1>{!connected || questionsMember !== user ? <p role="status">Questions could not be checked yet.</p> : questions.length ? questions.map((question) => <article className="card" key={question.question_id}><p>{question.message}</p><button onClick={() => { questionFocusRef.current = question.question_id; const day = messageLocalDay(question.created_at, timezone); if (day) setConversationDay(day); navigate("conversation"); }}>View in conversation</button></article>) : !ownerWorkNeedsAttention && <p>No pending questions.</p>}
+          {isAdmin && <section className="card attention-recovery" aria-label="Earlier work and recovery">
+            <OwnerRecovery workLogRequest={connected ? daemonRequest : undefined} onReturnToConversation={() => { navigate("conversation"); window.requestAnimationFrame(() => focusConversationRequest(recoveryReturnMessageId.current)); }} items={ownerRecoveryItems} stopping={ownerRecoveryStopping} actionsEnabled={connected && ownerRecoveryCheck.user === user && ownerRecoveryCheck.state === "ready"} onStop={(id) => void stopOwnerRequest(id)} onShow={(id) => { navigate("conversation"); void showOwnerAnswer(id); }} />
+            {(!connected || ownerRecoveryCheck.user !== user || ownerRecoveryCheck.state !== "ready") && <p role="status">{!connected ? "Disconnected. Reconnect to check earlier requests." : ownerRecoveryCheck.state === "failed" ? "Earlier requests could not be checked; any list shown is an older snapshot." : "Checking earlier requests; any list shown is an older snapshot."}</p>}
+            {connected && ownerRecoveryCheck.user === user && ownerRecoveryCheck.state === "failed" && <button type="button" onClick={() => void refreshOwnerRecovery()}>Check requests again</button>}
             {ownerRecoveryNotice && <p role="status">{ownerRecoveryNotice}</p>}
+            {legacyNotificationNotice && <section aria-label="Earlier notifications"><h3>Notifications to review</h3><p role="status">{legacyNotificationNotice}</p><LegacyNotificationReview key={user} request={daemonRequest} onChanged={() => void poll()} /></section>}
+            {ownerOnly && <details><summary>Earlier work records and technical details</summary>
+              {pausedLegacyRequests === null ? <p role="status">Earlier queued requests could not be checked.</p> : pausedLegacyRequests > 0 && <p role="status">{pausedLegacyRequests} earlier {pausedLegacyRequests === 1 ? "request is" : "requests are"} paused. These counts may overlap with other records.</p>}
+              <p>These checks inspect stored records; they do not retry work or confirm an action or delivery.</p>
+              <LegacyStateInventory key={user} request={daemonRequest} actor={user} />
+            </details>}
             <div ref={setReminderRecoveryTarget} />
           </section>}
         </section>}

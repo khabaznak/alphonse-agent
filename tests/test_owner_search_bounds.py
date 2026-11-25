@@ -60,11 +60,12 @@ def test_owner_search_default_is_bounded_and_never_accepts_partial_page(tmp_path
         assert len(provider.requests) == 2
         assert all(f'Apples note {i}' in provider.requests[1].prompt for i in range(count))
     else:
-        assert len(provider.requests) == 2
+        assert len(provider.requests) == 3
         assert 'next_offset' in provider.requests[1].prompt
         if count > 90:
             assert 'too_many_matches' in provider.requests[1].prompt
         assert 'Apples note' not in provider.requests[1].prompt
+        assert 'Apples note' not in provider.requests[2].prompt
 
 
 def test_complete_search_projection_labels_speakers_without_duplicate_or_private_content(tmp_path):
@@ -232,7 +233,7 @@ def test_owner_can_narrow_an_overflowing_search_without_seeing_partial_results(t
     processor = OwnerReadConversationProcessor(users=users, budgets=SQLiteTaskBudgetStore(str(tmp_path / 'budget.db')),
         authorize_claim=lambda *_: True, save_checkpoint=lambda *_: None, now_ms=lambda: 100)
     result = processor.process(task, context)
-    assert len(provider.requests) == 3
+    assert len(provider.requests) == (4 if reverse else 3)
     if reverse:
         # A complete older search cannot clear the later overflow.
         assert result.status == ProcessingStatus.FAILED
@@ -358,4 +359,4 @@ def test_owner_search_at_page_budget_asks_to_narrow(tmp_path):
     processor = OwnerReadConversationProcessor(users=users, budgets=SQLiteTaskBudgetStore(str(tmp_path / 'budget.db')),
         authorize_claim=lambda *_: True, save_checkpoint=lambda *_: None, now_ms=lambda: 100)
     assert processor.process(task, context).status == ProcessingStatus.FAILED
-    assert len(provider.requests) == 4
+    assert len(provider.requests) == 5

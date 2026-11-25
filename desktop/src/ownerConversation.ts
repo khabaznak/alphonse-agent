@@ -60,7 +60,7 @@ export function ownerFailureMessage(code?: string): string {
     source_incomplete: "A source could not be verified as complete.",
     unsupported_operation: "This request needs an operation that is not available in owner conversation mode.",
     action_limit: "I reached the action limit before finishing.",
-    answer_unverified: "I could not verify enough source information to answer.",
+    answer_unverified: "Alphonse could not verify its proposed answer. The specific reason was not recorded.",
     clarification_unverified: "The follow-up question could not be checked, so it was not sent.",
     clarification_review_unavailable: "The clarification check is unavailable, so the follow-up question was not sent.",
   };

@@ -1007,6 +1007,7 @@ class OwnerReadConversationProcessor:
             chooser, access, load, allowed, lambda *_: '', provenance, self.now_ms,
             input_reservation=65536, output_reservation=16384, projection_budget=65536,
             validate_observation=validate, record_bound_observation=record, atomic_checkpoint=atomic,
+            retry_unverified_answer=True,
             commit_owner_reminder=commit_reminder,
             commit_owner_schedule=commit_schedule if schedule_enabled else None,
             allow_question=allow_question,

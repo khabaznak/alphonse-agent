@@ -866,6 +866,33 @@ def test_recovery_feedback_persists_across_multiple_reads_without_extra_retries(
     assert all('A previous answer was not verified' in text for text in fixture.seen[1:])
 
 
+def test_owner_unverified_answer_gets_one_budgeted_reconsideration(fixture):
+    decisions = iter([
+        {'kind': 'answer', 'text': 'unsupported'},
+        {'kind': 'tool', 'tool_id': 'native.read', 'arguments': {'key': 'x'}},
+        {'kind': 'answer', 'text': 'The value is 42.'},
+    ])
+    def choose(text, cap):
+        fixture.seen.append(text)
+        return {**next(decisions), 'usage': {'input_tokens': 10, 'output_tokens': 10}}
+    host = replace(fixture.host, choose=choose, input_reservation=1024, retry_unverified_answer=True)
+    result = run_candidate(fixture.state, host)
+    assert result.status == 'completed'
+    assert result.unsupported_retries == 1
+    assert fixture.calls == [{'key': 'x'}]
+    assert 'reason may be unknown' in fixture.seen[1]
+
+
+def test_owner_reconsideration_does_not_release_rejected_answer(fixture):
+    host = replace(fixture.host, retry_unverified_answer=True, input_reservation=1024,
+        choose=lambda *_: {'kind': 'answer', 'text': 'unverified', 'usage': {'input_tokens': 10, 'output_tokens': 10}},
+        verify_response=lambda *_: False)
+    result = run_candidate(fixture.state, host)
+    assert (result.status, result.blocker, result.response) == ('blocked', 'candidate_answer_unsupported', '')
+    assert result.unsupported_retries == 1
+    assert fixture.host.budgets.load('task').usage()['charged']['model_calls'] == 2
+
+
 def test_unsupported_recovery_is_bounded_and_no_answer_delivered(fixture):
     host = replace(fixture.host,
         choose=lambda *_: {'kind': 'answer', 'text': 'guessed', 'usage': {'input_tokens': 10, 'output_tokens': 10}},
