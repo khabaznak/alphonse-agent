@@ -80,11 +80,31 @@ def _project_complete_conversation_search(payload: dict[str, Any]) -> str:
         role = item['source'].get('role')
         role = role if role in {'user', 'assistant'} else 'unknown'
         results.append({'speaker': role, **item})
+    # Present a timeline only when all observation times are known and distinct.
+    # Equal, malformed, naive, or missing times do not establish an ordering;
+    # in those cases retain the search result order and its original ranks.
+    instants = []
+    for item in results:
+        value = item.get('event_time')
+        try:
+            parsed = datetime.fromisoformat(value.replace('Z', '+00:00')) if isinstance(value, str) else None
+            instant = parsed.astimezone(timezone.utc) if parsed and parsed.utcoffset() is not None else None
+        except (ValueError, OverflowError):
+            instant = None
+        instants.append(instant)
+    chronological = bool(results) and all(value is not None for value in instants) and len(set(instants)) == len(instants)
+    if chronological:
+        results = [item for _, item in sorted(zip(instants, results), key=lambda pair: pair[0])]
     projected = {key: payload[key] for key in ('schema_version', 'status', 'query',
                  'timezone', 'coverage', 'backend', 'total_matches', 'truncated')}
     projected['notice'] = ('Each result is a separate recorded conversation message. '
-        'Speaker describes who made that statement. Results are ordered by search relevance, '
-        'not chronology. An observation time is not proof of a current or external fact.')
+        'Speaker describes the recorded role: assistant is an earlier assistant message, '
+        'and user is a user message. When correcting your earlier answer, identify it '
+        'as yours rather than attributing it to the user. ' +
+        ('No conversation messages matched. ' if not results else
+         'Results are ordered by their distinct recorded observation times; each original search rank is retained. '
+         if chronological else 'Observation times are missing or ambiguous; results retain search relevance order. ') +
+        'Observation times do not establish when underlying events occurred or prove a current or external fact.')
     projected['results'] = results
     return json.dumps(projected, ensure_ascii=False)
 

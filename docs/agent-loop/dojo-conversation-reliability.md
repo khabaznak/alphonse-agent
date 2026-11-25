@@ -119,3 +119,15 @@ three normalized characters. It may broaden result sets and trigger the existing
 requirement to narrow searches with more than 90 matches. Its scan and the
 existing in-memory FTS index are not bounded by total authorized history size;
 fixture benchmarks are not production-scale guarantees.
+
+After presenting complete search results in observation-time order when all
+times were explicit and distinct, the [French attempt](evidence/dojo-reliability-french-recap-20261125-03.json)
+reported the earlier choice and explicitly called its own recap erroneous, but
+did not mention the later owner confirmation. The [Japanese attempt](evidence/dojo-reliability-japanese-owner-change-20261125-04.json)
+reported the changed choice and said the recent reply conflicted with the
+records, but did not explicitly identify it as its own. Each used a search and
+two model calls and was acknowledged by the test client. They took 13.711 and
+14.237 seconds and reported 47,044/274 and 63,015/252 input/output tokens,
+respectively. Both fixtures had been used during development. These observations
+are not proof of causation, independent grounding, complete source coverage or
+general reliability.

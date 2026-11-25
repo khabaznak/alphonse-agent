@@ -107,7 +107,55 @@ def test_complete_search_projection_labels_speakers_without_duplicate_or_private
     assert prompt.count('Plan is amber lantern.') == 1
     assert prompt.count('Plan is unchosen lantern.') == 1
     assert 'Private lantern information.' not in prompt
-    assert 'ordered by search relevance, not chronology' in prompt
+    assert 'recorded observation times' in prompt
+
+
+@pytest.mark.parametrize('timestamps', [
+    ('2026-01-01T12:00:00+00:00', None),
+    ('2026-01-01T12:00:00+00:00', '2026-01-01T12:00:00Z'),
+    ('2026-01-01T12:00:00+00:00', 'invalid'),
+    ('2026-01-01T12:00:00+00:00', '2026-01-01T11:00:00'),
+])
+def test_search_projection_keeps_relevance_order_for_unknown_or_ambiguous_times(timestamps):
+    from alphonse.agent_v2.core.intelligence.simple_loop.owner_read_processor import _project_complete_conversation_search
+    import json
+    results = [{'source_id': f'conversation:{index}', 'source': {'role': 'assistant' if index else 'user'},
+                'event_time': timestamp, 'rank': index + 1, 'excerpt': f'message {index}'}
+               for index, timestamp in enumerate(timestamps)]
+    payload = {'schema_version': 1, 'status': 'found', 'query': 'message', 'timezone': 'UTC',
+               'coverage': {}, 'backend': 'sqlite_fts5', 'total_matches': 2,
+               'truncated': False, 'results': results}
+    projected = json.loads(_project_complete_conversation_search(payload))
+    assert [item['rank'] for item in projected['results']] == [1, 2]
+    assert 'missing or ambiguous' in projected['notice']
+
+
+def test_empty_search_projection_does_not_claim_ambiguous_timestamps():
+    from alphonse.agent_v2.core.intelligence.simple_loop.owner_read_processor import _project_complete_conversation_search
+    import json
+    payload = {'schema_version': 1, 'status': 'empty', 'query': 'message', 'timezone': 'UTC',
+               'coverage': {}, 'backend': 'sqlite_fts5', 'total_matches': 0,
+               'truncated': False, 'results': []}
+    projected = json.loads(_project_complete_conversation_search(payload))
+    assert 'No conversation messages matched' in projected['notice']
+    assert 'missing or ambiguous' not in projected['notice']
+
+
+def test_search_projection_orders_distinct_observation_times_and_preserves_ranks():
+    from alphonse.agent_v2.core.intelligence.simple_loop.owner_read_processor import _project_complete_conversation_search
+    import json
+    results = [{'source_id': 'later', 'source': {'role': 'assistant'}, 'event_time': '2026-01-02T00:00:00Z',
+                'rank': 1, 'excerpt': 'later message'},
+               {'source_id': 'earlier', 'source': {'role': 'user'}, 'event_time': '2026-01-01T00:00:00Z',
+                'rank': 2, 'excerpt': 'earlier message'}]
+    payload = {'schema_version': 1, 'status': 'found', 'query': 'message', 'timezone': 'UTC',
+               'coverage': {}, 'backend': 'sqlite_fts5', 'total_matches': 2,
+               'truncated': False, 'results': results}
+    projected = json.loads(_project_complete_conversation_search(payload))
+    assert [item['source_id'] for item in projected['results']] == ['earlier', 'later']
+    assert [item['rank'] for item in projected['results']] == [2, 1]
+    assert [item['speaker'] for item in projected['results']] == ['user', 'assistant']
+    assert 'not establish when underlying events occurred' in projected['notice']
 
 
 @pytest.mark.parametrize('reverse', [False, True])
