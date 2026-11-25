@@ -1,0 +1,43 @@
+{
+  "case": "native-desktop-scripted-same-request-reconsideration",
+  "user_message": "Please help me find a safe next step for the heater.",
+  "ipc_status": {
+    "status": "client_acknowledged"
+  },
+  "checkpoint": {
+    "status": "completed",
+    "blocker": "",
+    "unsupported_retries": 1,
+    "selected_draft_present": true,
+    "pickup_started": true
+  },
+  "fixture_events": [
+    {
+      "event": "scripted_decision",
+      "reconsideration_feedback_visible": false,
+      "text": "I cannot establish a safe next step from the available information."
+    },
+    {
+      "event": "verification",
+      "outcome": "injected_rejection"
+    },
+    {
+      "event": "scripted_decision",
+      "reconsideration_feedback_visible": true,
+      "text": "A ping only confirms that a host responded, not that it is the heater or that it supports control. Please share the heater model or its manual so I can help identify a documented, safe next step."
+    },
+    {
+      "event": "verification",
+      "outcome": "accepted"
+    }
+  ],
+  "model": "scripted synthetic provider",
+  "usage": "two scripted decisions; reported 100 input and 20 output tokens each are synthetic, not real usage",
+  "cost": "no external provider",
+  "limitations": [
+    "The first verification rejection was injected by the fixture.",
+    "This receipt records IPC acknowledgement and checkpoint state; it does not independently verify the visual UI.",
+    "No live model, Jev, device, household data, or network tool was used.",
+    "This scripted sequence does not establish semantic model performance, general reliability, or real device safety."
+  ]
+}

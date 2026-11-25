@@ -29,6 +29,15 @@ it("offers a recovery route only when one was supplied for this request", () => 
     projectName: "", memoize: false, renderMarkdown: false,
     failures: [{ messageId: message.id, failureCode: "time_limit", dismissed: false }],
     onFailureDismissedChange: () => {} };
-  expect(renderToStaticMarkup(<ConversationTimelineEntry {...common} />)).not.toContain("Review unfinished work");
-  expect(renderToStaticMarkup(<ConversationTimelineEntry {...common} onReviewRecovery={() => {}} />)).toContain("Review unfinished work");
+  expect(renderToStaticMarkup(<ConversationTimelineEntry {...common} />)).not.toContain("Review request status");
+  expect(renderToStaticMarkup(<ConversationTimelineEntry {...common} onReviewRecovery={() => {}} />)).toContain("Review request status");
+});
+
+it("places the failure before its closed work log, with an honest unverified-answer message", () => {
+  const message: ChatMessage = { id: "a".repeat(32), role: "user", content: "What should we do next?" };
+  const html = renderToStaticMarkup(<ConversationTimelineEntry message={message} questions={[]} user="owner" timezone="UTC" onDone={async () => {}} projectName="" memoize={false} renderMarkdown={false} failures={[{messageId: message.id, failureCode: "answer_unverified", dismissed: false}]} onFailureDismissedChange={() => {}} workLogRequest={async () => ({}) as never} />);
+  expect(html).toContain("The specific reason was not recorded.");
+  expect(html).not.toContain("could not verify enough source information");
+  expect(html.indexOf("Alphonse could not complete this request")).toBeLessThan(html.indexOf('class="conversation-work-log"'));
+  expect(html).toMatch(/<details id="conversation-work-log-[^"]+" class="conversation-work-log">/);
 });

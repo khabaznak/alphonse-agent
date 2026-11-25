@@ -24,7 +24,7 @@ it("offers only explicitly available recovery controls", () => {
   const container = document.createElement("div"); const root = createRoot(container);
   const review = vi.fn();
   act(() => root.render(<ConversationFailure message="Stopped" dismissed={false} onDismissedChange={() => {}} onReviewRecovery={review} />));
-  const button = [...container.querySelectorAll("button")].find((item) => item.textContent === "Review unfinished work");
+  const button = [...container.querySelectorAll("button")].find((item) => item.textContent === "Review request status");
   expect(button).toBeTruthy(); act(() => button!.click()); expect(review).toHaveBeenCalledOnce();
   expect(container.textContent).not.toContain("Open model settings");
   act(() => root.unmount());

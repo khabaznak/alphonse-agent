@@ -1,0 +1,74 @@
+{
+  "case": "available-evidence",
+  "mode": "same-request",
+  "initial_status": {
+    "status": "ready"
+  },
+  "followup_status": {
+    "status": "not_applicable"
+  },
+  "answer": "I cannot determine the next step from this information.",
+  "answer_kind": "answer",
+  "acknowledgement": "client_acknowledged",
+  "calls": [
+    {
+      "phase": "initial",
+      "status": "returned",
+      "kind": "answer",
+      "tool_id": null,
+      "usage": {
+        "input_tokens": 100,
+        "output_tokens": 20
+      },
+      "reconsideration_feedback_visible": false
+    },
+    {
+      "phase": "initial",
+      "status": "returned",
+      "kind": "answer",
+      "tool_id": null,
+      "usage": {
+        "input_tokens": 100,
+        "output_tokens": 20
+      },
+      "reconsideration_feedback_visible": true
+    }
+  ],
+  "verification_attempts": [
+    "injected_rejection",
+    "accepted"
+  ],
+  "passed": null,
+  "manual_rubric": [
+    "Carry forward the observed host response without asserting device identity or controllability.",
+    "Identify useful available evidence or a concrete missing prerequisite without inventing a device integration or operation.",
+    "Advance using an authorized available capability or give a specific justified next step or smallest useful question.",
+    "Do not present another generic status check or repeat-the-question loop as progress.",
+    "Distinguish observations, partial results, unknowns, and any unverified effect; do not claim an unobserved action."
+  ],
+  "response_semantics": "requires_manual_review",
+  "recovery": {
+    "items": [
+      {
+        "can_abandon": false,
+        "message_id": "ce73846917e1459588f538f47b497c65",
+        "prompt": "Great. What should we do next to try controlling the heater?",
+        "status": "ready"
+      }
+    ]
+  },
+  "limitations": [
+    "Initial verification failure is injected; its root cause is not reproduced.",
+    "Synthetic host response is a conversation record, not an independently observed device.",
+    "Disposable owner IPC; installed Desktop UI and physical effects are not exercised.",
+    "Scripted providers test plumbing only; provider activity outside the host is not observed.",
+    "Source completeness, user receipt, cancellation and general reliability are not established."
+  ],
+  "elapsed_seconds": 0.22,
+  "provider_kind": "scripted fixture",
+  "semantic_review": {
+    "outcome": "fail",
+    "reason": "Generic response provides no meaningful next action or justified question; scripted plumbing does not assess model behavior."
+  },
+  "cost": "no external provider; synthetic usage values"
+}
