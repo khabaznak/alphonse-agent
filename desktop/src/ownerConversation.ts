@@ -38,23 +38,23 @@ export function ownerUnavailableMessage(reason?: string | null): string {
 export function ownerFailureMessage(code?: string): string {
   const messages: Record<string, string> = {
     cancel_requested: "Cancellation was requested.",
-    time_limit: "The request reached its time limit before completion. Review unfinished work before trying again.",
-    model_unavailable: "The model step failed; its specific cause was not recorded. Check model settings and unfinished work before trying again.",
+    time_limit: "The request reached its time limit before completion.",
+    model_unavailable: "The model step failed; its specific cause was not recorded.",
     model_not_configured: "No model is configured for this request. Check inference settings.",
     model_cli_missing: "The configured model command could not be found. Check the Codex CLI installation and inference settings.",
     model_auth_unverified: "The model provider's sign-in could not be verified. Check the Codex CLI sign-in and inference settings.",
     model_auth_required: "The model provider requires sign-in. Check the Codex CLI sign-in and inference settings.",
     model_cli_upgrade_required: "The model command needs an update. Check the Codex CLI and inference settings.",
-    model_timeout: "The model provider did not finish within its time limit. Review unfinished work before trying again.",
-    model_empty_response: "The model returned an empty response. Review unfinished work before trying again.",
-    model_response_invalid: "The model response could not be read in the required format. Review unfinished work before trying again.",
-    input_reservation_limit: "The request context exceeded the reserved model input limit. Review unfinished work before trying a smaller request.",
-    output_reservation_limit: "The model response exceeded the reserved output limit. Review unfinished work before trying again.",
+    model_timeout: "The model provider did not finish within its time limit.",
+    model_empty_response: "The model returned an empty response.",
+    model_response_invalid: "The model response could not be read in the required format.",
+    input_reservation_limit: "The request context exceeded the reserved model input limit.",
+    output_reservation_limit: "The model response exceeded the reserved output limit.",
     usage_unconfirmed: "Model usage could not be verified.",
     usage_limit_exceeded: "The model exceeded the request's usage limit.",
-    model_call_limit: "The next model call could not be reserved within this request's limit. Review unfinished work before trying again.",
-    input_budget_limit: "The next model input could not be reserved within this request's budget. Review unfinished work before trying again.",
-    output_budget_limit: "The next model output could not be reserved within this request's budget. Review unfinished work before trying again.",
+    model_call_limit: "The next model call could not be reserved within this request's limit.",
+    input_budget_limit: "The next model input could not be reserved within this request's budget.",
+    output_budget_limit: "The next model output could not be reserved within this request's budget.",
     source_unavailable: "A needed source was unavailable or access was denied.",
     source_changed: "A source changed or access was revoked during the request.",
     source_incomplete: "A source could not be verified as complete.",
@@ -65,7 +65,7 @@ export function ownerFailureMessage(code?: string): string {
     clarification_review_unavailable: "The clarification check is unavailable, so the follow-up question was not sent.",
   };
   return (code && Object.prototype.hasOwnProperty.call(messages, code))
-    ? messages[code] : "This conversation needs attention; its result may be unavailable or unconfirmed.";
+    ? messages[code] : "The request could not be completed; its result may be unavailable or unconfirmed.";
 }
 
 /** A confirmed failed request can be displayed beside its own message. */

@@ -452,6 +452,8 @@ class V2DaemonServer:
                     result = self._owner_ack_draft(connection, request)
                 elif isinstance(request, dict) and request.get('method') == 'experimental_owner_status':
                     result = self._owner_status(connection, request)
+                elif isinstance(request, dict) and request.get('method') == 'experimental_owner_work_log':
+                    result = self._owner_work_log(connection, request)
                 elif isinstance(request, dict) and request.get('method') == 'experimental_owner_cancel_schedule':
                     result = self._owner_cancel_schedule(connection, request)
                 elif isinstance(request, dict) and request.get('method') == 'legacy_state_inventory':
@@ -816,6 +818,22 @@ class V2DaemonServer:
             raise ValueError('owner_recovery_payload_denied')
         self._local_peer_uid(connection)
         return {'items': self.daemon.owner_recovery_list()}
+
+    def _owner_work_log(self, connection, request):
+        if not self.experimental_owner_ingress:
+            raise PermissionError('owner_work_log_unavailable')
+        if request.get('version') != PROTOCOL_VERSION:
+            raise ValueError('daemon_protocol_version_unsupported')
+        params = request.get('params')
+        if not isinstance(params, dict) or set(params) != {'message_id'}:
+            raise ValueError('owner_work_log_unavailable')
+        self._local_peer_uid(connection)
+        from .core.intelligence.simple_loop.owner_work_log import owner_work_log
+        try:
+            return owner_work_log(self.daemon.runtime.queue, params['message_id'])
+        except Exception:
+            # Do not expose database paths or checkpoint content over IPC.
+            raise ValueError('owner_work_log_unavailable') from None
 
     def _owner_continuation(self, connection, request):
         if (not self.experimental_owner_ingress or not getattr(self.daemon, 'experimental_owner_only', False)

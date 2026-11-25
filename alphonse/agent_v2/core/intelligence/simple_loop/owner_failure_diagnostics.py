@@ -129,8 +129,18 @@ def recent_owner_failures(queue, events, *, actor: str, project_id: str, current
             # Internal legacy category names (e.g. model_unavailable) can
             # overstate the evidence. Give the model the fixed description,
             # not the code or raw blocker.
-            result.append({'message_id': message_id, 'description': _DESCRIPTIONS[code],
-                           'effects': 'not established by this diagnostic'})
+            diagnostic = {'message_id': message_id, 'description': _DESCRIPTIONS[code],
+                          'effects': 'not established by this diagnostic'}
+            try:
+                # Reuse the same sanitized, actor-bound activity available to
+                # Desktop. Never copy raw arguments, outputs or provider text.
+                from .owner_work_log import owner_work_log
+                activity = owner_work_log(queue, message_id)['events']
+                diagnostic['recorded_activity'] = activity[-10:]
+                diagnostic['earlier_activity_omitted'] = len(activity) > 10
+            except Exception:
+                diagnostic['recorded_activity'] = 'unavailable'
+            result.append(diagnostic)
             if len(result) == 3:
                 break
     result.reverse()

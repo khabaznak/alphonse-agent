@@ -189,6 +189,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const [ownerQuestionScope, setOwnerQuestionScope] = useState("");
   const [ownerReplyTarget, setOwnerReplyTarget] = useState("");
   const [ownerRecoveryStopping, setOwnerRecoveryStopping] = useState("");
+  const [ownerRecoveryFocus, setOwnerRecoveryFocus] = useState("");
   const ownerRecoveryGeneration = useRef(0);
   const ownerQuestionGeneration = useRef(0);
   const ownerConversation = useMemo(() =>
@@ -893,12 +894,21 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       })),
     ).map((item) => {
       if (item.kind === "message") {
-        return <ConversationTimelineEntry key={item.key} message={item.message} questions={questions} user={user} timezone={timezone} onDone={poll} projectName={contextProjects.find((projectItem) => projectItem.project_id === item.message.project_id)?.name || ""} memoize={diagnosticBehavior.memoizesMessages} renderMarkdown={!diagnosticBehavior.plainTextMessages} failures={ownerFailures} onFailureDismissedChange={(messageId, dismissed) => updateOwnerFailures((current) => current.map((entry) => entry.messageId === messageId ? { ...entry, dismissed } : entry))} />;
+        return <ConversationTimelineEntry key={item.key} message={item.message} questions={questions} user={user} timezone={timezone} onDone={poll} projectName={contextProjects.find((projectItem) => projectItem.project_id === item.message.project_id)?.name || ""} memoize={diagnosticBehavior.memoizesMessages} renderMarkdown={!diagnosticBehavior.plainTextMessages} failures={ownerFailures} workLogRequest={isAdmin && connected ? daemonRequest : undefined} active={ownerConversationWorking && item.message.id === activeConversationMessageId} onReviewRecovery={isAdmin && ownerRecoveryItems.some((entry) => entry.message_id === item.message.id) ? (id) => { setOwnerRecoveryFocus(id); navigate("attention"); } : undefined} onOpenModelSettings={isAdmin ? () => { setSettingsTab("model"); navigate("settings"); } : undefined} onFailureDismissedChange={(messageId, dismissed) => updateOwnerFailures((current) => current.map((entry) => entry.messageId === messageId ? { ...entry, dismissed } : entry))} />;
       }
       const archivedSurface = archivedProgress[item.taskId];
       const surface = archivedSurface || surfaces[`task-progress:${item.taskId}`];
       return surface ? <TaskProgressBubble key={item.key} surface={surface} archived={Boolean(archivedSurface)} connected={connected} timezone={timezone} /> : null;
-    }), [archivedProgress, clientId, connected, contextProjects, diagnosticBehavior.memoizesMessages, diagnosticBehavior.plainTextMessages, messages, ownerConversation, ownerFailures, poll, progressTaskIds, questionTaskIds, questions, surfaces, timelineRenderVersion, timezone, user]);
+    }), [archivedProgress, clientId, connected, contextProjects, diagnosticBehavior.memoizesMessages, diagnosticBehavior.plainTextMessages, messages, ownerConversation, ownerFailures, ownerRecoveryItems, ownerConversationWorking, activeConversationMessageId, isAdmin, poll, progressTaskIds, questionTaskIds, questions, surfaces, timelineRenderVersion, timezone, user]);
+
+  useEffect(() => {
+    if (workspace !== "attention" || !ownerRecoveryFocus) return;
+    const frame = window.requestAnimationFrame(() => {
+      document.getElementById(`owner-recovery-${ownerRecoveryFocus}`)?.focus();
+      setOwnerRecoveryFocus("");
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [workspace, ownerRecoveryFocus]);
 
   useEffect(() => {
     if (workspace !== "conversation" || !questionFocusRef.current) return;

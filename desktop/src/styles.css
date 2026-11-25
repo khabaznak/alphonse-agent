@@ -1761,3 +1761,8 @@ button.mockup-skill-card > p { flex: 1; }
 .conversation-suggestion button { padding: 6px 11px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-raised); color: var(--text); font-weight: 600; }
 .conversation-draft-review { margin: 8px 0; padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-subtle); font-size: 12px; }
 .conversation-draft-review button { margin-left: 4px; }
+.conversation-work-log { align-self: flex-start; max-width: min(42rem, 90%); margin: .25rem 0 .75rem; color: var(--text-muted, #64716a); font-size: .85rem; }
+.conversation-work-log summary { cursor: pointer; font-weight: 600; }
+.conversation-work-log ol { padding-left: 1.4rem; margin: .5rem 0; }
+.conversation-work-log li { margin: .25rem 0; }
+.conversation-work-log small { display: block; }
