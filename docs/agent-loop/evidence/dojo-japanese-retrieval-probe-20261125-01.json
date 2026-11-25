@@ -1,0 +1,147 @@
+{
+  "direct_fts_indexed_terms": [
+    "ですね",
+    "に決めました",
+    "に決め直しました",
+    "予定を変更します",
+    "変更後の家族映画は",
+    "家族映画は",
+    "月の庭",
+    "週末の家族映画は",
+    "青い灯台"
+  ],
+  "direct_fts_results": [
+    {
+      "match": "\"家族映画\" OR \"週末\" OR \"決めた\"",
+      "older_records_matched": 0,
+      "query": "家族映画 週末 決めた"
+    },
+    {
+      "match": "\"週末\" OR \"家族映画\" OR \"映画\" OR \"決めた\"",
+      "older_records_matched": 0,
+      "query": "週末 家族映画 映画 決めた"
+    },
+    {
+      "match": "\"家族映画\"",
+      "older_records_matched": 0,
+      "query": "家族映画"
+    },
+    {
+      "match": "\"月の庭\"",
+      "older_records_matched": 2,
+      "query": "月の庭"
+    },
+    {
+      "match": "\"家族映画は\"",
+      "older_records_matched": 2,
+      "query": "家族映画は"
+    }
+  ],
+  "fixture": "japanese-owner-change",
+  "limitations": [
+    "Isolated reproduction, not the original live tool observations.",
+    "Direct FTS probe indexes only the older records; the tool probe uses the full synthetic history.",
+    "Results do not assess relevance on a broader corpus, model behavior, or general language reliability.",
+    "Complete snapshot coverage does not establish semantic recall."
+  ],
+  "search_results": [
+    {
+      "backend": "sqlite_fts5",
+      "coverage": {
+        "conversation": "complete"
+      },
+      "excerpts": [],
+      "later_owner_choice_returned": false,
+      "next_offset": null,
+      "query": "家族映画 週末 決めた",
+      "status": "empty",
+      "terms": [
+        "家族映画",
+        "週末",
+        "決めた"
+      ],
+      "total_matches": 0
+    },
+    {
+      "backend": "sqlite_fts5",
+      "coverage": {
+        "conversation": "complete"
+      },
+      "excerpts": [],
+      "later_owner_choice_returned": false,
+      "next_offset": null,
+      "query": "週末 家族映画 映画 決めた",
+      "status": "empty",
+      "terms": [
+        "週末",
+        "家族映画",
+        "映画",
+        "決めた"
+      ],
+      "total_matches": 0
+    },
+    {
+      "backend": "sqlite_fts5",
+      "coverage": {
+        "conversation": "complete"
+      },
+      "excerpts": [
+        "予定を変更します。家族映画は「月の庭」に決め直しました。",
+        "変更後の家族映画は「月の庭」ですね。",
+        "家族映画は「青い灯台」ですね。",
+        "家族映画はまだ決まっていません。",
+        "週末の家族映画は「青い灯台」に決めました。",
+        "週末の家族映画は最後に決めたままでお願いします。"
+      ],
+      "later_owner_choice_returned": true,
+      "next_offset": null,
+      "query": "家族映画",
+      "status": "found",
+      "terms": [
+        "家族映画"
+      ],
+      "total_matches": 6
+    },
+    {
+      "backend": "sqlite_fts5",
+      "coverage": {
+        "conversation": "complete"
+      },
+      "excerpts": [
+        "予定を変更します。家族映画は「月の庭」に決め直しました。",
+        "変更後の家族映画は「月の庭」ですね。"
+      ],
+      "later_owner_choice_returned": true,
+      "next_offset": null,
+      "query": "月の庭",
+      "status": "found",
+      "terms": [
+        "月の庭"
+      ],
+      "total_matches": 2
+    },
+    {
+      "backend": "sqlite_fts5",
+      "coverage": {
+        "conversation": "complete"
+      },
+      "excerpts": [
+        "予定を変更します。家族映画は「月の庭」に決め直しました。",
+        "変更後の家族映画は「月の庭」ですね。",
+        "家族映画は「青い灯台」ですね。",
+        "家族映画はまだ決まっていません。",
+        "週末の家族映画は「青い灯台」に決めました。",
+        "週末の家族映画は最後に決めたままでお願いします。"
+      ],
+      "later_owner_choice_returned": true,
+      "next_offset": null,
+      "query": "家族映画は",
+      "status": "found",
+      "terms": [
+        "家族映画は"
+      ],
+      "total_matches": 6
+    }
+  ],
+  "synthetic": true
+}
