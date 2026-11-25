@@ -25,7 +25,7 @@ export function OwnerRecovery({ items, stopping, onStop, onShow }: {
   return <section aria-label="Unfinished owner requests" className="owner-recovery">
     <h3>Unfinished requests</h3>
     <p>Requests are not retried automatically. You can stop an unfinished request after it is no longer running. An unconfirmed answer may already have been shown.</p>
-    <ul>{items.map((item) => <li key={item.message_id}>
+    <ul>{items.map((item) => <li key={item.message_id} id={`owner-recovery-${item.message_id}`} tabIndex={-1}>
       <span>{item.prompt || "Untitled request"}</span>{" — "}
       <span>{item.status === "ready" && item.can_abandon ? "Answer unavailable; request expired" : (labels[item.status] || "Needs attention")}</span>{" "}
       {item.committed_effect && <span>{item.committed_effect.name} </span>}

@@ -44,6 +44,38 @@ is a separate path and is not proof that a notice was durably displayed.
 
 ## Initial development observations
 
+The `work_log` case asks about a prior synthetic agreement and injects a model
+failure after the first model-selected tool action. It does not require a
+particular tool. It reads the owner IPC work-log and recovery list and checks
+that an unknown request cannot be inspected. The [real-model attempt](evidence/dojo-work-log-20261125-01.json)
+selected conversation search, and the work log reported that observation and
+the blocked request without exposing search arguments. The recovery list
+contained the failed request but did not permit abandonment. The subsequent
+answer reported a model failure but could not identify the failed request and
+asked for clarification. The attempt took 31.258 seconds and used four reported
+model calls across the initial and follow-up requests (116,236 input and 515
+output tokens reported); one additional model failure was injected. This is an IPC observation, not a Desktop-rendering test,
+semantic success, or evidence about real effects or privacy beyond the tested
+unknown-request rejection. The client acknowledged the follow-up draft.
+
+Run this case with `--case work_log`. The retained log is a sanitized projection
+of checkpointed observations, not a complete chronological audit of model
+intentions. Missing, denied or malformed checkpoints remain unavailable; shell
+effects are unconfirmed. A separate Desktop test checks the presentation and
+conditional recovery button.
+
+After adding the same sanitized activity to an authorized follow-up's context,
+the [second attempt](evidence/dojo-work-log-20261125-02.json) again exposed the
+recorded search in IPC and returned a matching recovery item with abandonment
+unavailable. The follow-up mentioned a recorded history search and an unknown
+model failure, but still could not identify which earlier request failed and
+asked for clarification. It took 20.242 seconds and reported 64,679 input and
+339 output tokens across three model calls; a further failure was injected.
+The client acknowledged the answer. This is a known behavioral gap, not a
+complete self-diagnosis pass. A subsequent scripted test also changes the
+disposable fixture's admin identity and checks that access is rejected; this
+does not establish protection against a same-UID host process or other channels.
+
 In the [elapsed attempt](evidence/dojo-failure-elapsed-20261125-01.json), the
 initial IPC status reported `time_limit`; the follow-up described the time
 limit, lack of a completed summary and uncertainty about effects. It took 7.348

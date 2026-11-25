@@ -22,3 +22,13 @@ it("restores a dismissed failure only beneath its original request after reloadi
   expect(html.match(/Request failed · View details/g)).toHaveLength(1);
   expect(render("other")).not.toContain("Request failed · View details");
 });
+
+it("offers a recovery route only when one was supplied for this request", () => {
+  const message: ChatMessage = { id: "a".repeat(32), role: "user", content: "Request" };
+  const common = { message, questions: [], user: "owner", timezone: "UTC", onDone: async () => {},
+    projectName: "", memoize: false, renderMarkdown: false,
+    failures: [{ messageId: message.id, failureCode: "time_limit", dismissed: false }],
+    onFailureDismissedChange: () => {} };
+  expect(renderToStaticMarkup(<ConversationTimelineEntry {...common} />)).not.toContain("Review unfinished work");
+  expect(renderToStaticMarkup(<ConversationTimelineEntry {...common} onReviewRecovery={() => {}} />)).toContain("Review unfinished work");
+});

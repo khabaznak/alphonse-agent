@@ -26,7 +26,7 @@ from alphonse.agent_v2.users import V2UserStore
 
 INITIAL = 'Please summarize our imaginary plan for the community picnic.'
 FOLLOWUP = 'What happened with my previous request?'
-CASES = ('elapsed', 'model_failure')
+CASES = ('elapsed', 'model_failure', 'work_log')
 
 
 def _wait(client, message, timeout):
@@ -46,8 +46,10 @@ def run(router: InferenceRouter, case: str, *, timeout: float = 30) -> dict:
     calls = []
     original = router.generate_json
     initial_phase = True
+    saw_tool = False
     def provider(request):
-        if initial_phase and case == 'model_failure':
+        nonlocal saw_tool
+        if initial_phase and (case == 'model_failure' or (case == 'work_log' and saw_tool)):
             calls.append({'phase': 'initial', 'status': 'injected_failure'})
             raise RuntimeError('synthetic provider fault')
         try:
@@ -56,6 +58,8 @@ def run(router: InferenceRouter, case: str, *, timeout: float = 30) -> dict:
             calls.append({'phase': 'initial' if initial_phase else 'followup', 'status': 'provider_error'})
             raise
         value = result.json_value if isinstance(result.json_value, dict) else {}
+        if initial_phase and value.get('kind') == 'tool':
+            saw_tool = True
         calls.append({'phase': 'initial' if initial_phase else 'followup', 'status': 'returned',
                       'kind': value.get('kind'), 'tool_id': value.get('tool_id'),
                       'usage': dict(result.usage or {})})
@@ -66,10 +70,18 @@ def run(router: InferenceRouter, case: str, *, timeout: float = 30) -> dict:
             root = Path(directory)
             db = root / 'owner.sqlite'
             users = V2UserStore(db)
-            users.onboard(display_name='Synthetic owner', users_root=root / 'users')
+            owner = users.onboard(display_name='Synthetic owner', users_root=root / 'users')
             queue = SQLiteMessageQueue(db, experimental_claim_fencing=True)
+            conversation = SQLiteConversationStore(db)
+            if case == 'work_log':
+                conversation.record(owner_user_id=owner.user_id, role='user',
+                    content='The imaginary picnic plan was to bring a blue blanket.', source='desktop',
+                    source_message_id='dojo:old-plan')
+                for index in range(18):
+                    conversation.record(owner_user_id=owner.user_id, role='user' if index % 2 == 0 else 'assistant',
+                        content=f'Synthetic unrelated note {index}.', source='desktop', source_message_id=f'dojo:filler:{index}')
             runtime = build_runtime_host(user_store=users, messages=queue,
-                question_store=SQLiteQuestionStore(db), conversation_store=SQLiteConversationStore(db),
+                question_store=SQLiteQuestionStore(db), conversation_store=conversation,
                 outbox=SQLiteOutboundStore(db), inference=router, experimental_owner_read=True,
                 owner_selected_draft_sink=lambda *_: None)
             candidate = runtime.processor.owner_read_candidate
@@ -86,7 +98,8 @@ def run(router: InferenceRouter, case: str, *, timeout: float = 30) -> dict:
             daemon.start()
             try:
                 client = V2DaemonClient(root / 'owner.sock')
-                first = client.request('experimental_owner_ingress', prompt=INITIAL)['message_id']
+                goal = 'What did we decide to bring to the imaginary picnic?' if case == 'work_log' else INITIAL
+                first = client.request('experimental_owner_ingress', prompt=goal)['message_id']
                 first_status = _wait(client, first, timeout)
                 with sqlite3.connect(f'file:{db}?mode=ro', uri=True) as conn:
                     row = conn.execute('SELECT task_state_json FROM v2_task_checkpoints WHERE task_id=?', (first,)).fetchone()
@@ -105,6 +118,33 @@ def run(router: InferenceRouter, case: str, *, timeout: float = 30) -> dict:
                               'A scripted provider exercises plumbing only; real model responses require semantic review.',
                               'Provider behavior outside the host and client receipt by a human are not observed.',
                               'One attempt does not establish general reliability.']}
+                if case == 'work_log':
+                    try:
+                        report['work_log'] = client.request('experimental_owner_work_log', message_id=first)
+                    except Exception:
+                        report['work_log'] = None
+                    try:
+                        client.request('experimental_owner_work_log', message_id='f' * 32)
+                        report['unknown_request_rejected'] = False
+                    except Exception:
+                        report['unknown_request_rejected'] = True
+                    # Disposable identity mutation tests the server-side actor
+                    # fence, then restores the fixture before the follow-up.
+                    with sqlite3.connect(db) as conn:
+                        conn.execute("UPDATE v2_user_settings SET value=? WHERE key='admin_user_id'", ('other-owner',))
+                    try:
+                        client.request('experimental_owner_work_log', message_id=first)
+                        report['foreign_actor_rejected'] = False
+                    except Exception:
+                        report['foreign_actor_rejected'] = True
+                    finally:
+                        with sqlite3.connect(db) as conn:
+                            conn.execute("UPDATE v2_user_settings SET value=? WHERE key='admin_user_id'", (owner.user_id,))
+                    try:
+                        report['recovery'] = client.request('experimental_owner_recovery_list')
+                    except Exception:
+                        report['recovery'] = None
+                    report['limitations'].append('A fault is injected after the first model-selected tool action; no tool route is prescribed.')
                 if first_status.get('status') not in {'failed', 'blocked'}:
                     report['followup_ipc'] = {'status': 'not_attempted'}
                     return report
