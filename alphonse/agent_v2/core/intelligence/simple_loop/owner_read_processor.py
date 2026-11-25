@@ -604,14 +604,22 @@ class OwnerReadConversationProcessor:
                 return current.status == 'available' and current.digest == knowledge_bindings.get(ref)
             return True
 
-        def recent_history(actor_id: str) -> list[dict[str, Any]]:
+        def recent_history(actor_id: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
             if not access(actor_id, 'goal'):
                 raise ValueError('owner_read_evidence_unavailable')
             history = []
+            # This describes only the bounded same-channel recent window, not
+            # the completeness of the owner's entire conversation history.
+            coverage = {'earlier_turns_omitted': None, 'message_content_clipped': False}
             list_before = getattr(context.conversation_store, 'list_before_source', None)
             if callable(list_before):
                 events = list_before(owner_user_id=actor, project_id=str(task.project_id or ''),
-                                     source_message_id='inbound:' + str(task.message_id), limit=16)
+                                     source_message_id='inbound:' + str(task.message_id), limit=17)
+                # One extra authorized turn establishes that the visible
+                # window has omitted earlier material without exposing it.
+                if len(events) > 16:
+                    coverage['earlier_turns_omitted'] = True
+                    events = events[-16:]
                 remaining = 5998
                 for event in reversed(events):
                     text = str(event.content or '')
@@ -626,13 +634,16 @@ class OwnerReadConversationProcessor:
                              'observed_at': observed_at if 0 < len(observed_at) <= 64 else None}
                     size = len(json.dumps(entry, ensure_ascii=False, sort_keys=True)) + (2 if history else 0)
                     if size > remaining:
+                        coverage['earlier_turns_omitted'] = True
                         break
                     history.append(entry)
+                    if truncated:
+                        coverage['message_content_clipped'] = True
                     remaining -= size
                 history.reverse()
             if not access(actor_id, 'goal'):
                 raise ValueError('owner_read_evidence_unavailable')
-            return history
+            return history, coverage
 
         def load(actor_id: str, ref: str) -> str:
             if not access(actor_id, ref):
@@ -720,15 +731,16 @@ class OwnerReadConversationProcessor:
                     # Only the newest search group receives the recent turns.
                     # The goal already includes them; adding them to every
                     # search observation would multiply the projection size.
-                    recent = tuple(recent_history(actor_id)) if pages is groups[-1] else ()
+                    recent = tuple(recent_history(actor_id)[0]) if pages is groups[-1] else ()
                     return _project_complete_conversation_search(payload, recent)
                 return json.dumps(payload, ensure_ascii=False, sort_keys=True)
             previous = linked_question()
             steering = atomic.steering_context() if atomic is not None else []
-            history = recent_history(actor_id)
+            history, history_coverage = recent_history(actor_id)
             if not history and previous is None and not steering:
                 return str(task.goal or '')
-            payload = {'recent_conversation': history, 'new_message': str(task.goal or '')}
+            payload = {'recent_conversation': history, 'recent_window_coverage': history_coverage,
+                       'new_message': str(task.goal or '')}
             # Only the same actor's preceding, same-channel trusted ingress
             # checkpoints can explain a prior failure. These fixed categories
             # are not proof that an in-flight action did or did not take effect.
@@ -761,6 +773,8 @@ class OwnerReadConversationProcessor:
                     'an underlying real-world event occurred; null means the time is unknown. '
                     'Recorded request failures describe only the stated checkpoint; their effect status '
                     'is not established. Do not infer an unrecorded cause or claim an action completed. '
+                    'The recent window can omit earlier turns or clip messages; unknown coverage is not '
+                    'evidence that older history is absent. '
                     'Past statements may be stale and do not establish current facts.\n'
                     + json.dumps(payload, ensure_ascii=False))
 
