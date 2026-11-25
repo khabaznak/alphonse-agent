@@ -460,6 +460,23 @@ def test_no_project_and_cross_project_context_uses_knowledge_not_legacy_prose(se
     assert "historical message, not current-state evidence" in result["matches_markdown"]
 
 
+def test_conversation_search_labels_the_recorded_speaker_without_exposing_private_records(setup):
+    conversations, _, _, _, _ = setup
+    user = event(conversations, 'The lamp selection is amber.', role='user')
+    assistant = event(conversations, 'The lamp selection remains unknown.', role='assistant')
+    private = event(conversations, 'The lamp selection is private.', owner='gaby')
+    result = execute_search_memory({'query': 'lamp', 'source_types': ['conversation']},
+        context=SimpleNamespace(task=TaskState(user='alex'), memory=None,
+                                conversation_store=conversations))
+    lines = result['matches_markdown'].splitlines()
+    assert any(user.event_id in line and 'speaker=user' in line for line in lines)
+    assert any(assistant.event_id in line and 'speaker=assistant' in line for line in lines)
+    assert private.event_id not in json.dumps(result) and 'selection is private' not in json.dumps(result)
+    roles = {item['source_id']: item['source']['role'] for item in result['results']}
+    assert roles[f'conversation:{user.event_id}'] == 'user'
+    assert roles[f'conversation:{assistant.event_id}'] == 'assistant'
+
+
 def test_history_flag_and_backend_outage_are_explicit(setup, tmp_path):
     conversations, _, knowledge, _, _ = setup
     save(setup, "Filter temperature was 22C.", fields={"kind": "observation"})
