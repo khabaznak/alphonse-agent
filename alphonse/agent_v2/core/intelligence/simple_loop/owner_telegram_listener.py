@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import os
-import queue as thread_queue
 import math
 import threading
 import time
@@ -48,7 +47,7 @@ class TelegramOwnerListener:
         self._poller = None
         self.last_error = None
         self.activity_interval = activity_interval
-        self._receipts = thread_queue.Queue(maxsize=100)
+        self._receipts = threading.Event()
         self._receipt_stop = None
         self._receipt_rate_lock = threading.Lock()
         self._receipt_next_at = 0.0
@@ -87,7 +86,7 @@ class TelegramOwnerListener:
             self._stop.clear()
             # Each generation gets its own stop flag and queue; an old blocked
             # provider call cannot consume work from a restarted listener.
-            self._receipts = thread_queue.Queue(maxsize=100)
+            self._receipts = threading.Event()
             self._receipt_stop = threading.Event()
             self._thread = threading.Thread(target=self._run, name='alphonse-telegram-owner', daemon=True)
             self._thread.start()
@@ -127,38 +126,53 @@ class TelegramOwnerListener:
             raise RuntimeError('telegram_owner_reply_unconfirmed')
         return result
 
-    def _authorized_origin(self, message_id):
+    def _origin_locked(self, conn, message_id, *, finalized=False):
         from alphonse.agent_v2.core.intelligence.simple_loop.owner_telegram_ingress import verified_telegram_origin_locked
+        origin = verified_telegram_origin_locked(conn, message_id)
+        if origin is None and finalized:
+            # Only receipt feedback may use the finalized origin. Activity must
+            # remain tied to a live inbound task.
+            from alphonse.agent_v2.core.intelligence.simple_loop.owner_telegram_handoff import verify_finalized_telegram_reply_locked
+            if verify_finalized_telegram_reply_locked(conn, message_id):
+                row = conn.execute('SELECT * FROM v2_owner_telegram_ingress WHERE message_id=?', (message_id,)).fetchone()
+                origin = dict(row) if row is not None else None
+        return origin if origin and origin['integration_id'] == self.integration_id else None
+
+    def _authorized_origin(self, message_id):
         try:
             if self._stop.is_set() or self._record_revision(self._current()) != self._revision:
                 return None
             with self.queue._connect() as conn:
-                origin = verified_telegram_origin_locked(conn, message_id)
-            return origin if origin and origin['integration_id'] == self.integration_id else None
+                return self._origin_locked(conn, message_id)
         except Exception:
             return None
 
     def _queue_receipt(self, message_id):
-        """Record an at-most-once receipt attempt after accepted ingress."""
-        from alphonse.agent_v2.core.intelligence.simple_loop.owner_telegram_ingress import verified_telegram_origin_locked
-        with self.queue._connect() as conn:
-            conn.execute('BEGIN IMMEDIATE')
-            origin = verified_telegram_origin_locked(conn, message_id)
-            if origin is None or origin['integration_id'] != self.integration_id:
-                return
-            conn.execute('CREATE TABLE IF NOT EXISTS v2_owner_telegram_receipts (message_id TEXT PRIMARY KEY) STRICT')
-            first = conn.execute('INSERT OR IGNORE INTO v2_owner_telegram_receipts VALUES (?)', (message_id,)).rowcount == 1
-        if first:
-            try:
-                self._receipts.put_nowait(message_id)
-            except thread_queue.Full:
-                pass  # Feedback is optional and never backpressures ingestion.
+        """Wake the worker; ingress already committed the pending receipt."""
+        self._receipts.set()
+
+    @staticmethod
+    def _receipt_schema(conn):
+        from alphonse.agent_v2.core.intelligence.simple_loop.owner_telegram_ingress import ensure_telegram_receipt_schema
+        ensure_telegram_receipt_schema(conn)
 
     def _receipt_loop(self, stopped, receipts, client):
+        cursor = -1
         while not stopped.is_set():
             try:
-                message_id = receipts.get(timeout=.2)
-            except thread_queue.Empty:
+                with self.queue._connect() as conn:
+                    row = conn.execute("""SELECT r.message_id,i.update_id FROM v2_owner_telegram_receipts r
+                        JOIN v2_owner_telegram_ingress i ON i.message_id=r.message_id
+                        WHERE r.status='pending' AND i.integration_id=? AND i.update_id>?
+                        ORDER BY i.update_id LIMIT 1""", (self.integration_id, cursor)).fetchone()
+                if row is None:
+                    cursor = -1
+                    receipts.wait(.2)
+                    receipts.clear()
+                    continue
+                message_id, cursor = row['message_id'], row['update_id']
+            except Exception:
+                stopped.wait(.2)
                 continue
             if stopped.is_set():
                 break
@@ -176,8 +190,27 @@ class TelegramOwnerListener:
                     break
             if stopped.is_set():
                 break
-            origin = self._authorized_origin(message_id)
-            if origin is not None and not stopped.is_set():
+            if not stopped.is_set():
+                try:
+                    current = not self._stop.is_set() and self._record_revision(self._current()) == self._revision
+                except Exception:
+                    current = False
+                if not current:
+                    continue
+                try:
+                    with self.queue._connect() as conn:
+                        conn.execute('BEGIN IMMEDIATE')
+                        origin = self._origin_locked(conn, message_id, finalized=True)
+                        claimed = conn.execute("UPDATE v2_owner_telegram_receipts SET status=? WHERE message_id=? AND status='pending'", ('attempted' if origin is not None else 'discarded', message_id)).rowcount
+                except Exception:
+                    continue  # Leave pending for a later scan.
+                if not claimed or origin is None:
+                    continue
+                try:
+                    if stopped.is_set() or self._stop.is_set() or self._record_revision(self._current()) != self._revision:
+                        continue
+                except Exception:
+                    continue
                 try:
                     # This reaction records receipt only, not progress or
                     # completion. It remains truthful after any outcome.

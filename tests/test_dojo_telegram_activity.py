@@ -57,3 +57,47 @@ def test_cancelled_task_stops_activity_while_model_is_blocked():
     assert 'typing' in kinds[:kinds.index('cancellation_requested')]
     assert 'typing' not in kinds[kinds.index('cancellation_settled'):]
     assert 'reply' not in kinds
+
+
+def test_question_handoff_stops_activity_and_requests_input():
+    result = run(hold_seconds=.3, activity_interval=.1, needs_input=True)
+    events = result['events']
+    kinds = [event['kind'] for event in events]
+    replies = [event for event in events if event['kind'] == 'reply']
+    assert kinds.count('model_started') == 1
+    assert replies == [{'kind': 'reply', 'chat_id': '123', 'text': 'Which synthetic source?'}]
+    assert 'typing' in kinds[:kinds.index('model_released')]
+    assert 'typing' not in kinds[kinds.index('reply') + 1:]
+
+
+def test_delayed_typing_does_not_block_reply_or_replay_but_can_arrive_late():
+    result = run(hold_seconds=.2, activity_interval=.1, delay_typing=True)
+    kinds = [event['kind'] for event in result['events']]
+    assert kinds.count('model_started') == 1
+    assert kinds.count('typing_started') == 1
+    assert kinds.count('reply') == 1
+    assert kinds.index('typing_started') < kinds.index('model_released') < kinds.index('reply')
+    assert kinds.index('reply') < kinds.index('feedback_released') < kinds.index('typing')
+    assert 'typing_started' not in kinds[kinds.index('reply') + 1:]
+
+
+def test_delayed_receipt_does_not_block_reply_or_replay():
+    result = run(hold_seconds=.2, activity_interval=.1, delay_receipt=True)
+    kinds = [event['kind'] for event in result['events']]
+    assert kinds.count('model_started') == 1
+    assert kinds.count('receipt_started') == 1
+    assert kinds.count('reply') == 1
+    assert kinds.index('receipt_started') < kinds.index('model_released') < kinds.index('reply')
+    assert kinds.index('reply') < kinds.index('feedback_released') < kinds.index('reaction')
+    assert 'typing' not in kinds[kinds.index('reply') + 1:]
+
+
+def test_cancelled_delayed_typing_does_not_restart_after_release():
+    result = run(hold_seconds=.2, activity_interval=.1, cancel_task=True, delay_typing=True)
+    kinds = [event['kind'] for event in result['events']]
+    assert kinds.count('model_started') == 1
+    assert kinds.count('typing_started') == 1
+    assert 'reply' not in kinds
+    assert kinds.index('typing_started') < kinds.index('cancellation_requested')
+    assert kinds.index('cancellation_settled') < kinds.index('feedback_released') < kinds.index('typing')
+    assert 'typing_started' not in kinds[kinds.index('feedback_released') + 1:]

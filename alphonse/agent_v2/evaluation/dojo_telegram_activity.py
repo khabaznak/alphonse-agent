@@ -12,6 +12,7 @@ from pathlib import Path
 import tempfile
 import threading
 import time
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from alphonse.agent_v2.conversations import SQLiteConversationStore
@@ -55,13 +56,16 @@ def assess(events: list[dict], *, model_was_held: bool, completed: bool) -> dict
 
 
 def run(*, timeout: float = 12, hold_seconds: float = 6, feedback_failure: bool = False,
-        activity_interval: float = 4.0, model_failure: bool = False, cancel_task: bool = False) -> dict:
+        activity_interval: float = 4.0, model_failure: bool = False, cancel_task: bool = False,
+        needs_input: bool = False,
+        delay_typing: bool = False, delay_receipt: bool = False) -> dict:
     if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not 0 < timeout <= 60:
         raise ValueError('telegram_activity_timeout_invalid')
     if (isinstance(hold_seconds, bool) or not isinstance(hold_seconds, (int, float))
             or not 0 < hold_seconds < timeout):
         raise ValueError('telegram_activity_hold_invalid')
     entered, release = threading.Event(), threading.Event()
+    feedback_entered, feedback_release, feedback_finished = threading.Event(), threading.Event(), threading.Event()
     events = []
 
     class Provider:
@@ -73,7 +77,8 @@ def run(*, timeout: float = 12, hold_seconds: float = 6, feedback_failure: bool 
                 raise TimeoutError('synthetic held model timed out')
             if model_failure:
                 raise RuntimeError('synthetic model failure')
-            result = {'kind': 'answer', 'tool_id': None, 'arguments': None, 'text': 'Synthetic reply'}
+            result = {'kind': 'question' if needs_input else 'answer', 'tool_id': None, 'arguments': None,
+                      'text': 'Which synthetic source?' if needs_input else 'Synthetic reply'}
             return InferenceResult(json_value=result, raw_response=json.dumps(result),
                                    usage={'input_tokens': 100, 'output_tokens': 20})
 
@@ -85,12 +90,26 @@ def run(*, timeout: float = 12, hold_seconds: float = 6, feedback_failure: bool 
                      'text': 'Please check the synthetic report.', 'from': {'id': 123},
                      'chat': {'id': 123, 'type': 'private'}}}]
         def send_chat_action(self, *, chat_id, action):
+            if delay_typing:
+                events.append({'kind': 'typing_started'})
+                feedback_entered.set()
+                if not feedback_release.wait(timeout):
+                    raise TimeoutError('synthetic typing timeout')
             events.append({'kind': 'typing' if action == 'typing' else 'activity', 'chat_id': str(chat_id)})
+            if delay_typing:
+                feedback_finished.set()
         def set_message_reaction(self, *, chat_id, message_id, emoji):
+            if delay_receipt:
+                events.append({'kind': 'receipt_started'})
+                feedback_entered.set()
+                if not feedback_release.wait(timeout):
+                    raise TimeoutError('synthetic receipt timeout')
             if feedback_failure:
                 events.append({'kind': 'feedback_failed'})
                 raise RuntimeError('synthetic feedback failure')
             events.append({'kind': 'reaction', 'chat_id': str(chat_id), 'message_id': str(message_id), 'emoji': emoji})
+            if delay_receipt:
+                feedback_finished.set()
         def send_message(self, *, chat_id, text):
             events.append({'kind': 'reply', 'chat_id': str(chat_id), 'text': text})
             return 'synthetic-provider-ack'
@@ -110,6 +129,10 @@ def run(*, timeout: float = 12, hold_seconds: float = 6, feedback_failure: bool 
             conversation_store=SQLiteConversationStore(db), outbox=SQLiteOutboundStore(db), integration_store=store,
             inference=InferenceRouter(provider=Provider(), default_profile=ModelProfile('test', 'fixture', 'offline')),
             experimental_owner_read=True, owner_selected_draft_sink=lambda *_: None)
+        if needs_input:
+            # Exercise the question handoff with a deterministic, bounded
+            # judgment; this is not evidence of Jev's real-model performance.
+            runtime.core.system_one = SimpleNamespace(review_clarification_effect_claim=lambda **_: True)
         daemon = V2Daemon(runtime, daemon_id='telegram-activity-dojo', experimental_owner_only=True,
                           owner_telegram_enabled=True)
         daemon._acquire_single_instance_lock = lambda: None
@@ -129,6 +152,8 @@ def run(*, timeout: float = 12, hold_seconds: float = 6, feedback_failure: bool 
                 # can be recorded; no provider or user data leaves this process.
                 if held:
                     time.sleep(hold_seconds)
+                if delay_typing or delay_receipt:
+                    feedback_entered.wait(timeout)
                 if held and cancel_task:
                     daemon.kill_switch.request_cancel_status()
                     events.append({'kind': 'cancellation_requested'})
@@ -146,13 +171,23 @@ def run(*, timeout: float = 12, hold_seconds: float = 6, feedback_failure: bool 
                         break
                     time.sleep(.02)
                 completed = any(x['kind'] == 'reply' for x in events)
+                if needs_input and completed:
+                    time.sleep(activity_interval * 2 + .05)
+                if delay_typing or delay_receipt:
+                    events.append({'kind': 'feedback_released'})
+                    feedback_release.set()
+                    feedback_finished.wait(timeout)
+                    time.sleep(activity_interval * 2 + .05)
             finally:
                 release.set()
+                feedback_release.set()
                 daemon.stop()
         checks = assess(events, model_was_held=held, completed=completed)
         return {'case': CASE_ID, 'checks': checks, 'events': events, 'hold_seconds': hold_seconds,
                 'limitations': ['Fake Telegram client; provider delivery is not verified.',
                                 'Deterministic blocked model; real-model behavior is not measured.',
+                                'A question case uses a predetermined clarification judgment, not a real decision model.',
+                                'An already-started feedback call can finish after the terminal outcome; fake delivery is not Telegram delivery.',
                                 'One run does not establish reliability or exact timing guarantees.']}
 
 

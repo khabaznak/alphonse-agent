@@ -1,6 +1,7 @@
 """Synthetic Telegram polling through the actual owner worker and reply handoff."""
 from datetime import datetime, timezone
 import json
+import threading
 import time
 
 import pytest
@@ -57,7 +58,7 @@ def test_telegram_update_through_real_owner_worker_is_delivered_at_most_once(tmp
                                    usage={'input_tokens': 100, 'output_tokens': 20})
 
     class Client:
-        def __init__(self): self.sent = []
+        def __init__(self): self.sent = []; self.reactions = []
         def get_updates(self, *, offset, timeout):
             # Repeated provider responses test deduplication and offset handling.
             def update(update_id, date, text):
@@ -68,11 +69,18 @@ def test_telegram_update_through_real_owner_worker_is_delivered_at_most_once(tmp
             self.sent.append((chat_id, text))
             if uncertain: raise TimeoutError('synthetic timeout')
             return 'synthetic-provider-reply'
+        def set_message_reaction(self, **kwargs):
+            self.reactions.append(kwargs)
 
     from alphonse.agent_v2.core.intelligence.simple_loop import owner_telegram_listener as module
     real_listener = module.TelegramOwnerListener
+    receipt_gate = threading.Event()
+    class DelayedReceiptListener(real_listener):
+        def _receipt_loop(self, stopped, receipts, client):
+            receipt_gate.wait(10)
+            super()._receipt_loop(stopped, receipts, client)
     fake_client = Client()
-    monkeypatch.setattr(module, 'TelegramOwnerListener', lambda q, s, i: real_listener(
+    monkeypatch.setattr(module, 'TelegramOwnerListener', lambda q, s, i: DelayedReceiptListener(
         q, s, i, client_factory=lambda **_: fake_client,
         clock=lambda: datetime.fromtimestamp(1000, timezone.utc), poll_interval=.1))
     provider = Provider()
@@ -101,6 +109,14 @@ def test_telegram_update_through_real_owner_worker_is_delivered_at_most_once(tmp
             if reply_status == expected: break
             time.sleep(.03)
         assert reply_status == expected
+        if not uncertain:
+            with queue._connect() as conn:
+                message_id = conn.execute('SELECT message_id FROM v2_owner_telegram_ingress').fetchone()[0]
+            assert daemon._owner_telegram_listener.begin_activity(message_id) is None
+        receipt_gate.set()
+        deadline = time.monotonic() + 3
+        while not fake_client.reactions and time.monotonic() < deadline: time.sleep(.01)
+        assert fake_client.reactions == [{'chat_id': '123', 'message_id': '41', 'emoji': '👀'}]
         time.sleep(.3)
         assert fake_client.sent == [('123', 'Synthetic reply')]
         assert provider.calls == (2 if bash_enabled else 1)
@@ -110,4 +126,5 @@ def test_telegram_update_through_real_owner_worker_is_delivered_at_most_once(tmp
             assert conn.execute('SELECT count(*) FROM v2_owner_telegram_replies').fetchone()[0] == 1
             assert not conn.execute("SELECT 1 FROM sqlite_master WHERE name='v2_trusted_owner_ingress'").fetchone()
     finally:
+        receipt_gate.set()
         daemon.stop()
