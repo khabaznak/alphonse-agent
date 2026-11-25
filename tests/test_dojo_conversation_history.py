@@ -58,3 +58,28 @@ def test_owner_change_variant_preserves_later_owner_choice_without_claiming_sema
     assert result['expected_fact_mentioned'] is True
     assert result['decisions'][0]['historical_fact_visible_in_prompt'] is True
     assert result['passed'] is None and result['response_semantics'] == 'requires_manual_review'
+
+
+def test_heldout_old_decision_is_not_in_recent_prompt_but_confirmation_is():
+    class HeldoutProvider:
+        supports_image_input = False
+
+        def __init__(self):
+            self.prompts = []
+
+        def generate_json(self, request):
+            self.prompts.append(request.prompt)
+            decision = {'kind': 'answer', 'tool_id': None, 'arguments': None,
+                        'text': 'La donación era de cuatro cajas de cuentos infantiles; mi resumen anterior fue incorrecto.'}
+            return InferenceResult(json_value=decision, usage={'input_tokens': 100, 'output_tokens': 20})
+
+    provider = HeldoutProvider()
+    router = InferenceRouter(provider=provider, default_profile=ModelProfile('test', 'scripted', 'fixture'))
+    result = run_historical_correction(router, timeout=10, heldout=True)
+    assert result['case'] == 'historical-heldout'
+    assert result['status'] == 'ready' and result['acknowledgement'] == 'client_acknowledged'
+    assert result['decisions'][0]['historical_fact_visible_in_prompt'] is False
+    assert 'Confirmo que lo que acordamos' in provider.prompts[0]
+    assert 'Todavía no hemos decidido' in provider.prompts[0]
+    assert result['expected_fact_mentioned'] is True
+    assert result['passed'] is None and result['response_semantics'] == 'requires_manual_review'

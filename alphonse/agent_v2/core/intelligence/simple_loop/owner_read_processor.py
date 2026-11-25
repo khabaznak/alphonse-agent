@@ -639,15 +639,26 @@ class OwnerReadConversationProcessor:
                 # Bound recent context. Preserve both ends of long messages:
                 # a later correction or destination may be at the end.
                 # Historical text gives context, never new authority.
-                remaining = 6000
+                # Include metadata in the same bound as message content. An
+                # observed timestamp may be unknown (e.g. imported history);
+                # never substitute the record's ingestion time for it.
+                remaining = 5998  # JSON array delimiters
                 for event in reversed(events):
                     text = str(event.content or '')
+                    truncated = False
                     if len(text) > 1500:
                         text = text[:700] + '\n[... earlier turn truncated ...]\n' + text[-700:]
-                    if len(text) > remaining:
+                        truncated = True
+                    event_id = str(event.event_id or '')
+                    observed_at = str(event.observed_at or '')
+                    entry = {'role': event.role, 'content': text, 'content_truncated': truncated,
+                             'source_id': 'conversation:' + event_id if 0 < len(event_id) <= 240 else None,
+                             'observed_at': observed_at if 0 < len(observed_at) <= 64 else None}
+                    size = len(json.dumps(entry, ensure_ascii=False, sort_keys=True)) + (2 if history else 0)
+                    if size > remaining:
                         break
-                    history.append({'role': event.role, 'content': text})
-                    remaining -= len(text)
+                    history.append(entry)
+                    remaining -= size
                 history.reverse()
             if not history and previous is None and not steering:
                 return str(task.goal or '')
@@ -663,8 +674,10 @@ class OwnerReadConversationProcessor:
                     'shown order, including any changes or corrections; the user may change '
                     'the subject. Owner corrections are current additions to this request, '
                     'subject to the same authorization and effect checks. '
+                    'An observed_at value is the recorded observation time, not proof of when '
+                    'an underlying real-world event occurred; null means the time is unknown. '
                     'Past statements may be stale and do not establish current facts.\n'
-                    + json.dumps(payload, ensure_ascii=False, sort_keys=True))
+                    + json.dumps(payload, ensure_ascii=False))
 
         def record(actor_id: str, tool_id: str, args: dict[str, Any], result: dict[str, Any]) -> str:
             payload = result.get('result') if isinstance(result, dict) else None

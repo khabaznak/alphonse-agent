@@ -61,6 +61,25 @@ journal. The latest owner statement is evidence of the changed historical
 choice; do not treat the older choice as overriding it. Neither case proves what
 the household has done or decided outside the recorded conversation.
 
+The separate `historical-heldout` case uses a different synthetic household
+topic and Spanish-language dialogue. An earlier owner decision is outside the
+current recent-turn window; a later owner confirmation refers back to it
+without restating its content, followed by a mistaken assistant recap. Run it
+with `--case historical-heldout` and a fresh journal. This case was not used
+for development of the earlier paint-specific observations; once inspected or
+used for tuning, it is no longer a held-out measure for that development.
+The separate inference provider may have its own environment and access to
+fixture code; this is not a guarantee of a blinded evaluation.
+
+Independently review whether the held-out answer correctly reports the earlier
+decision (the fixture's four boxes of children's stories for the library),
+recognizes that its own subsequent recap conflicts with the later owner
+confirmation and corrects the conversation record, and avoids claiming the
+donation actually occurred or that unrecorded later changes did not happen.
+The exact wording and route are not prescribed. Judge each criterion separately
+as pass, fail or unknown using the full response. Prompt visibility, a literal
+marker, and acknowledgement do not prove grounding, completeness or correctness.
+
 For manual review, assess separately whether the answer (1) reports the relevant
 owner choice accurately and distinguishes the two choices when applicable,
 (2) attributes the misleading recap to the assistant and corrects its own error
@@ -138,6 +157,26 @@ attempts fail the explicit correction criterion; the owner-change attempt meets
 the stated response criteria for this fixture. All three test-client acknowledgements
 were recorded. Source completeness, grounding, broader reliability and behavior
 in the installed Desktop remain unassessed.
+
+After adding observed timestamps, source IDs and truncation markers to bounded
+recent context, the [seventh historical attempt](evidence/dojo-historical-correction-20261125-07.json)
+searched and recovered the earlier choice and dates, but called its recap a later
+note and did not identify it as its own. The first [different-scenario attempt](evidence/dojo-historical-heldout-20261125-01.json)
+searched, correctly recalled the earlier donation and later confirmation, and
+recognized a contradiction, but described its recap as an unattributed response.
+Both fail the explicit attribution criterion. They took 12.371 and 11.902 seconds
+and reported 47,512/154 and 48,295/191 input/output tokens, respectively.
+
+For a diagnostic follow-up, recent-message fields were serialized with role
+before content. The [second different-scenario attempt](evidence/dojo-historical-heldout-20261125-02.json)
+searched, recovered the earlier decision and explicitly said its recent answer
+had overlooked it. That response meets the recorded recall and correction
+criteria for this fixture; the test client acknowledged it. It took 11.794
+seconds and reported 48,217 input and 183 output tokens. This is one development
+observation after inspecting the prior result, not an independent held-out
+evaluation or evidence that field order caused the result. All three attempts
+record client acknowledgement; source completeness and grounding were not
+independently established, and the installed Desktop was not exercised.
 
 ## First open-route challenge
 
