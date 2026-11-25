@@ -45,13 +45,9 @@ CASES = {
 def run(router, case_id: str, *, timeout: float = 90) -> dict:
     if case_id not in CASES or case_id in base.CASES:
         raise ValueError('unknown_or_conflicting_case')
-    base.CASES[case_id] = CASES[case_id]
-    try:
-        result = base.run(router, case_id, timeout=timeout)
-        result['limitations'].append('Recorded synthetic history does not rule out unrecorded changes or prove external effects.')
-        return result
-    finally:
-        del base.CASES[case_id]
+    result = base.run(router, case_id, timeout=timeout, case_override=CASES[case_id])
+    result['limitations'].append('Recorded synthetic history does not rule out unrecorded changes or prove external effects.')
+    return result
 
 
 def main() -> None:
