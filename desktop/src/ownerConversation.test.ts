@@ -221,7 +221,7 @@ describe("explicit owner conversation transport", () => {
     });
     const client = new OwnerConversation(request as OwnerRequest);
     await client.send("hello");
-    await expect(client.poll(() => {})).rejects.toThrow("source could not be verified as complete");
+    await expect(client.poll(() => {})).rejects.toMatchObject({ messageId: id, failureCode: "source_incomplete", message: expect.stringContaining("source could not be verified as complete") });
     expect(request.mock.calls.filter(([method]) => method === "experimental_owner_take_draft")).toHaveLength(0);
     expect(client.hasPending()).toBe(false);
   });

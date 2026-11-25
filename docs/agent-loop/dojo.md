@@ -34,6 +34,13 @@ unknowns, interruptions and resource costs alongside passes; do not silently
 retry. An independent observable outcome does not automatically prove the
 agent's reasoning, its grounding or its safety in a different environment.
 
+## Messages while work is active
+
+The [enqueue and steer exercises](dojo-enqueue-and-steer.md) use disposable data
+to observe held follow-ups and updates to an active request. Their default scripted
+provider checks plumbing only; consult the exercise guide for setup, independent
+review, optional configured-model attempts, and limitations.
+
 ## Historical conversation correction
 
 The existing conversation-context runner also has a `historical-correction`

@@ -444,6 +444,8 @@ class V2DaemonServer:
                         'experimental_owner_composer_reconcile', 'experimental_owner_steer_add',
                         'experimental_owner_steer_list', 'experimental_owner_steer_remove'}:
                     result = self._owner_followups(connection, request)
+                elif isinstance(request, dict) and request.get('method') == 'experimental_owner_message_suggestion':
+                    result = self._owner_message_suggestion(connection, request)
                 elif isinstance(request, dict) and request.get('method') == 'experimental_owner_take_draft':
                     result = self._owner_take_draft(connection, request)
                 elif isinstance(request, dict) and request.get('method') == 'experimental_owner_ack_draft':
@@ -493,6 +495,41 @@ class V2DaemonServer:
                 encoded = (json.dumps({"version": PROTOCOL_VERSION, "request_id": _request_id(request),
                     "ok": False, "error": "daemon_response_unavailable"}) + "\n").encode("utf-8")
             connection.sendall(encoded)
+
+    def _owner_message_suggestion(self, connection, request):
+        """Suggest only for the authenticated local owner's live request."""
+        if not self.experimental_owner_ingress or getattr(self.daemon, 'experimental_owner_only', False) is not True:
+            raise PermissionError('owner_suggestion_unavailable')
+        if request.get('version') != PROTOCOL_VERSION:
+            raise ValueError('daemon_protocol_version_unsupported')
+        params = request.get('params')
+        if not isinstance(params, dict) or set(params) != {'active_message_id', 'prompt'}:
+            raise ValueError('owner_suggestion_payload_denied')
+        message_id, prompt = params['active_message_id'], params['prompt']
+        if (not isinstance(message_id, str) or re.fullmatch(r'[0-9a-f]{32}', message_id) is None
+                or not isinstance(prompt, str) or not prompt.strip() or len(prompt.encode('utf-8')) > 4096):
+            raise ValueError('owner_suggestion_payload_denied')
+        uid = self._local_peer_uid(connection)
+        users, queue = self.daemon.runtime.user_store, self.daemon.runtime.queue
+        owner = users.admin_user()
+        if (owner is None or owner.is_active is not True or owner.role not in ('admin', 'owner')
+                or not users.is_admin(owner.user_id) or not users.db_path or users.db_path == ':memory:'
+                or os.path.realpath(str(users.db_path)) != os.path.realpath(str(queue.db_path))):
+            raise PermissionError('owner_suggestion_unavailable')
+        if self.daemon.owner_message_status(message_id) != 'pending':
+            return {'suggestion': None}
+        with queue._connect() as conn:
+            row = conn.execute("""SELECT q.prompt FROM v2_inbound_messages q
+                JOIN v2_trusted_owner_ingress o ON o.message_id=q.message_id
+                WHERE q.message_id=? AND q.user_id=? AND o.owner_id=? AND o.peer_uid=?""",
+                (message_id, owner.user_id, owner.user_id, uid)).fetchone()
+        if row is None:
+            return {'suggestion': None}
+        from alphonse.agent_v2.owner_message_suggestion import suggest
+        suggestion = suggest(self.daemon.runtime.system_one_settings_store.get(), active_request=row['prompt'], draft=prompt)
+        if self.daemon.owner_message_status(message_id) != 'pending':
+            suggestion = None
+        return {'suggestion': suggestion}
 
     def _owner_followups(self, connection, request):
         """Manage held follow-ups; this endpoint never dispatches work."""

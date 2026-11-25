@@ -2,13 +2,14 @@ from alphonse.agent_v2.evaluation.dojo_held_followups import run
 
 
 def test_scripted_dojo_observes_fifo_and_context_without_claiming_semantic_pass():
-    result = run()
+    result = run(scenario='enqueue')
     assert result['observation'] == 'followup_execution'
     assert result['initial_ready'] and result['first_ready'] and result['second_ready']
     assert result['accepted_statuses'] == ['queued'] * 3
     assert result['listed_ids'] == [s * 32 for s in ('1', '2', '3')]
     assert result['remove_status'] == 'removed'
     assert result['before_ack'] == [('1' * 32, 'queued'), ('3' * 32, 'queued')]
+    assert result['before_initial_ack'] == [('1' * 32, 'queued'), ('3' * 32, 'queued')]
     assert result['before_first_ack'] == [('1' * 32, 'released'), ('3' * 32, 'queued')]
     assert result['after'] == [('1' * 32, 'completed'), ('3' * 32, 'completed')]
     assert result['inbound_count'] == 0
@@ -89,3 +90,45 @@ def test_hypothetical_chat_queue_has_ordered_context_without_claiming_semantic_p
     assert result['after'] == [('1' * 32, 'completed'), ('3' * 32, 'completed')]
     assert result['context_visible'] == [False, False, True]
     assert result['passed'] is None
+
+
+def test_unknown_named_exercise_is_rejected_before_starting_a_daemon():
+    import pytest
+    with pytest.raises(ValueError, match='unknown_dojo_scenario'):
+        run(scenario='typo')
+
+
+def test_named_journal_records_provider_and_does_not_overwrite(tmp_path, monkeypatch):
+    import json
+    import pytest
+    from alphonse.agent_v2.evaluation import dojo_held_followups as exercise
+
+    fake = lambda **kwargs: {'observation': 'followup_execution', 'passed': None, 'received': kwargs['scenario']}
+    monkeypatch.setattr(exercise, 'run', fake)
+    path = tmp_path / 'receipt.json'
+    exercise.main(['--scenario', 'enqueue', '--journal', str(path)])
+    record = json.loads(path.read_text())
+    assert record['scenario'] == record['observation']['received'] == 'enqueue'
+    assert record['provider'] == 'scripted'
+    assert record['observation']['passed'] is None
+    with pytest.raises(FileExistsError):
+        exercise.main(['--scenario', 'steer', '--journal', str(path)])
+    assert json.loads(path.read_text()) == record
+
+
+def test_failed_named_exercise_records_unknown_and_fails(tmp_path, monkeypatch):
+    import json
+    import pytest
+    from alphonse.agent_v2.evaluation import dojo_held_followups as exercise
+
+    def unavailable(**kwargs):
+        raise OSError('synthetic local setup failure')
+    monkeypatch.setattr(exercise, 'run', unavailable)
+    path = tmp_path / 'failed.json'
+    with pytest.raises(SystemExit) as exit_info:
+        exercise.main(['--scenario', 'steer', '--journal', str(path)])
+    assert exit_info.value.code == 1
+    observation = json.loads(path.read_text())['observation']
+    assert observation['observation'] == 'exercise_error'
+    assert observation['error_type'] == 'OSError'
+    assert observation['passed'] is None
