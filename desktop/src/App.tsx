@@ -175,7 +175,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const [ownerFollowupSnapshot, setOwnerFollowupSnapshot] = useState<{ user: string; items: OwnerFollowup[] }>({ user: "", items: [] });
   const ownerFollowups = ownerFollowupSnapshot.user === user ? ownerFollowupSnapshot.items : [];
   const followupSubmitting = useRef(false);
-  const uncertainFollowup = useRef<{ user: string; id: string; prompt: string; activeId: string; mode: "queue" | "steer" } | null>(null);
+  const uncertainFollowup = useRef<{ user: string; id: string; prompt: string; draftSnapshot: string; activeId: string; mode: "queue" | "steer" } | null>(null);
   const [conversationSendMode, setConversationSendMode] = useState<ConversationSendMode>("queue");
   useEffect(() => { setConversationSendMode(readConversationSendMode(window.localStorage, user)); }, [user]);
   const changeConversationSendMode = (mode: ConversationSendMode) => {
@@ -527,7 +527,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
             const attempt = uncertainFollowup.current;
             if (attempt?.user === user && followupResult.items.some((item) => item.id === attempt.id)) {
               uncertainFollowup.current = null;
-              setPrompt((current) => current === attempt.prompt ? "" : current);
+              setPrompt((current) => current === attempt.draftSnapshot ? "" : current);
               ownerConversationNotice.current = "";
               setError("");
             }
@@ -753,7 +753,8 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
     else if (draftTask === undefined) setDraftTask(activeConversationMessageId ?? null);
   }, [prompt, draftTask, activeConversationMessageId]);
   const submitPrompt = async (mode: ConversationSendMode | "normal", expectedActiveMessageId?: string) => {
-    const value = prompt.trim();
+    const draftSnapshot = prompt;
+    const value = draftSnapshot.trim();
     if (!value) return;
     if (value.startsWith("/")) {
       const command = value.split(/\s+/, 1)[0].toLowerCase();
@@ -803,7 +804,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
           if (previous && previous.user === user && (previous.prompt !== messagePrompt || previous.activeId !== activeId || previous.mode !== mode)) {
             throw new Error("A previous message submission is uncertain. Review the follow-up list before sending another; your draft is preserved.");
           }
-          const attempt = previous?.user === user ? previous : { user, id: crypto.randomUUID().replaceAll("-", ""), prompt: messagePrompt, activeId, mode };
+          const attempt = previous?.user === user ? { ...previous, draftSnapshot } : { user, id: crypto.randomUUID().replaceAll("-", ""), prompt: messagePrompt, draftSnapshot, activeId, mode };
           uncertainFollowup.current = attempt;
           let status: "queued" | "late" | "accepted" | "not_accepted" | "included_in_planning";
           followupSubmitting.current = true;
@@ -823,7 +824,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
           }
           if (status === "late" || status === "not_accepted") throw new Error("The active request could not accept this message. Your draft was not sent; check its saved submission before trying again.");
           if (!["queued", "accepted", "included_in_planning"].includes(status)) throw new Error("Submission could not be confirmed. Check the saved submission before trying again.");
-          setPrompt((current) => current === messagePrompt ? "" : current);
+          setPrompt((current) => current === draftSnapshot ? "" : current);
           // The saved draft is retained for review; it is not automatically replayed.
           await poll();
           return;
@@ -834,7 +835,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
         setOwnerClarificationNotice("");
         setOwnerReplyTarget("");
         setOwnerConversationBusy(true);
-        setPrompt((current) => current === messagePrompt ? "" : current);
+        setPrompt((current) => current === draftSnapshot ? "" : current);
         const acceptedAt = ownerAcceptedAt(queued.accepted_at, submittedAt);
         const acceptedDay = messageLocalDay(acceptedAt, timezone) || localDay(timezone);
         conversationDayRef.current = acceptedDay;
