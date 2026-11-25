@@ -158,6 +158,44 @@ def test_search_projection_orders_distinct_observation_times_and_preserves_ranks
     assert 'not establish when underlying events occurred' in projected['notice']
 
 
+def test_search_projection_unifies_recent_context_by_id_and_preserves_clipping():
+    from alphonse.agent_v2.core.intelligence.simple_loop.owner_read_processor import _project_complete_conversation_search
+    payload = {'schema_version': 1, 'status': 'found', 'query': 'decision', 'timezone': 'UTC',
+               'coverage': {}, 'backend': 'sqlite_fts5', 'total_matches': 1, 'truncated': False,
+               'results': [{'source_id': 'conversation:old', 'source': {'role': 'user'},
+                            'event_time': '2026-01-01T00:00:00Z', 'rank': 1,
+                            'excerpt': 'original decision'}]}
+    recent = (
+        {'role': 'user', 'source_id': 'conversation:old', 'observed_at': '2026-01-01T00:00:00Z',
+         'content': 'original decision', 'content_truncated': False},
+        {'role': 'user', 'source_id': 'conversation:confirmation', 'observed_at': '2026-01-02T00:00:00Z',
+         'content': 'confirmation', 'content_truncated': True},
+        {'role': 'assistant', 'source_id': 'conversation:recap', 'observed_at': '2026-01-03T00:00:00Z',
+         'content': 'recap', 'content_truncated': False},
+    )
+    projection = json.loads(_project_complete_conversation_search(payload, recent))
+    assert [row['source_id'] for row in projection['results']] == [
+        'conversation:old', 'conversation:confirmation', 'conversation:recap']
+    assert 'origin' not in projection['results'][0]
+    assert [row['origin'] for row in projection['results'][1:]] == ['recent_context', 'recent_context']
+    assert projection['results'][1]['truncated'] is True
+    assert projection['total_matches'] == 1
+    assert 'not search hits' in projection['notice'] and 'not the complete conversation' in projection['notice']
+
+
+def test_search_projection_recent_unknown_time_keeps_search_order_and_empty_is_explicit():
+    from alphonse.agent_v2.core.intelligence.simple_loop.owner_read_processor import _project_complete_conversation_search
+    payload = {'schema_version': 1, 'status': 'empty', 'query': 'decision', 'timezone': 'UTC',
+               'coverage': {}, 'backend': 'sqlite_fts5', 'total_matches': 0, 'truncated': False, 'results': []}
+    recent = ({'role': 'user', 'source_id': 'conversation:unknown', 'observed_at': None,
+               'content': 'recent', 'content_truncated': False},)
+    projection = json.loads(_project_complete_conversation_search(payload, recent))
+    assert projection['results'][0]['origin'] == 'recent_context'
+    assert projection['total_matches'] == 0
+    assert 'No conversation messages matched the search' in projection['notice']
+    assert 'missing or ambiguous' in projection['notice']
+
+
 @pytest.mark.parametrize('reverse', [False, True])
 def test_owner_can_narrow_an_overflowing_search_without_seeing_partial_results(tmp_path, reverse):
     users = V2UserStore(':memory:')

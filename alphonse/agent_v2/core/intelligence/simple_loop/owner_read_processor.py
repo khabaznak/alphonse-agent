@@ -67,7 +67,7 @@ def _owner_shell_should_stop(context, atomic, state, actor, tool_id, arguments, 
         return True
 
 
-def _project_complete_conversation_search(payload: dict[str, Any]) -> str:
+def _project_complete_conversation_search(payload: dict[str, Any], recent: tuple[dict[str, Any], ...] = ()) -> str:
     """Present each verified search hit once, with its recorded speaker first.
 
     The compatibility envelope also repeats the same text as Markdown and
@@ -76,10 +76,21 @@ def _project_complete_conversation_search(payload: dict[str, Any]) -> str:
     completed search; it does not alter the retained observation or authority.
     """
     results = []
+    search_ids = set()
     for item in payload['results']:
         role = item['source'].get('role')
         role = role if role in {'user', 'assistant'} else 'unknown'
         results.append({'speaker': role, **item})
+        search_ids.add(item['source_id'])
+    # Recent context and search use separate authorization checks. Only add
+    # already actor-scoped recent turns, de-duplicating by the exact stable ID.
+    # A truncated recent message remains explicitly marked as incomplete.
+    for item in recent:
+        if item['source_id'] in search_ids:
+            continue
+        results.append({'speaker': item['role'], 'origin': 'recent_context',
+                        'source_id': item['source_id'], 'event_time': item['observed_at'],
+                        'excerpt': item['content'], 'truncated': item['content_truncated']})
     # Present a timeline only when all observation times are known and distinct.
     # Equal, malformed, naive, or missing times do not establish an ordering;
     # in those cases retain the search result order and its original ranks.
@@ -98,12 +109,17 @@ def _project_complete_conversation_search(payload: dict[str, Any]) -> str:
     projected = {key: payload[key] for key in ('schema_version', 'status', 'query',
                  'timezone', 'coverage', 'backend', 'total_matches', 'truncated')}
     projected['notice'] = ('Each result is a separate recorded conversation message. '
+        + ('Recent-context messages are included alongside search results; they are not search hits, '
+           'and truncated recent messages are incomplete. ' if recent else '') +
+        'This timeline is not the complete conversation. '
+        + ('No conversation messages matched the search. ' if not payload['results'] else '') +
         'Speaker describes the recorded role: assistant is an earlier assistant message, '
         'and user is a user message. When correcting your earlier answer, identify it '
         'as yours rather than attributing it to the user. ' +
-        ('No conversation messages matched. ' if not results else
+        ('' if not results else
          'Results are ordered by their distinct recorded observation times; each original search rank is retained. '
-         if chronological else 'Observation times are missing or ambiguous; results retain search relevance order. ') +
+         if chronological else 'Observation times are missing or ambiguous; search hits retain relevance order '
+         'and recent-context messages follow in conversation order. ') +
         'Observation times do not establish when underlying events occurred or prove a current or external fact.')
     projected['results'] = results
     return json.dumps(projected, ensure_ascii=False)
@@ -588,6 +604,36 @@ class OwnerReadConversationProcessor:
                 return current.status == 'available' and current.digest == knowledge_bindings.get(ref)
             return True
 
+        def recent_history(actor_id: str) -> list[dict[str, Any]]:
+            if not access(actor_id, 'goal'):
+                raise ValueError('owner_read_evidence_unavailable')
+            history = []
+            list_before = getattr(context.conversation_store, 'list_before_source', None)
+            if callable(list_before):
+                events = list_before(owner_user_id=actor, project_id=str(task.project_id or ''),
+                                     source_message_id='inbound:' + str(task.message_id), limit=16)
+                remaining = 5998
+                for event in reversed(events):
+                    text = str(event.content or '')
+                    truncated = False
+                    if len(text) > 1500:
+                        text = text[:700] + '\n[... earlier turn truncated ...]\n' + text[-700:]
+                        truncated = True
+                    event_id = str(event.event_id or '')
+                    observed_at = str(event.observed_at or '')
+                    entry = {'role': event.role, 'content': text, 'content_truncated': truncated,
+                             'source_id': 'conversation:' + event_id if 0 < len(event_id) <= 240 else None,
+                             'observed_at': observed_at if 0 < len(observed_at) <= 64 else None}
+                    size = len(json.dumps(entry, ensure_ascii=False, sort_keys=True)) + (2 if history else 0)
+                    if size > remaining:
+                        break
+                    history.append(entry)
+                    remaining -= size
+                history.reverse()
+            if not access(actor_id, 'goal'):
+                raise ValueError('owner_read_evidence_unavailable')
+            return history
+
         def load(actor_id: str, ref: str) -> str:
             if not access(actor_id, ref):
                 raise ValueError('owner_read_evidence_unavailable')
@@ -671,39 +717,15 @@ class OwnerReadConversationProcessor:
                         'notice': 'Shortened previews are withheld because they may omit later changes. Read an original source when its hidden content is relevant.'},
                         ensure_ascii=False, sort_keys=True)
                 if tool_id == SEARCH_MEMORY_TOOL_ID:
-                    return _project_complete_conversation_search(payload)
+                    # Only the newest search group receives the recent turns.
+                    # The goal already includes them; adding them to every
+                    # search observation would multiply the projection size.
+                    recent = tuple(recent_history(actor_id)) if pages is groups[-1] else ()
+                    return _project_complete_conversation_search(payload, recent)
                 return json.dumps(payload, ensure_ascii=False, sort_keys=True)
             previous = linked_question()
             steering = atomic.steering_context() if atomic is not None else []
-            history = []
-            list_before = getattr(context.conversation_store, 'list_before_source', None)
-            if callable(list_before):
-                events = list_before(owner_user_id=actor, project_id=str(task.project_id or ''),
-                                     source_message_id='inbound:' + str(task.message_id), limit=16)
-                # Bound recent context. Preserve both ends of long messages:
-                # a later correction or destination may be at the end.
-                # Historical text gives context, never new authority.
-                # Include metadata in the same bound as message content. An
-                # observed timestamp may be unknown (e.g. imported history);
-                # never substitute the record's ingestion time for it.
-                remaining = 5998  # JSON array delimiters
-                for event in reversed(events):
-                    text = str(event.content or '')
-                    truncated = False
-                    if len(text) > 1500:
-                        text = text[:700] + '\n[... earlier turn truncated ...]\n' + text[-700:]
-                        truncated = True
-                    event_id = str(event.event_id or '')
-                    observed_at = str(event.observed_at or '')
-                    entry = {'role': event.role, 'content': text, 'content_truncated': truncated,
-                             'source_id': 'conversation:' + event_id if 0 < len(event_id) <= 240 else None,
-                             'observed_at': observed_at if 0 < len(observed_at) <= 64 else None}
-                    size = len(json.dumps(entry, ensure_ascii=False, sort_keys=True)) + (2 if history else 0)
-                    if size > remaining:
-                        break
-                    history.append(entry)
-                    remaining -= size
-                history.reverse()
+            history = recent_history(actor_id)
             if not history and previous is None and not steering:
                 return str(task.goal or '')
             payload = {'recent_conversation': history, 'new_message': str(task.goal or '')}
