@@ -40,8 +40,27 @@ def test_atomic_origin_is_distinct_from_desktop_and_deduplicates(fixture):
         assert origin['owner_id'] == owner.user_id
         assert origin['chat_id'] == '123'
         assert conn.execute('SELECT count(*) FROM v2_inbound_messages').fetchone()[0] == 1
+        assert conn.execute('SELECT status FROM v2_owner_telegram_receipts WHERE message_id=?', (mid,)).fetchone()[0] == 'pending'
         assert conn.execute("SELECT source FROM v2_conversation_events WHERE source_message_id=?", (f'inbound:{mid}',)).fetchone()[0] == 'telegram'
         assert not conn.execute("SELECT 1 FROM sqlite_master WHERE name='v2_trusted_owner_ingress'").fetchone()
+
+
+def test_receipt_persistence_and_ingress_are_atomic(fixture):
+    import sqlite3
+    from alphonse.agent_v2.core.intelligence.simple_loop.owner_telegram_ingress import ensure_telegram_receipt_schema
+    queue, _ = fixture
+    with queue._connect() as conn:
+        ensure_telegram_receipt_schema(conn)
+        conn.execute("CREATE TRIGGER fail_receipt BEFORE INSERT ON v2_owner_telegram_receipts BEGIN SELECT RAISE(ABORT, 'test'); END")
+    with pytest.raises(sqlite3.IntegrityError):
+        enqueue_telegram_owner(queue, integration_id='telegram-test', update=update())
+    with queue._connect() as conn:
+        assert conn.execute('SELECT count(*) FROM v2_inbound_messages').fetchone()[0] == 0
+        assert conn.execute('SELECT count(*) FROM v2_conversation_events').fetchone()[0] == 0
+        conn.execute('DROP TRIGGER fail_receipt')
+    mid = enqueue_telegram_owner(queue, integration_id='telegram-test', update=update())
+    with queue._connect() as conn:
+        assert conn.execute('SELECT status FROM v2_owner_telegram_receipts WHERE message_id=?', (mid,)).fetchone()[0] == 'pending'
 
 
 @pytest.mark.parametrize('event', [update(sender=456), update(chat=456), update(kind='group')])
