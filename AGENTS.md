@@ -36,12 +36,28 @@ general behavior, not as a vocabulary to encode into production. When existing
 phrase-based logic cannot yet be safely replaced, identify the limitation and
 its migration rather than claiming general multilingual support.
 
-## Agent-loop direction and gym
+## Agent-loop direction and Dojo
 
 The owner selected the simpler loop as the sole agent-loop architecture and
-directed removal of the V2 and V3 loops. Coordinator issue #230 tracks the gym,
-integration and qualification of the simpler loop. Preserve household data and
-make unsupported capabilities explicit while the simpler loop is developed.
+directed removal of the V2 and V3 loops. Coordinator issue #230 tracks the Dojo
+and the integration and qualification of the simpler loop. Preserve household
+data and make unsupported capabilities explicit while the simpler loop develops.
+
+The Dojo assesses Alphonse against realistic, open-route challenges using five
+pillars: resourcefulness and improvisation, resilience, accountability, human
+understanding, and trustworthiness. Consult `docs/agent-loop/dojo.md` when
+choosing, designing, running, or interpreting a Dojo exercise. Use the Dojo
+when changes to the agent loop, tools, skills, conversations, or integrations
+need behavioral assessment, and when diagnosing a reported real-world failure;
+choose a focused relevant exercise and use representative disposable data.
+
+Allow different authorized approaches rather than prescribing a tool sequence
+or hardcoding the answer. Judge outcomes against independently observable
+evidence, and record failures, unknowns, resource costs, and what was not
+assessed. Distinguish simulated providers from real models and actual product
+paths; one successful run does not establish general reliability or authority.
+Follow the relevant exercise's documented setup and permissions, preserving
+household data and applying the existing authorization and effect checks.
 
 For historical context, open `docs/agent-loop/v3-current-state-2026-11.html`
 and `docs/agent-loop/simpler-loop-proposal-2026-11.html` in a browser. These are
