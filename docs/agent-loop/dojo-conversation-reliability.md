@@ -90,3 +90,32 @@ Each response was ready and acknowledged by the test client. These are manual
 assessments of three synthetic attempts, not a reliability rate or evidence of
 grounding. The first two miss required capabilities even though each produced a
 truthful partial answer. The model provider may have access to fixture code.
+
+## Attempts after retrieval and projection changes
+
+The [French rerun](evidence/dojo-reliability-french-recap-20261125-02.json)
+recovered the dessert and identified a contradiction, but called the assistant's
+recap a more recent message without attributing it to itself. It did not report
+the later owner confirmation. The self-correction and full-recall criteria failed.
+The [Japanese rerun](evidence/dojo-reliability-japanese-owner-change-20261125-02.json)
+reported both the original and changed movie choices correctly but did not
+acknowledge its own contradictory recap. The [English control](evidence/dojo-reliability-english-consistent-control-20261125-02.json)
+reported the herb without inventing a conflict. Times were 20.410, 13.615 and
+13.294 seconds, respectively. Reported input/output tokens were 62,282/231,
+49,022/206 and 46,487/116. Each used two model calls and one memory search.
+
+After ensuring ordinary FTS matches always outrank substring-only matches, the
+[second Japanese rerun](evidence/dojo-reliability-japanese-owner-change-20261125-03.json)
+again retrieved the changed choice but did not correct the recap. It used two
+model calls and one search, taking 11.835 seconds and reporting 47,700 input and
+192 output tokens. All four drafts were acknowledged by the test client. The
+results show recovery of the synthetic choice in these attempts, not general
+retrieval reliability or verified grounding. The owner-change and recap examples
+have been used during development and are not independent held-out evidence.
+
+The substring fallback checks terms against an already authorized snapshot,
+preserves existing pagination, and considers at most 24 query terms of at least
+three normalized characters. It may broaden result sets and trigger the existing
+requirement to narrow searches with more than 90 matches. Its scan and the
+existing in-memory FTS index are not bounded by total authorized history size;
+fixture benchmarks are not production-scale guarantees.

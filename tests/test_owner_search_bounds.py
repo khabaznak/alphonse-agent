@@ -67,6 +67,49 @@ def test_owner_search_default_is_bounded_and_never_accepts_partial_page(tmp_path
         assert 'Apples note' not in provider.requests[1].prompt
 
 
+def test_complete_search_projection_labels_speakers_without_duplicate_or_private_content(tmp_path):
+    users = V2UserStore(':memory:')
+    owner = users.onboard(display_name='Synthetic owner', users_root=tmp_path / 'users')
+    store = SQLiteConversationStore(tmp_path / 'conversation.db')
+    for owner_id, role, content, identifier in (
+        (owner.user_id, 'user', 'Plan is amber lantern.', '1'),
+        (owner.user_id, 'assistant', 'Plan is unchosen lantern.', '2'),
+        ('other-owner', 'user', 'Private lantern information.', '3'),
+    ):
+        store.record(owner_user_id=owner_id, role=role, content=content, source='test', source_message_id=identifier)
+    registry = InMemoryToolRegistry()
+    registry.register(build_search_memory_tool_definition())
+    registry.register(build_read_memory_source_tool_definition())
+
+    class Provider:
+        supports_image_input = False
+        def __init__(self):
+            self.requests = []
+        def generate_json(self, request):
+            self.requests.append(request)
+            decision = ({'kind': 'tool', 'tool_id': 'native.search_memory',
+                         'arguments': {'query': 'lantern', 'source_types': ['conversation']}, 'text': None}
+                        if len(self.requests) == 1 else
+                        {'kind': 'answer', 'tool_id': None, 'arguments': None, 'text': 'Synthetic answer.'})
+            return InferenceResult(json_value=decision, usage={'input_tokens': 100, 'output_tokens': 20})
+
+    provider = Provider()
+    task = TaskState(task_id='message', message_id='message', user=owner.user_id, goal='Find lantern.',
+                     intelligence_engine='single_loop_experimental', intelligence_schema_version=1)
+    context = CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry,
+        inference=InferenceRouter(provider=provider, default_profile=ModelProfile('test', 'fixture', 'offline')),
+        conversation_store=store, cancellation_checker=lambda: False)
+    processor = OwnerReadConversationProcessor(users=users, budgets=SQLiteTaskBudgetStore(str(tmp_path / 'budget.db')),
+        authorize_claim=lambda *_: True, save_checkpoint=lambda *_: None, now_ms=lambda: 100)
+    assert processor.process(task, context).status == ProcessingStatus.WAITING
+    prompt = provider.requests[1].prompt
+    assert '"speaker": "user"' in prompt and '"speaker": "assistant"' in prompt
+    assert prompt.count('Plan is amber lantern.') == 1
+    assert prompt.count('Plan is unchosen lantern.') == 1
+    assert 'Private lantern information.' not in prompt
+    assert 'ordered by search relevance, not chronology' in prompt
+
+
 @pytest.mark.parametrize('reverse', [False, True])
 def test_owner_can_narrow_an_overflowing_search_without_seeing_partial_results(tmp_path, reverse):
     users = V2UserStore(':memory:')
