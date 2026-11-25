@@ -37,22 +37,30 @@ export function ownerUnavailableMessage(reason?: string | null): string {
 /** Fixed, non-sensitive categories supplied by the daemon; never render raw errors. */
 export function ownerFailureMessage(code?: string): string {
   const messages: Record<string, string> = {
-    cancel_requested: "Cancellation was requested. Check unfinished requests before trying again.",
-    time_limit: "This request exceeded its time limit. Check unfinished requests before trying again.",
-    model_unavailable: "The model could not complete this request. Check unfinished requests before trying again.",
-    usage_unconfirmed: "Model usage could not be verified. Check unfinished requests before trying again.",
-    usage_limit_exceeded: "The model exceeded the request's usage limit. Check unfinished requests before trying again.",
-    source_unavailable: "A needed source was unavailable or access was denied. Check access and unfinished requests before trying again.",
-    source_changed: "A source changed or access was revoked during the request. Check unfinished requests before trying again.",
-    source_incomplete: "A source could not be verified as complete. Check unfinished requests before trying again.",
+    cancel_requested: "Cancellation was requested.",
+    time_limit: "This request exceeded its time limit.",
+    model_unavailable: "The model could not complete this request.",
+    usage_unconfirmed: "Model usage could not be verified.",
+    usage_limit_exceeded: "The model exceeded the request's usage limit.",
+    source_unavailable: "A needed source was unavailable or access was denied.",
+    source_changed: "A source changed or access was revoked during the request.",
+    source_incomplete: "A source could not be verified as complete.",
     unsupported_operation: "This request needs an operation that is not available in owner conversation mode.",
-    action_limit: "I reached the action limit before finishing. Check unfinished requests before trying again.",
-    answer_unverified: "I could not verify enough source information to answer. Check unfinished requests before trying again.",
-    clarification_unverified: "The follow-up question could not be checked, so it was not sent. Check unfinished requests before trying again.",
-    clarification_review_unavailable: "The clarification check is unavailable, so the follow-up question was not sent. Check unfinished requests before trying again.",
+    action_limit: "I reached the action limit before finishing.",
+    answer_unverified: "I could not verify enough source information to answer.",
+    clarification_unverified: "The follow-up question could not be checked, so it was not sent.",
+    clarification_review_unavailable: "The clarification check is unavailable, so the follow-up question was not sent.",
   };
   return (code && Object.prototype.hasOwnProperty.call(messages, code))
     ? messages[code] : "This conversation needs attention; its result may be unavailable or unconfirmed.";
+}
+
+/** A confirmed failed request can be displayed beside its own message. */
+export class OwnerRequestFailed extends Error {
+  constructor(readonly messageId: string, readonly failureCode?: string) {
+    super(ownerFailureMessage(failureCode));
+    this.name = "OwnerRequestFailed";
+  }
 }
 
 /**
@@ -196,7 +204,8 @@ export class OwnerConversation {
       if (state.status !== "ready") {
         if (state.status === "failed") this.pending.delete(pending.messageId);
         pending.pickupStarted = true;
-        throw new Error(state.status === "failed" ? ownerFailureMessage(state.failure_code) : state.status === "started_unconfirmed"
+        if (state.status === "failed") throw new OwnerRequestFailed(pending.messageId, state.failure_code);
+        throw new Error(state.status === "started_unconfirmed"
           ? "The answer could not be confirmed. It will not be fetched again automatically."
           : "This conversation needs attention; its result may be unavailable or unconfirmed.");
       }

@@ -42,7 +42,7 @@ describe("interactive follow-up controls", () => {
       {id: "first", prompt: "Add apples", status: "queued", can_remove: true},
       {id: "second", prompt: "Make them green", status: "released", can_remove: false},
     ]} onRemove={remove} />));
-    expect(container.textContent).toContain("Queued");
+    expect(container.textContent).toContain("Waiting");
     expect(container.textContent).toContain("Processing");
     expect(container.querySelectorAll("button")).toHaveLength(1);
     await act(async () => container.querySelector("button")!.click());
@@ -57,7 +57,7 @@ describe("interactive follow-up controls", () => {
       {id: "done", prompt: "Use pears", status: "included_in_planning", can_remove: true},
     ]} onRemove={remove} />));
     expect(container.textContent).toContain("Included in planning");
-    expect(container.textContent).toContain("Review dependent follow-ups before clearing.");
+    expect(container.textContent).toContain("Review dependent follow-ups before removing.");
     expect(container.querySelectorAll("button")).toHaveLength(1);
     await act(async () => container.querySelector("button")!.click());
     expect(remove).toHaveBeenCalledExactlyOnceWith("done");
