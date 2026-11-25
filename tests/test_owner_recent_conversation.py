@@ -96,6 +96,8 @@ def test_ordinary_owner_followups_receive_prior_turns(tmp_path, monkeypatch):
         start = provider.prompts[0].index('{"recent_conversation":')
         projection, _ = json.JSONDecoder().raw_decode(provider.prompts[0][start:])
         history = projection['recent_conversation']
+        assert projection['recent_window_coverage'] == {
+            'earlier_turns_omitted': None, 'message_content_clipped': True}
         assert history[0]['source_id'] == f'conversation:{first.event_id}'
         assert history[0]['observed_at'] == first.observed_at == '2026-10-01T13:00:00+00:00'
         assert history[0]['role'] == 'user' and history[0]['content_truncated'] is True

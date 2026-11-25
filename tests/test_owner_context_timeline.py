@@ -23,6 +23,8 @@ def test_recent_confirmation_reaches_search_timeline():
     router = InferenceRouter(provider=provider, default_profile=ModelProfile('test', 'scripted', 'fixture'))
     result = run(router, 'french-recap', timeout=10)
     assert result['status'] == 'ready'
+    assert '"earlier_turns_omitted": true' in provider.prompts[0]
+    assert 'tartes aux pommes' not in provider.prompts[0]
     prompt = provider.prompts[1]
     search_start = prompt.index('"results": [')
     timeline = prompt[search_start:]
