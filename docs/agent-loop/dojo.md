@@ -34,6 +34,54 @@ unknowns, interruptions and resource costs alongside passes; do not silently
 retry. An independent observable outcome does not automatically prove the
 agent's reasoning, its grounding or its safety in a different environment.
 
+## Historical conversation correction
+
+The existing conversation-context runner also has a `historical-correction`
+case. A disposable owner previously chose a synthetic dining-room paint, then
+received a misleading recap that the choice remained open. Intervening turns
+place the original choice beyond the current recent-context window. Days later
+the owner asks whether the choice was already made. The exercise lets Alphonse select any
+available authorized route; it does not prescribe a search, source or answer.
+The older owner statement is the fixture evidence, not proof that any real room
+was painted. Review whether the response recovers the choice, corrects the
+recent recap, and stays within the available evidence. The recorded literal
+marker is diagnostic, not a semantic grade or proof of grounding.
+
+Run a fresh journal with the configured model:
+
+```sh
+.venv/bin/python -m alphonse.agent_v2.evaluation.dojo_conversation_context \
+  /tmp/dojo-history.json --case historical-correction --model MODEL
+```
+
+The receipt retains status, failure code, response and client acknowledgement,
+elapsed time, observed model decisions and provider-reported usage when supplied.
+It explicitly leaves source completeness and semantic success unassessed. The
+owner worker and IPC use temporary data; this is not the installed Desktop UI,
+and the inference provider may have activity outside the host's observation.
+An acknowledgement is not proof of human receipt. Record blocked or failed
+attempts as well as successes; do not silently retry. This single scenario does
+not establish multilingual recall, privacy across household members, general
+reliability, or authority for actions.
+
+The [first real-model attempt](evidence/dojo-historical-correction-20261125-01.json),
+using the initial four-turn fixture without intervening turns,
+answered with the earlier color and finish and the test client acknowledged the
+draft. It did not explicitly mention the mistaken recap. The host recorded one
+model decision and no tool call, so a historical retrieval route and grounding
+were not observed; the provider may have seen the fact in conversation context.
+It took 4.775 seconds and reported 14,977 input and 43 output tokens. This single
+synthetic run does not demonstrate reliable retrieval or self-correction.
+After adding the intervening turns, the [second attempt](evidence/dojo-historical-correction-20261125-02.json)
+searched conversation history; the original fact was absent from the first
+model prompt and present in the next. The answer stated the earlier choice and
+finish but treated the later mistaken assistant recap as a potentially conflicting
+update rather than recognizing it as its own mistake. The test client acknowledged
+the response. It took 11.445 seconds and two model calls; reported usage totaled
+31,161 input and 159 output tokens. Whether the retrieved sources were complete
+and whether the answer meets the full correction goal remain unassessed. Prompt
+visibility and an observed search do not prove model grounding.
+
 ## First open-route challenge
 
 `owner_gym_smoke --case dojo-clock` asks for the current UTC timestamp without
