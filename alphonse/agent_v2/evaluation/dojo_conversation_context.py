@@ -42,9 +42,23 @@ CHANGED_HISTORY = (*HISTORY[:-1],
     ('user', 'We changed the dining room choice to Moss Green in a satin finish.'),
     ('assistant', 'We still need to choose the dining room paint color.'))
 
+# Separate scenario for evaluation after development on the paint fixture.
+# The recent owner confirmation doesn't repeat the earlier decision's content.
+HELDOUT_HISTORY = (
+    ('user', 'Para la donación a la biblioteca ya decidimos entregar cuatro cajas de cuentos infantiles.'),
+    ('assistant', 'Entendido, cuatro cajas de cuentos infantiles para la biblioteca.'),
+    *tuple(turn for topic in ('las plantas', 'las ventanas', 'el jardín', 'la mesa',
+                               'las bicicletas', 'el pasillo', 'las lámparas', 'las cortinas', 'los estantes')
+           for turn in (('user', f'Hablemos de {topic} después.'),
+                        ('assistant', f'De acuerdo, podemos retomar lo de {topic}.'))),
+    ('user', 'Confirmo que lo que acordamos para la donación a la biblioteca sigue siendo nuestra decisión.'),
+    ('assistant', 'Todavía no hemos decidido qué donar a la biblioteca.'),
+)
+HELDOUT_GOAL = '¿Ya habíamos decidido qué donar a la biblioteca?'
+
 
 def run_historical_correction(router: InferenceRouter, *, timeout: float = 90,
-                              owner_changed_choice: bool = False) -> dict:
+                              owner_changed_choice: bool = False, heldout: bool = False) -> dict:
     """Observe recovery of an older fact after an erroneous recent recap.
 
     Markers are diagnostics only. A human must assess the entire answer and
@@ -53,9 +67,12 @@ def run_historical_correction(router: InferenceRouter, *, timeout: float = 90,
     started = time.monotonic()
     decisions = []
     original_generate = router.generate_json
-    history = CHANGED_HISTORY if owner_changed_choice else HISTORY
-    expected_fact = 'Moss Green' if owner_changed_choice else 'Harbor Blue'
-    case = 'historical-owner-change' if owner_changed_choice else 'historical-correction'
+    if heldout and owner_changed_choice:
+        raise ValueError('historical_case_conflict')
+    history = HELDOUT_HISTORY if heldout else CHANGED_HISTORY if owner_changed_choice else HISTORY
+    expected_fact = 'cuatro cajas' if heldout else 'Moss Green' if owner_changed_choice else 'Harbor Blue'
+    case = 'historical-heldout' if heldout else 'historical-owner-change' if owner_changed_choice else 'historical-correction'
+    goal = HELDOUT_GOAL if heldout else HISTORY_GOAL
 
     def inspect_request(request):
         try:
@@ -64,7 +81,7 @@ def run_historical_correction(router: InferenceRouter, *, timeout: float = 90,
             decisions.append({'status': 'provider_error'})
             raise
         value = result.json_value if isinstance(result.json_value, dict) else {}
-        recap = HISTORY[-1][1]
+        recap = history[-1][1]
         recap_at = request.prompt.find(recap)
         decisions.append({'status': 'returned', 'kind': value.get('kind'),
                           'tool_id': value.get('tool_id'), 'arguments': value.get('arguments'),
@@ -100,7 +117,7 @@ def run_historical_correction(router: InferenceRouter, *, timeout: float = 90,
             daemon.start()
             try:
                 client = V2DaemonClient(root / 'owner.sock')
-                message = client.request('experimental_owner_ingress', prompt=HISTORY_GOAL)['message_id']
+                message = client.request('experimental_owner_ingress', prompt=goal)['message_id']
                 deadline = time.monotonic() + timeout
                 while time.monotonic() < deadline:
                     status = client.request('experimental_owner_status', message_id=message)
@@ -201,14 +218,16 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('journal', type=Path)
     parser.add_argument('--model', required=True)
-    parser.add_argument('--case', choices=('context', 'historical-correction', 'historical-owner-change'), default='context')
+    parser.add_argument('--case', choices=('context', 'historical-correction', 'historical-owner-change',
+                                           'historical-heldout'), default='context')
     args = parser.parse_args()
     router = build_inference_router_from_settings(InferenceSettingsRecord(model_id=args.model))
     router.provider.config = replace(router.provider.config, timeout_seconds=40.0)
     with args.journal.open('x', encoding='utf-8') as journal:
         try:
             result = (run(router) if args.case == 'context' else
-                      run_historical_correction(router, owner_changed_choice=args.case == 'historical-owner-change'))
+                      run_historical_correction(router, owner_changed_choice=args.case == 'historical-owner-change',
+                                                heldout=args.case == 'historical-heldout'))
         except Exception as exc:
             json.dump({'case': args.case, 'status': 'infrastructure_error',
                        'error_type': type(exc).__name__, 'passed': None}, journal)
