@@ -67,6 +67,28 @@ def _owner_shell_should_stop(context, atomic, state, actor, tool_id, arguments, 
         return True
 
 
+def _project_complete_conversation_search(payload: dict[str, Any]) -> str:
+    """Present each verified search hit once, with its recorded speaker first.
+
+    The compatibility envelope also repeats the same text as Markdown and
+    recall items. Those copies can obscure who said what and inflate context.
+    This projection is only applied after the host has revalidated the entire
+    completed search; it does not alter the retained observation or authority.
+    """
+    results = []
+    for item in payload['results']:
+        role = item['source'].get('role')
+        role = role if role in {'user', 'assistant'} else 'unknown'
+        results.append({'speaker': role, **item})
+    projected = {key: payload[key] for key in ('schema_version', 'status', 'query',
+                 'timezone', 'coverage', 'backend', 'total_matches', 'truncated')}
+    projected['notice'] = ('Each result is a separate recorded conversation message. '
+        'Speaker describes who made that statement. Results are ordered by search relevance, '
+        'not chronology. An observation time is not proof of a current or external fact.')
+    projected['results'] = results
+    return json.dumps(projected, ensure_ascii=False)
+
+
 class OwnerReadConversationProcessor:
     """Run the real read-only candidate for a trusted active direct owner.
 
@@ -628,6 +650,8 @@ class OwnerReadConversationProcessor:
                                     for item in payload['results']],
                         'notice': 'Shortened previews are withheld because they may omit later changes. Read an original source when its hidden content is relevant.'},
                         ensure_ascii=False, sort_keys=True)
+                if tool_id == SEARCH_MEMORY_TOOL_ID:
+                    return _project_complete_conversation_search(payload)
                 return json.dumps(payload, ensure_ascii=False, sort_keys=True)
             previous = linked_question()
             steering = atomic.steering_context() if atomic is not None else []

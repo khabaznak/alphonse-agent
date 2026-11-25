@@ -99,11 +99,28 @@ def rank(hits: list[SearchHit], query: str) -> tuple[list[tuple[float, SearchHit
                       for i, h in enumerate(hits)}
             scores = {i: score for i, score in scores.items() if score}
             backend = "keyword_fallback"
+    # FTS unicode61 requires token boundaries, which some writing systems and
+    # identifiers do not use in the same way as a search query. Recover
+    # literal substrings of individual query terms from the *same authorized
+    # snapshot*. At most 24 terms are considered, as in the FTS query. Ignore
+    # short terms to limit incidental matches, and rank these weak matches
+    # below ordinary lexical hits rather than treating them as semantic proof.
+    lexical_matches = set(scores)
+    substring_terms = tuple(term for term in terms if len(term) >= 3)
+    normalized_query = normalized(query)
     for i, hit in enumerate(hits):
-        if normalized(query) in normalized(hit.item.content) or query == hit.source_id:
+        content = normalized(hit.item.content)
+        if normalized_query in content or query == hit.source_id:
             scores[i] = scores.get(i, 0) + 10
-    ranked = [(score, hits[i]) for i, score in scores.items()]
-    return sorted(ranked, key=lambda pair: (-pair[0], pair[1].source_id)), backend
+            lexical_matches.add(i)
+        elif backend == "sqlite_fts5" and substring_terms:
+            searchable = content + " " + normalized(" ".join(hit.entities))
+            matches = sum(term in searchable for term in substring_terms)
+            if matches:
+                scores[i] = scores.get(i, 0) + matches * 1e-9
+    ordered = sorted(scores.items(), key=lambda pair: (pair[0] not in lexical_matches,
+                     -pair[1], hits[pair[0]].source_id))
+    return [(score, hits[i]) for i, score in ordered], backend
 
 
 def fingerprint(arguments: dict, requester: str, zone: str) -> str:
