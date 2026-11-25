@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const service = vi.hoisted(() => ({ ingress: vi.fn(), followup: vi.fn(), steer: vi.fn(), followupList: vi.fn(), history: vi.fn() }));
+const service = vi.hoisted(() => ({ ingress: vi.fn(), followup: vi.fn(), steer: vi.fn(), followupList: vi.fn(), history: vi.fn(), recoveryList: vi.fn() }));
 vi.mock("./api", () => ({
   ensureDaemon: async () => {}, playAlertSound: async () => {}, showInFinder: async () => {}, stopDaemon: async () => {},
   daemonRequest: async (method: string, params: Record<string, unknown> = {}) => {
@@ -12,6 +12,7 @@ vi.mock("./api", () => ({
     if (method === "experimental_owner_status") return params.message_id ? { status: "pending" } : { processing_ready: true, owner_only: true, paused_legacy_requests: 0 };
     if (method === "experimental_owner_ingress") return service.ingress(params);
     if (method === "experimental_owner_followup_list") return service.followupList();
+    if (method === "experimental_owner_recovery_list") return service.recoveryList();
     if (method === "experimental_owner_composer_save") return { id: params.id, status: "saved" };
     if (method === "experimental_owner_followup_add") return service.followup(params);
     if (method === "experimental_owner_steer_add") return service.steer(params);
@@ -39,7 +40,7 @@ describe("confirmed conversation sends", () => {
     window.matchMedia = vi.fn().mockReturnValue({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() });
     HTMLElement.prototype.scrollTo = vi.fn();
     service.ingress.mockReset(); service.followup.mockReset(); service.steer.mockReset(); service.followupList.mockReset();
-    service.followupList.mockResolvedValue({ items: [] }); service.history.mockReset(); service.history.mockResolvedValue({ messages: [] });
+    service.followupList.mockResolvedValue({ items: [] }); service.history.mockReset(); service.history.mockResolvedValue({ messages: [] }); service.recoveryList.mockReset(); service.recoveryList.mockResolvedValue({ items: [] });
     service.followup.mockResolvedValue({ status: "queued" }); service.steer.mockResolvedValue({ status: "accepted" });
   });
   afterEach(() => vi.restoreAllMocks());
@@ -194,6 +195,29 @@ describe("confirmed conversation sends", () => {
     expect(element.textContent).not.toContain(`ID: ${id}`);
     await act(async () => { textarea.closest("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); await flush(); });
     expect(service.ingress).toHaveBeenCalledWith({ prompt: "A different question" });
+    await act(async () => root.unmount()); element.remove();
+  });
+
+  it("refreshes a recovery item before showing it and focuses the updated request", async () => {
+    const id = "2".repeat(32); window.localStorage.setItem("alphonse.desktop.conversationFailures.fixture", JSON.stringify([{ messageId: id, failureCode: "time_limit", dismissed: false }]));
+    service.history.mockResolvedValue({ messages: [{ id, role: "user", source: "desktop", content: "Previous request", created_at: new Date().toISOString() }] });
+    const pending = { message_id: id, prompt: "Previous request", status: "pending", can_abandon: false };
+    let resolve!: (value: unknown) => void;
+    service.recoveryList.mockImplementation(() => new Promise((done) => { resolve = done; }));
+    // Keep the first discovery immediate, then defer the review refresh.
+    service.recoveryList.mockResolvedValueOnce({ items: [pending] });
+    const element = document.createElement("div"); document.body.appendChild(element); const root = createRoot(element);
+    await act(async () => { root.render(<App />); await flush(); }); await act(async () => { await flush(); });
+    const button = [...element.querySelectorAll("button")].find((item) => item.textContent === "Review request status")!;
+    expect(button).toBeTruthy();
+    await act(async () => { button.click(); await flush(); });
+    const panel = element.querySelector('[aria-label="Needs your attention workspace"]')!;
+    expect(panel.textContent).toContain("Checking request status");
+    expect(panel.textContent).not.toContain("Waiting to be processed");
+    await act(async () => { resolve({ items: [{ ...pending, status: "failed" }] }); await flush(); });
+    await act(async () => { await new Promise((done) => setTimeout(done, 30)); });
+    expect(panel.textContent).toContain("Needs attention");
+    expect(document.activeElement?.id).toBe(`owner-recovery-${id}`);
     await act(async () => root.unmount()); element.remove();
   });
 

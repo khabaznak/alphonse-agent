@@ -39,7 +39,7 @@ export function focusRequestWorkLog(messageId: string): boolean {
 }
 
 /** Render only bounded descriptions and counts returned by the owner-scoped endpoint. */
-export function ConversationWorkLog({ request, messageId, active, summary = "Work log", showEvidenceLimits = false, labelContextId, disclosureId }: { request: OwnerRequest; messageId: string; active: boolean; summary?: string; showEvidenceLimits?: boolean; labelContextId?: string; disclosureId?: string }) {
+export function ConversationWorkLog({ request, messageId, active, summary = "Work log", showEvidenceLimits = false, labelContextId, disclosureId, onActiveUpdate }: { request: OwnerRequest; messageId: string; active: boolean; summary?: string; showEvidenceLimits?: boolean; labelContextId?: string; disclosureId?: string; onActiveUpdate?: () => void }) {
   const [open, setOpen] = useState(active);
   const wasActive = useRef(active);
   useEffect(() => {
@@ -79,6 +79,8 @@ export function ConversationWorkLog({ request, messageId, active, summary = "Wor
     const timer = active ? window.setInterval(() => void load(), 2000) : undefined;
     return () => { cancelled = true; if (timer) window.clearInterval(timer); };
   }, [request, messageId, active, open]);
+
+  useEffect(() => { if (active) onActiveUpdate?.(); }, [active, log, unavailable, onActiveUpdate]);
 
   const groups: { event: WorkEvent; count: number }[] = [];
   for (const event of log?.events ?? []) {

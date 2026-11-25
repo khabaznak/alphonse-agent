@@ -116,6 +116,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const activeHistoryRefreshRef = useRef(false);
   const messagesDuringConversationReloadRef = useRef(new Map<number, ChatMessage[]>());
   const timelineRef = useRef<HTMLDivElement | null>(null);
+  const followTimelineRef = useRef(true);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const surfacesRef = useRef<Record<string, A2uiSurface>>({});
   const dismissedScheduledSurfacesRef = useRef(readDismissedScheduledSurfaces(window.localStorage));
@@ -268,7 +269,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       const items = await listOwnerRecovery(daemonRequest);
       if (generation === ownerRecoveryGeneration.current) {
         setOwnerRecoveryItems(items);
-        setOwnerRecoveryNotice((notice) => notice === "Unfinished requests could not be checked." ? "" : notice);
+        setOwnerRecoveryNotice((notice) => ["Unfinished requests could not be checked.", "Checking request status…"].includes(notice) ? "" : notice);
       }
     } catch {
       if (generation === ownerRecoveryGeneration.current) setOwnerRecoveryNotice("Unfinished requests could not be checked.");
@@ -322,6 +323,12 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
     }
   };
   useEffect(() => { setComposerProject(null); }, [user]);
+  const followActiveLog = useCallback(() => {
+    window.requestAnimationFrame(() => {
+      const element = timelineRef.current;
+      if (element && workspaceRef.current === "conversation" && followTimelineRef.current) element.scrollTop = element.scrollHeight;
+    });
+  }, []);
   const { state: drawer, act: changeDrawer, saveFailed: drawerSaveFailed, reconcile: reconcileWidgets } = useAtHand(user);
   const [widgetContext, setWidgetContext] = useState<WidgetContext>();
   const [widgetItem, setWidgetItem] = useState<{ member: string; artifactId: string; itemId: string; family: CoordinationData["family"] }>();
@@ -914,21 +921,20 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       })),
     ).map((item) => {
       if (item.kind === "message") {
-        return <ConversationTimelineEntry key={item.key} message={item.message} questions={questions} user={user} timezone={timezone} onDone={poll} projectName={contextProjects.find((projectItem) => projectItem.project_id === item.message.project_id)?.name || ""} memoize={diagnosticBehavior.memoizesMessages} renderMarkdown={!diagnosticBehavior.plainTextMessages} failures={ownerFailures} workLogRequest={isAdmin && connected ? daemonRequest : undefined} active={ownerConversationWorking && item.message.id === activeConversationMessageId} onDraftQuestion={isAdmin ? (id, content, createdAt) => { setOwnerReplyTarget(""); setFailedReferenceError(""); setFailedReference({ owner: user, id, quote: quotedRequestText(content), createdAt }); setPrompt((current) => draftQuestionAboutRequest(current, content)); window.requestAnimationFrame(() => textareaRef.current?.focus()); } : undefined} onReviewRecovery={isAdmin && ownerRecoveryItems.some((entry) => entry.message_id === item.message.id) ? (id) => { recoveryReturnMessageId.current = id; setOwnerRecoveryFocus(id); navigate("attention"); } : undefined} onOpenModelSettings={isAdmin ? () => { setSettingsTab("model"); navigate("settings"); } : undefined} onFailureDismissedChange={(messageId, dismissed) => updateOwnerFailures((current) => current.map((entry) => entry.messageId === messageId ? { ...entry, dismissed } : entry))} />;
+        return <ConversationTimelineEntry key={item.key} message={item.message} questions={questions} user={user} timezone={timezone} onDone={poll} projectName={contextProjects.find((projectItem) => projectItem.project_id === item.message.project_id)?.name || ""} memoize={diagnosticBehavior.memoizesMessages} renderMarkdown={!diagnosticBehavior.plainTextMessages} failures={ownerFailures} workLogRequest={isAdmin && connected ? daemonRequest : undefined} onActiveLogUpdate={followActiveLog} active={ownerConversationWorking && item.message.id === activeConversationMessageId} onDraftQuestion={isAdmin ? (id, content, createdAt) => { setOwnerReplyTarget(""); setFailedReferenceError(""); setFailedReference({ owner: user, id, quote: quotedRequestText(content), createdAt }); setPrompt((current) => draftQuestionAboutRequest(current, content)); window.requestAnimationFrame(() => textareaRef.current?.focus()); } : undefined} onReviewRecovery={isAdmin && ownerRecoveryItems.some((entry) => entry.message_id === item.message.id) ? (id) => { recoveryReturnMessageId.current = id; setOwnerRecoveryItems([]); setOwnerRecoveryNotice("Checking request status…"); setOwnerRecoveryFocus(id); navigate("attention"); void refreshOwnerRecovery(); } : undefined} onOpenModelSettings={isAdmin ? () => { setSettingsTab("model"); navigate("settings"); } : undefined} onFailureDismissedChange={(messageId, dismissed) => updateOwnerFailures((current) => current.map((entry) => entry.messageId === messageId ? { ...entry, dismissed } : entry))} />;
       }
       const archivedSurface = archivedProgress[item.taskId];
       const surface = archivedSurface || surfaces[`task-progress:${item.taskId}`];
       return surface ? <TaskProgressBubble key={item.key} surface={surface} archived={Boolean(archivedSurface)} connected={connected} timezone={timezone} /> : null;
-    }), [archivedProgress, clientId, connected, contextProjects, diagnosticBehavior.memoizesMessages, diagnosticBehavior.plainTextMessages, messages, ownerConversation, ownerFailures, ownerRecoveryItems, ownerConversationWorking, activeConversationMessageId, isAdmin, poll, progressTaskIds, questionTaskIds, questions, surfaces, timelineRenderVersion, timezone, user]);
+    }), [archivedProgress, clientId, connected, contextProjects, diagnosticBehavior.memoizesMessages, diagnosticBehavior.plainTextMessages, messages, ownerConversation, ownerFailures, ownerRecoveryItems, ownerConversationWorking, activeConversationMessageId, isAdmin, poll, refreshOwnerRecovery, followActiveLog, progressTaskIds, questionTaskIds, questions, surfaces, timelineRenderVersion, timezone, user]);
 
   useEffect(() => {
     if (workspace !== "attention" || !ownerRecoveryFocus) return;
     const frame = window.requestAnimationFrame(() => {
-      focusOwnerRecovery(ownerRecoveryFocus);
-      setOwnerRecoveryFocus("");
+      if (focusOwnerRecovery(ownerRecoveryFocus)) setOwnerRecoveryFocus("");
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [workspace, ownerRecoveryFocus]);
+  }, [workspace, ownerRecoveryFocus, ownerRecoveryItems]);
 
   useEffect(() => {
     if (workspace !== "conversation" || !questionFocusRef.current) return;
@@ -989,7 +995,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
           </div>
         </header>
         {error && <div className="error" role="alert">{error}</div>}
-        <div id="conversation-timeline" className="timeline" ref={timelineRef} tabIndex={-1} aria-live="polite">
+        <div id="conversation-timeline" className="timeline" ref={timelineRef} tabIndex={-1} aria-live="polite" onScroll={(event) => { const element = event.currentTarget; followTimelineRef.current = element.scrollHeight - element.scrollTop - element.clientHeight <= 24; }}>
           {timelineNodes}
           {ownerConversationWorking && conversationDay === localDay(timezone) && <ConversationActivity />}
           <OwnerContinuation key={user} request={daemonRequest} active={isAdmin && connected && ownerContinuationAvailable && conversationDay === localDay(timezone)} />
