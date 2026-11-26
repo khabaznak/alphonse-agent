@@ -33,7 +33,8 @@ from .owner_named_skill import OWNER_NAMED_SKILL_TOOL_ID, explicit_requested_nam
 from .owner_gmail import OWNER_GMAIL_TOOL_ID, valid_owner_gmail, owner_gmail_unit
 from .owner_calendar import OWNER_CALENDAR_TOOL_ID, calendar_window, valid_owner_calendar
 from .owner_gmail_search import (
-    OWNER_GMAIL_SEARCH_TOOL_ID, gmail_search_arguments, gmail_search_prompt, private_gmail_search_result,
+    OWNER_GMAIL_SEARCH_TOOL_ID, final_gmail_search_result, gmail_search_arguments, gmail_search_can_refine,
+    gmail_search_prompt, new_gmail_search_attempt, owner_gmail_planner_labels, private_gmail_search_result,
     valid_owner_gmail_search,
 )
 from .owner_schedules import OWNER_SCHEDULES_TOOL_ID, valid_schedules_observation
@@ -383,14 +384,29 @@ class OwnerReadConversationProcessor:
                 allow_owner_host_bash=host_bash_enabled)
             mail_summary_chooser = RouterCandidateChooser(router=context.inference, task=task, tools=(),
                 max_input_tokens=65536, cancellation_checker=context.is_cancelled, private_mail_summary=True)
+            if gmail_search_enabled:
+                refinement_descriptor = replace(search_descriptor, description=search_descriptor.description +
+                    ' The previous searches shown in the observations returned zero matches in their stated scopes. '
+                    'If an empty query relied on an exact phrase or unverified sender filter, try a simpler distinctive '
+                    'search term in the most relevant authorized label. Consider a different relevant authorized label '
+                    'if the previous scope may have excluded the result. '
+                    'Respect any scope and dates the user specified. If no useful authorized refinement remains, '
+                    'return an answer. The host will report the verified search result.')
+                mail_refinement_chooser = RouterCandidateChooser(router=context.inference, task=task,
+                    tools=(refinement_descriptor,), max_input_tokens=65536, cancellation_checker=context.is_cancelled)
+
             def chooser(projection: str, max_output_tokens: int) -> dict:
                 mail = gmail_search_observation()
                 if mail is not None:
-                    decision = mail_summary_chooser(projection, min(4096, max_output_tokens))
-                    if decision.get('kind') == 'question' and not private_gmail_search_result(mail):
+                    refining = can_refine_gmail_search()
+                    mail_chooser = mail_refinement_chooser if refining else mail_summary_chooser
+                    decision = mail_chooser(projection, min(4096, max_output_tokens))
+                    if ((decision.get('kind') == 'question' and not private_gmail_search_result(mail))
+                            or (refining and decision.get('kind') == 'tool'
+                                and not allowed(actor, OWNER_GMAIL_SEARCH_TOOL_ID, decision['arguments']))):
                         # The verified empty/blocked observation supplies the
-                        # answer. The host formats it without model assertions.
-                        return {**decision, 'kind': 'answer', 'text': 'Gmail search result recorded.'}
+                        # answer when no executable refinement was proposed.
+                        return {'kind': 'answer', 'text': 'Gmail search result recorded.', 'usage': decision['usage']}
                     return decision
                 decision = base_chooser(projection, max_output_tokens)
                 # Owner search requires a complete page before it becomes
@@ -479,8 +495,14 @@ class OwnerReadConversationProcessor:
                 return (load_bound_owner_question(conn, actor, clarification) if clarification is not None
                         else load_bound_owner_followup(conn, actor, followup))
 
+        def gmail_searches():
+            return [(args, payload) for tool, args, payload in observations.values() if tool == OWNER_GMAIL_SEARCH_TOOL_ID]
+
         def gmail_search_observation():
-            return next((payload for tool, _, payload in observations.values() if tool == OWNER_GMAIL_SEARCH_TOOL_ID), None)
+            return final_gmail_search_result(payload for _, payload in gmail_searches())
+
+        def can_refine_gmail_search():
+            return gmail_search_enabled and gmail_search_can_refine([payload for _, payload in gmail_searches()])
 
         def private_provider_observed() -> bool:
             return any(tool in {OWNER_CALENDAR_TOOL_ID, OWNER_GMAIL_SEARCH_TOOL_ID}
@@ -489,14 +511,19 @@ class OwnerReadConversationProcessor:
         def allowed(actor_id: str, tool_id: str, args: dict[str, Any]) -> bool:
             if actor_id != actor or not self._authorized(task, context) or not isinstance(args, dict):
                 return False
-            if private_provider_observed():
-                return False
             if tool_id == OWNER_GMAIL_SEARCH_TOOL_ID:
+                if not gmail_search_enabled or atomic is None:
+                    return False
                 try:
                     gmail_search_arguments(args)
+                    if private_provider_observed():
+                        return can_refine_gmail_search() and new_gmail_search_attempt(
+                            actor, args, gmail_searches(), context=execution_context)
                 except ValueError:
                     return False
-                return gmail_search_enabled and atomic is not None
+                return True
+            if private_provider_observed():
+                return False
             if tool_id == OWNER_CALENDAR_TOOL_ID:
                 try:
                     zone = context.user_timezone_provider(actor) if 'day_offset' in args else None
@@ -734,7 +761,7 @@ class OwnerReadConversationProcessor:
                     return json.dumps({'status': payload['status'],
                         'notice': 'The host will deliver the Calendar result privately. Return an answer now.'})
                 if tool_id == OWNER_GMAIL_SEARCH_TOOL_ID:
-                    return gmail_search_prompt(payload)
+                    return gmail_search_prompt(payload, refinement_arguments=args if can_refine_gmail_search() else None)
                 if tool_id == READ_MEMORY_SOURCE_TOOL_ID:
                     pages = conversation_read_sequences(actor, observations)[payload['items'][0]['source_id']]
                     # Never project an incomplete prefix as if it were the
@@ -799,10 +826,16 @@ class OwnerReadConversationProcessor:
             previous = linked_question()
             steering = atomic.steering_context() if atomic is not None else []
             history, history_coverage = recent_history(actor_id)
-            if not history and previous is None and not steering:
+            labels = None
+            if gmail_search_enabled and atomic is not None and (not private_provider_observed() or can_refine_gmail_search()):
+                labels = owner_gmail_planner_labels(actor_id, context=execution_context)
+            has_labels = labels is not None and bool(labels['labels'])
+            if not history and previous is None and not steering and not has_labels:
                 return str(task.goal or '')
             payload = {'recent_conversation': history, 'recent_window_coverage': history_coverage,
                        'new_message': str(task.goal or '')}
+            if has_labels:
+                payload['authorized_gmail_search_labels'] = labels
             # Only the same actor's preceding, same-channel trusted ingress
             # checkpoints can explain a prior failure. These fixed categories
             # are not proof that an in-flight action did or did not take effect.

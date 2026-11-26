@@ -17,11 +17,14 @@ selection and Gmail content searches can renew Google credentials with the
 existing connection. Reconnect if Google withdraws or expires its authorization.
 
 When asked in the owner’s Desktop Conversation, Alphonse searches one granted
-label and can summarize excerpts from up to 20 matching messages. Use the
-full Gmail name for a nested label, such as `Family/School`. A message may be
+label per attempt and can summarize excerpts from up to 20 matching messages.
+Use the full Gmail name for a nested label, such as `Family/School`. A message may be
 archived or outside Inbox and still match the selected label. A request that
-omits a label defaults to Inbox. The search normally covers 90 days and may
-extend to 365 days. The reply identifies its scope, sources and any incomplete
+omits a label defaults to Inbox. The search planner sees up to 32 unambiguous
+label names with live content grants. When a search completes with zero
+matches, the planner may make up to two different authorized Gmail searches.
+It sees the empty searches' query and scope during refinement. The search
+normally covers 90 days and may extend to 365 days. The reply identifies its scope, sources and any incomplete
 coverage. When asked, the summary draws out deadlines and action items with
 numbered references to the reviewed messages. [Gmail search semantics](https://developers.google.com/workspace/gmail/api/guides/filtering)
 
