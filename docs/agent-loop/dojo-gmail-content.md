@@ -129,3 +129,35 @@ showed the expected Mexico City time, an all-day event with an inclusive
 display end date, and an event with only a specified start time. These
 observations cover the fixture interaction and the synthetic owner-worker run.
 They leave general summary quality and screen-reader use unassessed.
+
+## Action digest qualification
+
+The Action digest uses the same owner worker and numbered source observations.
+On the [initial structured run](evidence/dojo-gmail-action-digest-20261125.jsonl),
+the model found the revised deadline and its two sources, but kept the deadline
+in prose above the undated tasks in the plain-text fallback. The
+[retest](evidence/dojo-gmail-action-digest-retry-20261125.jsonl) after clarifying
+the prompt put registration in a dated row, cited the old and revised notices,
+left the unspecified year and timezone unknown, and included the two undated
+tasks. It returned four cited source rows, reported partial coverage, and
+completed private pickup in 14.565 seconds over two model calls. Usage was
+28,125 input and 354 output tokens. Both runs used synthetic provider messages
+with real inference and preserved redacted conversation history.
+
+The separate [Critic fixture](../../desktop/tests/critic-action-digest/README.md)
+uses production projectors and the production Desktop renderer. The Critic
+scored it 8.8/10 and passed it at 8.9/10 after tightening Markdown spacing and
+widening the time rail. At 380 px, both cards fit without horizontal
+scrolling. Tab and Enter opened source 8, moved focus to its excerpt, and
+preserved the coverage note. The fixture also exercised literal provider
+punctuation, empty results, local date groups, an overnight continuation, an
+unspecified end time, and a multi-day all-day event. The rating covers these
+synthetic states. General inference accuracy and screen readers were not assessed.
+
+In a native window connected to the local Desktop daemon, the live Gmail
+request reviewed 19 messages from the authorized label and showed partial
+coverage. It rendered two action rows and seven cited email sources. Selecting
+a source opened the disclosure, displayed the corresponding excerpt, and moved
+focus to that source. A separate live Calendar request displayed one event
+under its local date in the Mexico City timezone. Multi-day grouping was
+exercised with the synthetic fixture. Live message and event content are omitted.

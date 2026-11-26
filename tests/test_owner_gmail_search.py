@@ -8,6 +8,7 @@ import pytest
 
 from alphonse.agent_v2.accounts import GMAIL_CONTENT_OPERATION
 from alphonse.agent_v2.conversations import SQLiteConversationStore
+from alphonse.agent_v2.core.intelligence.simple_loop.gmail_digest import parse_gmail_digest
 from alphonse.agent_v2.core.intelligence.simple_loop.owner_gmail_search import (
     OwnerGmailSearchService,
     execute_owner_gmail_search,
@@ -44,6 +45,27 @@ def mail(id='retained', *, age_days=1, labels=('INBOX',)):
                 '<img src="https://mail-tracker.invalid"><script>HIDDEN_SCRIPT</script>')}},
                 {'mimeType': 'text/plain', 'filename': 'invoice.txt',
                  'body': {'attachmentId': 'fixture_attachment', 'data': encoded('PRIVATE_ATTACHMENT')}}]}}
+
+
+def test_action_digest_preserves_partial_dates_and_accepts_only_observed_sources():
+    def action(title, when, sources, date=None):
+        return {'date': date, 'when': when, 'title': title, 'detail': '', 'sources': sources}
+
+    digest = parse_gmail_digest(json.dumps({
+        'summary': '**Current deadline** [8](#source-8)',
+        'actions': [
+            action('Pack an apron', '', [7]),
+            action('Register', 'Dec 3\n17:00 · Mexico City', [8, 2, 8]),
+            action('Invented source', '', [21]),
+            action('Bring supplies', 'Dec 2', [1], '2026-12-02'),
+            action('Invalid date', 'Dec 34', [1], '2026-12-34'),
+        ],
+    }), count=12)
+    assert [item.title for item in digest.actions] == ['Bring supplies', 'Register', 'Pack an apron']
+    assert digest.actions[1].date == '' and digest.actions[1].when.startswith('Dec 3')
+    assert digest.actions[1].sources == (8, 2)
+    assert digest.cited_sources(12) == {1, 2, 7, 8}
+    assert 'No date given · Pack an apron' in digest.as_text()
 
 
 def test_inbox_content_counts_and_content_permissions_are_distinct(f):

@@ -2,7 +2,7 @@ import { memo } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import { FileText } from "lucide-react";
 import remarkGfm from "remark-gfm";
-import { A2uiComponentTree } from "./a2ui";
+import { PrivateProviderResult } from "./a2ui";
 import { formatMessageTime } from "./messageTime";
 import type { ChatMessage } from "./types";
 
@@ -26,7 +26,7 @@ export function ConversationMessage({ message, timezone, projectName = "", rende
     {message.source && !["desktop", "ledger"].includes(message.source) && <small className="message-source" title={`Sent from ${message.source}`}>↗ {sourceLabel(message.source)}</small>}
     {message.project_id && <small className="message-project-association" title="Task project context">Project · {projectName || message.project_id}</small>}
     {message.role === "assistant" && message.private_reply_owner && message.private_reply_surface
-      ? <A2uiComponentTree surface={message.private_reply_surface} dataModel={message.private_reply_surface.dataModel} setDataModel={() => {}} />
+      ? <PrivateProviderResult key={message.private_reply_surface.surfaceId} surface={message.private_reply_surface} />
       : message.role === "assistant" && renderMarkdown && !message.private_reply_plain_text
         ? <div className="message-markdown"><ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={MARKDOWN_COMPONENTS}>{message.content}</ReactMarkdown></div>
         : message.content}

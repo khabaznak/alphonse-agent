@@ -27,8 +27,11 @@ numbered references to the reviewed messages. [Gmail search semantics](https://d
 
 The configured inference model receives the bounded matching excerpts in a
 summary step with no Alphonse tools. Email text remains untrusted evidence.
-The private result is rendered as a read-only A2UI card in Desktop with
-coverage and expandable sources. Older Desktop versions can display the
+The private result is rendered as a read-only A2UI card. Action reviews put
+dated rows before undated tasks and keep search coverage visible. Numbered
+citations open and focus the exact email excerpt within the card. Headings,
+lists and emphasis are formatted in Alphonse's synthesis. Provider fields
+and excerpts are literal text. Older Desktop versions can display the
 plain-text reply. The task checkpoint
 holds bounded excerpts and the draft for verified pickup. Ordinary conversation
 history records a receipt without message content. Google access, the local
