@@ -548,7 +548,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
             // Preserve the last list and continue pickup/acknowledgement of existing work.
           }
           let sawQuestion = false;
-          const acknowledgementRecovered = await ownerConversation.poll((messageId, answer, kind, committedEffect, privateReply) => {
+          const acknowledgementRecovered = await ownerConversation.poll((messageId, answer, kind, committedEffect, privateReply, privateSurface) => {
             if (ownerConversationRef.current !== ownerConversation) return;
             appendMessage({
               // Match the daemon's durable outbound:owner:<message_id> source
@@ -557,6 +557,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
               created_at: new Date().toISOString(), project_id: "", committed_effect: committedEffect,
               private_reply_owner: privateReply ? user : undefined,
               private_reply_plain_text: privateReply === "gmail" || undefined,
+              private_reply_surface: privateSurface,
             });
             sawQuestion = kind === "question";
             setOwnerClarificationNotice(kind === "question"

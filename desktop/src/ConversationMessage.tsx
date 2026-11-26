@@ -2,6 +2,7 @@ import { memo } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import { FileText } from "lucide-react";
 import remarkGfm from "remark-gfm";
+import { A2uiComponentTree } from "./a2ui";
 import { formatMessageTime } from "./messageTime";
 import type { ChatMessage } from "./types";
 
@@ -24,7 +25,11 @@ export function ConversationMessage({ message, timezone, projectName = "", rende
   return <article className={`message ${message.role} conversation-message`} aria-label={message.role === "assistant" ? "Alphonse" : message.role === "user" ? "You" : "System notice"}>
     {message.source && !["desktop", "ledger"].includes(message.source) && <small className="message-source" title={`Sent from ${message.source}`}>↗ {sourceLabel(message.source)}</small>}
     {message.project_id && <small className="message-project-association" title="Task project context">Project · {projectName || message.project_id}</small>}
-    {message.role === "assistant" && renderMarkdown && !message.private_reply_plain_text ? <div className="message-markdown"><ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={MARKDOWN_COMPONENTS}>{message.content}</ReactMarkdown></div> : message.content}
+    {message.role === "assistant" && message.private_reply_owner && message.private_reply_surface
+      ? <A2uiComponentTree surface={message.private_reply_surface} dataModel={message.private_reply_surface.dataModel} setDataModel={() => {}} />
+      : message.role === "assistant" && renderMarkdown && !message.private_reply_plain_text
+        ? <div className="message-markdown"><ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={MARKDOWN_COMPONENTS}>{message.content}</ReactMarkdown></div>
+        : message.content}
     {message.committed_effect?.kind === "scheduled_task_cancelled" && <aside aria-label="Verified cancellation">
       Scheduled task cancelled: {message.committed_effect.name}.
       {message.committed_effect.execution_may_have_started && " The task may already have started."}

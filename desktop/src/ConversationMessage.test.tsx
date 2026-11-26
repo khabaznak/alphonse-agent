@@ -54,4 +54,18 @@ describe("conversation content", () => {
     expect(html).not.toContain("href=");
     expect(html).not.toContain("<img");
   });
+  it("renders the private result and a collapsed plain-text source disclosure", () => {
+    const message: ChatMessage = { id: "mail", role: "assistant", content: "fallback", private_reply_owner: "owner",
+      private_reply_surface: { surfaceId: "private-gmail:mail", catalogId: "alphonse.desktop.catalog.v2", dataModel: {}, components: {
+        root: { id: "root", component: "Card", children: ["sources"] },
+        sources: { id: "sources", component: "Disclosure", label: "Reviewed sources", children: ["subject"] },
+        subject: { id: "subject", component: "Text", text: "Packing [updated] <latest>" },
+      } } };
+    const html = render(message);
+    expect(html).toContain("<summary>Reviewed sources</summary>");
+    expect(html).not.toContain('<details open');
+    expect(html).toContain("Packing [updated] &lt;latest&gt;");
+    expect(html).not.toContain("fallback");
+    expect(render({ ...message, private_reply_owner: undefined })).not.toContain("Packing");
+  });
 });

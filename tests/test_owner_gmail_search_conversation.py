@@ -93,6 +93,11 @@ def test_search_evidence_and_summary_stay_in_private_desktop_path(f, tmp_path, c
             return
         draft = daemon.take_owner_desktop_draft(mid)
         assert draft['private_gmail'] is True and '11:30' in draft['message'] and SUBJECT in draft['message']
+        create, update = draft['private_a2ui']
+        assert create['createSurface']['surfaceId'] == f'private-gmail:{mid}'
+        assert create['createSurface']['sendDataModel'] is False
+        assert any(c.get('component') == 'Disclosure' for c in update['updateComponents']['components'])
+        assert BODY not in json.dumps(draft['private_a2ui'])
         daemon.acknowledge_owner_desktop_draft(mid, draft['acknowledgement_token'])
         assert all('11:30' not in item.content and SUBJECT not in item.content
                    for item in conversation.list(owner_user_id='owner'))

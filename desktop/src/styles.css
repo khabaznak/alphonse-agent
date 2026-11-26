@@ -562,6 +562,70 @@ a { color: var(--accent); }
 .question-card button.question-cancel:hover { background: var(--warning-soft); }
 .a2ui-status { color: var(--warning); }
 
+.provider-result-card {
+  display: grid;
+  gap: 10px;
+  max-width: 100%;
+  min-width: 0;
+  padding: clamp(13px, 2vw, 19px);
+  color: var(--text);
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  overflow-wrap: anywhere;
+}
+.provider-result-card :is(h4, p) { margin: 0; }
+.provider-result-card .a2ui-source { font: 650 17px/1.25 var(--font-display); }
+.provider-result-card :is(.a2ui-scope, .a2ui-qualifier, [class$="_meta"]) {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.provider-result-card .a2ui-coverage {
+  padding: 6px 10px;
+  border-inline-start: 2px solid var(--warning);
+  background: var(--warning-soft);
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.provider-result-card :is(.a2ui-findings, .a2ui-empty) {
+  white-space: pre-wrap;
+  line-height: 1.6;
+}
+.provider-result-card .a2ui-sources {
+  border-block: 1px solid var(--border);
+  padding-block: 8px;
+}
+.provider-result-card .a2ui-sources summary {
+  width: fit-content;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1.7;
+  font-weight: 650;
+}
+.provider-result-card .a2ui-sources .a2ui-column {
+  gap: 3px;
+  margin-block-start: 7px;
+  padding: 7px 9px;
+  border-radius: var(--radius-control);
+  background: var(--surface-subtle);
+  font-size: 13px;
+}
+.provider-result-card .a2ui-column[class*="a2ui-day_"] {
+  padding-block-start: 8px;
+  border-block-start: 1px solid var(--border);
+}
+.provider-result-card h4[class$="_heading"] { font-size: 13px; font-weight: 680; }
+.provider-result-card .a2ui-row[class*="_event_"] {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+  align-items: baseline;
+  font-size: 13px;
+}
+.provider-result-card [class$="_time"] { color: var(--muted); font-variant-numeric: tabular-nums; }
+
 .scheduled-task-card {
   display: grid;
   gap: 14px;

@@ -1,12 +1,13 @@
 /** Opt-in owner-conversation transport; the daemon remains the authority. */
 import type { CommittedEffect } from "./types";
+import { decodePrivateProviderSurface, type A2uiSurface } from "./a2ui";
 export type OwnerRequest = <T>(method: string, params?: Record<string, unknown>) => Promise<T>;
 
 type Pending = { messageId: string; pickupStarted: boolean; paused?: boolean; acknowledgementToken?: string; acknowledgementInFlight?: boolean; acknowledgementRetryAttempted?: boolean };
 type Status = "pending" | "continuation_paused" | "continuation_accepted" | "continuation_declined" | "ready" | "started_unconfirmed" | "client_acknowledged" | "failed" | "unavailable";
 export type OwnerCapability = { owner_only?: boolean; processing_ready?: boolean; continuation_available?: boolean; blocking_reason?: string | null; paused_legacy_requests?: number };
 type StatusReply = OwnerCapability & { status?: Status; failure_code?: string };
-type Pickup = { message_id: string; message: string; acknowledgement_token: string; delivery_status: string; kind?: "answer" | "question"; committed_effect?: CommittedEffect; private_calendar?: true; private_gmail?: true };
+type Pickup = { message_id: string; message: string; acknowledgement_token: string; delivery_status: string; kind?: "answer" | "question"; committed_effect?: CommittedEffect; private_calendar?: true; private_gmail?: true; private_a2ui?: unknown };
 type OwnerIngressReply = { message_id: string; accepted_at?: string };
 
 /** Prefer the daemon's durable ingress instant; older daemons may omit it. */
@@ -172,7 +173,7 @@ export class OwnerConversation {
     }
   }
 
-  async poll(onAnswer: (messageId: string, answer: string, kind: "answer" | "question", effect?: CommittedEffect, privateReply?: "calendar" | "gmail") => void): Promise<boolean> {
+  async poll(onAnswer: (messageId: string, answer: string, kind: "answer" | "question", effect?: CommittedEffect, privateReply?: "calendar" | "gmail", privateSurface?: A2uiSurface) => void): Promise<boolean> {
     let acknowledgementRecovered = false;
     for (const pending of this.pending.values()) {
       if (pending.pickupStarted) {
@@ -243,8 +244,11 @@ export class OwnerConversation {
             || typeof pickup.committed_effect.execution_may_have_started !== "boolean"))) {
         throw new Error("The answer could not be confirmed. It will not be fetched again automatically.");
       }
-      if (pickup.private_gmail) onAnswer(pending.messageId, pickup.message, "answer", pickup.committed_effect, "gmail");
-      else if (pickup.private_calendar) onAnswer(pending.messageId, pickup.message, "answer", pickup.committed_effect, "calendar");
+      const provider = pickup.private_gmail ? "gmail" : pickup.private_calendar ? "calendar" : undefined;
+      if (provider) {
+        const surface = decodePrivateProviderSurface(pickup.private_a2ui, pending.messageId, provider);
+        onAnswer(pending.messageId, pickup.message, "answer", pickup.committed_effect, provider, surface);
+      }
       else if (pickup.committed_effect) onAnswer(pending.messageId, pickup.message, pickup.kind ?? "answer", pickup.committed_effect);
       else onAnswer(pending.messageId, pickup.message, pickup.kind ?? "answer");
       pending.acknowledgementToken = pickup.acknowledgement_token;

@@ -172,6 +172,24 @@ describe("explicit owner conversation transport", () => {
     expect(seen).toHaveBeenCalledExactlyOnceWith(id, "Listo.", "answer", effect);
   });
 
+  it.each([undefined, { bad: "surface" }])("acknowledges the private Gmail fallback when A2UI is absent or invalid", async (surface) => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "experimental_owner_status") return { owner_only: true, processing_ready: true, status: "ready" };
+      if (method === "experimental_owner_ingress") return { message_id: id };
+      if (method === "experimental_owner_take_draft") return {
+        message_id: id, message: "Private fallback", kind: "answer", private_gmail: true, private_a2ui: surface,
+        acknowledgement_token: token, delivery_status: "started_unconfirmed",
+      };
+      return { status: "client_acknowledged" };
+    });
+    const conversation = new OwnerConversation(request as OwnerRequest);
+    await conversation.send("Find the workshop message");
+    const shown = vi.fn();
+    await conversation.poll(shown);
+    expect(shown).toHaveBeenCalledWith(id, "Private fallback", "answer", undefined, "gmail", undefined);
+    expect(request).toHaveBeenLastCalledWith("experimental_owner_ack_draft", { message_id: id, acknowledgement_token: token });
+  });
+
   it("does not display or acknowledge an unknown pickup kind", async () => {
     const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
       if (method === "experimental_owner_status") return params?.message_id ? { status: "ready" } : { processing_ready: true };

@@ -101,3 +101,31 @@ summary, five source rows and the incomplete coverage notice. The daemon
 recorded the exact granted label and the Desktop acknowledgement. This
 check confirmed live retrieval and rendering. The factual interpretation of
 the real mail was not assessed, and no message details are recorded here.
+
+## Fuller review and A2UI
+
+The `label-expanded` case supplies 12 disposable messages. The old deadline
+is near the top of the results, and the replacement deadline is in source
+8. Two other messages add preparation tasks, including a task with no separate
+deadline and an office opening time without a timezone. Gmail's simulated
+continuation makes coverage partial.
+
+- The [initial run](evidence/dojo-gmail-label-expanded-20261125.jsonl) stopped
+  on an unverified model login before any Gmail request.
+- The [retest](evidence/dojo-gmail-label-expanded-retry-20261125.jsonl) made one
+  exact-label list and 12 message reads. It reported the revised deadline in
+  Mexico City time, cited sources 2 and 8, preserved the missing deadline and
+  timezone, and cited the two preparation notices. Only the final call saw the
+  revised deadline excerpt. The private A2UI result contained 12 source rows,
+  and the client acknowledged it. The retest took 15.687 seconds and used
+  40,571 input and 288 output tokens over two model calls.
+
+The Critic prioritized action findings, prominent coverage, public-facing
+names and dates without opaque IDs, and a keyboard-operable source disclosure.
+In a disposable browser fixture using the delivered A2UI catalog, both cards
+fit at 420 pixels. Enter opened the Gmail disclosure, retained focus, and
+showed 12 sources with literal punctuation in a synthetic subject. Calendar
+showed the expected Mexico City time, an all-day event with an inclusive
+display end date, and an event with only a specified start time. These
+observations cover the fixture interaction and the synthetic owner-worker run.
+They leave general summary quality and screen-reader use unassessed.

@@ -15,7 +15,7 @@ from alphonse.agent_v2.core.questions import QuestionInterrupt
 
 A2UI_VERSION = "v0.9.1"
 ALPHONSE_DESKTOP_CATALOG_ID = "alphonse.desktop.catalog.v2"
-SUPPORTED_COMPONENTS = frozenset({"Card", "Row", "Column", "List", "Text", "Button", "TextInput", "Status", "Divider", "Icon", "CheckBox", "ChoicePicker", "DateTimeInput", "Table"})
+SUPPORTED_COMPONENTS = frozenset({"Card", "Row", "Column", "List", "Text", "Button", "TextInput", "Status", "Divider", "Icon", "CheckBox", "ChoicePicker", "DateTimeInput", "Table", "Disclosure"})
 SUPPORTED_ICONS = frozenset({"check", "info", "warning", "error", "calendar", "clock", "list", "progress"})
 
 
@@ -288,6 +288,9 @@ def validate_envelope(message: dict[str, Any]) -> None:
                 raise ValueError("a2ui_component_not_allowed")
             if kind == "Icon" and str(component.get("name") or "") not in SUPPORTED_ICONS:
                 raise ValueError("a2ui_icon_not_allowed")
+            if kind == "Disclosure" and (not isinstance(component.get("label"), str)
+                    or not component["label"].strip() or not isinstance(component.get("children"), list)):
+                raise ValueError("a2ui_disclosure_invalid")
             if kind in {"TextInput", "CheckBox", "DateTimeInput", "ChoicePicker"}:
                 value = component.get("value")
                 if not isinstance(value, dict) or not str(value.get("path") or "").startswith("/"):
