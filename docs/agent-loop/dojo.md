@@ -391,3 +391,11 @@ the generalized path to the actual owner worker with deterministic authorization
 effect verification and uncertain-effect recovery, then add a challenge with a
 real setback and multiple viable options. The current Bash-only fixture does not
 yet demonstrate those capabilities.
+
+## Activity and recovery experience
+
+The [activity UX exercise](dojo-activity-ux.md) records live and terminal owner-worker activity around a disposable multi-step request and an injected interruption. Its independent Critic rubric assesses the rendered experience and actionable recovery separately from IPC observations. The [scripted-provider receipt](dojo-activity-ux-scripted-receipt.json) records both the triggered fault and an early answer that did not trigger it; neither is a real-model or UX pass.
+
+## Exact failed-request reference
+
+The [failed-request reference exercise](dojo-failed-reference.md) uses two identical prompts with different injected failures and observes which checkpoint is projected into a selected follow-up. Its scripted receipt includes foreign-owner and stale-reference rejection; it does not claim a real-model or Desktop UX pass.

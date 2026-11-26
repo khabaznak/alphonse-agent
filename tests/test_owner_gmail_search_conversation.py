@@ -44,10 +44,11 @@ def inbox_fixture():
 class ScriptedSummary:
     supports_image_input = False
 
-    def __init__(self, *, request_tool_after_mail=False, question_after_mail=False):
+    def __init__(self, *, request_tool_after_mail=False, question_after_mail=False, summary=SUMMARY):
         self.prompts = []
         self.request_tool_after_mail = request_tool_after_mail
         self.question_after_mail = question_after_mail
+        self.summary = summary
 
     def generate_json(self, request):
         self.prompts.append(request.prompt)
@@ -59,7 +60,7 @@ class ScriptedSummary:
         elif self.question_after_mail:
             action = {'kind': 'question', 'tool_id': None, 'arguments': None, 'text': 'Can you grant access?'}
         else:
-            action = {'kind': 'answer', 'tool_id': None, 'arguments': None, 'text': SUMMARY}
+            action = {'kind': 'answer', 'tool_id': None, 'arguments': None, 'text': self.summary}
         return InferenceResult(json_value=action, raw_response=json.dumps(action),
                                usage={'input_tokens': 100, 'output_tokens': 45})
 
@@ -142,11 +143,12 @@ def test_empty_search_refinement_is_scoped_and_summary_stays_tool_free(f, tmp_pa
                    for item in conversation.list(owner_user_id='owner'))
 
 
-@pytest.mark.parametrize('case', ['authorized', 'count_only', 'revoked', 'tool_after_mail'])
+@pytest.mark.parametrize('case', ['authorized', 'count_only', 'revoked', 'tool_after_mail', 'bare_citation'])
 def test_search_evidence_and_summary_stay_in_private_desktop_path(f, tmp_path, case):
     seed_mail(f, content_grant=case != 'count_only')
     wire = inbox_fixture()
-    provider = ScriptedSummary(request_tool_after_mail=case == 'tool_after_mail', question_after_mail=case == 'count_only')
+    provider = ScriptedSummary(request_tool_after_mail=case == 'tool_after_mail', question_after_mail=case == 'count_only',
+                               summary=f'{SUMMARY} [1] [2]' if case == 'bare_citation' else SUMMARY)
     with calendar_worker(f, tmp_path, wire, provider) as (daemon, queue, conversation, _):
         daemon.runtime.owner_gmail_search_service = OwnerGmailSearchService(f.accounts, lambda _: f.service, transport=wire)
         mid = queue.enqueue_trusted_local_owner(prompt=GOAL, peer_uid=os.getuid())
@@ -176,7 +178,9 @@ def test_search_evidence_and_summary_stay_in_private_desktop_path(f, tmp_path, c
         assert create['createSurface']['surfaceId'] == f'private-gmail:{mid}'
         assert create['createSurface']['sendDataModel'] is False
         assert any(c.get('component') == 'Disclosure' for c in update['updateComponents']['components'])
-        assert BODY not in json.dumps(draft['private_a2ui'])
+        components = update['updateComponents']['components']
+        excerpts = {item['id']: item['text'] for item in components if item.get('variant') == 'quote'}
+        assert excerpts == ({'source_1_excerpt': BODY} if case == 'bare_citation' else {})
         daemon.acknowledge_owner_desktop_draft(mid, draft['acknowledgement_token'])
         assert all('11:30' not in item.content and SUBJECT not in item.content
                    for item in conversation.list(owner_user_id='owner'))

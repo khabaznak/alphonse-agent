@@ -1,0 +1,162 @@
+{
+  "provider": "scripted fixture, no live model",
+  "model_cost_usd": 0,
+  "attempts": {
+    "triggered": {
+      "scenario": "activity-ux",
+      "goal": "What was the latest plan for the imaginary neighborhood picnic, and what remains uncertain?",
+      "initial_ipc": {
+        "failure_code": "model_unavailable",
+        "status": "failed"
+      },
+      "live_work_log": {
+        "activity": {
+          "latest": {
+            "effects": "not_reported",
+            "outcome": "recorded",
+            "tool_kind": "conversation_search"
+          },
+          "pending_tool": false,
+          "recorded_action_count": 2,
+          "unconfirmed_effect_count": 0
+        },
+        "events": [
+          {
+            "label": "Searched conversation history",
+            "outcome": "Observation recorded"
+          },
+          {
+            "label": "Searched conversation history",
+            "outcome": "Observation recorded"
+          }
+        ],
+        "failure_code": null,
+        "notice": "This log shows recorded tool observations; it may not include every activity.",
+        "status": "running"
+      },
+      "terminal_work_log": {
+        "activity": {
+          "latest": {
+            "effects": "not_reported",
+            "outcome": "recorded",
+            "tool_kind": "conversation_search"
+          },
+          "pending_tool": false,
+          "recorded_action_count": 2,
+          "unconfirmed_effect_count": 0
+        },
+        "events": [
+          {
+            "label": "Searched conversation history",
+            "outcome": "Observation recorded"
+          },
+          {
+            "label": "Searched conversation history",
+            "outcome": "Observation recorded"
+          }
+        ],
+        "failure_code": "model_unavailable",
+        "notice": "This log shows recorded tool observations; it may not include every activity.",
+        "status": "blocked"
+      },
+      "recovery": {
+        "items": [
+          {
+            "can_abandon": false,
+            "message_id": "a24c72bdd44c44a18fe1bfd079089fbd",
+            "prompt": "What was the latest plan for the imaginary neighborhood picnic, and what remains uncertain?",
+            "status": "failed"
+          }
+        ]
+      },
+      "fault": "injected_after_two_selected_tools",
+      "calls": [
+        {
+          "status": "returned",
+          "kind": "tool",
+          "tool_id": "native.search_memory",
+          "usage": {
+            "input_tokens": 100,
+            "output_tokens": 20
+          }
+        },
+        {
+          "status": "returned",
+          "kind": "tool",
+          "tool_id": "native.search_memory",
+          "usage": {
+            "input_tokens": 100,
+            "output_tokens": 20
+          }
+        },
+        {
+          "status": "injected_failure"
+        }
+      ],
+      "elapsed_seconds": 0.439,
+      "product_path": "disposable owner worker and IPC, not Desktop rendering",
+      "critic_verdict": "not_assessed",
+      "passed": null,
+      "limitations": [
+        "Synthetic conversation and injected model failure; no household data or real-world outcome is established.",
+        "The trigger counts model selections; the work log independently shows what was actually recorded.",
+        "Desktop rendering, accessibility, recovery execution and human comprehension are not observed by this runner.",
+        "Scripted providers test plumbing only; provider-reported token usage is retained when available, not a dollar-cost estimate.",
+        "A single attempt does not establish general reliability, grounding, privacy or language coverage."
+      ]
+    },
+    "early_answer": {
+      "scenario": "activity-ux",
+      "goal": "What was the latest plan for the imaginary neighborhood picnic, and what remains uncertain?",
+      "initial_ipc": {
+        "status": "ready"
+      },
+      "live_work_log": null,
+      "terminal_work_log": {
+        "activity": {
+          "latest": null,
+          "pending_tool": false,
+          "recorded_action_count": 0,
+          "unconfirmed_effect_count": 0
+        },
+        "events": [],
+        "failure_code": null,
+        "notice": "This log shows recorded tool observations; it may not include every activity.",
+        "status": "completed"
+      },
+      "recovery": {
+        "items": [
+          {
+            "can_abandon": false,
+            "message_id": "05fcec5426ae4c198a795891fd643c61",
+            "prompt": "What was the latest plan for the imaginary neighborhood picnic, and what remains uncertain?",
+            "status": "ready"
+          }
+        ]
+      },
+      "fault": "not_triggered",
+      "calls": [
+        {
+          "status": "returned",
+          "kind": "answer",
+          "tool_id": null,
+          "usage": {
+            "input_tokens": 100,
+            "output_tokens": 20
+          }
+        }
+      ],
+      "elapsed_seconds": 0.102,
+      "product_path": "disposable owner worker and IPC, not Desktop rendering",
+      "critic_verdict": "not_assessed",
+      "passed": null,
+      "limitations": [
+        "Synthetic conversation and injected model failure; no household data or real-world outcome is established.",
+        "The trigger counts model selections; the work log independently shows what was actually recorded.",
+        "Desktop rendering, accessibility, recovery execution and human comprehension are not observed by this runner.",
+        "Scripted providers test plumbing only; provider-reported token usage is retained when available, not a dollar-cost estimate.",
+        "A single attempt does not establish general reliability, grounding, privacy or language coverage."
+      ]
+    }
+  }
+}

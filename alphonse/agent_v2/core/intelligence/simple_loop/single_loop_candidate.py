@@ -15,6 +15,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Callable
 from uuid import uuid4
 
+from alphonse.agent_v2.core.inference.models import ModelResponseParseError
 from .evidence_projection import EvidenceAccessError, EvidenceSource, project_evidence
 from .task_budget import BudgetExhausted, SQLiteTaskBudgetStore, SyntheticEvaluationBudgetStore
 from .prerequisite import FEEDBACK, MissingPrerequisite
@@ -66,9 +67,18 @@ class CandidateState:
     prerequisite_feedback: str = ''
     prerequisite_retries: int = 0
     retry_feedback_pending: bool = False
+    parse_repair_pending: bool = False
+
+    def request_parse_repair(self, budget) -> bool:
+        if self.invalid_decision_retries or budget.usage()['unknown_usage'] or not budget.within_work_limits():
+            return False
+        self.invalid_decision_retries = 1
+        self.decision_format_pending = True
+        self.parse_repair_pending = True
+        return True
 
     def snapshot(self) -> dict[str, Any]:
-        return {'schema_version': 6, **deepcopy(asdict(self))}
+        return {'schema_version': 7, **deepcopy(asdict(self))}
 
     @classmethod
     def restore(cls, snapshot: dict[str, Any]) -> 'CandidateState':
@@ -76,7 +86,7 @@ class CandidateState:
             raise ValueError('candidate_checkpoint_invalid')
         version = snapshot.get('schema_version')
         base = {'schema_version', 'task_id', 'actor', 'goal_source', 'evidence_sources', 'status', 'response', 'blocker', 'inflight'}
-        if type(version) is not int or version not in (1, 2, 3, 4, 5, 6):
+        if type(version) is not int or version not in (1, 2, 3, 4, 5, 6, 7):
             raise ValueError('candidate_checkpoint_version_unsupported')
         expected = base if version == 1 else base | {'unsupported_retries', 'recovery_pending'}
         if version >= 3:
@@ -87,6 +97,8 @@ class CandidateState:
             expected |= {'prerequisite_feedback', 'prerequisite_retries'}
         if version >= 6:
             expected |= {'retry_feedback_pending'}
+        if version >= 7:
+            expected |= {'parse_repair_pending'}
         if set(snapshot) != expected:
             raise ValueError('candidate_checkpoint_invalid')
         state = cls(**{key: deepcopy(value) for key, value in snapshot.items() if key != 'schema_version'})
@@ -102,6 +114,8 @@ class CandidateState:
                 or type(state.invalid_decision_retries) is not int or not 0 <= state.invalid_decision_retries <= 1
                 or type(state.decision_format_pending) is not bool
                 or (state.decision_format_pending and state.invalid_decision_retries == 0)
+                or type(state.parse_repair_pending) is not bool
+                or (state.parse_repair_pending and not state.decision_format_pending)
                 or not isinstance(state.answer_review_state, str)
                 or state.answer_review_state not in {'not_started', 'pending', 'used'}):
             raise ValueError('candidate_checkpoint_invalid')
@@ -291,6 +305,10 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
                 raise ValueError('candidate_pause_result_invalid')
             if paused:
                 return state
+        repairing_parse = state.parse_repair_pending
+        repair_failure = 'candidate_model_response_invalid' if repairing_parse else ''
+        if repairing_parse and _deadline_elapsed(host):
+            return _terminal(host, state, 'blocked', repair_failure)
         try:
             projection = _project(host, state)
             fingerprint = _projection_fingerprint(projection)
@@ -300,7 +318,7 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
             chooser_cap = getattr(host.choose, 'max_input_tokens', None)
             if chooser_cap is not None and (type(chooser_cap) is not int or chooser_cap <= 0
                                             or chooser_cap > host.input_reservation):
-                return _terminal(host, state, 'blocked', 'candidate_chooser_input_cap_exceeds_reservation')
+                return _terminal(host, state, 'blocked', repair_failure or 'candidate_chooser_input_cap_exceeds_reservation')
             # The projection length is only part of the input. A chooser may
             # add framing, tool schemas or other material; its complete cap and
             # the output cap must be enforced by the external transport.
@@ -315,7 +333,11 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
             if state.retry_feedback_pending:
                 decision_input += ('\nThe previous identical read failed, so its immediate repeat was not dispatched. '
                                    'Consider another available route or explain what remains unavailable.')
-            if state.decision_format_pending:
+            if repairing_parse:
+                decision_input += ('\nThe previous model response could not be decoded. Return one valid answer or '
+                                   'question using the recorded observations. Explain any limits of the evidence. '
+                                   'Do not request a tool or repeat a command.')
+            elif state.decision_format_pending:
                 decision_input += ('\nThe previous decision had an invalid format and was not executed. '
                                    'Return one valid action: an answer or question with text, '
                                    'or a tool action with tool_id and arguments.')
@@ -328,7 +350,7 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
                                    'give a supported answer. Do not read unrelated sources just to exhaust '
                                    'the catalog.')
             if len(decision_input.encode('utf-8')) > host.input_reservation:
-                return _terminal(host, state, 'blocked', 'candidate_input_reservation_too_small')
+                return _terminal(host, state, 'blocked', repair_failure or 'candidate_input_reservation_too_small')
             call_id = 'model-' + uuid4().hex
             amounts = {'actions': 0, 'model_calls': 1, 'input_tokens': host.input_reservation,
                        'output_tokens': host.output_reservation}
@@ -349,7 +371,7 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
                 state.answer_review_state = 'used'
             _save(host, state)
         except (BudgetExhausted, EvidenceAccessError, ValueError, KeyError) as exc:
-            return _terminal(host, state, 'blocked', type(exc).__name__ + ':' + str(exc))
+            return _terminal(host, state, 'blocked', repair_failure or type(exc).__name__ + ':' + str(exc))
         if _cancelled(host):
             # Proven undispatched here; retain the reservation conservatively.
             return _terminal(host, state, 'cancelled', 'cancelled')
@@ -358,28 +380,43 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
         if host.atomic_checkpoint is not None and not host.atomic_checkpoint.check_claim(call_id, 'model'):
             return _terminal(host, state, 'blocked', 'candidate_claim_unavailable')
         chooser_failure = ''
+        parse_error = None
         try:
             decision = host.choose(decision_input, host.output_reservation)
+        except ModelResponseParseError as exc:
+            parse_error = exc
+            decision = None
         except Exception as exc:
             chooser_failure = _chooser_failure_category(exc)
             logger.warning('simple_loop_decision_failed category=%s', chooser_failure)
             decision = None
         usage = decision.get('usage', {}) if isinstance(decision, dict) else {}
+        if parse_error is not None:
+            usage = parse_error.usage
+        parse_stage = parse_error.response_stage if parse_error is not None else None
         if not isinstance(usage, dict):
             usage = {}
         try:
             outcome = 'success' if isinstance(decision, dict) else 'failure'
+            retry_parse = False
             if host.atomic_checkpoint is None:
                 budget = host.budgets.load(state.task_id)
                 revision = budget.revision
                 budget.settle(call_id, outcome=outcome, input_tokens=usage.get('input_tokens'),
-                              output_tokens=usage.get('output_tokens'))
+                              output_tokens=usage.get('output_tokens'), parse_stage=parse_stage)
                 host.budgets.save(state.task_id, budget, expected_revision=revision)
+                if parse_error is not None:
+                    retry_parse = state.request_parse_repair(budget)
             else:
                 settled = host.atomic_checkpoint.settle_model(expected_version=host.atomic_checkpoint.version,
                     reservation_id=call_id, outcome=outcome, input_tokens=usage.get('input_tokens'),
-                    output_tokens=usage.get('output_tokens'), decision=decision, projection_fingerprint=fingerprint)
+                    output_tokens=usage.get('output_tokens'), decision=decision, projection_fingerprint=fingerprint,
+                    parse_stage=parse_stage)
                 budget = settled.budget
+                if parse_error is not None:
+                    # Settlement and the one retry grant share a transaction.
+                    state = settled.state
+                    retry_parse = not repairing_parse and state.parse_repair_pending
         except (ValueError, KeyError):
             return _terminal(host, state, 'blocked', 'candidate_model_settlement_unavailable')
         state.inflight = ''
@@ -387,7 +424,13 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
             _save(host, state)
         if _cancelled(host):
             return _terminal(host, state, 'cancelled', 'cancelled')
+        if parse_error is not None:
+            if retry_parse:
+                continue
+            return _terminal(host, state, 'blocked', 'candidate_model_response_invalid')
         if not isinstance(decision, dict):
+            if repairing_parse:
+                return _terminal(host, state, 'blocked', repair_failure)
             reasons = {
                 'input_exceeds_reservation': 'candidate_input_reservation_too_small',
                 'output_exceeds_reservation': 'candidate_output_reservation_too_small',
@@ -405,18 +448,22 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
         if any((value is not None and (type(value) is not int or value < 0))
                or (value is None and not host.synthetic_allow_unreported_usage)
                for value in (usage.get('input_tokens'), usage.get('output_tokens'))):
-            return _terminal(host, state, 'blocked', 'candidate_model_usage_unknown_or_overrun')
+            return _terminal(host, state, 'blocked', repair_failure or 'candidate_model_usage_unknown_or_overrun')
         if not budget.within_work_limits():
-            return _terminal(host, state, 'blocked', 'candidate_model_usage_overrun')
+            return _terminal(host, state, 'blocked', repair_failure or 'candidate_model_usage_overrun')
         if host.atomic_checkpoint is not None and getattr(host.atomic_checkpoint, 'steering_decision_stale', False):
             # Usage was settled, but a user correction arrived during the
             # model call. The atomic checkpoint intentionally kept no selected
             # decision; re-project the current goal before any action.
+            if repairing_parse:
+                return _terminal(host, state, 'blocked', repair_failure)
             continue
         # A still-authorized source may nevertheless have changed during inference.
         if not _is_fresh(host, state, fingerprint):
             return _terminal(host, state, 'blocked', 'candidate_evidence_changed_or_revoked')
         kind = decision.get('kind')
+        if repairing_parse and (not isinstance(kind, str) or kind not in {'answer', 'question'}):
+            return _terminal(host, state, 'blocked', repair_failure)
         valid_shape = (isinstance(kind, str) and (kind in {'answer', 'question'} or
                        (kind == 'tool' and isinstance(decision.get('tool_id'), str)
                         and isinstance(decision.get('arguments'), dict))))
@@ -432,11 +479,12 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
             return _terminal(host, state, 'blocked', 'candidate_decision_invalid')
         if state.decision_format_pending:
             state.decision_format_pending = False
+            state.parse_repair_pending = False
             _save(host, state)
         if kind in {'answer', 'question'}:
             text = decision.get('text')
             if not isinstance(text, str) or not text.strip():
-                return _terminal(host, state, 'blocked', 'candidate_empty_communication')
+                return _terminal(host, state, 'blocked', repair_failure or 'candidate_empty_communication')
             if kind == 'question':
                 if host.allow_question is not None:
                     try:
@@ -451,7 +499,7 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
                     return _terminal(host, state, 'blocked', 'candidate_steering_unavailable')
                 return _terminal(host, state, 'waiting_user', 'question_delivery_not_integrated', text,
                                  selected_decision=decision, projection_fingerprint=fingerprint)
-            if host.synthetic_preanswer_review and state.answer_review_state == 'not_started':
+            if not repairing_parse and host.synthetic_preanswer_review and state.answer_review_state == 'not_started':
                 # Hold the proposal; do not persist, return, or pass its text as
                 # evidence. The next budgeted decision sees only the current
                 # authorized projection and the neutral review request.
@@ -472,6 +520,8 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
             if _deadline_elapsed(host):
                 return _terminal(host, state, 'blocked', 'candidate_deadline_exceeded')
             if not grounded:
+                if repairing_parse:
+                    return _terminal(host, state, 'blocked', repair_failure)
                 missing = False
                 if host.remaining_advertised_evidence is not None and state.unsupported_retries < 2:
                     try:
@@ -609,6 +659,8 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
                 action_id, 'tool', tool_id=tool_id, arguments=args):
             return _terminal(host, state, 'blocked', 'candidate_claim_unavailable')
         private_digest = None
+        from .owner_calendar import OWNER_CALENDAR_TOOL_ID
+        from .owner_gmail_search import OWNER_GMAIL_SEARCH_TOOL_ID
         if tool_id == OWNER_KNOWLEDGE_TOOL_ID:
             from .owner_private_knowledge_read import PrivateKnowledgeRead
             try:
@@ -621,15 +673,15 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
                 result = {'status': 'success', 'result': deepcopy(private.observation)}
             except Exception:
                 result = {'status': 'failed', 'result': None}
-        elif tool_id in {'native.owner_gmail_search', 'native.owner_calendar_agenda'}:
-            # The generic invocation path redacts sensitive results before
-            # returning them. These owner-only reads feed the verified pickup
-            # path directly without publishing a generic event or memory entry.
+        elif tool_id in {OWNER_CALENDAR_TOOL_ID, OWNER_GMAIL_SEARCH_TOOL_ID}:
+            # Keep provider details outside generic result events, memory and telemetry.
+            if host.atomic_checkpoint is None or descriptor.metadata.get('sensitive_content') is not True:
+                return _terminal(host, state, 'blocked', 'candidate_private_read_unavailable')
             try:
-                observation = ToolInvocationService(context=host.context, task=host.task).execute_or_raise(tool_id, args)
-                result = {'status': 'success', 'result': observation}
+                payload = ToolInvocationService(context=host.context, task=host.task).execute_or_raise(tool_id, args)
             except Exception:
-                result = {'status': 'failed', 'result': None}
+                return _terminal(host, state, 'blocked', 'candidate_private_read_unavailable')
+            result = {'status': 'success', 'result': payload}
         elif disposable:
             try:
                 result = host.execute_disposable_tool(state.actor, tool_id, deepcopy(args))

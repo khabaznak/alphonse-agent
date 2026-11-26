@@ -103,6 +103,7 @@ class SQLiteMessageQueue:
 
     def enqueue_trusted_local_owner(self, *, prompt: str, peer_uid: int,
                                     reply_to_message_id: str | None = None,
+                                    failed_request_message_id: str | None = None,
                                     return_receipt: bool = False,
                                     _authority_binding: tuple[str, str] | None = None) -> str | dict[str, str]:
         """Atomically bind a local-peer ingress to its newly created queue row.
@@ -118,6 +119,8 @@ class SQLiteMessageQueue:
             raise ValueError('prompt_required')
         if type(return_receipt) is not bool:
             raise ValueError('owner_ingress_receipt_invalid')
+        if reply_to_message_id is not None and failed_request_message_id is not None:
+            raise ValueError('owner_failure_reference_unavailable')
         if _authority_binding is not None:
             if (not isinstance(_authority_binding, tuple) or len(_authority_binding) != 2
                     or any(not isinstance(value, str) or re.fullmatch(r'[0-9a-f]{32}', value) is None
@@ -145,6 +148,9 @@ class SQLiteMessageQueue:
             if reply_to_message_id is not None:
                 from alphonse.agent_v2.core.intelligence.simple_loop.owner_clarification import bind_owner_question
                 metadata_fields['owner_clarification'] = bind_owner_question(conn, actor, reply_to_message_id)
+            if failed_request_message_id is not None:
+                from alphonse.agent_v2.core.intelligence.simple_loop.owner_failure_diagnostics import bind_failed_request
+                metadata_fields['owner_failed_request'] = bind_failed_request(conn, actor, failed_request_message_id)
             metadata = json.dumps(metadata_fields, sort_keys=True)
             payload = [message_id, timestamp, prompt.strip(), actor, '', '', '', '', metadata]
             conn.execute("""CREATE TABLE IF NOT EXISTS v2_trusted_owner_ingress (
@@ -1288,6 +1294,8 @@ def finalized_owner_history_matches(conn: sqlite3.Connection, message_id: str, o
             source_metadata['owner_clarification'] = metadata['owner_clarification']
         if 'owner_followup' in metadata:
             source_metadata['owner_followup'] = metadata['owner_followup']
+        if 'owner_failed_request' in metadata:
+            source_metadata['owner_failed_request'] = metadata['owner_failed_request']
         payload = [message_id, origin['created_at'], raw['goal'], raw['user'], raw['project_id'],
                    raw['tag'], raw['correlation_id'], raw['memory_session_id'], json.dumps(source_metadata, sort_keys=True)]
         if version == 0:

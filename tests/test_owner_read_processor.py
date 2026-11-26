@@ -189,7 +189,9 @@ def test_owner_search_truncated_excerpt_is_discovery_only(tmp_path, read_source,
         assert len(provider.requests) == 2
     else:
         assert result.status == ProcessingStatus.FAILED
-        assert len(provider.requests) == 2
+        assert len(provider.requests) == 3
+        assert 'A previous answer was not verified' in provider.requests[-1].prompt
+        assert 'Moved to Saturday.' not in provider.requests[-1].prompt
 
 
 def test_shortened_preview_is_hidden_even_if_model_guesses_after_reading_other_source(tmp_path):

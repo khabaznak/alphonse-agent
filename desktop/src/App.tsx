@@ -1,3 +1,5 @@
+import { draftQuestionAboutRequest, quotedRequestText } from "./conversationFollowup";
+import { FailedReferenceNotice } from "./FailedReferenceNotice";
 import { ConversationComposer } from "./ConversationComposer";
 import { ConversationSuggestion } from "./ConversationSuggestion";
 import { draftTaskChanged, readConversationSendMode, writeConversationSendMode, type ConversationSendMode, type DraftTask } from "./conversationSendMode";
@@ -28,7 +30,8 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { daemonRequest, ensureDaemon, playAlertSound, showInFinder, stopDaemon } from "./api";
 import { TrustedLocalBashSettings } from "./TrustedLocalBashSettings";
-import { legacyNotificationReviewMessage, OwnerConversation, OwnerRequestFailed, ownerAcceptedAt, ownerBusyFor, ownerUnavailableMessage, type OwnerCapability } from "./ownerConversation";
+import { ModelSettingsSection } from "./ModelSettingsSection";
+import { legacyNotificationReviewMessage, FailedReferenceUnavailableError, OwnerConversation, OwnerRequestFailed, ownerAcceptedAt, ownerBusyFor, ownerUnavailableMessage, type OwnerCapability } from "./ownerConversation";
 import { abandonOwnerRequest, listOwnerRecovery, type OwnerRecoveryItem } from "./ownerRecovery";
 import { focusConversationRequest, focusOwnerRecovery, OwnerRecovery } from "./OwnerRecoveryPanel";
 import { OwnerContinuation } from "./OwnerContinuation";
@@ -57,7 +60,7 @@ import { readDismissedScheduledSurfaces, rememberDismissedScheduledSurface, with
 import { avatarState, avatarStateLabel, capdActivityLabel, canOpenSettingsSection, isCurrentDesktopAdmin, type Workspace, SETTINGS_SECTIONS } from "./layoutState";
 import { pollForKnownUser, reconcileQuestionSurfaces, reuseQuestions, withoutTaskProgressSurfaces } from "./pollState";
 import { appendQueueSample, type QueueSample } from "./queueHistory";
-import type { ActivityEvent, AgentDocument, ChatMessage, CodeModeSettings, InferenceSettings, MediaToolsSettings, MemorySettings, Project, Question, SystemOneSettings, WebToolsSettings } from "./types";
+import type { ActivityEvent, AgentDocument, ChatMessage, CodeModeSettings, MediaToolsSettings, MemorySettings, Project, Question, SystemOneSettings, WebToolsSettings } from "./types";
 
 type Modal = "onboarding" | null;
 type SettingsTab = (typeof SETTINGS_SECTIONS)[number][0];
@@ -78,15 +81,6 @@ type PollResponse = {
   status: { active_work: Record<string, string>; activity: { state?: string }; queue?: { ready?: number; processing?: number; retry_wait?: number } };
 };
 type HistoryResponse = { messages: ChatMessage[] };
-type Provider = {
-  provider_key: string;
-  display_name: string;
-  models: Array<{ model_id: string; display_name: string }>;
-  catalog_cli_version?: string;
-  cli_version?: string;
-  cli_path?: string;
-  catalog_cli_matches_runtime?: boolean | null;
-};
 const SETTINGS_ICONS = { general: Settings, appearance: Palette, tools: Wrench, integrations: Plug, notifications: Bell, automations: CalendarClock, model: Brain, "system-one": Gauge, "agent-config": FileText, skills: Sparkles, members: UsersRound };
 const localDay = (timezone: string) => {
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone: timezone || "UTC", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
@@ -114,6 +108,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const activeHistoryRefreshRef = useRef(false);
   const messagesDuringConversationReloadRef = useRef(new Map<number, ChatMessage[]>());
   const timelineRef = useRef<HTMLDivElement | null>(null);
+  const followTimelineRef = useRef(true);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const surfacesRef = useRef<Record<string, A2uiSurface>>({});
   const dismissedScheduledSurfacesRef = useRef(readDismissedScheduledSurfaces(window.localStorage));
@@ -192,6 +187,9 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const [ownerQuestions, setOwnerQuestions] = useState<OwnerQuestion[]>([]);
   const [ownerQuestionScope, setOwnerQuestionScope] = useState("");
   const [ownerReplyTarget, setOwnerReplyTarget] = useState("");
+  const [failedReferenceError, setFailedReferenceError] = useState("");
+  const failedReferenceRemoveRef = useRef<HTMLButtonElement>(null);
+  const [failedReference, setFailedReference] = useState<{ owner: string; id: string; quote: string; createdAt?: string } | null>(null);
   const [ownerRecoveryStopping, setOwnerRecoveryStopping] = useState("");
   const [ownerRecoveryFocus, setOwnerRecoveryFocus] = useState("");
   const ownerRecoveryGeneration = useRef(0);
@@ -289,6 +287,8 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
     setOwnerQuestions([]);
     setOwnerQuestionScope("");
     setOwnerReplyTarget("");
+    setFailedReference(null);
+    setFailedReferenceError("");
     if (!isAdmin) {
       ++ownerRecoveryGeneration.current;
       ++ownerQuestionGeneration.current;
@@ -320,6 +320,12 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
     }
   };
   useEffect(() => { setComposerProject(null); }, [user]);
+  const followActiveLog = useCallback(() => {
+    window.requestAnimationFrame(() => {
+      const element = timelineRef.current;
+      if (element && workspaceRef.current === "conversation" && followTimelineRef.current) element.scrollTop = element.scrollHeight;
+    });
+  }, []);
   const { state: drawer, act: changeDrawer, saveFailed: drawerSaveFailed, reconcile: reconcileWidgets } = useAtHand(user);
   const [widgetContext, setWidgetContext] = useState<WidgetContext>();
   const [widgetItem, setWidgetItem] = useState<{ member: string; artifactId: string; itemId: string; family: CoordinationData["family"] }>();
@@ -568,10 +574,11 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
           setOwnerConversationBusy(ownerConversation.hasPending());
           if (acknowledgementRecovered) { ownerConversationNotice.current = ""; setError(""); }
         } catch (cause) {
+          if (ownerConversationRef.current !== ownerConversation) return;
           setOwnerConversationBusy(ownerConversation.hasPending());
           if (cause instanceof OwnerRequestFailed) {
             updateOwnerFailures((current) => [...current.filter((item) => item.messageId !== cause.messageId),
-              { messageId: cause.messageId, failureCode: cause.failureCode || "", dismissed: false }]);
+              { messageId: cause.messageId, failureCode: cause.failureCode || "", dismissed: false, recovery: cause.recovery }]);
             ownerConversationNotice.current = "";
             setError("");
           } else {
@@ -764,7 +771,6 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   }, [prompt, workspace]);
 
   const activeConversationMessageId = ownerConversation?.isWorking() ? ownerConversation.activeMessageId() : undefined;
-  const activeConversationMessage = messages.find((message) => message.id === activeConversationMessageId);
   const [draftTask, setDraftTask] = useState<DraftTask>(undefined);
   const [draftNeedsReview, setDraftNeedsReview] = useState(false);
   const reviewDraft = Boolean(prompt.trim()) && (draftNeedsReview || draftTaskChanged(draftTask, activeConversationMessageId));
@@ -772,11 +778,16 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
     if (!prompt.trim()) { setDraftTask(undefined); setDraftNeedsReview(false); }
     else if (draftTask === undefined) setDraftTask(activeConversationMessageId ?? null);
   }, [prompt, draftTask, activeConversationMessageId]);
+  const selectedFailure = failedReference?.owner === user && prompt.includes(failedReference.quote) ? failedReference : null;
+  useEffect(() => {
+    if (failedReference && (failedReference.owner !== user || !prompt.includes(failedReference.quote))) setFailedReference(null);
+  }, [failedReference, prompt, user]);
+
   const submitPrompt = async (mode: ConversationSendMode | "normal", expectedActiveMessageId?: string) => {
     const draftSnapshot = prompt;
     const value = draftSnapshot.trim();
     if (!value) return;
-    if (value.startsWith("/")) {
+    if (value.startsWith("/") && !selectedFailure) {
       const command = value.split(/\s+/, 1)[0].toLowerCase();
       if (command === "/killswitch") {
         setPrompt("");
@@ -816,6 +827,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
         if (ownerDrafts.some((draft) => draft.resolution === "unresolved") || (mode !== "queue" && uncertainFollowup.current?.user === user)) {
           throw new Error("A message submission is uncertain. Review the follow-up list before sending another message; your draft is preserved.");
         }
+        if (selectedFailure && (mode === "queue" || mode === "steer")) throw new Error("Remove the failed-request reference before steering or queueing. Your draft is preserved.");
         if (mode === "queue" || mode === "steer") {
           const activeId = ownerConversation.activeMessageId();
           if (!ownerConversation.isWorking() || !activeId || activeId !== expectedActiveMessageId) throw new Error("The active request changed or finished. Your draft was not sent; review it before sending.");
@@ -851,9 +863,10 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
         }
         setOwnerConversationBusy(true);
         const submittedAt = new Date().toISOString();
-        const queued = await ownerConversation.send(messagePrompt, ownerReplyTarget || undefined);
+        const queued = await ownerConversation.send(messagePrompt, ownerReplyTarget || undefined, selectedFailure?.id);
         setOwnerClarificationNotice("");
         setOwnerReplyTarget("");
+        setFailedReference((current) => current === selectedFailure ? null : current);
         setOwnerConversationBusy(true);
         setPrompt((current) => current === draftSnapshot ? "" : current);
         const acceptedAt = ownerAcceptedAt(queued.accepted_at, submittedAt);
@@ -870,6 +883,12 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
     } catch (cause) {
       if (ownerConversation && ownerConversationRef.current !== ownerConversation) return;
       const message = cause instanceof Error ? cause.message : "Message could not be queued";
+      if (cause instanceof FailedReferenceUnavailableError && selectedFailure) {
+        setOwnerConversationBusy(ownerConversation?.hasPending() || false);
+        setFailedReferenceError(selectedFailure.id);
+        window.requestAnimationFrame(() => failedReferenceRemoveRef.current?.focus());
+        return;
+      }
       if (ownerConversation) {
         setOwnerConversationBusy(ownerConversation.hasPending());
         ownerConversationNotice.current = message;
@@ -914,12 +933,12 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       })),
     ).map((item) => {
       if (item.kind === "message") {
-        return <ConversationTimelineEntry key={item.key} message={item.message} questions={questions} user={user} timezone={timezone} onDone={poll} projectName={contextProjects.find((projectItem) => projectItem.project_id === item.message.project_id)?.name || ""} memoize={diagnosticBehavior.memoizesMessages} renderMarkdown={!diagnosticBehavior.plainTextMessages} failures={ownerFailures} workLogRequest={isAdmin && connected ? daemonRequest : undefined} active={ownerConversationWorking && item.message.id === activeConversationMessageId} onReviewRecovery={isAdmin && ownerRecoveryItems.some((entry) => entry.message_id === item.message.id) ? (id) => { recoveryReturnMessageId.current = id; setOwnerRecoverySnapshot({user, items: []}); setOwnerRecoveryCheck({user, state: "loading"}); setOwnerRecoveryNotice("Checking request status…"); setOwnerRecoveryFocus(id); navigate("attention"); void refreshOwnerRecovery(); } : undefined} onOpenModelSettings={isAdmin ? () => { setSettingsTab("model"); navigate("settings"); } : undefined} onFailureDismissedChange={(messageId, dismissed) => updateOwnerFailures((current) => current.map((entry) => entry.messageId === messageId ? { ...entry, dismissed } : entry))} />;
+        return <ConversationTimelineEntry key={item.key} message={item.message} questions={questions} user={user} timezone={timezone} onDone={poll} projectName={contextProjects.find((projectItem) => projectItem.project_id === item.message.project_id)?.name || ""} memoize={diagnosticBehavior.memoizesMessages} renderMarkdown={!diagnosticBehavior.plainTextMessages} failures={ownerFailures} showFailureRecovery={isAdmin} workLogRequest={isAdmin && connected ? daemonRequest : undefined} onActiveLogUpdate={followActiveLog} active={ownerConversationWorking && item.message.id === activeConversationMessageId} onDraftQuestion={isAdmin ? (id, content, createdAt) => { setOwnerReplyTarget(""); setFailedReferenceError(""); setFailedReference({ owner: user, id, quote: quotedRequestText(content), createdAt }); setPrompt((current) => draftQuestionAboutRequest(current, content)); window.requestAnimationFrame(() => textareaRef.current?.focus()); } : undefined} onReviewRecovery={isAdmin && ownerRecoveryItems.some((entry) => entry.message_id === item.message.id) ? (id) => { recoveryReturnMessageId.current = id; setOwnerRecoverySnapshot({user, items: []}); setOwnerRecoveryCheck({user, state: "loading"}); setOwnerRecoveryNotice("Checking request status…"); setOwnerRecoveryFocus(id); navigate("attention"); void refreshOwnerRecovery(); } : undefined} onOpenModelSettings={isAdmin ? () => { setSettingsTab("model"); navigate("settings"); } : undefined} onFailureDismissedChange={(messageId, dismissed) => updateOwnerFailures((current) => current.map((entry) => entry.messageId === messageId ? { ...entry, dismissed } : entry))} />;
       }
       const archivedSurface = archivedProgress[item.taskId];
       const surface = archivedSurface || surfaces[`task-progress:${item.taskId}`];
       return surface ? <TaskProgressBubble key={item.key} surface={surface} archived={Boolean(archivedSurface)} connected={connected} timezone={timezone} /> : null;
-    }), [archivedProgress, clientId, connected, contextProjects, conversationDay, diagnosticBehavior.memoizesMessages, diagnosticBehavior.plainTextMessages, messages, ownerConversation, ownerFailures, ownerRecoveryItems, ownerConversationWorking, activeConversationMessageId, isAdmin, poll, refreshOwnerRecovery, progressTaskIds, questionTaskIds, questions, surfaces, timelineRenderVersion, timezone, user]);
+    }), [archivedProgress, clientId, connected, contextProjects, conversationDay, diagnosticBehavior.memoizesMessages, diagnosticBehavior.plainTextMessages, messages, ownerConversation, ownerFailures, ownerRecoveryItems, ownerConversationWorking, activeConversationMessageId, isAdmin, poll, refreshOwnerRecovery, followActiveLog, progressTaskIds, questionTaskIds, questions, surfaces, timelineRenderVersion, timezone, user]);
 
   useEffect(() => {
     if (workspace !== "attention" || !ownerRecoveryFocus) return;
@@ -988,7 +1007,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
           </div>
         </header>
         {error && <div className="error" role="alert">{error}</div>}
-        <div className="timeline" ref={timelineRef} aria-live="polite">
+        <div id="conversation-timeline" className="timeline" ref={timelineRef} tabIndex={-1} aria-live="polite" onScroll={(event) => { const element = event.currentTarget; followTimelineRef.current = element.scrollHeight - element.scrollTop - element.clientHeight <= 24; }}>
           {timelineNodes}
           {ownerConversationWorking && conversationDay === localDay(timezone) && <ConversationActivity />}
           <OwnerContinuation key={user} request={daemonRequest} active={isAdmin && connected && ownerContinuationAvailable && conversationDay === localDay(timezone)} />
@@ -998,16 +1017,17 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
           {activeSurface && (
             <A2uiSurfaceView surface={activeSurface} clientId={clientId} user={user} onDone={poll} onDismiss={dismissScheduledSurface} onAction={(result) => { if (result.action === "view_scheduled_task" && typeof result.scheduled_task_id === "string") { dismissScheduledSurface(activeSurface.surfaceId); setScheduledTaskForView(result.scheduled_task_id); navigate("agenda"); } }} />
           )}
-          {activeConversationMessageId && <p className="conversation-active-task" role="status">Alphonse is working{activeConversationMessage?.content ? <> on: <strong>{activeConversationMessage.content}</strong></> : " on your request"}</p>}
+          {activeConversationMessageId && !connected && <p className="conversation-active-task" role="status">Connection lost. The status of this request is unknown until Alphonse reconnects.</p>}
           <OwnerSavedDrafts items={ownerDrafts} prompt={prompt} onCheck={(draft) => { void daemonRequest("experimental_owner_composer_reconcile", {id: draft.id}).then(() => { if (uncertainFollowup.current?.id === draft.id) uncertainFollowup.current = null; return poll(); }).catch(() => setError("Submission could not be checked.")); }} onRestore={(draft) => { setPrompt(draft.prompt); }} onDelete={(draft) => { void daemonRequest("experimental_owner_composer_delete", {id: draft.id}).then(() => poll()).catch(() => setError("The saved draft could not be deleted.")); }} />
           <OwnerSteering items={ownerSteering.user === user ? ownerSteering.items : []} onRemove={(id) => { void daemonRequest("experimental_owner_steer_remove", {id}).then(() => poll()).catch(() => setError("Steering could not be cleared; the request or a dependent follow-up may still need it.")); }} />
           <OwnerFollowups items={ownerFollowups} onRemove={(id) => { void daemonRequest("experimental_owner_followup_remove", { id }).then(() => poll()).catch(() => setError("The follow-up could not be removed; refresh its status.")); }} />
+          {selectedFailure && <FailedReferenceNotice id={selectedFailure.id} createdAt={selectedFailure.createdAt} timezone={timezone} unavailable={failedReferenceError === selectedFailure.id} removeRef={failedReferenceRemoveRef} onRemove={() => { setFailedReference(null); setFailedReferenceError(""); textareaRef.current?.focus(); }} />}
           </div>
           <ConversationComposer prompt={prompt} task={activeConversationMessageId} mode={conversationSendMode} enterToSend={enterToSend} reviewDraft={reviewDraft} textareaRef={textareaRef} commandMenuRef={commandMenuRef} suggestions={suggestions} commands={DESKTOP_COMMANDS} context={composerProject ? <>Project: {composerProject.name} <button type="button" onClick={() => setComposerProject(null)} aria-label="Remove project from next message">×</button></> : "Everyday assistant"} suggestion={<ConversationSuggestion request={daemonRequest} task={workspace === "conversation" && connected && !reviewDraft ? activeConversationMessageId : undefined} prompt={prompt} user={user} defaultMode={conversationSendMode} onSend={(mode, task) => void submitPrompt(mode, task)} />} onChange={(value) => { if (!prompt.trim() && value.trim()) setDraftTask(activeConversationMessageId ?? null); setPrompt(value); }} onSend={(mode, task) => void submitPrompt(mode, task)} onReview={() => { const current = ownerConversation?.isWorking() ? ownerConversation.activeMessageId() : undefined; setDraftTask(current ?? null); setDraftNeedsReview(false); textareaRef.current?.focus(); }} />
           <div className="composer-support" tabIndex={0} aria-label="Conversation notices">
           {ownerConversationBusy && ownerConversation && <OwnerConversationRecoveryNotice state={ownerConversation.blockingState()} retrying={ownerAcknowledgementRetrying} onRetry={() => void retryOwnerAcknowledgement()} />}
           {isAdmin && !ownerWorkerReady && <p className="composer-hint" role="status">{ownerUnavailableMessage(ownerBlockingReason)}</p>}
-          {isAdmin && ownerQuestionScope === user && <OwnerQuestionSelector questions={ownerQuestions} selectedId={ownerReplyTarget} disabled={ownerConversationBusy} onSelect={setOwnerReplyTarget} />}
+          {isAdmin && ownerQuestionScope === user && <OwnerQuestionSelector questions={ownerQuestions} selectedId={ownerReplyTarget} disabled={ownerConversationBusy} onSelect={(id) => { setOwnerReplyTarget(id); if (id) setFailedReference(null); }} />}
           {isAdmin && ownerClarificationNotice && <p className="composer-hint" role="status">{ownerClarificationNotice}</p>}
           </div>
         </section>
@@ -1087,7 +1107,7 @@ function SettingsWorkspace({ isAdmin, user, initialTab, workspaceRequired, enter
   const saveMemory = async () => { if (!memory) return; try { const current = await daemonRequest<{ user: { user_id: string } | null }>("current_user"); if (!current.user) return; const result = await daemonRequest<{ settings: MemorySettings }>("save_memory_settings", { actor_user_id: current.user.user_id, values: memory }); setMemory(result.settings); setMemoryNotice("Saved. New tasks use these limits."); } catch (cause) { setMemoryNotice(cause instanceof Error ? cause.message : "Memory settings could not be saved"); } };
   const allowed = canOpenSettingsSection(tab, isAdmin);
   return <section className="settings-workspace">
-    <header className="settings-workspace-header"><div>{tab === "members" && selectedMember ? <><nav className="settings-breadcrumb" aria-label="Breadcrumb"><span>Settings</span><ChevronRight aria-hidden="true" /><button onClick={returnToMembers}>Household members</button><ChevronRight aria-hidden="true" /><span aria-current="page">{selectedMember.name}</span></nav><h1 ref={headingRef} tabIndex={-1}>{selectedMember.name}</h1><p>Manage this member’s details and communication preferences.</p></> : <><p className="eyebrow">Settings / {SETTINGS_SECTIONS.find(([id]) => id === tab)?.[1]}</p><h1 ref={headingRef} tabIndex={-1}>{workspaceRequired ? "Set up Alphonse Workspace" : tab === "appearance" ? "Make yourself at home." : SETTINGS_SECTIONS.find(([id]) => id === tab)?.[1]}</h1><p>{tab === "appearance" ? "A familiar Alphonse, with a quieter canvas." : tab === "integrations" ? "Connect the services you use with Alphonse and manage access in one place." : "Manage Alphonse from a dedicated workspace."}</p></>}</div></header>
+    <header className={`settings-workspace-header${tab === "model" ? " model-settings-header" : ""}`}><div>{tab === "members" && selectedMember ? <><nav className="settings-breadcrumb" aria-label="Breadcrumb"><span>Settings</span><ChevronRight aria-hidden="true" /><button onClick={returnToMembers}>Household members</button><ChevronRight aria-hidden="true" /><span aria-current="page">{selectedMember.name}</span></nav><h1 ref={headingRef} tabIndex={-1}>{selectedMember.name}</h1><p>Manage this member’s details and communication preferences.</p></> : <><p className="eyebrow">Settings / {SETTINGS_SECTIONS.find(([id]) => id === tab)?.[1]}</p><h1 ref={headingRef} tabIndex={-1}>{workspaceRequired ? "Set up Alphonse Workspace" : tab === "appearance" ? "Make yourself at home." : SETTINGS_SECTIONS.find(([id]) => id === tab)?.[1]}</h1><p>{tab === "appearance" ? "A familiar Alphonse, with a quieter canvas." : tab === "integrations" ? "Connect the services you use with Alphonse and manage access in one place." : tab === "model" ? "Choose the model Alphonse uses for new tasks." : "Manage Alphonse from a dedicated workspace."}</p></>}</div></header>
     {!allowed && <p role="alert">This section requires an administrator.</p>}
     {workspaceRequired && <p className="settings-setup-notice" role="alert">{isAdmin ? "Choose and save a Workspace directory to continue." : "Ask the administrator to configure the Workspace directory."}</p>}
     {visitedSections.has("general") && <div hidden={tab !== "general"} className="general-settings">
@@ -1754,16 +1774,6 @@ function AutomationsSettingsSection({ user }: { user: string }) {
   </section>;
 }
 
-function ModelSettingsSection() {
-  const [providers, setProviders] = useState<Provider[]>([]); const [settings, setSettings] = useState<InferenceSettings | null>(null); const [provider, setProvider] = useState(""); const [model, setModel] = useState(""); const [notice, setNotice] = useState("");
-  useEffect(() => { void Promise.all([daemonRequest<{ providers: Provider[] }>("inference_providers"), daemonRequest<{ settings: InferenceSettings }>("inference_settings")]).then(([catalog, current]) => { const selectedProvider = catalog.providers.find((item) => item.provider_key === current.settings.provider_key) || catalog.providers[0]; setProviders(catalog.providers); setSettings(current.settings); setProvider(selectedProvider?.provider_key || ""); setModel(current.settings.model_id || selectedProvider?.models[0]?.model_id || ""); }); }, []);
-  const selected = providers.find((item) => item.provider_key === provider);
-  const savedStatus = settings?.validation_error?.startsWith("openai_codex_model_access_rejected") || settings?.validation_error?.startsWith("openai_codex_model_unavailable")
-    ? "Codex temporarily rejected this model. Alphonse will keep the last successful validation and retry new tasks."
-    : settings?.validation_error || (settings?.validated_at ? `Validated ${new Date(settings.validated_at).toLocaleString()}.` : (!settings?.model_id ? "Choose and save a model before starting a task." : "Validation required."));
-  return <section className="settings-panel"><h3>Agent model</h3><p>Models in this list are advertised by the Codex catalog. Validate &amp; save makes a live request to verify current access before Alphonse uses the selection for new tasks.</p><select value={provider} onChange={(event) => { const nextProvider = providers.find((item) => item.provider_key === event.target.value); setProvider(event.target.value); setModel(nextProvider?.models[0]?.model_id || ""); }}>{providers.map((item) => <option value={item.provider_key} key={item.provider_key}>{item.display_name}</option>)}</select><select value={model} onChange={(event) => setModel(event.target.value)} disabled={!selected?.models.length}>{selected?.models.map((item) => <option value={item.model_id} key={item.model_id}>{item.display_name}</option>)}</select><button disabled={!provider || !model} onClick={() => void daemonRequest<{ settings: InferenceSettings }>("set_inference_settings", { provider_key: provider, model_id: model }).then((result) => { setSettings(result.settings); setNotice("Validated and saved for new tasks."); }).catch((cause: unknown) => setNotice(inferenceValidationNotice(cause)))}>Validate &amp; save</button><p>{notice || savedStatus}</p>{selected?.catalog_cli_matches_runtime === false && <p>Catalog source {selected.catalog_cli_version || "unknown"}; runtime {selected.cli_version || "unknown"} at <code>{selected.cli_path || "codex"}</code>. Update or configure the runtime CLI so both use the same Codex version.</p>}</section>;
-}
-
 function SystemOneSettingsSection({ user }: { user: string }) {
   const [settings, setSettings] = useState<SystemOneSettings | null>(null);
   const [apiKey, setApiKey] = useState("");
@@ -1813,13 +1823,6 @@ function SystemOneSettingsSection({ user }: { user: string }) {
     </>}
     {!settings && notice && <p role="status">{notice}</p>}
   </section>;
-}
-
-function inferenceValidationNotice(cause: unknown): string {
-  const message = errorNotice(cause, "Validation failed");
-  return message.startsWith("openai_codex_model_access_rejected") || message.startsWith("openai_codex_model_unavailable")
-    ? "Codex temporarily rejected this advertised model. Your saved model and its last successful validation were not changed."
-    : message;
 }
 
 function errorNotice(cause: unknown, fallback: string): string {

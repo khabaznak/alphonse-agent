@@ -464,6 +464,7 @@ class OwnerAtomicCheckpoint:
                         'message': display_response(state.response, observations, private_desktop=True),
                         'kind': selected['kind'],
                         'delivery_status': 'started_unconfirmed', 'acknowledgement_token': acknowledgement_token}
+            timezone_provider = context.user_timezone_provider
             searches = [binding['gmail_search_observation'] for binding in observations.values()
                         if binding.get('tool_id') == OWNER_GMAIL_SEARCH_TOOL_ID]
             mail = final_gmail_search_result(searches)
@@ -471,15 +472,15 @@ class OwnerAtomicCheckpoint:
                 response['private_gmail'] = True
                 response['private_a2ui'] = gmail_summary_surface(
                     self.task.message_id, mail, source=gmail_source_title(mail),
-                    summary=gmail_summary_text(state.response), searches=searches)
+                    summary=gmail_summary_text(state.response), searches=searches,
+                    timezone_name=timezone_provider(self.task.user) if callable(timezone_provider) else None)
             for binding in observations.values():
                 calendar = binding.get('calendar_observation')
                 if binding.get('tool_id') == OWNER_CALENDAR_TOOL_ID and calendar['status'] in ('complete', 'partial'):
                     response['private_calendar'] = True
-                    local_timezone = context.user_timezone_provider
                     response['private_a2ui'] = calendar_agenda_surface(
                         self.task.message_id, calendar,
-                        timezone_name=local_timezone(self.task.user) if callable(local_timezone) else None)
+                        timezone_name=timezone_provider(self.task.user) if callable(timezone_provider) else None)
                 if (binding.get('tool_id') == SCHEDULED_TASK_TOOL_ID
                         and binding.get('arguments', {}).get('operation') == 'cancel'):
                     effect = binding['schedule_observation']
@@ -816,6 +817,28 @@ class OwnerAtomicCheckpoint:
                     'reservation_id': reservation_id, 'kind': kind,
                     'tool_id': tool_id, 'arguments': deepcopy(arguments), 'claim_digest': _claim_digest(self.receipt),
                 }
+                # A separate, bounded presentation record preserves the exact
+                # dispatch contract. It is never used to authorize the tool.
+                raw['metadata'].pop('owner_activity_intent', None)
+                if kind == 'tool':
+                    from .candidate_decision_policy import ACTIVITY_INTENTS
+                    intent = selected_decision.get('activity_intent')
+                    decision_keys = {'kind', 'tool_id', 'arguments', 'text', 'activity_intent'}
+                    usage = selected_decision.get('usage')
+                    valid_usage = (usage is None and 'usage' not in selected_decision) or (
+                        isinstance(usage, dict) and set(usage) == {'input_tokens', 'output_tokens'}
+                        and all(value is None or (type(value) is int and value >= 0) for value in usage.values()))
+                    if (isinstance(intent, str) and intent in ACTIVITY_INTENTS
+                            and selected_decision.get('text') is None and valid_usage
+                            and set(selected_decision) in (decision_keys, decision_keys | {'usage'})):
+                        raw['metadata']['owner_activity_intent'] = {
+                            'schema_version': 1, 'actor': state.actor, 'task_id': state.task_id,
+                            'reservation_id': reservation_id, 'tool_id': tool_id,
+                            'claim_digest': _claim_digest(self.receipt),
+                            'decision_sha256': _decision_digest(selected_decision),
+                            'projection_sha256': projection_fingerprint, 'intent': intent,
+                            'usage': deepcopy(usage), 'selection': deepcopy(pending_decision),
+                        }
                 result = self.store._write(conn, row, raw, state, budget)
         if result is not None:
             self.version = result.version
@@ -826,7 +849,7 @@ class OwnerAtomicCheckpoint:
 
     def settle_model(self, *, expected_version: int, reservation_id: str, outcome: str,
                      input_tokens: int | None, output_tokens: int | None, decision: Any = None,
-                     projection_fingerprint: str = '') -> Checkpoint:
+                     projection_fingerprint: str = '', parse_stage: str | None = None) -> Checkpoint:
         if outcome not in {'success', 'failure', 'timeout'}:
             raise ValueError('owner_atomic_outcome_invalid')
         decision_digest = _decision_digest(decision)
@@ -839,9 +862,11 @@ class OwnerAtomicCheckpoint:
                         'claim_digest': _claim_digest(self.receipt)}
             if state.inflight != reservation_id or raw['metadata'].get('owner_read_pending_action') != expected:
                 raise CheckpointConflict('owner_atomic_reservation_mismatch')
-            budget.settle(reservation_id, outcome=outcome, input_tokens=input_tokens, output_tokens=output_tokens)
+            budget.settle(reservation_id, outcome=outcome, input_tokens=input_tokens, output_tokens=output_tokens,
+                          parse_stage=parse_stage)
             state.inflight = ''
             del raw['metadata']['owner_read_pending_action']
+            raw['metadata'].pop('owner_activity_intent', None)
             # A steer accepted while this model call was outstanding makes
             # its decision stale. Settlement still accounts for usage, but no
             # selected decision survives to authorize a tool or final answer.
@@ -868,7 +893,8 @@ class OwnerAtomicCheckpoint:
                         or projection_marker['steering_ids'] != [item['id'] for item in steering if item['reservation_id'] != reservation_id]
                         or projection_marker['steering_sha256'] != _decision_digest([[item['id'], item['content_digest']] for item in included])):
                     raise CheckpointConflict('owner_steering_projection_unavailable')
-            if not stale:
+            retry_parse = parse_stage is not None and state.request_parse_repair(budget)
+            if not stale and not retry_parse:
                 raw['metadata']['owner_read_pending_decision'] = {
                     'reservation_id': reservation_id, 'claim_digest': _claim_digest(self.receipt),
                     'decision_sha256': decision_digest, 'projection_sha256': projection_fingerprint,
@@ -949,6 +975,7 @@ class OwnerAtomicCheckpoint:
             state.evidence_sources.append(evidence_ref)
             state.inflight = ''
             del raw['metadata']['owner_read_pending_action']
+            raw['metadata'].pop('owner_activity_intent', None)
             result = self.store._write(conn, row, raw, state, budget)
         self.version = result.version
         return result
@@ -983,6 +1010,7 @@ class OwnerAtomicCheckpoint:
             state.evidence_sources.append(evidence_ref)
             state.inflight = ''
             del raw['metadata']['owner_read_pending_action']
+            raw['metadata'].pop('owner_activity_intent', None)
             result = self.store._write(conn, row, raw, state, budget)
         self.version = result.version
         return result
@@ -1203,6 +1231,7 @@ class OwnerAtomicCheckpoint:
             state.evidence_sources.append(evidence_ref)
             state.inflight = ''
             del metadata['owner_read_pending_action']
+            metadata.pop('owner_activity_intent', None)
             del metadata['owner_bash_dispatch_started']
             del metadata['owner_bash_return_unreconciled']
             result = self.store._write(conn, row, raw, state, budget)

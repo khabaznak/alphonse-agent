@@ -894,6 +894,102 @@ def test_selected_tool_arguments_are_bound_to_model_decision(setup):
     assert result.state.inflight == 'read'
 
 
+def test_bounded_activity_intent_is_bound_to_decision_and_removed_on_settlement(setup):
+    _, _, _, queue, _, task, _, atomic = setup
+    start = atomic.initialize(CandidateState(task.task_id, task.user, 'goal'), make_budget())
+    reserved = atomic.reserve(expected_version=start.version, reservation_id='model-intent', kind='model',
+        amounts={'actions': 0, 'model_calls': 1, 'input_tokens': 100, 'output_tokens': 50}, now_ms=101)
+    args = {'source_id': 'conversation:fixture'}
+    decision = {'kind': 'tool', 'tool_id': 'native.read_memory_source', 'arguments': args,
+                'text': None, 'activity_intent': 'find_information'}
+    projection = 'a' * 64
+    settled = atomic.settle_model(expected_version=reserved.version, reservation_id='model-intent',
+        outcome='success', input_tokens=3, output_tokens=2, decision=decision, projection_fingerprint=projection)
+    kwargs = dict(expected_version=settled.version, reservation_id='read-intent', kind='tool',
+        amounts={'actions': 1, 'model_calls': 0, 'input_tokens': 0, 'output_tokens': 0}, now_ms=102,
+        tool_id='native.read_memory_source', arguments=args, projection_fingerprint=projection)
+    with pytest.raises(CheckpointConflict, match='pending_decision_unresolved'):
+        atomic.reserve(**kwargs, selected_decision={**decision, 'activity_intent': 'make_change'})
+    tool = atomic.reserve(**kwargs, selected_decision=decision)
+    with queue._connect() as conn:
+        raw = json.loads(atomic.store._row(conn, task.task_id)['task_state_json'])
+    marker = raw['metadata']['owner_activity_intent']
+    assert marker['intent'] == 'find_information' and marker['reservation_id'] == 'read-intent'
+    assert marker['actor'] == task.user and marker['task_id'] == task.task_id
+    from alphonse.agent_v2.core.intelligence.simple_loop.owner_work_log import owner_work_log
+    assert owner_work_log(queue, task.message_id)['activity']['pending_intent'] == 'find_information'
+    result = atomic.settle_read(expected_version=tool.version, reservation_id='read-intent',
+        tool_id='native.read_memory_source', arguments=args, evidence_ref='e1', observation={'text': 'private'})
+    assert result.state.inflight == ''
+    with queue._connect() as conn:
+        raw = json.loads(atomic.store._row(conn, task.task_id)['task_state_json'])
+    assert 'owner_activity_intent' not in raw['metadata']
+
+
+def test_explicit_failed_request_binds_exact_owner_and_revalidates_history(setup):
+    from alphonse.agent_v2.core.intelligence.simple_loop.owner_failure_diagnostics import load_bound_failed_request
+    _, _, _, queue, _, task, store, atomic = setup
+    start = atomic.initialize(CandidateState(task.task_id, task.user, 'goal'), make_budget())
+    state = start.state
+    state.status, state.blocker = 'blocked', 'candidate_model_timeout'
+    atomic.save_state(state)
+    first = task.message_id
+    # Two independent owner requests have exactly the same user-visible text.
+    with queue._connect() as conn:
+        conn.execute("UPDATE v2_inbound_messages SET status='failed' WHERE message_id=?", (first,))
+    second = queue.enqueue_trusted_local_owner(prompt='Find the apples note.', peer_uid=os.getuid())
+    acquired2 = queue.claim_next()
+    task2 = TaskState.from_message(acquired2.message, message_id=second)
+    task2.task_id = second
+    atomic2 = OwnerAtomicCheckpoint(queue, store, task2, acquired2.claim_receipt,
+                                    clock=lambda: datetime.now(timezone.utc))
+    state2 = atomic2.initialize(CandidateState(second, task.user, 'goal'), make_budget()).state
+    state2.status, state2.blocker = 'blocked', 'candidate_model_unavailable'
+    atomic2.save_state(state2)
+    followup = queue.enqueue_trusted_local_owner(prompt='Why did this fail?', peer_uid=os.getuid(),
+                                                 failed_request_message_id=first)
+    with queue._connect() as conn:
+        row = conn.execute('SELECT metadata_json FROM v2_inbound_messages WHERE message_id=?', (followup,)).fetchone()
+        binding = json.loads(row['metadata_json'])['owner_failed_request']
+        conn.execute('BEGIN')
+        diagnostic = load_bound_failed_request(conn, task.user, binding)
+        assert diagnostic['message_id'] == first and diagnostic['message_id'] != second
+        assert diagnostic['description'] == 'The model provider timed out.'
+        with pytest.raises(ValueError, match='owner_failure_reference_unavailable'):
+            load_bound_failed_request(conn, 'other-owner', binding)
+        conn.rollback()
+        conn.execute('DELETE FROM v2_conversation_events WHERE source_message_id=?', ('inbound:' + first,))
+        conn.commit()
+        conn.execute('BEGIN')
+        with pytest.raises(ValueError, match='owner_failure_reference_unavailable'):
+            load_bound_failed_request(conn, task.user, binding)
+        conn.rollback()
+    with pytest.raises(ValueError, match='owner_failure_reference_unavailable'):
+        queue.enqueue_trusted_local_owner(prompt='Why?', peer_uid=os.getuid(), failed_request_message_id=first)
+    with pytest.raises(ValueError, match='owner_failure_reference_unavailable'):
+        queue.enqueue_trusted_local_owner(prompt='Why?', peer_uid=os.getuid(),
+            failed_request_message_id=second, reply_to_message_id=second)
+
+
+def test_failed_reference_ipc_rejection_is_definite_and_does_not_enqueue(setup):
+    from alphonse.agent_v2.ipc import V2DaemonClient, V2DaemonServer
+    _, _, _, queue, _, _, _, _ = setup
+    daemon = SimpleNamespace(runtime=SimpleNamespace(queue=queue), experimental_owner_only=False)
+    with tempfile.TemporaryDirectory(prefix='owner-reference-', dir='/private/tmp') as socket_dir:
+        server = V2DaemonServer(daemon, socket_path=os.path.join(socket_dir, 'p.sock'), experimental_owner_ingress=True)
+        server.start()
+        try:
+            with queue._connect() as conn:
+                before = conn.execute('SELECT COUNT(*) FROM v2_inbound_messages').fetchone()[0]
+            with pytest.raises(RuntimeError, match='^ValueError: owner_failure_reference_unavailable$'):
+                V2DaemonClient(server.socket_path).request('experimental_owner_ingress',
+                    prompt='Explain this.', failed_request_message_id='a' * 32)
+            with queue._connect() as conn:
+                assert conn.execute('SELECT COUNT(*) FROM v2_inbound_messages').fetchone()[0] == before
+        finally:
+            server.stop()
+
+
 def test_lost_inflight_clock_can_be_explicitly_abandoned(setup):
     _, _, _, queue, _, task, _, atomic = setup
     start = atomic.initialize(CandidateState(task.task_id, task.user, 'goal'), make_budget())

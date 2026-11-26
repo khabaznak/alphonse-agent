@@ -1,4 +1,5 @@
-import { type ReactNode, useEffect, useId, useRef, useState } from "react";
+import { Fragment, type ReactNode, useEffect, useId, useRef, useState } from "react";
+import { CalendarDays, Mail } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { daemonRequest } from "./api";
 
@@ -129,18 +130,27 @@ type PrivatePresentation = {
 
 function Citation({ number, presentation }: { number: number; presentation: PrivatePresentation }) {
   return <button type="button" className="provider-citation" aria-label={`Read email source ${number}`}
-    aria-controls={presentation.disclosureId} onClick={() => presentation.openSource(number)}>[{number}]</button>;
+    aria-controls={presentation.disclosureId} onClick={() => presentation.openSource(number)}>{`[${number}]`}</button>;
 }
 
 function PrivateMarkdown({ text, presentation }: { text: string; presentation: PrivatePresentation }) {
+  const withCitations = (children: ReactNode): ReactNode => {
+    if (Array.isArray(children)) return children.map((child, index) => <Fragment key={index}>{withCitations(child)}</Fragment>);
+    if (typeof children !== "string") return children;
+    return children.split(/(\[(?:[1-9]|1\d|20)\])/).map((part, index) => {
+      const number = index % 2 === 1 ? Number(part.slice(1, -1)) : 0;
+      return number && presentation.hasSource(number) ? <Citation key={index} number={number} presentation={presentation} /> : part;
+    });
+  };
+  const heading = ({ children }: { children?: ReactNode }) => <h4>{withCitations(children)}</h4>;
   return <ReactMarkdown skipHtml allowedElements={MAIL_MARKDOWN} unwrapDisallowed
     urlTransform={(url) => /^#source-(?:[1-9]|1\d|20)$/.test(url) ? url : ""}
     components={{
-      h1: ({ children }) => <h4>{children}</h4>,
-      h2: ({ children }) => <h4>{children}</h4>,
-      h3: ({ children }) => <h4>{children}</h4>,
-      h5: ({ children }) => <h4>{children}</h4>,
-      h6: ({ children }) => <h4>{children}</h4>,
+      h1: heading, h2: heading, h3: heading, h4: heading, h5: heading, h6: heading,
+      p: ({ children }) => <p>{withCitations(children)}</p>,
+      li: ({ children }) => <li>{withCitations(children)}</li>,
+      strong: ({ children }) => <strong>{withCitations(children)}</strong>,
+      em: ({ children }) => <em>{withCitations(children)}</em>,
       a: ({ href, children }) => {
         const number = Number(href?.slice("#source-".length));
         return presentation.hasSource(number) && children === String(number)
@@ -159,14 +169,12 @@ export function PrivateProviderResult({ surface }: { surface: A2uiSurface }) {
   const openSource = (number: number) => {
     if (!hasSource(number)) return;
     const row = root.current?.querySelector<HTMLElement>(`[data-email-source="${number}"]`);
-    const disclosure = row?.closest("details");
-    if (!row || !disclosure) return;
-    disclosure.open = true;
+    if (!row) return;
     selectSource(number);
     row.focus({ preventScroll: true });
     row.scrollIntoView?.({ block: "nearest" });
   };
-  return <div ref={root}>
+  return <div ref={root} className="provider-result-frame">
     <A2uiComponentTree surface={surface} dataModel={surface.dataModel} setDataModel={() => {}}
       privatePresentation={{ hasSource, openSource, selectedSource, disclosureId }} />
   </div>;
@@ -176,11 +184,44 @@ export function A2uiComponentTree({ surface, dataModel, setDataModel, onAction, 
   const node = (id: string): ReactNode => {
     const item = surface.components[id]; if (!item) return null;
     const cls = `a2ui-${cssIdentifier(id)}`;
-    if (item.component === "List" && privatePresentation) return <ul key={id} className={`provider-list ${cls}`} role="list">
-      {(item.children ?? []).map((child) => <li key={child}>{node(child)}</li>)}
-    </ul>;
+    if (item.component === "List" && privatePresentation) {
+      const List = id === "source_list" ? "ol" : "ul";
+      return <List key={id} className={`provider-list ${cls}`} role="list">
+        {(item.children ?? []).map((child) => <li key={child}>{node(child)}</li>)}
+      </List>;
+    }
     const children = <>{(item.children || []).map(node)}</>;
-    if (item.component === "Card") return <section key={id} className={`question-card a2ui-card ${cls}${surface.surfaceId.startsWith("scheduled-task:") ? " scheduled-task-card" : ""}${surface.surfaceId.startsWith("private-") ? " provider-result-card" : ""}`}>{children}</section>;
+    if (item.component === "Card" && privatePresentation) {
+      const componentIds = item.children ?? [];
+      const header = componentIds.filter((child) => ["source", "result_head", "title", "scope"].includes(child));
+      const titleId = `${privatePresentation.disclosureId}-title`;
+      let contents = children;
+      if (id === "root" && componentIds.includes("sources")) {
+        contents = <>{header.map(node)}<div className="provider-evidence-pane">
+          <div>{componentIds.filter((child) => child !== "sources" && !header.includes(child)).map(node)}</div>
+          {node("sources")}
+        </div></>;
+      }
+      const groups = componentIds.filter((child) => /^day_\d+$/.test(child));
+      if (id === "root" && surface.surfaceId.startsWith("private-calendar:") && groups.length) {
+        contents = <>{componentIds.filter((child) => !groups.includes(child)).map(node)}
+          <table className="provider-agenda" aria-labelledby={titleId} aria-describedby={`${privatePresentation.disclosureId}-scope`}>
+            <thead><tr><th scope="col">Day</th><th scope="col">Time</th><th scope="col">Event</th></tr></thead>
+            <tbody>{groups.flatMap((group) => (surface.components[`${group}_events`]?.children ?? []).map((event) => {
+              const detail = surface.components[`${event}_meta`]?.text;
+              return <tr key={event}>
+                <td>{surface.components[`${group}_heading`]?.text}</td>
+                <td className="provider-agenda-time">{surface.components[`${event}_time`]?.text}</td>
+                <td>{surface.components[`${event}_title`]?.text}{detail && <><br /><small>{detail}</small></>}</td>
+              </tr>;
+            }))}</tbody>
+          </table>
+        </>;
+      }
+      return <article key={id} className="provider-result-card"
+        aria-labelledby={surface.components.title ? titleId : undefined}>{contents}</article>;
+    }
+    if (item.component === "Card") return <section key={id} className={`question-card a2ui-card ${cls}${surface.surfaceId.startsWith("scheduled-task:") ? " scheduled-task-card" : ""}`}>{children}</section>;
     if (item.component === "Row" || item.component === "Column" || item.component === "List") {
       const number = Number(SOURCE_ID.exec(id)?.[1]);
       const isSource = item.component === "Column" && privatePresentation?.hasSource(number);
@@ -190,20 +231,43 @@ export function A2uiComponentTree({ surface, dataModel, setDataModel, onAction, 
         aria-label={isSource ? `Email source ${number}` : undefined}
         aria-describedby={isSource && surface.components[`source_${number}_excerpt`] ? `${privatePresentation?.disclosureId}-quote-${number}` : undefined}>{children}</div>;
     }
-    if (item.component === "Disclosure") return <details key={id} className={`a2ui-disclosure ${cls}`}
-      id={id === "sources" ? privatePresentation?.disclosureId : undefined}><summary>{item.label}</summary>{children}</details>;
+    if (item.component === "Disclosure" && id === "sources" && privatePresentation)
+      return <section key={id} id={privatePresentation.disclosureId} aria-labelledby={`${privatePresentation.disclosureId}-sources`}>
+        <h4 id={`${privatePresentation.disclosureId}-sources`} aria-label={item.label} title={surface.components.qualifier?.text}>
+          {item.label?.replace(/ \(\d+(?: of \d+ reviewed)?\)$/, "")}
+        </h4>{children}
+      </section>;
+    if (item.component === "Disclosure") return <details key={id} className={`a2ui-disclosure ${cls}`}><summary>{item.label}</summary>{children}</details>;
     if (item.component === "EmailCitation" && privatePresentation?.hasSource(item.sourceNumber!))
       return <Citation key={id} number={item.sourceNumber!} presentation={privatePresentation} />;
     if (item.component === "Markdown" && privatePresentation)
-      return <div key={id} className={`provider-markdown ${cls}`}><PrivateMarkdown text={item.text ?? ""} presentation={privatePresentation} /></div>;
+      return <div key={id} className={`provider-markdown ${cls}`}><PrivateMarkdown text={item.text ?? ""} presentation={privatePresentation} />
+        {/^action_\d+_detail$/.test(id) && " "}</div>;
+    if (item.component === "Status" && privatePresentation && id === "coverage")
+      return <span key={id} className={cls} title={surface.components.coverage_note?.text}
+        aria-description={surface.components.coverage_note?.text}>{item.text}</span>;
     if (item.component === "Text" && privatePresentation) {
-      if (item.variant === "heading") return <h3 key={id} className={cls}>{item.text}</h3>;
+      if (id === "coverage_note" || id === "qualifier") return null;
+      if (id === "scope") return <p key={id} className={cls} id={`${privatePresentation.disclosureId}-scope`}>{item.text}</p>;
+      if (id === "source") {
+        const Icon = surface.surfaceId.startsWith("private-gmail:") ? Mail : CalendarDays;
+        return <div key={id} className={cls}><Icon size={16} aria-hidden="true" /><span>{item.text}</span></div>;
+      }
+      if (item.variant === "heading") return <h3 key={id} className={cls} id={id === "title" ? `${privatePresentation.disclosureId}-title` : undefined}>{item.text}</h3>;
       if (item.variant === "subheading") return <h4 key={id} className={cls}>{item.text}</h4>;
-      if (item.variant === "strong") return <p key={id} className={cls}><strong>{item.text}</strong></p>;
-      if (item.variant === "due") return <p key={id} className={`provider-due ${cls}`}>{item.text}</p>;
+      if (item.variant === "strong") return <strong key={id} className={cls}>{item.text}</strong>;
+      if (item.variant === "due") {
+        const [date, ...time] = (item.text ?? "").split("\n");
+        return <div key={id} className={cls}><span className="provider-due">{date}</span>
+          {time.length > 0 && <><br />{time.join("\n")}</>}</div>;
+      }
+      if (id.endsWith("_when")) return <div key={id} className={cls}>{item.text}</div>;
+      if (id.endsWith("_time")) return <span key={id} className={cls}>{item.text}</span>;
+      if (/^day_\d+_event_\d+_meta$/.test(id)) return <small key={id} className={cls}>{item.text}</small>;
       if (item.variant === "quote") {
         const number = /^source_(\d+)_excerpt$/.exec(id)?.[1];
-        return <blockquote key={id} className={cls} id={number ? `${privatePresentation.disclosureId}-quote-${number}` : undefined}>{item.text}</blockquote>;
+        const Component = number ? "q" : "blockquote";
+        return <Component key={id} className={cls} id={number ? `${privatePresentation.disclosureId}-quote-${number}` : undefined}>{item.text}</Component>;
       }
     }
     if (item.component === "Text" && item.variant === "heading") return <h4 key={id} className={cls}>{item.text}</h4>;

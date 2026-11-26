@@ -12,7 +12,7 @@ import json
 from typing import Callable
 
 from alphonse.agent_v2.core.core import ToolDescriptor, ToolKind
-from alphonse.agent_v2.core.inference.models import InferenceResult
+from alphonse.agent_v2.core.inference.models import InferenceResult, ModelResponseParseError
 from alphonse.agent_v2.core.inference.openai_codex import _json_envelope
 from alphonse.agent_v2.core.inference.router import InferenceRouter, _simple_loop_failure_category
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
@@ -96,7 +96,8 @@ class RouterCandidateChooser:
             progress = (validate_source_progress(self.observation_progress())
                         if self.observation_progress is not None else None)
             request = make_request(projection=projection, catalog=self._catalog,
-                output_schema=action_schema(), cancellation_checker=self.cancellation_checker,
+                output_schema=action_schema(include_activity_intent=bool(self._catalog)),
+                cancellation_checker=self.cancellation_checker,
                 task_id=self._identity[0], user=self._identity[1], project_id=self._identity[2],
                 source_progress=progress, private_mail_summary=self.private_mail_summary)
         except Exception:
@@ -114,6 +115,8 @@ class RouterCandidateChooser:
         except Exception as exc:
             # Forward only fixed categories, never raw provider output or
             # exception strings, into the claim-bound failure checkpoint.
+            if type(exc) is ModelResponseParseError:
+                raise ModelResponseParseError(exc.response_stage, exc.usage) from None
             category = _simple_loop_failure_category(exc)
             allowed = {'model_not_configured', 'cli_missing', 'subscription_auth_unverified',
                        'authentication_required', 'cli_upgrade_required', 'provider_timeout',

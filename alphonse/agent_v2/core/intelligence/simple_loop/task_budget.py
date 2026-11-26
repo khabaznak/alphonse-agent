@@ -18,6 +18,8 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 from types import MappingProxyType
 
+from alphonse.agent_v2.core.inference.models import RESPONSE_PARSE_STAGES
+
 SCHEMA_VERSION = 1
 CONTINUATION_SCHEMA_VERSION = 2
 _MAX_COUNTER = (1 << 63) - 1
@@ -124,8 +126,10 @@ class TaskBudget:
         for key, row in rows.items():
             if not isinstance(key, str) or not key.strip() or not isinstance(row, dict):
                 raise ValueError("budget_invalid:reservation")
-            if set(row) != {"lane", "kind", "reserved", "status", "actual", "unknown_tokens", "outcome"}:
+            if set(row) - {"parse_stage"} != {"lane", "kind", "reserved", "status", "actual", "unknown_tokens", "outcome"}:
                 raise ValueError("budget_invalid:reservation")
+            if "parse_stage" in row:
+                cls._validate_parse_stage(row, row["outcome"], row["parse_stage"])
             if row["lane"] not in {"work", "final"} or row["kind"] not in {"tool", "model"}:
                 raise ValueError("budget_invalid:reservation_type")
             if row["lane"] == "final" and row["kind"] != "model":
@@ -281,13 +285,21 @@ class TaskBudget:
         self.revision += 1
         return self.revision
 
-    def settle(self, reservation_id: str, *, outcome: str,
-               input_tokens: int | None = None, output_tokens: int | None = None) -> int:
+    @staticmethod
+    def _validate_parse_stage(row: dict, outcome: str, stage: str) -> None:
+        if (type(stage) is not str or stage not in RESPONSE_PARSE_STAGES or row["kind"] != "model"
+                or outcome != "failure"):
+            raise ValueError("budget_invalid:parse_stage")
+
+    def settle(self, reservation_id: str, *, outcome: str, input_tokens: int | None = None,
+               output_tokens: int | None = None, parse_stage: str | None = None) -> int:
         row = self._reservations.get(reservation_id)
         if row is None or row["status"] != "reserved":
             raise ValueError("budget_reservation_not_pending")
         if outcome not in {"success", "failure", "timeout", "cancelled"}:
             raise ValueError("budget_invalid:outcome")
+        if parse_stage is not None:
+            self._validate_parse_stage(row, outcome, parse_stage)
         actual = dict(row["reserved"])
         unknown: list[str] = []
         if row["kind"] == "model":
@@ -299,6 +311,8 @@ class TaskBudget:
         elif input_tokens is not None or output_tokens is not None:
             raise ValueError("budget_invalid:tool_token_usage")
         row.update(status="settled", actual=actual, unknown_tokens=unknown, outcome=outcome)
+        if parse_stage is not None:
+            row["parse_stage"] = parse_stage
         self.revision += 1
         return self.revision
 

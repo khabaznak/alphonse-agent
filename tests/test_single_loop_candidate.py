@@ -499,18 +499,21 @@ def test_cancellation_prevents_format_repair_call(fixture):
 
 def test_older_candidate_snapshots_restore_without_format_retries():
     snapshot = CandidateState('task', 'actor', 'goal').snapshot()
-    for version in (1, 2, 3):
-        old = {key: value for key, value in snapshot.items()
-               if key not in {'answer_review_state', 'prerequisite_feedback', 'prerequisite_retries', 'retry_feedback_pending'}}
+    for version in (1, 2, 3, 6):
+        old = {**snapshot, 'schema_version': version}
+        old.pop('parse_repair_pending')
+        if version < 4:
+            for key in ('answer_review_state', 'prerequisite_feedback', 'prerequisite_retries', 'retry_feedback_pending'):
+                old.pop(key)
         if version < 3:
             old.pop('invalid_decision_retries')
             old.pop('decision_format_pending')
-        old['schema_version'] = version
         if version == 1:
             old.pop('unsupported_retries')
             old.pop('recovery_pending')
         restored = CandidateState.restore(old)
         assert restored.invalid_decision_retries == 0 and not restored.decision_format_pending
+        assert not restored.parse_repair_pending
         assert restored.answer_review_state == 'not_started'
 
 

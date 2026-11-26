@@ -214,15 +214,17 @@ class V2DaemonClient:
         return self.request("inference_settings")
 
     def inference_providers(self) -> dict[str, Any]:
-        return self.request("inference_providers")
+        client = V2DaemonClient(self.socket_path, timeout_sec=max(self.timeout_sec, 6.0))
+        return client.request("inference_providers")
 
     def inference_models(self, provider_key: str) -> dict[str, Any]:
-        return self.request("inference_models", provider_key=provider_key)
+        client = V2DaemonClient(self.socket_path, timeout_sec=max(self.timeout_sec, 6.0))
+        return client.request("inference_models", provider_key=provider_key)
 
     def set_inference_settings(self, *, provider_key: str, model_id: str) -> dict[str, Any]:
-        # Model validation performs one bounded provider request. It needs a
-        # longer timeout than routine daemon health and queue operations.
-        client = V2DaemonClient(self.socket_path, timeout_sec=max(self.timeout_sec, 35.0))
+        # Allow the login check, model turn, version lookup and settings write
+        # to finish before the caller times out on a validation that may save.
+        client = V2DaemonClient(self.socket_path, timeout_sec=max(self.timeout_sec, 85.0))
         return client.request("set_inference_settings", provider_key=provider_key, model_id=model_id)
 
     def system_one_settings(self, *, actor_user_id: str) -> dict[str, Any]:
@@ -690,7 +692,7 @@ class V2DaemonServer:
         if request.get('version') != PROTOCOL_VERSION:
             raise ValueError('daemon_protocol_version_unsupported')
         params = request.get('params')
-        allowed_fields = {'prompt', 'reply_to_message_id'}
+        allowed_fields = {'prompt', 'reply_to_message_id', 'failed_request_message_id'}
         if self.experimental_authority_ingress:
             allowed_fields |= {'message_id', 'authority_request_id'}
         if (not isinstance(params, dict) or 'prompt' not in params
@@ -706,6 +708,11 @@ class V2DaemonServer:
                 (not isinstance(params['reply_to_message_id'], str)
                  or re.fullmatch(r'[0-9a-f]{32}', params['reply_to_message_id']) is None)):
             raise ValueError('owner_question_context_unavailable')
+        if ('failed_request_message_id' in params and
+                (not isinstance(params['failed_request_message_id'], str)
+                 or re.fullmatch(r'[0-9a-f]{32}', params['failed_request_message_id']) is None
+                 or 'reply_to_message_id' in params)):
+            raise ValueError('owner_failure_reference_unavailable')
         uid = self._local_peer_uid(connection)
         if (getattr(self.daemon, 'experimental_owner_only', False) is True
                 and not self.daemon.owner_processing_ready()):
@@ -715,7 +722,8 @@ class V2DaemonServer:
         if type(queue) is not SQLiteMessageQueue:
             raise PermissionError('owner_ingress_unavailable')
         return queue.enqueue_trusted_local_owner(prompt=params['prompt'], peer_uid=uid,
-                    reply_to_message_id=params.get('reply_to_message_id'), return_receipt=True,
+                    reply_to_message_id=params.get('reply_to_message_id'),
+                    failed_request_message_id=params.get('failed_request_message_id'), return_receipt=True,
                     _authority_binding=binding)
 
     def _legacy_notification_review(self, connection, request):

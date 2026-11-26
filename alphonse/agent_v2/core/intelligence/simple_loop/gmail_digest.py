@@ -4,6 +4,8 @@ from datetime import date
 import json
 import re
 
+_CITATION = re.compile(r"(?<![\\\[])\[([1-9]|1[0-9]|20)\](?:\(#source-\1\)|(?![\[(]))")
+
 
 @dataclass(frozen=True)
 class GmailDigestAction:
@@ -12,19 +14,29 @@ class GmailDigestAction:
     title: str
     detail: str
     sources: tuple[int, ...]
+    superseded_sources: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
 class GmailDigest:
     summary: str
     actions: tuple[GmailDigestAction, ...] = ()
+    title: str = ''
+    replaced_sources: tuple[int, ...] = ()
 
     def cited_sources(self, count: int) -> set[int]:
-        citations = {number for action in self.actions for number in action.sources}
-        for text in (self.summary, *(action.detail for action in self.actions)):
-            citations.update(int(number) for number in re.findall(r"\[(\d{1,2})\]\(#source-\1\)", text)
-                             if 1 <= int(number) <= count)
-        return citations
+        return set(self.source_order(count))
+
+    def source_order(self, count: int) -> tuple[int, ...]:
+        citations = []
+        for action in self.actions:
+            citations.extend(action.sources)
+            citations.extend(int(number) for number in _CITATION.findall(action.detail))
+        citations.extend(int(number) for number in _CITATION.findall(self.summary))
+        return tuple(dict.fromkeys(number for number in citations if 1 <= number <= count))
+
+    def superseded_sources(self) -> set[int]:
+        return set(self.replaced_sources).union(number for action in self.actions for number in action.superseded_sources)
 
     def as_text(self) -> str:
         lines = [
@@ -47,13 +59,13 @@ def parse_gmail_digest(text: str, count: int) -> GmailDigest:
         value = json.loads(candidate)
     except (ValueError, RecursionError):
         return GmailDigest('')
-    if (not isinstance(value, dict) or set(value) != {'summary', 'actions'}
+    if (not isinstance(value, dict) or set(value) - {'title', 'superseded_sources'} != {'summary', 'actions'}
             or not isinstance(value['summary'], str) or len(value['summary']) > 2000
             or not isinstance(value['actions'], list) or len(value['actions']) > 12):
         return GmailDigest('')
     items = []
     for row in value['actions']:
-        if (not isinstance(row, dict) or set(row) != {'date', 'when', 'title', 'detail', 'sources'}
+        if (not isinstance(row, dict) or set(row) - {'superseded_sources'} != {'date', 'when', 'title', 'detail', 'sources'}
                 or not isinstance(row['title'], str) or not row['title'].strip() or len(row['title']) > 240
                 or not isinstance(row['when'], str) or len(row['when']) > 140
                 or not isinstance(row['detail'], str) or len(row['detail']) > 1000
@@ -67,9 +79,23 @@ def parse_gmail_digest(text: str, count: int) -> GmailDigest:
                     continue
             except (TypeError, ValueError):
                 continue
+        sources = tuple(dict.fromkeys(row['sources']))
+        marked = row.get('superseded_sources', [])
+        superseded = ()
+        if (isinstance(marked, list) and len(marked) < len(sources)
+                and all(type(number) is int and number in sources for number in marked)):
+            superseded = tuple(dict.fromkeys(marked))
         items.append(GmailDigestAction(
             due or '', row['when'].strip(), ' '.join(row['title'].split()), row['detail'].strip(),
-            tuple(dict.fromkeys(row['sources'])),
+            sources, superseded,
         ))
     items.sort(key=lambda item: (not item.date, not item.when, item.date))
-    return GmailDigest(value['summary'].strip(), tuple(items))
+    summary = value['summary'].strip()
+    title = value.get('title')
+    title = ' '.join(title.split()) if isinstance(title, str) and len(title) <= 100 else ''
+    cited = GmailDigest(summary, tuple(items)).cited_sources(count)
+    marked = value.get('superseded_sources')
+    replaced = ()
+    if isinstance(marked, list) and len(marked) < len(cited):
+        replaced = tuple(dict.fromkeys(number for number in marked if type(number) is int and number in cited))
+    return GmailDigest(summary, tuple(items), title, replaced)

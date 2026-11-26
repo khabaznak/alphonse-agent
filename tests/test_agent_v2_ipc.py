@@ -166,7 +166,7 @@ def test_model_settings_request_uses_validation_timeout(monkeypatch) -> None:
 
     client.set_inference_settings(provider_key="openai_codex", model_id="gpt-5.5")
 
-    assert captured == {"timeout": 35.0, "method": "set_inference_settings"}
+    assert captured == {"timeout": 85.0, "method": "set_inference_settings"}
 
 
 def test_daemon_ipc_system_one_settings_are_admin_only_and_mask_secrets(tmp_path) -> None:

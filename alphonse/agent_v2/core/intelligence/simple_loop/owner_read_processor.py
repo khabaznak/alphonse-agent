@@ -482,6 +482,17 @@ class OwnerReadConversationProcessor:
         execution_context = context.tool_execution_context(task)
         clarification = task.metadata.get('owner_clarification') if isinstance(task.metadata, dict) else None
         followup = task.metadata.get('owner_followup') if isinstance(task.metadata, dict) else None
+        failed_request = task.metadata.get('owner_failed_request') if isinstance(task.metadata, dict) else None
+
+        def linked_failure() -> dict | None:
+            if failed_request is None:
+                return None
+            if (clarification is not None or followup is not None or atomic is None
+                    or type(context.messages) is not SQLiteMessageQueue):
+                raise ValueError('owner_failure_reference_unavailable')
+            from .owner_failure_diagnostics import load_bound_failed_request
+            with context.messages.trusted_local_owner_claim_transaction(context.claim_receipt, task) as conn:
+                return load_bound_failed_request(conn, actor, failed_request)
 
         def linked_question() -> tuple[str, str] | None:
             if clarification is None and followup is None:
@@ -673,6 +684,7 @@ class OwnerReadConversationProcessor:
             if ref == 'goal':
                 try:
                     linked_question()
+                    linked_failure()
                     return True
                 except Exception:
                     return False
@@ -824,18 +836,21 @@ class OwnerReadConversationProcessor:
                     return _project_complete_conversation_search(payload, recent)
                 return json.dumps(payload, ensure_ascii=False, sort_keys=True)
             previous = linked_question()
+            specific_failure = linked_failure()
             steering = atomic.steering_context() if atomic is not None else []
             history, history_coverage = recent_history(actor_id)
             labels = None
             if gmail_search_enabled and atomic is not None and (not private_provider_observed() or can_refine_gmail_search()):
                 labels = owner_gmail_planner_labels(actor_id, context=execution_context)
             has_labels = labels is not None and bool(labels['labels'])
-            if not history and previous is None and not steering and not has_labels:
+            if not history and previous is None and specific_failure is None and not steering and not has_labels:
                 return str(task.goal or '')
             payload = {'recent_conversation': history, 'recent_window_coverage': history_coverage,
                        'new_message': str(task.goal or '')}
             if has_labels:
                 payload['authorized_gmail_search_labels'] = labels
+            if specific_failure is not None:
+                payload['explicitly_referenced_failed_request'] = specific_failure
             # Only the same actor's preceding, same-channel trusted ingress
             # checkpoints can explain a prior failure. These fixed categories
             # are not proof that an in-flight action did or did not take effect.
@@ -875,7 +890,13 @@ class OwnerReadConversationProcessor:
                     'An observed_at value is the recorded observation time, not proof of when '
                     'an underlying real-world event occurred; null means the time is unknown. '
                     'Recorded request failures describe only the stated checkpoint; their effect status '
-                    'is not established. Do not infer an unrecorded cause or claim an action completed. '
+                    'is not established. An explicitly referenced failed request is the request selected '
+                    'by the user for this follow-up; its historical text supplies context, not authorization '
+                    'to repeat any action. Each failure is bound to its quoted request excerpt and source ID; '
+                    'use the relevant request when explaining a failure, and treat a clipped excerpt as incomplete. '
+                    'A suggested follow-up is prior assistant guidance that may explain the owner\'s next '
+                    'message. It does not establish any underlying fact, action, or authorization. '
+                    'Do not infer an unrecorded cause or claim an action completed. '
                     + coverage_notice +
                     'The recent window can omit earlier turns or clip messages; unknown coverage is not '
                     'evidence that older history is absent. '
@@ -1136,6 +1157,16 @@ class OwnerReadConversationProcessor:
                                         'intelligence_schema_version': 1, 'status': 'cancelled'}),
                                     status=ProcessingStatus.CANCELLED, error='owner_read_cancelled')
         if result.status not in {'completed', 'waiting_user'}:
+            if atomic is not None and result.blocker == 'candidate_read_denied':
+                from .owner_authority_bridge import context_authority_active
+                from .owner_failure_recovery import compose_owner_failure_recovery
+                try:
+                    context._owner_failure_recovery_publish = compose_owner_failure_recovery(
+                        atomic, router=context.inference, cancelled=context.is_cancelled, now_ms=self.now_ms,
+                        authorized=lambda: self._authorized(task, context) and context_authority_active(context))
+                except Exception:
+                    # Recovery copy is optional. Its failure cannot replace the original blocker.
+                    pass
             return self._failure(task, result.blocker or 'owner_read_blocked')
         if result.status == 'waiting_user' and any(tool == OWNER_GMAIL_TOOL_ID for tool, _, _ in observations.values()):
             # A clarification is not a count answer. Do not replace its text

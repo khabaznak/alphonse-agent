@@ -64,7 +64,7 @@ def resolve_owner_question(conn: Any, owner: str, message_id: str, *, allow_answ
         pickup = metadata['owner_read_desktop_pickup_started']
         observations = metadata['owner_read_observations']
         allowed_metadata = {'intelligence_engine', 'intelligence_schema_version', 'routing_disposition',
-                            'owner_clarification', 'owner_followup', 'owner_steering_included_projection', 'owner_host_bash_history', STATE_KEY, 'owner_read_observations',
+                            'owner_clarification', 'owner_followup', 'owner_failed_request', 'owner_steering_included_projection', 'owner_host_bash_history', STATE_KEY, 'owner_read_observations',
                             'owner_read_selected_draft', 'owner_read_desktop_pickup_started'}
         if (raw.get('task_id') != message_id or raw.get('message_id') != message_id
                 or raw.get('user') != owner or raw.get('intelligence_engine') != 'single_loop_experimental'
