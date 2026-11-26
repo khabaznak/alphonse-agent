@@ -132,6 +132,8 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const [conversationDay, setConversationDay] = useState(() => localDay("UTC"));
   const conversationDayRef = useRef(conversationDay);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("appearance");
+  const [outlookSettingsRequested, setOutlookSettingsRequested] = useState(false);
+  const onOutlookOpened = useCallback(() => setOutlookSettingsRequested(false), []);
   const [workspace, setWorkspace] = useState<Workspace>("conversation");
   // Mount once per visit history so navigation preserves local forms and scroll.
   const [visited, setVisited] = useState<Set<Workspace>>(() => new Set(["conversation"]));
@@ -143,14 +145,24 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   workspaceRef.current = workspace;
   const workspaceHostRef = useRef<HTMLDivElement>(null);
   const drawerToggleRef = useRef<HTMLButtonElement>(null);
-  const navigate = (next: Workspace) => {
+  const navigationFocus = useRef<"composer" | "outlook-settings" | undefined>(undefined);
+  const navigate = (next: Workspace, focus?: "composer" | "outlook-settings") => {
     if (workspaceRequired && next !== "settings") return;
+    navigationFocus.current = focus;
     if (next === "settings" && workspace !== "settings") setReturnWorkspace(workspace);
     setVisited((current) => new Set([...current, next]));
     setWorkspace(next);
   };
   useEffect(() => {
-    workspaceHostRef.current?.querySelector<HTMLElement>(".workspace-panel:not([hidden])")?.focus({ preventScroll: true });
+    const panel = workspaceHostRef.current?.querySelector<HTMLElement>(".workspace-panel:not([hidden])");
+    const focus = navigationFocus.current;
+    navigationFocus.current = undefined;
+    const target = focus === "composer" && workspace === "conversation"
+      ? textareaRef.current
+      : focus === "outlook-settings" && workspace === "settings"
+        ? panel?.querySelector<HTMLElement>("[data-outlook-settings-heading]")
+        : null;
+    (target ?? panel)?.focus({ preventScroll: true });
   }, [workspace, settingsTab]);
   const [scheduledTaskForView, setScheduledTaskForView] = useState("");
   const [scheduleViewRequest, setScheduleViewRequest] = useState(0);
@@ -554,7 +566,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
             // Preserve the last list and continue pickup/acknowledgement of existing work.
           }
           let sawQuestion = false;
-          const acknowledgementRecovered = await ownerConversation.poll((messageId, answer, kind, committedEffect, privateReply, privateSurface) => {
+          const acknowledgementRecovered = await ownerConversation.poll((messageId, answer, kind, committedEffect, privateReply, privateSurface, outlookInbox) => {
             if (ownerConversationRef.current !== ownerConversation) return;
             appendMessage({
               // Match the daemon's durable outbound:owner:<message_id> source
@@ -562,8 +574,9 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
               id: `owner:${messageId}`, role: "assistant", content: answer,
               created_at: new Date().toISOString(), project_id: "", committed_effect: committedEffect,
               private_reply_owner: privateReply ? user : undefined,
-              private_reply_plain_text: privateReply === "gmail" || undefined,
+              private_reply_plain_text: privateReply === "gmail" || privateReply === "outlook" || undefined,
               private_reply_surface: privateSurface,
+              private_outlook_inbox: outlookInbox,
             });
             sawQuestion = kind === "question";
             setOwnerClarificationNotice(kind === "question"
@@ -933,7 +946,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       })),
     ).map((item) => {
       if (item.kind === "message") {
-        return <ConversationTimelineEntry key={item.key} message={item.message} questions={questions} user={user} timezone={timezone} onDone={poll} projectName={contextProjects.find((projectItem) => projectItem.project_id === item.message.project_id)?.name || ""} memoize={diagnosticBehavior.memoizesMessages} renderMarkdown={!diagnosticBehavior.plainTextMessages} failures={ownerFailures} showFailureRecovery={isAdmin} workLogRequest={isAdmin && connected ? daemonRequest : undefined} onActiveLogUpdate={followActiveLog} active={ownerConversationWorking && item.message.id === activeConversationMessageId} onDraftQuestion={isAdmin ? (id, content, createdAt) => { setOwnerReplyTarget(""); setFailedReferenceError(""); setFailedReference({ owner: user, id, quote: quotedRequestText(content), createdAt }); setPrompt((current) => draftQuestionAboutRequest(current, content)); window.requestAnimationFrame(() => textareaRef.current?.focus()); } : undefined} onReviewRecovery={isAdmin && ownerRecoveryItems.some((entry) => entry.message_id === item.message.id) ? (id) => { recoveryReturnMessageId.current = id; setOwnerRecoverySnapshot({user, items: []}); setOwnerRecoveryCheck({user, state: "loading"}); setOwnerRecoveryNotice("Checking request status…"); setOwnerRecoveryFocus(id); navigate("attention"); void refreshOwnerRecovery(); } : undefined} onOpenModelSettings={isAdmin ? () => { setSettingsTab("model"); navigate("settings"); } : undefined} onFailureDismissedChange={(messageId, dismissed) => updateOwnerFailures((current) => current.map((entry) => entry.messageId === messageId ? { ...entry, dismissed } : entry))} />;
+        return <ConversationTimelineEntry key={item.key} message={item.message} questions={questions} user={user} timezone={timezone} onDone={poll} projectName={contextProjects.find((projectItem) => projectItem.project_id === item.message.project_id)?.name || ""} memoize={diagnosticBehavior.memoizesMessages} renderMarkdown={!diagnosticBehavior.plainTextMessages} failures={ownerFailures} showFailureRecovery={isAdmin} workLogRequest={isAdmin && connected ? daemonRequest : undefined} onActiveLogUpdate={followActiveLog} active={ownerConversationWorking && item.message.id === activeConversationMessageId} onDraftQuestion={isAdmin ? (id, content, createdAt) => { setOwnerReplyTarget(""); setFailedReferenceError(""); setFailedReference({ owner: user, id, quote: quotedRequestText(content), createdAt }); setPrompt((current) => draftQuestionAboutRequest(current, content)); window.requestAnimationFrame(() => textareaRef.current?.focus()); } : undefined} onReviewRecovery={isAdmin && ownerRecoveryItems.some((entry) => entry.message_id === item.message.id) ? (id) => { recoveryReturnMessageId.current = id; setOwnerRecoverySnapshot({user, items: []}); setOwnerRecoveryCheck({user, state: "loading"}); setOwnerRecoveryNotice("Checking request status…"); setOwnerRecoveryFocus(id); navigate("attention"); void refreshOwnerRecovery(); } : undefined} onOpenModelSettings={isAdmin ? () => { setSettingsTab("model"); navigate("settings"); } : undefined} onOpenOutlookSettings={isAdmin ? () => { setOutlookSettingsRequested(true); setSettingsTab("integrations"); navigate("settings", "outlook-settings"); } : undefined} onFailureDismissedChange={(messageId, dismissed) => updateOwnerFailures((current) => current.map((entry) => entry.messageId === messageId ? { ...entry, dismissed } : entry))} />;
       }
       const archivedSurface = archivedProgress[item.taskId];
       const surface = archivedSurface || surfaces[`task-progress:${item.taskId}`];
@@ -1050,7 +1063,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
             <div ref={setReminderRecoveryTarget} />
           </section>}
         </section>}
-      {visited.has("settings") && <section className="workspace-panel" tabIndex={-1} aria-label="Settings workspace" hidden={workspace !== "settings"}><SettingsWorkspace isAdmin={isAdmin} user={user} initialTab={settingsTab} workspaceRequired={workspaceRequired} enterToSend={enterToSend} conversationSendMode={conversationSendMode} onConversationSendModeChange={changeConversationSendMode} desktopStyle={desktopStyle} desktopNotifications={desktopNotifications} onDesktopStyleChange={changeDesktopStyle} onDesktopNotificationsChange={setDesktopNotifications} onEnterToSendChange={setEnterToSend} onTimezoneChange={setTimezone} onWorkspaceConfigured={() => setWorkspaceRequired(false)} onTestDesktopNotification={() => void desktopNotifierRef.current.notify({ id: `test:${Date.now()}`, title: "Alphonse test alert", body: "Desktop notifications are ready." }, { ...desktopNotifications, onlyWhenUnfocused: false })} mascotMotion={mascotMotion} onMascotMotionChange={setMascotMotion} onNavigate={setSettingsTab} onWidgets={() => setWidgetCatalogOpen(true)} onClose={() => { navigate(returnWorkspace); }} /></section>}
+      {visited.has("settings") && <section className="workspace-panel" tabIndex={-1} aria-label="Settings workspace" hidden={workspace !== "settings"}><SettingsWorkspace isAdmin={isAdmin} user={user} initialTab={settingsTab} workspaceRequired={workspaceRequired} enterToSend={enterToSend} conversationSendMode={conversationSendMode} onConversationSendModeChange={changeConversationSendMode} desktopStyle={desktopStyle} desktopNotifications={desktopNotifications} onDesktopStyleChange={changeDesktopStyle} onDesktopNotificationsChange={setDesktopNotifications} onEnterToSendChange={setEnterToSend} onTimezoneChange={setTimezone} onWorkspaceConfigured={() => setWorkspaceRequired(false)} onTestDesktopNotification={() => void desktopNotifierRef.current.notify({ id: `test:${Date.now()}`, title: "Alphonse test alert", body: "Desktop notifications are ready." }, { ...desktopNotifications, onlyWhenUnfocused: false })} mascotMotion={mascotMotion} onMascotMotionChange={setMascotMotion} onNavigate={setSettingsTab} onWidgets={() => setWidgetCatalogOpen(true)} outlookRequested={outlookSettingsRequested} onOutlookOpened={onOutlookOpened} onConversation={() => navigate("conversation", "composer")} onClose={() => { navigate(returnWorkspace); }} /></section>}
       </div>
       {widgetCatalogOpen && <WidgetCatalogDialog state={drawer} act={changeDrawer} member={user} onClose={() => setWidgetCatalogOpen(false)} />}
       <AtHandDrawer activityMember={activityMember} queueSamples={queueHistory} state={{ ...drawer, open: atHandOpen }} act={changeDrawer} member={user} connected={connected} questionCount={questions.length} questionsMember={questionsMember} onAttention={() => navigate("attention")} onAgenda={(id) => { setScheduleViewRequest((value) => value + 1); setScheduledTaskForView(id || ""); navigate("agenda"); }} toggleRef={drawerToggleRef} saveFailed={drawerSaveFailed} widgetContext={widgetContext} timezone={timezone} onItem={(artifactId, itemId, family) => { setWidgetItem({ member: user, artifactId, itemId, family }); navigate(["appointments", "reminders"].includes(family) ? "agenda" : "projects"); }} onWork={(id, taskId) => { setWorkTaskForView(taskId || ""); setProjectForView((current) => ({ id: taskId ? "" : id, request: current.request + 1 })); navigate("projects"); }} onRequest={(draft) => { setPrompt((current) => appendWidgetDraft(current, draft)); setConversationDay(localDay(timezone)); navigate("conversation"); window.requestAnimationFrame(() => textareaRef.current?.focus()); }} />
@@ -1071,7 +1084,7 @@ function OnboardingModal({ onComplete }: { onComplete: (userId: string) => void 
   return <ModalFrame title="Set up Alphonse" onClose={() => undefined}><p>Create the local administrator and choose Alphonse’s Workspace directory. This is the root for users, projects, skills, and agent configuration.</p><label>Workspace directory</label><div className="workspace-picker"><input aria-label="Selected Workspace directory" readOnly value={root} placeholder="Choose a folder in Finder" /><button type="button" onClick={() => void chooseRoot()}>Choose folder…</button></div><label>Your name<input value={name} onChange={(event) => setName(event.target.value)} placeholder="Your name" /></label><button disabled={!name.trim() || !root.trim()} onClick={() => void save()}>Create administrator</button><p>{error}</p></ModalFrame>;
 }
 
-function SettingsWorkspace({ isAdmin, user, initialTab, workspaceRequired, enterToSend, conversationSendMode, onConversationSendModeChange, desktopStyle, desktopNotifications, onDesktopStyleChange, onDesktopNotificationsChange, onEnterToSendChange, onTimezoneChange, onWorkspaceConfigured, onTestDesktopNotification, onNavigate, onWidgets, mascotMotion, onMascotMotionChange, onClose }: { isAdmin: boolean; user: string; initialTab: SettingsTab; workspaceRequired: boolean; enterToSend: boolean; conversationSendMode: ConversationSendMode; onConversationSendModeChange: (mode: ConversationSendMode) => void; desktopStyle: DesktopStyle; desktopNotifications: DesktopNotificationPreferences; onDesktopStyleChange: (value: DesktopStyle) => void; onDesktopNotificationsChange: (value: DesktopNotificationPreferences) => void; onEnterToSendChange: (value: boolean) => void; onTimezoneChange: (value: string) => void; onWorkspaceConfigured: () => void; onTestDesktopNotification: () => void; onNavigate: (tab: SettingsTab) => void; onWidgets: () => void; mascotMotion: boolean; onMascotMotionChange: (enabled: boolean) => void; onClose: () => void }) {
+function SettingsWorkspace({ isAdmin, user, initialTab, workspaceRequired, enterToSend, conversationSendMode, onConversationSendModeChange, desktopStyle, desktopNotifications, onDesktopStyleChange, onDesktopNotificationsChange, onEnterToSendChange, onTimezoneChange, onWorkspaceConfigured, onTestDesktopNotification, onNavigate, onWidgets, mascotMotion, onMascotMotionChange, outlookRequested, onOutlookOpened, onConversation, onClose }: { isAdmin: boolean; user: string; initialTab: SettingsTab; workspaceRequired: boolean; enterToSend: boolean; conversationSendMode: ConversationSendMode; onConversationSendModeChange: (mode: ConversationSendMode) => void; desktopStyle: DesktopStyle; desktopNotifications: DesktopNotificationPreferences; onDesktopStyleChange: (value: DesktopStyle) => void; onDesktopNotificationsChange: (value: DesktopNotificationPreferences) => void; onEnterToSendChange: (value: boolean) => void; onTimezoneChange: (value: string) => void; onWorkspaceConfigured: () => void; onTestDesktopNotification: () => void; onNavigate: (tab: SettingsTab) => void; onWidgets: () => void; mascotMotion: boolean; onMascotMotionChange: (enabled: boolean) => void; outlookRequested: boolean; onOutlookOpened: () => void; onConversation: () => void; onClose: () => void }) {
   const [root, setRoot] = useState(""); const [timezone, setTimezone] = useState("UTC"); const [mirrorAutomationMessages, setMirrorAutomationMessages] = useState(false); const [notice, setNotice] = useState(""); const [workspaceNotice, setWorkspaceNotice] = useState(""); const [savingWorkspace, setSavingWorkspace] = useState(false); const tab = workspaceRequired ? "general" : initialTab;
   const [overviewRevision, setSettingsOverviewRevision] = useState(0);
   const [skillsEditor, setSkillsEditor] = useState<string | null>(null);
@@ -1175,7 +1188,7 @@ function SettingsWorkspace({ isAdmin, user, initialTab, workspaceRequired, enter
       </section>
       <div className="setting-group"><MediaToolsSettingsSection /></div>
     </div>}
-    {visitedSections.has("integrations") && <div hidden={tab !== "integrations"} className="mockup-settings-content"><IntegrationsWorkspace key={user} user={user} isAdmin={isAdmin} /></div>}
+    {visitedSections.has("integrations") && <div hidden={tab !== "integrations"} className="mockup-settings-content"><IntegrationsWorkspace key={user} user={user} isAdmin={isAdmin} outlookRequested={outlookRequested} onOutlookOpened={onOutlookOpened} onConversation={onConversation} /></div>}
     {visitedSections.has("automations") && isAdmin && <div hidden={tab !== "automations"}><AutomationsSettingsSection user={user} /></div>}
     {visitedSections.has("model") && isAdmin && <div hidden={tab !== "model"}><ModelSettingsSection /></div>}
     {visitedSections.has("system-one") && isAdmin && <div hidden={tab !== "system-one"}><SystemOneSettingsSection user={user} /></div>}
@@ -1666,15 +1679,16 @@ function ProjectEditorPanel({ user, project, onBack, onUpdated, onClose }: { use
   </div>;
 }
 
-function IntegrationsWorkspace({ user, isAdmin }: { user: string; isAdmin: boolean }) {
+function IntegrationsWorkspace({ user, isAdmin, outlookRequested, onOutlookOpened, onConversation }: { user: string; isAdmin: boolean; outlookRequested: boolean; onOutlookOpened: () => void; onConversation: () => void }) {
   const [selected, setSelected] = useState<"telegram" | "discord" | null>(null);
   const [statuses, setStatuses] = useState<Record<string, boolean> | null>(null);
   const [statusError, setStatusError] = useState(false);
   const refresh = useCallback(() => { void daemonRequest<{ integrations: Array<{ provider_key: string; integration: Record<string, unknown> | null }> }>("integrations").then(result => { setStatuses(Object.fromEntries(result.integrations.map(item => [item.provider_key, Boolean(item.integration?.enabled)]))); setStatusError(false); }).catch(() => { setStatuses(null); setStatusError(true); }); }, []);
   useEffect(() => { refresh(); }, [refresh]);
+  useEffect(() => { if (outlookRequested) setSelected(null); }, [outlookRequested]);
   if (selected) return <section className="integration-detail"><button className="integration-back" onClick={() => { setSelected(null); refresh(); }}>← All integrations</button>{selected === "telegram" ? <IntegrationsSettingsSection user={user} /> : <DiscordIntegrationSettingsSection user={user} />}</section>;
   const messaging = <section className="integration-messaging"><h3>Household messaging</h3><p>Messaging channels are managed for the household.</p><div className="integration-service-grid">{(["telegram", "discord"] as const).map(id => <article className="mockup-settings-card integration-service-card" key={id}><div className="integration-card-heading"><IntegrationIcon service={id} /><div><h3>{id === "telegram" ? "Telegram" : "Discord"}</h3><p>Message Alphonse from an authorized {id === "telegram" ? "Telegram chat" : "Discord channel"}.</p></div></div><small className="integration-card-status">{statuses ? statuses[id] ? "Enabled" : "Not enabled" : statusError ? "Status unavailable" : "Checking status…"}</small><div className="integration-card-footer"><span>Household</span>{isAdmin ? <button onClick={() => setSelected(id)}>Manage {id === "telegram" ? "Telegram" : "Discord"} →</button> : <span>Administrator manages</span>}</div></article>)}</div></section>;
-  return <OptionalAccounts identity={user} messaging={messaging} />;
+  return <OptionalAccounts identity={user} messaging={messaging} outlookRequested={outlookRequested} onOutlookOpened={onOutlookOpened} onConversation={onConversation} />;
 }
 
 function IntegrationsSettingsSection({ user }: { user: string }) {

@@ -661,6 +661,7 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
         private_digest = None
         from .owner_calendar import OWNER_CALENDAR_TOOL_ID
         from .owner_gmail_search import OWNER_GMAIL_SEARCH_TOOL_ID
+        from .owner_outlook import OWNER_OUTLOOK_TOOL_ID
         if tool_id == OWNER_KNOWLEDGE_TOOL_ID:
             from .owner_private_knowledge_read import PrivateKnowledgeRead
             try:
@@ -673,13 +674,15 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
                 result = {'status': 'success', 'result': deepcopy(private.observation)}
             except Exception:
                 result = {'status': 'failed', 'result': None}
-        elif tool_id in {OWNER_CALENDAR_TOOL_ID, OWNER_GMAIL_SEARCH_TOOL_ID}:
+        elif tool_id in {OWNER_CALENDAR_TOOL_ID, OWNER_GMAIL_SEARCH_TOOL_ID, OWNER_OUTLOOK_TOOL_ID}:
             # Keep provider details outside generic result events, memory and telemetry.
             if host.atomic_checkpoint is None or descriptor.metadata.get('sensitive_content') is not True:
                 return _terminal(host, state, 'blocked', 'candidate_private_read_unavailable')
             try:
                 payload = ToolInvocationService(context=host.context, task=host.task).execute_or_raise(tool_id, args)
             except Exception:
+                if _cancelled(host):
+                    return _terminal(host, state, 'cancelled', 'cancelled')
                 return _terminal(host, state, 'blocked', 'candidate_private_read_unavailable')
             result = {'status': 'success', 'result': payload}
         elif disposable:

@@ -18,7 +18,7 @@ Set `ALPHONSE_GOOGLE_OAUTH_CLIENT_SECRET_REF` to the non-secret reference printe
 by that command; never put the secret itself in an environment variable, shell
 argument, chat, or log. The importer leaves the downloaded file untouched; manage
 that copy separately. The reference is optional and scoped to the configured
-Google client ID. Microsoft behavior is unchanged. Configuration is fixed for the
+Google client ID. Microsoft uses a public client with no client secret. Configuration is fixed for the
 daemon lifetime; changes require a restart.
 
 For a local Desktop installation, `google_client_setup PATH --persist` imports the
@@ -107,8 +107,10 @@ errors are static codes; callback URLs and provider descriptions are not returne
 Google uses authorization code + PKCE, `openid` and only the selected capability
 scopes, with `access_type=offline` and explicit consent/account choice. Microsoft
 uses authorization code + PKCE, `openid`, `offline_access` and only selected Graph
-capabilities. The initial capabilities are `mail_read` and `calendar_read`, matching the project
-policy operation contract: read-only mail and calendar events.
+capabilities. The owner Desktop Inbox count uses `outlook_inbox_unread`, which
+requests delegated `Mail.ReadBasic` through Microsoft's `/consumers` authority.
+The shared optional acquisition capabilities `mail_read` and `calendar_read`
+use `/common` for their configured account types.
 Graph's short resource scope names are canonicalized only against our explicit
 allowlist. OIDC/refresh issuance scopes are not treated as resource permissions;
 missing capability scopes or refresh consent fail closed. Unused ID tokens are not

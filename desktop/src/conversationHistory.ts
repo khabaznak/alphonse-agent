@@ -9,10 +9,11 @@ export function mergeFreshConversationHistory(
     const previous = merged.get(message.id);
     if (!previous) merged.set(message.id, message);
     else if (message.private_reply_owner && previous.role === "assistant") {
-      // The live, owner-scoped pickup has the agenda. History only stores its receipt.
+      // A live, owner-scoped provider pickup can include private details. History stores the receipt.
       merged.set(message.id, { ...previous, content: message.content, private_reply_owner: message.private_reply_owner,
         ...(message.private_reply_plain_text ? { private_reply_plain_text: true } : {}),
-        ...(message.private_reply_surface ? { private_reply_surface: message.private_reply_surface } : {}) });
+        ...(message.private_reply_surface ? { private_reply_surface: message.private_reply_surface } : {}),
+        ...(message.private_outlook_inbox ? { private_outlook_inbox: message.private_outlook_inbox } : {}) });
     }
   }
   return orderConversationMessages([...merged.values()]);

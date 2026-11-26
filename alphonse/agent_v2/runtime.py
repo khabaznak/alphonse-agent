@@ -139,6 +139,7 @@ class V2RuntimeHost:
     coding_skill_error: str = ""
     integration_management: Any | None = None
     owner_gmail_service: Any | None = None
+    owner_outlook_service: Any | None = None
     owner_calendar_service: Any | None = None
     owner_gmail_search_service: Any | None = None
     # #6 installs the protected native adapter; skill selection grants no access.
@@ -255,6 +256,12 @@ def build_runtime_host(
         if tools.get(OWNER_GMAIL_TOOL_ID) is not None:
             raise ValueError('owner_gmail_tool_conflict')
         tools.register(build_owner_gmail_tool_definition())
+        from alphonse.agent_v2.core.intelligence.simple_loop.owner_outlook import (
+            OWNER_OUTLOOK_TOOL_ID, build_owner_outlook_tool_definition,
+        )
+        if tools.get(OWNER_OUTLOOK_TOOL_ID) is not None:
+            raise ValueError('owner_outlook_tool_conflict')
+        tools.register(build_owner_outlook_tool_definition())
         from alphonse.agent_v2.core.intelligence.simple_loop.owner_calendar import (
             OWNER_CALENDAR_TOOL_ID, build_owner_calendar_tool_definition,
         )
@@ -565,6 +572,8 @@ def refresh_runtime_artifacts(runtime: V2RuntimeHost) -> None:
         registry.register(build_owner_schedules_tool_definition())
         registry.register(build_owner_reminder_create_tool_definition())
         registry.register(build_owner_gmail_tool_definition())
+        from alphonse.agent_v2.core.intelligence.simple_loop.owner_outlook import build_owner_outlook_tool_definition
+        registry.register(build_owner_outlook_tool_definition())
         from alphonse.agent_v2.core.intelligence.simple_loop.owner_calendar import build_owner_calendar_tool_definition
         registry.register(build_owner_calendar_tool_definition())
         from alphonse.agent_v2.core.intelligence.simple_loop.owner_gmail_search import build_owner_gmail_search_tool_definition

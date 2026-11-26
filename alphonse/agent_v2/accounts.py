@@ -16,6 +16,9 @@ from alphonse.agent_v2.users import V2UserStore
 
 GMAIL_CONTENT_OPERATION = 'mail_content_read'
 GMAIL_READ_SCOPE = 'https://www.googleapis.com/auth/gmail.readonly'
+OUTLOOK_INBOX_OPERATION = 'outlook_inbox_unread'
+OUTLOOK_INBOX_RESOURCE = 'outlook:inbox'
+OUTLOOK_INBOX_SCOPE = 'https://graph.microsoft.com/Mail.ReadBasic'
 _GMAIL_SYSTEM_LABEL_IDS = frozenset({
     'INBOX', 'SPAM', 'TRASH', 'UNREAD', 'STARRED', 'IMPORTANT', 'SENT', 'DRAFT',
     'CATEGORY_PERSONAL', 'CATEGORY_SOCIAL', 'CATEGORY_PROMOTIONS', 'CATEGORY_UPDATES', 'CATEGORY_FORUMS',
@@ -109,6 +112,16 @@ class AccountService:
                 and operations == [GMAIL_CONTENT_OPERATION] and len(resources) == 1
                 and exact_gmail_label_id(resources[0])
                 and ((resources == ['INBOX'] and gmail_label_name is None) or valid_gmail_label_name(gmail_label_name))
+                and recipients == [actor] and project_id is None)
+
+    def _outlook_inbox_scope(self, record, actor, *, beneficiary, operations, resources, recipients, project_id):
+        owner = self.users.admin_user()
+        return (owner is not None and owner.user_id == actor == beneficiary == record.connection['owner_user_id']
+                and owner.is_active and owner.role in ('owner', 'admin')
+                and self.users.is_admin(actor)
+                and record.provider_key == 'microsoft' and record.connection['capabilities'] == [OUTLOOK_INBOX_OPERATION]
+                and OUTLOOK_INBOX_SCOPE in record.connection['granted_scopes'] and not record.revocation_pending
+                and operations == [OUTLOOK_INBOX_OPERATION] and resources == [OUTLOOK_INBOX_RESOURCE]
                 and recipients == [actor] and project_id is None)
 
     def create_connection(self, session: AccountSession, *, connection_id: str,
@@ -210,11 +223,16 @@ class AccountService:
         for recipient in recipients:
             self._active(recipient)
         content_grant = GMAIL_CONTENT_OPERATION in operations
+        outlook_grant = OUTLOOK_INBOX_OPERATION in operations
         compatible_operations = set(operations) <= set(record.connection['capabilities'])
         if content_grant:
             compatible_operations = requested_resource_count == 1 and self._gmail_content_scope(record, session.actor_user_id,
                 beneficiary=beneficiary_user_id, operations=operations, resources=resources,
                 recipients=recipients, project_id=project_id, gmail_label_name=gmail_label_name)
+        if outlook_grant:
+            compatible_operations = requested_resource_count == 1 and self._outlook_inbox_scope(
+                record, session.actor_user_id, beneficiary=beneficiary_user_id, operations=operations,
+                resources=resources, recipients=recipients, project_id=project_id)
         if (not grant_id.strip() or not operations or not resources
                 or not compatible_operations
                 or (not content_grant and gmail_label_name is not None)
@@ -234,6 +252,7 @@ class AccountService:
             if old and (old['connection_id'] != connection_id or old['beneficiary_user_id'] != beneficiary_user_id
                         or old['project_id'] != project_id or old['revoked_at']
                         or (GMAIL_CONTENT_OPERATION in old['operations']) != content_grant
+                        or (OUTLOOK_INBOX_OPERATION in old['operations']) != outlook_grant
                         or (content_grant and old['resources'] != resources)):
                 raise ValueError('account_grant_identity_immutable')
             if expected_revision != (row['revision'] if row else 0):
@@ -245,6 +264,19 @@ class AccountService:
                       AND json_extract(definition, '$.revoked_at')='' LIMIT 1''',
                     (connection_id, session.actor_user_id, GMAIL_CONTENT_OPERATION, resources[0])).fetchone():
                 raise ValueError('gmail_label_grant_exists')
+            if outlook_grant:
+                if not self._outlook_inbox_scope(record, session.actor_user_id,
+                        beneficiary=beneficiary_user_id, operations=operations, resources=resources,
+                        recipients=recipients, project_id=project_id):
+                    raise PermissionError('owner_only_account_scope_unavailable')
+                other_grants = conn.execute('''SELECT definition FROM v2_account_grants
+                    WHERE grant_id<>? AND json_extract(definition, '$.grantor_user_id')=?
+                      AND json_extract(definition, '$.operations')=json_array(?)''',
+                    (grant_id, session.actor_user_id, OUTLOOK_INBOX_OPERATION))
+                at = datetime.now(timezone.utc)
+                if any(account_grant_is_live(json.loads(candidate['definition']), at)
+                       for candidate in other_grants):
+                    raise ValueError('outlook_inbox_grant_exists')
             value = dict(schema_version=1, grant_id=grant_id, connection_id=connection_id,
                          grantor_user_id=session.actor_user_id, beneficiary_user_id=beneficiary_user_id,
                          project_id=project_id, operations=operations, resources=resources,
@@ -283,7 +315,8 @@ class AccountService:
     def authorize(self, session: AccountSession, *, connection_id: str, grant_id: str,
                   operation: str, resources: list[str], recipient_user_ids: list[str],
                   required_scopes: list[str], project_id: str | None = None,
-                  expected_grant_revision: int | None = None, owner_gmail_content: bool = False):
+                  expected_grant_revision: int | None = None, owner_gmail_content: bool = False,
+                  owner_outlook_inbox: bool = False):
         """Called at each managed use/page; config/project membership grants nothing."""
         self._active(session.actor_user_id)
         record = self.integrations.get(connection_id)
@@ -311,6 +344,14 @@ class AccountService:
                     beneficiary=grant['beneficiary_user_id'], operations=grant['operations'], resources=grant['resources'],
                     recipients=grant['recipient_user_ids'], project_id=project_id,
                     gmail_label_name=grant.get('gmail_label_name')))
+        if operation == OUTLOOK_INBOX_OPERATION:
+            capable = (owner_outlook_inbox is True and scopes == [OUTLOOK_INBOX_SCOPE] and requested_resource_count == 1
+                and resources == [OUTLOOK_INBOX_RESOURCE] and recipients == [session.actor_user_id]
+                and grant.get('grant_id') == grant_id and grant.get('revision') == row['revision']
+                and self._outlook_inbox_scope(record, session.actor_user_id,
+                    beneficiary=grant['beneficiary_user_id'], operations=grant['operations'],
+                    resources=grant['resources'], recipients=grant['recipient_user_ids'],
+                    project_id=grant['project_id']))
         if (grant['schema_version'] != 1 or grant['connection_id'] != connection_id
                 or grant['grantor_user_id'] != connection['owner_user_id']
                 or grant['beneficiary_user_id'] != session.actor_user_id or grant['project_id'] != project_id

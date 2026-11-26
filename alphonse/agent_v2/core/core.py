@@ -211,6 +211,7 @@ class ToolExecutionContext:
     browser_workflow_service: Any | None = None
     claim_receipt: Any | None = None
     owner_gmail_service: Any | None = None
+    owner_outlook_service: Any | None = None
     owner_calendar_service: Any | None = None
     owner_gmail_search_service: Any | None = None
 
@@ -252,6 +253,7 @@ class CoreLoopContext:
     telemetry_sink: Callable[[dict[str, Any]], None] | None = None
     system_one: Any | None = None
     owner_gmail_service: Any | None = None
+    owner_outlook_service: Any | None = None
     owner_calendar_service: Any | None = None
     owner_gmail_search_service: Any | None = None
     skill_store: Any | None = None
@@ -331,6 +333,7 @@ class CoreLoopContext:
             browser_workflow_service=self.browser_workflow_service,
             claim_receipt=self.claim_receipt,
             owner_gmail_service=self.owner_gmail_service,
+            owner_outlook_service=self.owner_outlook_service,
             owner_calendar_service=self.owner_calendar_service,
             owner_gmail_search_service=self.owner_gmail_search_service,
         )

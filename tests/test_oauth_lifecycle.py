@@ -7,7 +7,9 @@ from urllib.parse import urlencode
 
 import pytest
 
-from alphonse.agent_v2.accounts import AccountService, AccountSession
+from alphonse.agent_v2.accounts import (
+    AccountService, AccountSession, OUTLOOK_INBOX_OPERATION, OUTLOOK_INBOX_RESOURCE, OUTLOOK_INBOX_SCOPE,
+)
 from alphonse.agent_v2.integrations.credentials import CredentialVault
 from alphonse.agent_v2.integrations.oauth import ClientConfig, OAuthError, OAuthService, SCOPES
 from alphonse.agent_v2.integrations.store import SQLiteIntegrationStore
@@ -96,6 +98,103 @@ def expire(f):
     token = f.store.resolve_credentials(record)
     token['expires_at'] = str(time.time() - 1)
     f.store.install_credentials('one', token, expected_generation=record.credential_generation)
+
+
+def begin_outlook(f, connection='one'):
+    record = f.store.get(connection)
+    result = f.service.begin(f.owner, connection_id=connection, provider='microsoft',
+        capabilities=[OUTLOOK_INBOX_OPERATION], expected_revision=record.connection['revision'] if record else 0)
+    client = f.service.clients['microsoft']
+    callback = client.config.redirect_uri + '?' + urlencode({'state': client.state, 'code': 'disposable-code'})
+    return {'provider': 'microsoft', 'attempt_id': result['attempt_id']}, callback
+
+
+def test_outlook_inbox_oauth_status_and_wrong_account_are_safe(f):
+    attempt, callback = begin_outlook(f)
+    assert set(f.service.clients['microsoft'].scopes) == {'openid', 'offline_access', OUTLOOK_INBOX_SCOPE}
+    assert f.service.oauth_attempt_status(f.owner, **attempt) == {'status': 'pending'}
+    with pytest.raises(OAuthError, match='oauth_attempt_unavailable'):
+        f.service.oauth_attempt_status(f.other, **attempt)
+    f.service.complete(f.owner, callback)
+    assert f.service.oauth_attempt_status(f.owner, **attempt) == {'status': 'connected'}
+    assert f.service.cancel_oauth_attempt(f.owner, **attempt) == {'status': 'connected'}
+    record = f.store.get('one')
+    assert record.connection['granted_scopes'] == [OUTLOOK_INBOX_SCOPE]
+
+    attempt, callback = begin_outlook(f)
+    f.service.clients['microsoft'].identity = 'wrong-account'
+    with pytest.raises(OAuthError, match='oauth_account_mismatch'):
+        f.service.complete(f.owner, callback)
+    assert f.service.oauth_attempt_status(f.owner, **attempt) == {'status': 'failed', 'reason': 'account_mismatch'}
+    assert f.store.get('one').connection['provider_subject'] == 'subject-a'
+    assert f.store.get('one').credential_generation == record.credential_generation
+
+
+def test_outlook_inbox_chooses_personal_only_public_client(f):
+    from urllib.parse import parse_qs, urlsplit
+    from alphonse.agent_v2.integrations.oauth import ProviderClient
+
+    pytest.importorskip('requests_oauthlib')
+    config = next(item for item in f.configs if item.provider == 'microsoft')
+    f.service.clients['microsoft'] = ProviderClient(config)
+    result = f.service.begin(f.owner, connection_id='one', provider='microsoft',
+        capabilities=[OUTLOOK_INBOX_OPERATION], expected_revision=0)
+    url = urlsplit(result['authorization_url'])
+    values = parse_qs(url.query)
+    assert (url.scheme, url.hostname, url.path) == (
+        'https', 'login.microsoftonline.com', '/consumers/oauth2/v2.0/authorize')
+    assert values['redirect_uri'] == [config.redirect_uri]
+    assert values['code_challenge_method'] == ['S256']
+    assert 'client_secret' not in values and 'attempt_id' not in url.query
+    assert set(values['scope'][0].split()) == {'openid', 'offline_access', OUTLOOK_INBOX_SCOPE}
+
+
+@pytest.mark.parametrize('when', ['before_callback', 'during_exchange', 'in_browser', 'expired'])
+def test_outlook_stopped_consent_cannot_install_credentials(f, when):
+    attempt, callback = begin_outlook(f)
+    if when == 'before_callback':
+        assert f.service.cancel_oauth_attempt(f.owner, **attempt) == {'status': 'cancelled'}
+    if when == 'during_exchange':
+        f.service.clients['microsoft'].on_exchange = lambda: f.service.cancel_oauth_attempt(f.owner, **attempt)
+    if when == 'in_browser':
+        callback = callback.replace('code=disposable-code', 'error=access_denied&error_description=private')
+    if when == 'expired':
+        f.service.outlook_attempts[attempt['attempt_id']].expires = 0
+    with pytest.raises(OAuthError, match='oauth_(state_invalid|consent_cancelled|state_expired)'):
+        f.service.complete(f.owner, callback)
+    assert f.service.oauth_attempt_status(f.owner, **attempt) == {
+        'status': 'expired' if when == 'expired' else 'cancelled'}
+    assert not f.store.get('one').credential_ref
+    assert not f.backend.data
+
+
+def test_outlook_inbox_refresh_is_desktop_grant_scoped_and_revocation_fences_commit(f):
+    from datetime import datetime, timedelta, timezone
+
+    _, callback = begin_outlook(f)
+    f.service.complete(f.owner, callback)
+    grant_args = dict(beneficiary_user_id='owner', operations=[OUTLOOK_INBOX_OPERATION],
+        resources=[OUTLOOK_INBOX_RESOURCE], recipient_user_ids=['owner'],
+        expires_at=(datetime.now(timezone.utc) + timedelta(days=1)).isoformat())
+    f.accounts.save_grant(f.owner, grant_id='outlook', connection_id='one', expected_revision=0, **grant_args)
+    with pytest.raises(ValueError, match='outlook_inbox_grant_exists'):
+        f.accounts.save_grant(f.owner, grant_id='other-grant', connection_id='one', expected_revision=0, **grant_args)
+    with pytest.raises(PermissionError, match='account_grant_denied'):
+        f.accounts.authorize(f.owner, connection_id='one', grant_id='outlook',
+            operation=OUTLOOK_INBOX_OPERATION, resources=[OUTLOOK_INBOX_RESOURCE], recipient_user_ids=['owner'],
+            required_scopes=[OUTLOOK_INBOX_SCOPE])
+    refresh = dict(connection_id='one', expected_revision=revision(f), grant_id='outlook', grant_revision=1)
+    expire(f)
+    assert f.service.refresh_outlook_inbox_access(f.owner, **refresh) == {
+        'status': 'connected', 'access_token_status': 'current'}
+    assert revision(f) == refresh['expected_revision']
+    expire(f)
+    generation = f.store.get('one').credential_generation
+    f.service.clients['microsoft'].on_refresh = lambda: f.accounts.revoke_grant(
+        f.owner, grant_id='outlook', expected_revision=1)
+    with pytest.raises(OAuthError, match='oauth_refresh_not_persisted'):
+        f.service.refresh_outlook_inbox_access(f.owner, **refresh)
+    assert f.store.get('one').credential_generation == generation
 
 
 def test_no_refresh_token_access_refuses_expired_credentials_without_mutation(f):

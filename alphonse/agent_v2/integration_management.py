@@ -7,7 +7,7 @@ import time
 from uuid import uuid4
 
 from alphonse.agent_v2.accounts import (
-    AccountSession, GMAIL_CONTENT_OPERATION, exact_gmail_label_id, valid_gmail_label_name,
+    AccountSession, GMAIL_CONTENT_OPERATION, OUTLOOK_INBOX_OPERATION, exact_gmail_label_id, valid_gmail_label_name,
 )
 from alphonse.agent_v2.project_checks import _digest
 
@@ -248,7 +248,13 @@ class IntegrationManagement:
             return result
         if action == 'save_grant':
             operations = values.get('operations')
-            if 'expected_connection_revision' in values:
+            if operations == [OUTLOOK_INBOX_OPERATION]:
+                if channel != 'owner_desktop':
+                    raise PermissionError('outlook_inbox_grant_requires_desktop')
+                revision = values.get('expected_connection_revision')
+                if type(revision) is not int or revision < 1:
+                    raise ValueError('management_values_invalid')
+            elif 'expected_connection_revision' in values:
                 raise ValueError('management_values_invalid')
             if isinstance(operations, (list, tuple)) and GMAIL_CONTENT_OPERATION in operations:
                 if channel != 'owner_desktop':
@@ -280,6 +286,8 @@ class IntegrationManagement:
                           and g['grantor_user_id'] == session.actor_user_id), None)
             if not grant:
                 raise PermissionError('account_owner_required')
+            if OUTLOOK_INBOX_OPERATION in grant['operations']:
+                raise PermissionError('outlook_inbox_grant_requires_desktop')
             binding_id = 'account_' + uuid4().hex
             self.policies.bindings.configure(actor_id=session.actor_user_id, binding_id=binding_id,
                 skill_id=values['skill_id'], owner_id=grant['beneficiary_user_id'], kind='account',
@@ -289,6 +297,9 @@ class IntegrationManagement:
             self.policies.bindings.select(actor_id=session.actor_user_id, **values)
             return {'selected': True}
         if action in {'begin', 'complete', 'pause', 'disconnect', 'retry_deletion'}:
+            if (action == 'begin' and OUTLOOK_INBOX_OPERATION in (values.get('capabilities') or [])
+                    and channel != 'owner_desktop'):
+                raise PermissionError('outlook_inbox_setup_requires_desktop')
             if not self.oauth:
                 raise ValueError('oauth_setup_unavailable')
             return getattr(self.oauth, action)(session, **values)

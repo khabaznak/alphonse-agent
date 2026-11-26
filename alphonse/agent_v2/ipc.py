@@ -960,7 +960,9 @@ class V2DaemonServer:
         return uid
 
     def _optional_management(self, connection, request):
-        from alphonse.agent_v2.accounts import AccountSession, GMAIL_CONTENT_OPERATION, exact_gmail_label_id
+        from alphonse.agent_v2.accounts import (
+            AccountSession, GMAIL_CONTENT_OPERATION, OUTLOOK_INBOX_OPERATION, OUTLOOK_INBOX_RESOURCE, exact_gmail_label_id,
+        )
         self._local_peer_uid(connection)
         params = request.get('params', {})
         if not isinstance(params, dict) or set(params) - {'action', 'values'}:
@@ -986,24 +988,32 @@ class V2DaemonServer:
         values = params.get('values', {})
         if not isinstance(values, dict):
             raise ValueError('management_values_invalid')
+        operations = values.get('operations')
+        outlook_grant = operations == [OUTLOOK_INBOX_OPERATION]
+        outlook_begin = (values.get('provider') == 'microsoft'
+                         and values.get('capabilities') == [OUTLOOK_INBOX_OPERATION])
+        attempt_action = action in {'oauth_attempt_status', 'cancel_oauth_attempt'}
         if owner_only:
             if action not in {'catalog', 'begin', 'save_grant', 'revoke_grant', 'pause', 'disconnect',
-                              'retry_deletion', 'refresh_gmail_access', 'list_gmail_labels'}:
+                              'retry_deletion', 'refresh_gmail_access', 'refresh_outlook_inbox_access', 'list_gmail_labels',
+                              'oauth_attempt_status', 'cancel_oauth_attempt'}:
                 raise PermissionError('owner_only_account_action_unavailable')
             if action == 'catalog' and values:
                 raise ValueError('management_values_invalid')
-            if action == 'begin' and (values.get('provider') != 'google'
-                    or values.get('capabilities') not in (['mail_read'], ['calendar_read'])):
+            google_begin = (values.get('provider') == 'google'
+                            and values.get('capabilities') in (['mail_read'], ['calendar_read']))
+            if action == 'begin' and not (google_begin or outlook_begin):
                 raise PermissionError('owner_only_account_scope_unavailable')
             if action == 'save_grant':
                 from .core.intelligence.simple_loop.owner_calendar import exact_calendar_id
-                operations, resources = values.get('operations'), values.get('resources')
+                resources = values.get('resources')
                 inbox = operations == ['mail_read'] and resources == ['INBOX']
                 gmail_content = (operations == [GMAIL_CONTENT_OPERATION] and isinstance(resources, list)
                                  and len(resources) == 1 and exact_gmail_label_id(resources[0]))
                 calendar = (operations == ['calendar_read'] and isinstance(resources, list)
                             and len(resources) == 1 and exact_calendar_id(resources[0]))
-                if (not (inbox or gmail_content or calendar) or values.get('beneficiary_user_id') != owner.user_id
+                outlook = outlook_grant and resources == [OUTLOOK_INBOX_RESOURCE]
+                if (not (inbox or gmail_content or calendar or outlook) or values.get('beneficiary_user_id') != owner.user_id
                         or values.get('recipient_user_ids') != [owner.user_id] or values.get('project_id') is not None):
                     raise PermissionError('owner_only_account_scope_unavailable')
             if action == 'revoke_grant':
@@ -1011,22 +1021,38 @@ class V2DaemonServer:
                 with self.daemon.runtime.integration_store._connect() as db:
                     row = db.execute('SELECT connection_id FROM v2_account_grants WHERE grant_id=?', (grant_id,)).fetchone()
                 grant_record = self.daemon.runtime.integration_store.get(row['connection_id']) if row is not None else None
-                if (grant_record is None or grant_record.provider_key != 'google'
+                if (grant_record is None or not (grant_record.provider_key == 'google'
+                        or (grant_record.provider_key == 'microsoft'
+                            and grant_record.connection.get('capabilities') == [OUTLOOK_INBOX_OPERATION]))
                         or grant_record.connection.get('owner_user_id') != owner.user_id):
                     raise PermissionError('owner_only_account_scope_unavailable')
             if action in {'begin', 'save_grant', 'pause', 'disconnect', 'retry_deletion', 'list_gmail_labels'}:
                 connection_id = values.get('connection_id')
                 record = self.daemon.runtime.integration_store.get(connection_id) if isinstance(connection_id, str) else None
-                if record is not None and (record.provider_key != 'google'
-                        or record.connection.get('owner_user_id') != owner.user_id):
-                    raise PermissionError('owner_only_account_scope_unavailable')
+                if record is not None:
+                    connection = record.connection
+                    outlook_record = record.provider_key == 'microsoft' and (
+                        connection.get('capabilities') == [OUTLOOK_INBOX_OPERATION]
+                        or (connection.get('provider_subject', '').startswith('pending:')
+                            and connection.get('capabilities') == []))
+                    if (connection.get('owner_user_id') != owner.user_id
+                            or (action == 'save_grant' and outlook_grant != outlook_record)
+                            or (action == 'begin' and outlook_begin != outlook_record)
+                            or (record.provider_key != 'google' and (not outlook_record or action == 'list_gmail_labels'))):
+                        raise PermissionError('owner_only_account_scope_unavailable')
                 if (action == 'begin' and record is not None and record.connection.get('capabilities')
                         and record.connection['capabilities'] != values.get('capabilities')):
                     # A narrow reconnect would silently replace broader consent.
                     raise PermissionError('owner_only_combined_account_reconnect_unavailable')
         oauth = self.daemon.optional_accounts(session)
+        if attempt_action:
+            if not owner_only or set(values) != {'provider', 'attempt_id'}:
+                raise PermissionError('owner_only_account_scope_unavailable')
+            return getattr(oauth, action)(session, **values)
         if owner_only and action == 'refresh_gmail_access':
             return oauth.refresh_gmail_access(session, **values)
+        if owner_only and action == 'refresh_outlook_inbox_access':
+            return oauth.refresh_outlook_inbox_access(session, **values)
         management = self.daemon.runtime.integration_management
         management.oauth = oauth
         if action == 'begin':
@@ -1042,8 +1068,8 @@ class V2DaemonServer:
         # Callback exchange is accepted only by the loopback listener, never raw IPC.
         if action == 'complete':
             raise PermissionError('oauth_callback_transport_required')
-        if owner_only and (action == 'list_gmail_labels'
-                or (action == 'save_grant' and values.get('operations') == [GMAIL_CONTENT_OPERATION])):
+        if owner_only and (action == 'list_gmail_labels' or action == 'begin' and outlook_begin
+                or (action == 'save_grant' and (operations == [GMAIL_CONTENT_OPERATION] or outlook_grant))):
             return management.request(session, action, values, channel='owner_desktop')
         result = management.request(session, action, values)
         if owner_only and action == 'catalog':
@@ -1051,10 +1077,19 @@ class V2DaemonServer:
             result['owner_google_setup_only'] = True
             result['owner_gmail_content_setup'] = True
             result['owner_gmail_label_setup'] = True
-            result['providers'] = [dict(provider='google', capabilities=[capability
-                for capability in ('mail_read', 'calendar_read') if capability in provider['capabilities']])
-                for provider in result['providers'] if provider['provider'] == 'google']
-            result['connections'] = [item for item in result['connections'] if item['provider'] == 'google']
+            result['owner_outlook_inbox_setup'] = True
+            supported = {'google': ('mail_read', 'calendar_read'), 'microsoft': (OUTLOOK_INBOX_OPERATION,)}
+            result['providers'] = [
+                dict(provider=provider['provider'], capabilities=[
+                    capability for capability in supported[provider['provider']] if capability in provider['capabilities']])
+                for provider in result['providers']
+                if set(supported.get(provider['provider'], ())).intersection(provider['capabilities'])
+            ]
+            result['connections'] = [
+                item for item in result['connections']
+                if item['provider'] == 'google' or (item['provider'] == 'microsoft'
+                    and item.get('capabilities') in ([], [OUTLOOK_INBOX_OPERATION]))
+            ]
             connection_ids = {item['connection_id'] for item in result['connections']}
             result['grants'] = [grant for grant in result['grants'] if grant['connection_id'] in connection_ids]
         return result

@@ -8,7 +8,9 @@ import pytest
 
 from test_account_grants import f, expiry, revise_connection
 from test_project_checks import checks
-from alphonse.agent_v2.accounts import AccountSession, GMAIL_CONTENT_OPERATION, GMAIL_READ_SCOPE
+from alphonse.agent_v2.accounts import (
+    AccountSession, GMAIL_CONTENT_OPERATION, GMAIL_READ_SCOPE, OUTLOOK_INBOX_OPERATION, OUTLOOK_INBOX_RESOURCE,
+)
 from alphonse.agent_v2.integration_management import IntegrationManagement
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.tools.registry.native.integration_manage import build_integration_manage_tool_definition
@@ -206,6 +208,55 @@ def test_owner_google_setup_uses_canonical_owner_and_limits_actions(management, 
         server._optional_management(peer, {'version': PROTOCOL_VERSION, 'params': {'action': 'catalog', 'user': 'child'}})
     with pytest.raises(PermissionError, match='peer_denied'):
         server._optional_management(SimpleNamespace(getpeereid=lambda: (os.getuid()+1, 0)), req('catalog'))
+
+
+def test_owner_outlook_ipc_only_exposes_and_grants_personal_inbox_count(management, monkeypatch):
+    import os
+    from urllib.parse import urlencode
+    from alphonse.agent_v2.integrations.oauth import ClientConfig, OAuthService
+    from test_oauth_lifecycle import FakeProvider
+
+    f = management
+    f.runtime.integration_store = f.store
+    with f.store._connect() as db:
+        db.execute("UPDATE v2_integrations SET provider_key='google' WHERE integration_id='one'")
+    monkeypatch.setattr(os.path, 'samefile', lambda *_: True)
+    redirect = 'http://127.0.0.1:54321/callback'
+    oauth = OAuthService(f.service, [ClientConfig('microsoft', 'disposable', redirect)], client_factory=FakeProvider)
+    daemon = SimpleNamespace(runtime=f.runtime, experimental_owner_only=True, optional_accounts=lambda session: oauth)
+    server = V2DaemonServer(daemon)
+    server._accepting_handlers = True
+    server._oauth_loopback = SimpleNamespace(start=lambda provider: None)
+    peer = SimpleNamespace(getpeereid=lambda: (os.getuid(), 0))
+
+    def request(action, **values):
+        return server._optional_management(peer, {'version': PROTOCOL_VERSION, 'params': {'action': action, 'values': values}})
+
+    catalog = request('catalog')
+    assert catalog['owner_outlook_inbox_setup']
+    assert catalog['providers'] == [{'provider': 'microsoft', 'capabilities': [OUTLOOK_INBOX_OPERATION]}]
+    attempt = request('begin', connection_id='outlook', provider='microsoft', display_name='Test Hotmail',
+                      capabilities=[OUTLOOK_INBOX_OPERATION], expected_revision=0)
+    assert request('oauth_attempt_status', provider='microsoft', attempt_id=attempt['attempt_id']) == {'status': 'pending'}
+    callback = redirect + '?' + urlencode({'state': oauth.clients['microsoft'].state, 'code': 'disposable-code'})
+    oauth.complete(AccountSession('parent'), callback)
+    assert request('oauth_attempt_status', provider='microsoft', attempt_id=attempt['attempt_id']) == {'status': 'connected'}
+    account, = [item for item in request('catalog')['connections'] if item['provider'] == 'microsoft']
+    assert account['display_name'] == 'Test Hotmail'
+    grant = dict(grant_id='outlook-grant', connection_id='outlook', expected_revision=0,
+                 expected_connection_revision=account['revision'], beneficiary_user_id='parent',
+                 operations=[OUTLOOK_INBOX_OPERATION], resources=[OUTLOOK_INBOX_RESOURCE],
+                 recipient_user_ids=['parent'], expires_at=expiry())
+    for bad in ({'resources': ['all-mail']}, {'recipient_user_ids': ['child']}, {'project_id': 'project'},
+                {'operations': ['mail_read'], 'resources': ['INBOX']}):
+        with pytest.raises(PermissionError, match='owner_only_account_scope_unavailable'):
+            request('save_grant', **(grant | bad))
+    with pytest.raises(ValueError, match='oauth_revision_conflict'):
+        request('save_grant', **(grant | {'expected_connection_revision': account['revision'] - 1}))
+    with pytest.raises(PermissionError, match='outlook_inbox_grant_requires_desktop'):
+        f.management.request(AccountSession('parent'), 'save_grant', grant)
+    assert request('save_grant', **grant)['resources'] == [OUTLOOK_INBOX_RESOURCE]
+    assert request('revoke_grant', grant_id='outlook-grant', expected_revision=1) == {'revoked': True}
 
 
 def test_owner_gmail_setup_accepts_only_narrow_self_grant(management, monkeypatch):

@@ -411,6 +411,7 @@ class OwnerAtomicCheckpoint:
                     or selected.get('evidence_bindings_sha256') != _decision_digest(observations)):
                 raise CheckpointConflict('owner_desktop_pickup_unavailable')
             from .owner_gmail import OWNER_GMAIL_TOOL_ID, valid_owner_gmail_locked
+            from .owner_outlook import OWNER_OUTLOOK_TOOL_ID, outlook_inbox_result, valid_owner_outlook_locked
             from .owner_calendar import OWNER_CALENDAR_TOOL_ID, valid_owner_calendar_locked
             from .owner_gmail_search import (
                 OWNER_GMAIL_SEARCH_TOOL_ID, final_gmail_search_result, gmail_source_title, gmail_summary_text,
@@ -432,6 +433,11 @@ class OwnerAtomicCheckpoint:
                                 binding.get('gmail_observation'), context=context,
                                 desktop_pickup=not self.scheduled_origin))):
                     raise CheckpointConflict('owner_gmail_authority_unavailable')
+                if (binding.get('tool_id') == OWNER_OUTLOOK_TOOL_ID
+                        and (self.scheduled_origin or state.status != 'completed' or not valid_owner_outlook_locked(
+                            conn, self.task.user, binding.get('arguments'), binding.get('outlook_observation'),
+                            context=context))):
+                    raise CheckpointConflict('owner_outlook_authority_unavailable')
                 if (binding.get('tool_id') == OWNER_CALENDAR_TOOL_ID
                         and (state.status != 'completed' or not valid_owner_calendar_locked(
                             conn, self.task.user, binding.get('arguments'), binding.get('calendar_observation'),
@@ -460,11 +466,16 @@ class OwnerAtomicCheckpoint:
             metadata.pop('owner_read_ready_handoff', None)
             result = self.store._write(conn, row, raw, state, budget)
             from .owner_clock import display_response
+            timezone_provider = context.user_timezone_provider
+            timezone_name = (timezone_provider(self.task.user)
+                if callable(timezone_provider) and any(binding.get('tool_id') in {
+                    OWNER_OUTLOOK_TOOL_ID, OWNER_GMAIL_SEARCH_TOOL_ID, OWNER_CALENDAR_TOOL_ID,
+                } for binding in observations.values()) else None)
             response = {'message_id': self.task.message_id,
-                        'message': display_response(state.response, observations, private_desktop=True),
+                        'message': display_response(state.response, observations, private_desktop=True,
+                                                    timezone_name=timezone_name),
                         'kind': selected['kind'],
                         'delivery_status': 'started_unconfirmed', 'acknowledgement_token': acknowledgement_token}
-            timezone_provider = context.user_timezone_provider
             searches = [binding['gmail_search_observation'] for binding in observations.values()
                         if binding.get('tool_id') == OWNER_GMAIL_SEARCH_TOOL_ID]
             mail = final_gmail_search_result(searches)
@@ -473,14 +484,20 @@ class OwnerAtomicCheckpoint:
                 response['private_a2ui'] = gmail_summary_surface(
                     self.task.message_id, mail, source=gmail_source_title(mail),
                     summary=gmail_summary_text(state.response), searches=searches,
-                    timezone_name=timezone_provider(self.task.user) if callable(timezone_provider) else None)
+                    timezone_name=timezone_name)
             for binding in observations.values():
+                if binding.get('tool_id') == OWNER_OUTLOOK_TOOL_ID:
+                    outlook = binding['outlook_observation']
+                    response['outlook_inbox_status'] = outlook.get('reason', outlook['status'])
+                    if outlook['status'] == 'complete':
+                        response['outlook_inbox_result'] = outlook_inbox_result(outlook,
+                            locale_hint=state.response, timezone_name=timezone_name)
                 calendar = binding.get('calendar_observation')
                 if binding.get('tool_id') == OWNER_CALENDAR_TOOL_ID and calendar['status'] in ('complete', 'partial'):
                     response['private_calendar'] = True
                     response['private_a2ui'] = calendar_agenda_surface(
                         self.task.message_id, calendar,
-                        timezone_name=timezone_provider(self.task.user) if callable(timezone_provider) else None)
+                        timezone_name=timezone_name)
                 if (binding.get('tool_id') == SCHEDULED_TASK_TOOL_ID
                         and binding.get('arguments', {}).get('operation') == 'cancel'):
                     effect = binding['schedule_observation']
@@ -964,6 +981,9 @@ class OwnerAtomicCheckpoint:
             from .owner_gmail import OWNER_GMAIL_TOOL_ID
             if tool_id == OWNER_GMAIL_TOOL_ID:
                 observations[evidence_ref]['gmail_observation'] = deepcopy(observation)
+            from .owner_outlook import OWNER_OUTLOOK_TOOL_ID
+            if tool_id == OWNER_OUTLOOK_TOOL_ID:
+                observations[evidence_ref]['outlook_observation'] = deepcopy(observation)
             from .owner_calendar import OWNER_CALENDAR_TOOL_ID
             if tool_id == OWNER_CALENDAR_TOOL_ID:
                 observations[evidence_ref]['calendar_observation'] = deepcopy(observation)

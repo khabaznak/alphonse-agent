@@ -53,10 +53,11 @@ def build_owner_clock_tool_definition():
         argument_schema=schema, accepts_context=True)
 
 
-def display_response(response, bindings, *, private_desktop=False):
+def display_response(response, bindings, *, private_desktop=False, timezone_name=None):
     from .owner_calendar import OWNER_CALENDAR_TOOL_ID, format_calendar_observation
     from .owner_schedules import OWNER_SCHEDULES_TOOL_ID
     from .owner_gmail import OWNER_GMAIL_TOOL_ID, owner_gmail_failure_message
+    from .owner_outlook import OWNER_OUTLOOK_TOOL_ID, format_outlook_observation
     from .owner_gmail_search import OWNER_GMAIL_SEARCH_TOOL_ID, final_gmail_search_result, format_gmail_search_observation
     if any(binding.get('tool_id') == OWNER_SCHEDULES_TOOL_ID for binding in bindings.values()):
         response += '\n\nEarlier scheduled work is paused. New Desktop reminders appear only while Desktop is open.'
@@ -79,6 +80,9 @@ def display_response(response, bindings, *, private_desktop=False):
     for binding in bindings.values():
         if binding.get('tool_id') == OWNER_CALENDAR_TOOL_ID:
             provider_reads.append(format_calendar_observation(binding['calendar_observation'], private_delivery=private_desktop))
+        if binding.get('tool_id') == OWNER_OUTLOOK_TOOL_ID:
+            provider_reads.append(format_outlook_observation(binding['outlook_observation'],
+                private_delivery=private_desktop, timezone_name=timezone_name))
     searches = [binding['gmail_search_observation'] for binding in bindings.values()
                 if binding.get('tool_id') == OWNER_GMAIL_SEARCH_TOOL_ID]
     if searches:
