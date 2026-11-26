@@ -214,6 +214,8 @@ def test_non_exact_or_ambiguous_label_never_falls_back_to_inbox(f, label, reason
     grant_content(f, grant_id='another', resource='Label_123', label_name='WORK/CAFÉ')
     wire = Wire()
     service = OwnerGmailSearchService(f.accounts, lambda _: f.service, transport=wire)
+    assert service.planner_labels('owner')['labels'] == ['Inbox']
+    assert service.planner_labels('other')['labels'] == []
     result = service.observe('owner', {'query': '', 'label': label}, guard=lambda: None)
     assert result == {'status': 'unavailable', 'reason': reason}
     assert not wire.calls and f.service.clients['google'].refresh_count == 0

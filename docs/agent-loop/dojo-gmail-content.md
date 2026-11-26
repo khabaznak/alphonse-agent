@@ -102,6 +102,64 @@ recorded the exact granted label and the Desktop acknowledgement. This
 check confirmed live retrieval and rendering. The factual interpretation of
 the real mail was not assessed, and no message details are recorded here.
 
+## Sender lookup by conversational name
+
+The owner asks in Spanish whether they have mail from a teacher. The disposable
+mailbox puts a recent message from the teacher and a message that merely mentions
+her in a granted school label. The sender's display name omits the honorific in
+the request. Inbox is granted and has no matching messages. In `sender-empty-first`,
+the simulated provider returns an empty first list response regardless of the
+query. The model sees the request and can choose any available authorized route.
+
+```sh
+PYTHONPATH=.:tests .venv/bin/python docs/agent-loop/evidence/dojo-gmail-content-runner.py \
+  MODEL sender /tmp/dojo-mail-sender.jsonl
+```
+
+Repeat with `sender-empty-first` and a fresh journal. Compare the answer with the
+sender and mention in the fixture. Check that only authorized scopes were queried,
+that any excerpts first appeared in a call with zero tools, and that the private
+message details stayed out of conversation history. The runner simulates Gmail
+matching and exercises real inference and the owner IPC path. Live Gmail query
+semantics and native Desktop rendering are outside this exercise.
+
+On November 26, all inference runs used `gpt-6-luna`.
+
+- The first injected-empty attempt was blocked at local socket setup. It took
+  0.041 seconds with zero Gmail or model calls.
+  [Receipt](evidence/dojo-gmail-sender-empty-first-20261126-01.jsonl)
+- The next injected-empty attempt exposed a defect in the development build.
+  On a fresh conversation, the planner received no labels and stopped after
+  an Inbox search. It took 13.529 seconds and reported 25,965 input and 306
+  output tokens.
+  [Receipt](evidence/dojo-gmail-sender-empty-first-20261126-02.jsonl)
+- After fixing label disclosure on a fresh conversation, the injected-empty
+  attempt used three searches and correctly distinguished the teacher's message
+  from a mention. It took 23.843 seconds and reported 52,366 input and 305
+  output tokens. The original card probe omitted the numeric citation prefix
+  when checking the subject. The delivered text and fixture reads confirmed
+  the matching source.
+  [Receipt](evidence/dojo-gmail-sender-empty-first-20261126-03.jsonl)
+- The first regular sender attempt retained the honorific even when it refined
+  the search. It missed the message. It took 20.923 seconds and reported
+  50,331 input and 232 output tokens.
+  [Receipt](evidence/dojo-gmail-sender-20261126-01.jsonl)
+- After strengthening the general sender-query guidance, the regular sender
+  attempt refined an empty Inbox search to the school label. It cited the
+  teacher's message in Spanish and did not attribute the other email to her.
+  Only the final call saw excerpts, with zero tools. The correct source was
+  in the card, the client acknowledged the reply, and no private message
+  details appeared in history. It took 19.434 seconds and reported 40,116
+  input and 349 output tokens.
+  [Receipt](evidence/dojo-gmail-sender-20261126-02.jsonl)
+- The injected-empty attempt on that same build searched the school label
+  first, then Inbox. It stopped without returning to the school label and missed
+  the message. The empty card identified both searched scopes. It took
+  18.449 seconds and reported 40,314 input and 263 output tokens. Recovery
+  from a false empty response in the best label was inconsistent across the
+  development attempts.
+  [Receipt](evidence/dojo-gmail-sender-empty-first-20261126-04.jsonl)
+
 ## Fuller review and A2UI
 
 The `label-expanded` case supplies 12 disposable messages. The old deadline

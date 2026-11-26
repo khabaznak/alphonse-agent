@@ -413,7 +413,8 @@ class OwnerAtomicCheckpoint:
             from .owner_gmail import OWNER_GMAIL_TOOL_ID, valid_owner_gmail_locked
             from .owner_calendar import OWNER_CALENDAR_TOOL_ID, valid_owner_calendar_locked
             from .owner_gmail_search import (
-                OWNER_GMAIL_SEARCH_TOOL_ID, gmail_source_title, gmail_summary_text, valid_owner_gmail_search_locked,
+                OWNER_GMAIL_SEARCH_TOOL_ID, final_gmail_search_result, gmail_source_title, gmail_summary_text,
+                valid_owner_gmail_search_locked,
             )
             from alphonse.agent_v2.interfaces.private_provider_a2ui import calendar_agenda_surface, gmail_summary_surface
             from .owner_reminder_create import OWNER_REMINDER_CREATE_TOOL_ID, valid_reminder_locked
@@ -463,20 +464,22 @@ class OwnerAtomicCheckpoint:
                         'message': display_response(state.response, observations, private_desktop=True),
                         'kind': selected['kind'],
                         'delivery_status': 'started_unconfirmed', 'acknowledgement_token': acknowledgement_token}
+            searches = [binding['gmail_search_observation'] for binding in observations.values()
+                        if binding.get('tool_id') == OWNER_GMAIL_SEARCH_TOOL_ID]
+            mail = final_gmail_search_result(searches)
+            if mail is not None and mail['status'] in ('complete', 'partial'):
+                response['private_gmail'] = True
+                response['private_a2ui'] = gmail_summary_surface(
+                    self.task.message_id, mail, source=gmail_source_title(mail),
+                    summary=gmail_summary_text(state.response), searches=searches)
             for binding in observations.values():
                 calendar = binding.get('calendar_observation')
-                mail = binding.get('gmail_search_observation')
                 if binding.get('tool_id') == OWNER_CALENDAR_TOOL_ID and calendar['status'] in ('complete', 'partial'):
                     response['private_calendar'] = True
                     local_timezone = context.user_timezone_provider
                     response['private_a2ui'] = calendar_agenda_surface(
                         self.task.message_id, calendar,
                         timezone_name=local_timezone(self.task.user) if callable(local_timezone) else None)
-                if binding.get('tool_id') == OWNER_GMAIL_SEARCH_TOOL_ID and mail['status'] in ('complete', 'partial'):
-                    response['private_gmail'] = True
-                    response['private_a2ui'] = gmail_summary_surface(
-                        self.task.message_id, mail, source=gmail_source_title(mail),
-                        summary=gmail_summary_text(state.response))
                 if (binding.get('tool_id') == SCHEDULED_TASK_TOOL_ID
                         and binding.get('arguments', {}).get('operation') == 'cancel'):
                     effect = binding['schedule_observation']

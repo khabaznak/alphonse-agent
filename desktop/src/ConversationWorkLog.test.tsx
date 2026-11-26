@@ -29,3 +29,26 @@ it("offers only explicitly available recovery controls", () => {
   expect(container.textContent).not.toContain("Open model settings");
   act(() => root.unmount());
 });
+
+
+it("shows each Gmail label in search order while technical details are closed", async () => {
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  const request = vi.fn(async () => ({
+    status: "completed", failure_code: null, notice: "May be incomplete.",
+    events: ["Inbox", "Family/School", "Family/School"].map((gmail_label) => ({
+      label: "Searched Gmail", outcome: "Observation recorded", gmail_label,
+    })),
+  })) as unknown as OwnerRequest;
+  await act(async () => root.render(<ConversationWorkLog request={request} messageId={"a".repeat(32)} active />));
+  expect(container.querySelector(".conversation-work-log > p")?.textContent)
+    .toBe("Gmail search · Inbox → Family/School → Family/School");
+  const details = container.querySelector<HTMLDetailsElement>(".conversation-work-log-details")!;
+  expect(details.open).toBe(false);
+  expect(Array.from(details.querySelectorAll("li"), (item) => item.textContent)).toEqual([
+    "Searched Gmail · Inbox · Observation recorded",
+    "Searched Gmail · Family/School · Observation recorded",
+    "Searched Gmail · Family/School · Observation recorded",
+  ]);
+  await act(async () => root.unmount());
+});

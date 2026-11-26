@@ -3,6 +3,7 @@ from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from alphonse.agent_v2.core.intelligence.simple_loop.gmail_digest import parse_gmail_digest
+from alphonse.agent_v2.core.intelligence.simple_loop.owner_gmail_search import gmail_earlier_empty_scopes
 
 from .a2ui import ALPHONSE_DESKTOP_CATALOG_ID, A2UI_VERSION, validate_envelope
 
@@ -28,7 +29,7 @@ def _surface(message_id, provider, components, children):
     return envelopes
 
 
-def gmail_summary_surface(message_id, observation, *, source, summary):
+def gmail_summary_surface(message_id, observation, *, source, summary, searches=()):
     """Project the private digest and literal, bounded excerpts for its citations."""
     messages = observation["messages"]
     days = observation["lookback_days"]
@@ -46,7 +47,12 @@ def gmail_summary_surface(message_id, observation, *, source, summary):
     if not messages:
         components.append(_text("empty", "Gmail returned no matching messages in this search."
                                 if observation["status"] == "complete" else "No messages could be reviewed."))
-        return _surface(message_id, "gmail", components, [*children, "empty"])
+        children.append("empty")
+        for index, scope in enumerate(gmail_earlier_empty_scopes(observation, searches), 1):
+            key = f"earlier_scope_{index}"
+            components.append(_text(key, f"Also searched {scope}."))
+            children.append(key)
+        return _surface(message_id, "gmail", components, children)
     if digest.actions:
         rows = []
         components.append({"id": "actions", "component": "List", "children": rows})

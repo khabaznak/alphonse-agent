@@ -5,9 +5,12 @@ import json
 import os
 import re
 
+from alphonse.agent_v2.accounts import exact_gmail_label_id, valid_gmail_label_name
 from alphonse.agent_v2.core.messages.sqlite_queue import finalized_owner_history_matches
+from .owner_atomic_checkpoint import observation_digest
 from .owner_failure_diagnostics import public_failure_code
 from .owner_gmail import OWNER_GMAIL_TOOL_ID, owner_gmail_failure_message
+from .owner_gmail_search import OWNER_GMAIL_SEARCH_TOOL_ID
 
 _LABELS = {
     'native.search_memory': 'Searched conversation history',
@@ -18,11 +21,29 @@ _LABELS = {
     'native.owner_clock': 'Checked the clock',
     'native.owner_schedules': 'Checked schedules',
     'native.owner_gmail_unread': 'Checked unread mail',
-    'native.owner_gmail_search': 'Searched Gmail',
+    OWNER_GMAIL_SEARCH_TOOL_ID: 'Searched Gmail',
     'native.owner_calendar_agenda': 'Checked Google Calendar',
     'native.skill_catalog': 'Checked available skills',
     'native.owner_named_skill': 'Checked a named skill',
 }
+
+
+def _gmail_scope(item: dict) -> dict[str, str]:
+    """Use only the recorded provider scope for an observed search."""
+    mail = item.get('gmail_search_observation')
+    if (not isinstance(mail, dict) or mail.get('status') not in ('complete', 'partial')
+            or item.get('observation_sha256') != observation_digest(mail)):
+        return {}
+    authority = mail.get('authority')
+    if not isinstance(authority, dict) or not authority.get('grant_id'):
+        return {}
+    resource = authority.get('resource', 'INBOX')
+    name = authority.get('label_name')
+    if resource == 'INBOX' and name is None:
+        return {'gmail_label': 'Inbox'}
+    if resource != 'INBOX' and exact_gmail_label_id(resource) and valid_gmail_label_name(name):
+        return {'gmail_label': name}
+    return {}
 
 
 def _events(actor: str, refs: list, observations: dict, pending: object) -> list[dict]:
@@ -55,7 +76,10 @@ def _events(actor: str, refs: list, observations: dict, pending: object) -> list
         elif tool == OWNER_GMAIL_TOOL_ID and owner_gmail_failure_message(item.get('gmail_observation')):
             events.append({'label': 'Attempted an unread mail check', 'outcome': 'The Inbox count could not be verified'})
             continue
-        events.append({'label': _LABELS[tool], 'outcome': outcome})
+        event = {'label': _LABELS[tool], 'outcome': outcome}
+        if tool == OWNER_GMAIL_SEARCH_TOOL_ID:
+            event.update(_gmail_scope(item))
+        events.append(event)
     if isinstance(pending, dict) and pending.get('kind') == 'tool':
         events.append({'label': 'Tool action', 'outcome': 'Reserved; execution or effects are unconfirmed'})
     return events
