@@ -11,7 +11,8 @@ export function mergeFreshConversationHistory(
     else if (message.private_reply_owner && previous.role === "assistant") {
       // The live, owner-scoped pickup has the agenda. History only stores its receipt.
       merged.set(message.id, { ...previous, content: message.content, private_reply_owner: message.private_reply_owner,
-        ...(message.private_reply_plain_text ? { private_reply_plain_text: true } : {}) });
+        ...(message.private_reply_plain_text ? { private_reply_plain_text: true } : {}),
+        ...(message.private_reply_surface ? { private_reply_surface: message.private_reply_surface } : {}) });
     }
   }
   return orderConversationMessages([...merged.values()]);

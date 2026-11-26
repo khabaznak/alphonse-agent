@@ -21,7 +21,7 @@ from alphonse.agent_v2.services.project_check_worker import CheckStopped
 
 SCOPE = SCOPES['google']['mail_read']
 ALL_MAIL = 'gmail:all'  # Explicit mailbox-wide grant, including Spam and Trash.
-GMAIL_LABEL_SEARCH_MAX = 5
+GMAIL_LABEL_SEARCH_MAX = 20
 _ID = re.compile(r'^[A-Za-z0-9_-]{1,4096}$')
 
 

@@ -17,16 +17,19 @@ selection and Gmail content searches can renew Google credentials with the
 existing connection. Reconnect if Google withdraws or expires its authorization.
 
 When asked in the owner’s Desktop Conversation, Alphonse searches one granted
-label and can summarize excerpts from up to five matching messages. Use the
+label and can summarize excerpts from up to 20 matching messages. Use the
 full Gmail name for a nested label, such as `Family/School`. A message may be
 archived or outside Inbox and still match the selected label. A request that
 omits a label defaults to Inbox. The search normally covers 90 days and may
 extend to 365 days. The reply identifies its scope, sources and any incomplete
-coverage. [Gmail search semantics](https://developers.google.com/workspace/gmail/api/guides/filtering)
+coverage. When asked, the summary draws out deadlines and action items with
+numbered references to the reviewed messages. [Gmail search semantics](https://developers.google.com/workspace/gmail/api/guides/filtering)
 
 The configured inference model receives the bounded matching excerpts in a
 summary step with no Alphonse tools. Email text remains untrusted evidence.
-The private result is rendered as plain text in Desktop. The task checkpoint
+The private result is rendered as a read-only A2UI card in Desktop with
+coverage and expandable sources. Older Desktop versions can display the
+plain-text reply. The task checkpoint
 holds bounded excerpts and the draft for verified pickup. Ordinary conversation
 history records a receipt without message content. Google access, the local
 grant, and the owner claim are rechecked before pickup.

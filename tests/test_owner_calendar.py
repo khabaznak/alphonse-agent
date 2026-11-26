@@ -124,6 +124,11 @@ def test_calendar_titles_are_private_to_verified_desktop_pickup(f, tmp_path):
         assert answer['private_calendar'] is True and answer['kind'] == 'answer'
         assert TITLE in answer['message'] and '09:15:00-06:00' in answer['message']
         assert '2026-12-01 to 2026-12-02 (all day)' in answer['message']
+        create, update = answer['private_a2ui']
+        assert create['createSurface']['surfaceId'] == f'private-calendar:{message}'
+        visible = [item.get('text', '') for item in update['updateComponents']['components']]
+        assert TITLE in visible
+        assert any('All day · Through Wed, 02 Dec 2026' == text for text in visible)
         assert not any(marker in answer['message'] for marker in ('PRIVATE_DESCRIPTION_MARKER', 'CANCELLED_EVENT_MARKER', 'model draft'))
         daemon.acknowledge_owner_desktop_draft(message, answer['acknowledgement_token'])
         daemon.acknowledge_owner_desktop_draft(message, answer['acknowledgement_token'])

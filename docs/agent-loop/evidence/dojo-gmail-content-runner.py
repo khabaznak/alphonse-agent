@@ -1,5 +1,6 @@
 """Run the owner worker on disposable mail and observe the configured model."""
 import argparse
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 import tempfile
@@ -7,6 +8,7 @@ import time
 
 from alphonse.agent_v2.core.inference.openai_codex import OpenAICodexProvider, OpenAICodexProviderConfig
 from alphonse.agent_v2.core.intelligence.simple_loop.owner_gmail_search import OwnerGmailSearchService
+from test_gmail_adapter import Wire, message
 from test_owner_calendar import calendar_worker, worker_status
 from test_owner_gmail_search_conversation import BODY, GOAL, SUBJECT, f, inbox_fixture, seed_mail
 
@@ -17,6 +19,29 @@ LABEL_GOAL = (
     'Busca en la etiqueta de Gmail Family/Spring workshop el aviso del taller '
     'de cerámica. Dime a qué hora empieza y qué tengo que llevar.'
 )
+EXPANDED_GOAL = (
+    'Revisa los avisos de Gmail de los últimos 30 días en Family/Spring workshop. '
+    '¿Cuál es la fecha límite vigente del registro y qué tareas necesito hacer?'
+)
+REVISED_DEADLINE = 'Registration now closes December 3 at 17:00 Mexico City time.'
+
+
+def expanded_fixture():
+    bodies = {
+        2: 'The original registration deadline was November 29 at 09:00.',
+        7: 'Bring a plain apron. A separate deadline for this task was not provided.',
+        8: REVISED_DEADLINE + ' This replaces the November 29 deadline.',
+        11: 'Please bring proof of registration. The office opens at 09:00, timezone unspecified.',
+    }
+    messages = []
+    now = datetime.now(timezone.utc)
+    for index in range(1, 13):
+        item = message(f'workshop-{index}', labels=(LABEL_ID,), text=bodies.get(index, 'General workshop notice.'))
+        received = now - timedelta(hours=12 if index == 2 else 3)
+        item['internalDate'] = str(int(received.timestamp() * 1000))
+        item['payload']['headers'] = [{'name': 'Subject', 'value': f'Synthetic Workshop notice {index}'}]
+        messages.append(item)
+    return Wire({'messages': [{'id': item['id']} for item in messages], 'nextPageToken': 'unreviewed'}, *messages)
 
 
 class ObservedProvider:
@@ -28,6 +53,7 @@ class ObservedProvider:
 
     def generate_json(self, request):
         row = {'mail_excerpt_in_prompt': BODY in request.prompt,
+               'source_beyond_five_in_prompt': REVISED_DEADLINE in request.prompt,
                'other_mail_tool_in_prompt': 'native.owner_gmail_unread' in request.prompt}
         self.decisions.append(row)
         result = self.provider.generate_json(request)
@@ -41,14 +67,15 @@ class ObservedProvider:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('model')
-    parser.add_argument('case', choices=('authorized', 'count-only', 'label-authorized', 'label-denied'))
+    parser.add_argument('case', choices=('authorized', 'count-only', 'label-authorized', 'label-denied', 'label-expanded'))
     parser.add_argument('receipt', type=Path)
     args = parser.parse_args()
     provider = ObservedProvider()
-    wire = inbox_fixture()
-    label_case = args.case in {'label-authorized', 'label-denied'}
-    goal = LABEL_GOAL if label_case else GOAL
-    if label_case:
+    expanded = args.case == 'label-expanded'
+    wire = expanded_fixture() if expanded else inbox_fixture()
+    label_case = args.case.startswith('label-')
+    goal = EXPANDED_GOAL if expanded else LABEL_GOAL if label_case else GOAL
+    if label_case and not expanded:
         wire.responses[-1]['labelIds'] = [LABEL_ID]
     report = {'model': args.model, 'case': args.case, 'request': goal, 'status': 'started'}
     started = time.monotonic()
@@ -60,7 +87,7 @@ def main():
                 root = Path(directory)
                 fixture = f.__wrapped__(root)
                 seed_mail(fixture, content_grant=args.case != 'count-only')
-                if args.case == 'label-authorized':
+                if args.case in {'label-authorized', 'label-expanded'}:
                     fixture.accounts.save_grant(
                         fixture.owner, grant_id='workshop-label', connection_id='one',
                         expected_revision=0, beneficiary_user_id='owner',
@@ -78,9 +105,15 @@ def main():
                     if report['status'] == 'ready':
                         draft = client.request('experimental_owner_take_draft', message_id=mid)
                         report.update(answer=draft['message'], private_reply=draft.get('private_gmail'))
+                        if expanded:
+                            _, update = draft['private_a2ui']
+                            components = update['updateComponents']['components']
+                            report['a2ui_source_rows'] = sum(item['id'].startswith('source_') and
+                                item['component'] == 'Column' for item in components)
                         report['ack'] = client.request('experimental_owner_ack_draft', message_id=mid,
                             acknowledgement_token=draft['acknowledgement_token'])['status']
                         report['mail_in_history'] = any(SUBJECT in item.content or '11:30' in item.content
+                            or 'Synthetic Workshop notice' in item.content or REVISED_DEADLINE in item.content
                             for item in conversation.list(owner_user_id='owner'))
         except Exception as exc:
             report.update(status='infrastructure_error', error_type=type(exc).__name__)

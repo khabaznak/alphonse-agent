@@ -1,3 +1,5 @@
+import type { A2uiSurface } from "./a2ui";
+
 export type ActivityEvent = {
   sequence: number;
   phase: string;
@@ -110,4 +112,5 @@ export type ChatMessage = {
   committed_effect?: CommittedEffect;
   private_reply_owner?: string;
   private_reply_plain_text?: boolean;
+  private_reply_surface?: A2uiSurface;
 };

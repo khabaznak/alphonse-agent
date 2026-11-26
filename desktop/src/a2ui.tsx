@@ -2,11 +2,12 @@ import { type ReactNode, useEffect, useState } from "react";
 import { daemonRequest } from "./api";
 
 export const DESKTOP_CATALOG_ID = "alphonse.desktop.catalog.v2";
-const COMPONENTS = ["Card", "Row", "Column", "List", "Text", "Button", "TextInput", "Status", "Divider", "Icon", "CheckBox", "ChoicePicker", "DateTimeInput", "Table"] as const;
+const COMPONENTS = ["Card", "Row", "Column", "List", "Text", "Button", "TextInput", "Status", "Divider", "Icon", "CheckBox", "ChoicePicker", "DateTimeInput", "Table", "Disclosure"] as const;
 const ICONS: Record<string, string> = { check: "✓", info: "ⓘ", warning: "⚠", error: "✕", calendar: "◫", clock: "◷", list: "☷", progress: "◌" };
 
 export type A2uiComponent = {
   id: string; component: typeof COMPONENTS[number]; children?: string[]; text?: string; label?: string;
+  variant?: "heading";
   action?: { name: string; context: Record<string, unknown> }; value?: { path: string };
   justify?: "start" | "center" | "end" | "spaceBetween"; align?: "start" | "center" | "end" | "stretch";
   direction?: "vertical" | "horizontal"; axis?: "horizontal" | "vertical"; name?: keyof typeof ICONS;
@@ -37,6 +38,51 @@ export function applyA2uiEvent(surfaces: Record<string, A2uiSurface>, event: AgU
   return surfaces;
 }
 
+export function decodePrivateProviderSurface(value: unknown, messageId: string, provider: "gmail" | "calendar"): A2uiSurface | undefined {
+  if (!Array.isArray(value) || value.length !== 2) return;
+  const surfaceId = `private-${provider}:${messageId}`;
+  const [create, update]: unknown[] = value;
+  if (!isRecord(create) || !isRecord(update)
+      || create.version !== "v0.9.1" || update.version !== "v0.9.1"
+      || !isRecord(create.createSurface) || !isRecord(update.updateComponents)
+      || create.createSurface.catalogId !== DESKTOP_CATALOG_ID || create.createSurface.sendDataModel !== false
+      || create.createSurface.surfaceId !== surfaceId || update.updateComponents.surfaceId !== surfaceId
+      || Object.keys(create).length !== 2 || Object.keys(update).length !== 2) return;
+  const components: unknown = update.updateComponents.components;
+  if (!Array.isArray(components) || components.length > 360) return;
+  const byId = new Map<string, A2uiComponent>();
+  for (const item of components) {
+    if (!isRecord(item) || typeof item.id !== "string" || !/^[a-z0-9_]{1,48}$/.test(item.id)
+        || byId.has(item.id)) return;
+    const { component } = item;
+    let keys: string[];
+    if (component === "Text" || component === "Status") {
+      if (typeof item.text !== "string" || item.text.length > 4000
+          || (item.variant !== undefined && (component !== "Text" || item.variant !== "heading"))) return;
+      keys = ["id", "component", "text", "variant"];
+    } else if (component === "Card" || component === "Row" || component === "Column" || component === "Disclosure") {
+      if (!Array.isArray(item.children) || item.children.some((id: unknown) => typeof id !== "string")) return;
+      if (component === "Disclosure" && (typeof item.label !== "string" || !item.label.trim() || item.label.length > 80)) return;
+      keys = component === "Disclosure" ? ["id", "component", "children", "label"] : ["id", "component", "children"];
+    } else return;
+    if (Object.keys(item).some((key) => !keys.includes(key))) return;
+    byId.set(item.id, item as A2uiComponent);
+  }
+  if (byId.get("root")?.component !== "Card") return;
+  const visited = new Set<string>();
+  function visit(id: string, depth: number): boolean {
+    const item = byId.get(id);
+    if (!item || depth > 5 || visited.has(id)) return false;
+    visited.add(id);
+    return (item.children ?? []).every((child) => visit(child, depth + 1));
+  }
+  if (!visit("root", 0) || visited.size !== byId.size) return;
+  const surfaces = value.reduce((prev, envelope) => applyA2uiEvent(prev, {
+    type: "CUSTOM", name: "a2ui.envelope", value: envelope,
+  }), {} as Record<string, A2uiSurface>);
+  return surfaces[surfaceId];
+}
+
 export function A2uiSurfaceHost({ surfaces, clientId, user, onDone, onDismiss }: { surfaces: Record<string, A2uiSurface>; clientId: string; user: string; onDone: () => Promise<void>; onDismiss?: (surfaceId: string) => void }) {
   return <>{Object.values(surfaces).map((surface) => <A2uiSurfaceView key={surface.surfaceId} surface={surface} clientId={clientId} user={user} onDone={onDone} onDismiss={onDismiss} />)}</>;
 }
@@ -57,8 +103,10 @@ export function A2uiComponentTree({ surface, dataModel, setDataModel, onAction }
   const node = (id: string): ReactNode => {
     const item = surface.components[id]; if (!item) return null;
     const children = <>{(item.children || []).map(node)}</>; const cls = `a2ui-${cssIdentifier(id)}`;
-    if (item.component === "Card") return <section key={id} className={`question-card a2ui-card ${cls}${surface.surfaceId.startsWith("scheduled-task:") ? " scheduled-task-card" : ""}`}>{children}</section>;
+    if (item.component === "Card") return <section key={id} className={`question-card a2ui-card ${cls}${surface.surfaceId.startsWith("scheduled-task:") ? " scheduled-task-card" : ""}${surface.surfaceId.startsWith("private-") ? " provider-result-card" : ""}`}>{children}</section>;
     if (item.component === "Row" || item.component === "Column" || item.component === "List") return <div key={id} className={`a2ui-${item.component.toLowerCase()} ${cls}`} data-justify={item.justify} data-align={item.align}>{children}</div>;
+    if (item.component === "Disclosure") return <details key={id} className={`a2ui-disclosure ${cls}`}><summary>{item.label}</summary>{children}</details>;
+    if (item.component === "Text" && item.variant === "heading") return <h4 key={id} className={cls}>{item.text}</h4>;
     if (item.component === "Text" || item.component === "Status") return <p key={id} className={`${cls}${item.component === "Status" ? " a2ui-status" : ""}`}>{item.text}</p>;
     if (item.component === "Divider") return <hr key={id} className={`${cls} a2ui-divider`} aria-orientation={item.axis || "horizontal"} />;
     if (item.component === "Icon") return item.name && ICONS[item.name] ? <span key={id} className={`${cls} a2ui-icon`} role="img" aria-label={item.name}>{ICONS[item.name]}</span> : null;

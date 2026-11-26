@@ -72,7 +72,7 @@ def test_scoped_inbox_search_filters_label_and_time_and_bounds_model_projection(
     assert [path for path, _ in wire.calls] == ['messages', 'messages/retained', 'messages/wronglabel', 'messages/wrongage']
     query = wire.calls[0][1]['params']
     assert query['q'].startswith('(from:p@example.invalid) after:') and ' before:' in query['q']
-    assert query['labelIds'] == 'INBOX' and query['maxResults'] == 5 and query['includeSpamTrash'] == 'false'
+    assert query['labelIds'] == 'INBOX' and query['maxResults'] == 20 and query['includeSpamTrash'] == 'false'
     assert {attrs['token'] for _, attrs in wire.calls} == {'disposable-access'}
     prompt = gmail_search_prompt(result)
     entry, = json.loads(prompt)['messages']
@@ -85,6 +85,25 @@ def test_scoped_inbox_search_filters_label_and_time_and_bounds_model_projection(
     answer = format_gmail_search_observation(result, 'Ships on Friday [1].', private_delivery=True)
     assert history == 'Gmail Inbox matches were displayed privately in Desktop.'
     assert 'Shipping update' in answer and '[1]' in answer and 'Search coverage is incomplete' in answer
+
+
+def test_twenty_label_matches_share_the_excerpt_budget_and_keep_later_sources(f):
+    connect(f)
+    grant_content(f, resource='Label_42', label_name='Projects/Pottery', standing=True)
+    matches = [mail(f'fixture-{index}', labels=('Label_42',)) for index in range(1, 21)]
+    for row in matches:
+        marker = f"Deadline in {row['id']}."
+        row['payload']['parts'][0]['body']['data'] = encoded(marker + ' 陶芸窯' * 500)
+    wire = Wire({'messages': [{'id': row['id']} for row in matches], 'nextPageToken': 'omitted'}, *matches)
+    service = OwnerGmailSearchService(f.accounts, lambda _: f.service, transport=wire)
+    result = service.observe('owner', {'query': '', 'label': 'Projects/Pottery'}, guard=lambda: None)
+    assert result['status'] == 'partial'
+    assert len(result['messages']) == 20 and len(wire.calls) == 21
+    assert all(row['excerpt_truncated'] for row in result['messages'])
+    assert sum(len(row['excerpt'].encode()) for row in result['messages']) <= 16 * 1024
+    sources = json.loads(gmail_search_prompt(result))['messages']
+    assert sources[7]['excerpt'].startswith('Deadline in fixture-8.')
+    assert sources[-1]['source_number'] == 20 and sources[-1]['excerpt'].startswith('Deadline in fixture-20.')
 
 
 def test_search_stops_without_provider_access_when_account_ambiguous(f):

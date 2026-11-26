@@ -1,7 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { applyA2uiEvent, localDismissSurfaceId, readPointer, writePointer, type A2uiComponent, type A2uiSurface } from "./a2ui";
+import { applyA2uiEvent, decodePrivateProviderSurface, localDismissSurfaceId, readPointer, writePointer, type A2uiComponent, type A2uiSurface } from "./a2ui";
 
 describe("A2UI surface state", () => {
+  it("accepts a closed read-only result tree for the matching private pickup", () => {
+    const surfaceId = "private-gmail:request";
+    const stream = (components: unknown[]) => [
+      { version: "v0.9.1", createSurface: { surfaceId, catalogId: "alphonse.desktop.catalog.v2", sendDataModel: false } },
+      { version: "v0.9.1", updateComponents: { surfaceId, components } },
+    ];
+    const root = { id: "root", component: "Card", children: ["sources"] };
+    const sources = { id: "sources", component: "Disclosure", label: "Reviewed sources", children: ["subject"] };
+    const subject = { id: "subject", component: "Text", text: "Packing [updated] <latest>" };
+    expect(decodePrivateProviderSurface(stream([root, sources, subject]), "request", "gmail")?.components.subject).toEqual(subject);
+    expect(decodePrivateProviderSurface(stream([root, sources, subject]), "another-request", "gmail")).toBeUndefined();
+    expect(decodePrivateProviderSurface(stream([root, sources, subject]), "request", "calendar")).toBeUndefined();
+    expect(decodePrivateProviderSurface(stream([root, { ...sources, children: ["root"] }]), "request", "gmail")).toBeUndefined();
+    expect(decodePrivateProviderSurface(stream([root, sources, { ...subject, component: "Button" }]), "request", "gmail")).toBeUndefined();
+  });
+
   it("creates, updates, and deletes only catalog-approved surfaces", () => {
     const created = applyA2uiEvent({}, {
       type: "CUSTOM", name: "a2ui.envelope", value: {
