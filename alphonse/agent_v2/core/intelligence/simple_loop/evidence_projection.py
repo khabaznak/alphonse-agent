@@ -9,6 +9,7 @@ This module does not itself authorize actors or make provider calls.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 import json
 from typing import Callable, Iterable
 
@@ -56,19 +57,35 @@ class EvidenceAccessError(PermissionError):
     """A required source could not be authorized or safely loaded."""
 
 
+def observation_excerpt(text: str, limit: int) -> str:
+    """Keep both ends of a long observation without inventing a summary."""
+    data = text.encode('utf-8')
+    if len(data) <= limit:
+        return text
+    notice = '\n[... observation excerpted ...]\n'
+    if limit <= len(notice):
+        return notice[:max(0, limit)]
+    content_bytes = limit - len(notice)
+    head = content_bytes * 3 // 4
+    tail = content_bytes - head
+    return data[:head].decode('utf-8', errors='ignore') + notice + data[-tail:].decode('utf-8', errors='ignore')
+
+
 def project_evidence(
     sources: Iterable[EvidenceSource], *, actor: str, budget: int,
     authorize: Callable[[str, str], bool],
     load: Callable[[str, str], str],
+    compact: Callable[[str, str], str] | None = None,
 ) -> EvidenceProjection:
-    """Project whole accessible sources within a conservative UTF-8-byte budget.
+    """Project accessible sources within a conservative UTF-8-byte budget.
 
     The manifest contains source IDs and coverage metadata, never source content.
     Inaccessible optional source identifiers are not disclosed. The loader must
     return a source at the same actor-scoped authorization boundary and must not
     include credentials or material from other visibility units. An authorization
     callback failure is treated as denial. Required denial or loader failure stops
-    the projection. Expansion uses this same function with requested source refs,
+    the projection. Compaction marks observation excerpts and binds them to the
+    original view for freshness checks. Expansion uses this same function with requested source refs,
     so access is checked again rather than trusting an earlier manifest.
     """
     if not isinstance(actor, str) or not actor.strip():
@@ -88,6 +105,7 @@ def project_evidence(
     loaded: dict[str, EvidenceSource] = {}
     denied_count = 0
     unavailable_count = 0
+    compacted = {}
 
     def allowed(row: EvidenceSource) -> bool:
         try:
@@ -121,6 +139,11 @@ def project_evidence(
             raise EvidenceAccessError("required_evidence_incomplete")
         if row.truncated:
             content = "[Producer marked this source as truncated.]\n" + content
+        if compact is not None and row.kind == 'observation':
+            excerpt = compact(row.source_id, content)
+            if excerpt != content:
+                compacted[row.source_id] = hashlib.sha256(content.encode('utf-8')).hexdigest()
+                content = excerpt
         records.append(Record(row.source_id, row.kind.replace("_", " ").title(), content, required))
         loaded[row.source_id] = row
 
@@ -132,6 +155,7 @@ def project_evidence(
                 raise EvidenceAccessError("required_evidence_denied")
             denied_count += 1
             del loaded[source_id]
+            compacted.pop(source_id, None)
             records = [record for record in records if record.source_id != source_id]
 
     # Coverage is sent to the decision maker as a required source, not merely
@@ -149,8 +173,10 @@ def project_evidence(
             "over_budget_source_ids": manifest["omitted_source_ids"],
             "producer_truncated_source_ids": [source_id for source_id, row in loaded.items() if row.truncated],
         }
+        if compacted:
+            next_coverage["compacted_source_ids"] = list(compacted)
         next_coverage["complete"] = not (denied_count or unavailable_count
-            or next_coverage["over_budget_source_ids"] or next_coverage["producer_truncated_source_ids"])
+            or next_coverage["over_budget_source_ids"] or next_coverage["producer_truncated_source_ids"] or compacted)
         if coverage == next_coverage:
             break
         fingerprint = json.dumps(next_coverage, sort_keys=True)
@@ -164,7 +190,7 @@ def project_evidence(
         item = loaded.get(record["source_id"])
         if item is not None:
             record["source_type"] = item.kind
-            record["truncated"] = item.truncated
+            record["truncated"] = item.truncated or item.source_id in compacted
     manifest.update({
         "schema_version": 1,
         "purpose": "bounded_evidence",
@@ -175,13 +201,15 @@ def project_evidence(
             # still visible as counts and cannot masquerade as complete recall.
             "omitted_count": denied_count + unavailable_count + len(manifest["omitted_source_ids"]),
             "over_budget_count": len(manifest["omitted_source_ids"]),
-            "truncated_count": sum(row.truncated for row in loaded.values()),
+            "truncated_count": sum(row.truncated or row.source_id in compacted for row in loaded.values()),
             "absence_is_not_evidence": True,
             "complete": not (denied_count or unavailable_count or manifest["omitted_source_ids"]
-                             or any(row.truncated for row in loaded.values())),
+                           or any(row.truncated for row in loaded.values()) or compacted),
         },
         "raw_context_retained": False,
     })
+    if compacted:
+        manifest["compacted_source_digests"] = compacted
     # Reuse the existing call-time manifest mechanism; it retains metadata only.
     from alphonse.agent_v2.core.context_manifests import remember_projection
     remember_projection(text, manifest)

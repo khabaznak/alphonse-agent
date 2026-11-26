@@ -143,12 +143,16 @@ it("sends the failed request ID to recovery and matches the recovery destination
   await act(async () => root.unmount()); container.remove();
 });
 
-it("reports bounded source failures without saying the source was read", async () => {
+it.each([
+  ["web_source", "source_failed", "timeout", "Web source: could not be completed. The request timed out."],
+  ["web_search", "source_failed", "upstream_search_failed", "Web search: could not be completed. Upstream search engines failed."],
+  ["web_search", "partial", undefined, "Web search: returned partial results because some search engines failed."],
+])("reports a %s observation with outcome %s", async (tool_kind, outcome, detail, expected) => {
   const container = document.createElement("div"); const root = createRoot(container);
   const request = vi.fn(async () => ({ status: "blocked", failure_code: "source_unavailable", notice: "May be incomplete.", events: [],
-    activity: { recorded_action_count: 1, unconfirmed_effect_count: 0, pending_tool: false, latest: { tool_kind: "web_source", outcome: "source_failed", effects: "not_reported", detail: "timeout" } } })) as unknown as OwnerRequest;
+    activity: { recorded_action_count: 1, unconfirmed_effect_count: 0, pending_tool: false, latest: { tool_kind, outcome, effects: "not_reported", detail } } })) as unknown as OwnerRequest;
   await act(async () => root.render(<ConversationWorkLog request={request} messageId={"c".repeat(32)} active />));
-  expect(container.textContent).toContain("Web source: could not be completed. The request timed out.");
+  expect(container.textContent).toContain(expected);
   expect(container.textContent).not.toContain("Read a web source");
   expect(container.textContent).not.toContain("changed anything");
   await act(async () => root.unmount());

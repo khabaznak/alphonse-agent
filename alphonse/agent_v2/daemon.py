@@ -2316,7 +2316,7 @@ class V2Daemon:
     def verify_web_tools(self, *, actor_user_id: str, kind: str) -> dict[str, Any]:
         self._require_admin(actor_user_id)
         settings = self.runtime.web_tools_settings_store.get()
-        if kind == "search": return execute_web_search({"query": "Alphonse SearXNG verification", "limit": 1}, settings=settings)
+        if kind == "search": return execute_web_search({"query": "Python programming language", "limit": 1}, settings=settings)
         if kind == "fetch": return execute_web_fetch({"url": "https://example.com", "max_chars": 200}, settings=settings)
         raise ValueError("web_tools_verify_kind_invalid")
 

@@ -86,6 +86,10 @@ class RouterCandidateChooser:
             return True
 
     def __call__(self, projection: str, max_output_tokens: int) -> dict:
+        return self.prepare(projection, max_output_tokens)()
+
+    def prepare(self, projection: str, max_output_tokens: int) -> Callable[[], dict]:
+        """Check the exact request before the host reserves a provider call."""
         if not isinstance(projection, str) or type(max_output_tokens) is not int or max_output_tokens <= 0:
             raise ValueError('candidate_router_request_invalid')
         if self._cancelled():
@@ -110,6 +114,13 @@ class RouterCandidateChooser:
         # framing of another provider or hidden provider tokens.
         if len(_json_envelope(request).encode('utf-8')) > self.max_input_tokens:
             raise ValueError('candidate_router_input_exceeds_reservation')
+        return lambda: self._generate(request, max_output_tokens)
+
+    def _generate(self, request, max_output_tokens: int) -> dict:
+        if self._cancelled():
+            raise ValueError('candidate_router_cancelled')
+        if (self._task.task_id, self._task.user, self._task.project_id) != self._identity:
+            raise ValueError('candidate_router_task_identity_changed')
         try:
             result = self.router.generate_json(request)
         except Exception as exc:
