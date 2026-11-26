@@ -41,6 +41,15 @@ describe("email and calendar integrations", () => {
     expect(html).toContain("Google Calendar");
     expect(html).toContain("Outlook / Hotmail");
     expect(html).toContain("Not yet available in this version");
-    expect(html).toMatch(/disabled="" aria-label="View setup for Outlook \/ Hotmail"/);
+    expect(html).toMatch(/disabled="" aria-label="Unavailable Outlook \/ Hotmail"/);
+  });
+  it("offers the narrow Outlook Inbox service while leaving Outlook Calendar unavailable", () => {
+    const outlookCatalog = { ...catalog, owner_gmail_setup_only: true, owner_outlook_inbox_setup: true,
+      providers: [...catalog.providers, { provider: "microsoft", capabilities: ["outlook_inbox_unread"] }] };
+    const html = renderToStaticMarkup(<AccountServiceCards catalog={outlookCatalog} onChoose={() => {}} />);
+    expect(html).toContain("Check the unread count in your Outlook or Hotmail Inbox.");
+    expect(html).toMatch(/data-outlook-inbox-card="true" aria-label="Connect Outlook \/ Hotmail"/);
+    expect(html).toContain("Outlook Calendar");
+    expect(html).toContain("Not yet available");
   });
 });

@@ -1783,6 +1783,28 @@ button.mockup-member-card:not(:disabled):hover { border-color: var(--accent); }
 .optional-management .integration-connect-form fieldset { margin-bottom: 0; }
 .optional-management .dialog-actions { gap: 8px; }
 .optional-management .dialog-actions button { margin: 0; }
+.outlook-inbox-settings > h4, .outlook-connect-form h5, .outlook-account-row h5 { margin: 0; }
+.outlook-inbox-settings h5 { overflow-wrap: anywhere; }
+.outlook-inbox-settings .outlook-status:empty { margin: 0; }
+.outlook-account-row > div { min-width: 0; }
+.outlook-account-actions { text-align: right; }
+.outlook-account-actions .dialog-actions { justify-content: flex-end; margin-top: 8px; }
+.outlook-connect-form { display: grid; justify-items: start; gap: 10px; }
+.outlook-connect-form .form-field, .outlook-grant-form .form-field { width: 100%; max-width: 320px; }
+.outlook-connect-form .form-field, .outlook-connect-form p { margin: 0; }
+.outlook-connect-form input { width: 100%; }
+.outlook-grant-form { display: grid; gap: 12px; }
+.outlook-conversation-settings { align-self: flex-start; }
+.outlook-inbox-result { display: grid; gap: 7px; }
+.outlook-inbox-result :is(p, dl, dd) { margin: 0; }
+.outlook-inbox-result p { color: var(--muted); font-size: 12px; }
+.outlook-inbox-result .outlook-inbox-source { color: var(--text); font-weight: 650; }
+.outlook-inbox-result dl { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; }
+.outlook-inbox-result dd { font-size: 20px; font-weight: 680; font-variant-numeric: tabular-nums; }
+@media (max-width: 650px) {
+  .outlook-account-actions { text-align: left; }
+  .outlook-account-actions .dialog-actions { justify-content: flex-start; }
+}
 
 .skills-overview-heading { display: flex; justify-content: space-between; align-items: center; gap: 20px; margin-bottom: 20px; }
 .skills-overview-heading h2 { margin: 0; font-size: 16px; }

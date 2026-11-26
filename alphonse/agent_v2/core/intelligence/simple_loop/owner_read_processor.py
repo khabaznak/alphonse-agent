@@ -31,6 +31,9 @@ from .owner_read_recovery import restore_owner_read_observations
 from .owner_clock import OWNER_CLOCK_TOOL_ID, valid_clock_observation
 from .owner_named_skill import OWNER_NAMED_SKILL_TOOL_ID, explicit_requested_name, validate_owner_named_skill
 from .owner_gmail import OWNER_GMAIL_TOOL_ID, valid_owner_gmail, owner_gmail_unit
+from .owner_outlook import (
+    OWNER_OUTLOOK_TOOL_ID, outlook_display_locale, valid_owner_outlook,
+)
 from .owner_calendar import OWNER_CALENDAR_TOOL_ID, calendar_window, valid_owner_calendar
 from .owner_gmail_search import (
     OWNER_GMAIL_SEARCH_TOOL_ID, final_gmail_search_result, gmail_search_arguments, gmail_search_can_refine,
@@ -318,6 +321,11 @@ class OwnerReadConversationProcessor:
             if (gmail_descriptor is not None and gmail_descriptor.read_only is True
                     and context.owner_gmail_service is not None):
                 descriptors += (gmail_descriptor,)
+            outlook_descriptor = context.tools.get(OWNER_OUTLOOK_TOOL_ID)
+            outlook_enabled = (not scheduled_origin and not telegram_origin and outlook_descriptor is not None
+                               and outlook_descriptor.read_only is True and context.owner_outlook_service is not None)
+            if outlook_enabled:
+                descriptors += (outlook_descriptor,)
             calendar_descriptor = context.tools.get(OWNER_CALENDAR_TOOL_ID)
             calendar_enabled = (not scheduled_origin and not telegram_origin and calendar_descriptor is not None
                                 and calendar_descriptor.read_only is True and context.owner_calendar_service is not None)
@@ -384,6 +392,9 @@ class OwnerReadConversationProcessor:
                 allow_owner_host_bash=host_bash_enabled)
             mail_summary_chooser = RouterCandidateChooser(router=context.inference, task=task, tools=(),
                 max_input_tokens=65536, cancellation_checker=context.is_cancelled, private_mail_summary=True)
+            if outlook_enabled:
+                outlook_chooser = RouterCandidateChooser(router=context.inference, task=task, tools=(),
+                    max_input_tokens=65536, cancellation_checker=context.is_cancelled)
             if gmail_search_enabled:
                 refinement_descriptor = replace(search_descriptor, description=search_descriptor.description +
                     ' The previous searches shown in the observations returned zero matches in their stated scopes. '
@@ -396,6 +407,11 @@ class OwnerReadConversationProcessor:
                     tools=(refinement_descriptor,), max_input_tokens=65536, cancellation_checker=context.is_cancelled)
 
             def chooser(projection: str, max_output_tokens: int) -> dict:
+                outlook = outlook_observation()
+                if outlook is not None:
+                    decision = outlook_chooser(projection, min(4096, max_output_tokens))
+                    locale = outlook_display_locale(decision.get('text')) if decision.get('kind') == 'answer' else None
+                    return {'kind': 'answer', 'text': locale or 'Outlook Inbox check recorded.', 'usage': decision['usage']}
                 mail = gmail_search_observation()
                 if mail is not None:
                     refining = can_refine_gmail_search()
@@ -515,8 +531,11 @@ class OwnerReadConversationProcessor:
         def can_refine_gmail_search():
             return gmail_search_enabled and gmail_search_can_refine([payload for _, payload in gmail_searches()])
 
+        def outlook_observation():
+            return next((payload for tool, _, payload in observations.values() if tool == OWNER_OUTLOOK_TOOL_ID), None)
+
         def private_provider_observed() -> bool:
-            return any(tool in {OWNER_CALENDAR_TOOL_ID, OWNER_GMAIL_SEARCH_TOOL_ID}
+            return any(tool in {OWNER_CALENDAR_TOOL_ID, OWNER_GMAIL_SEARCH_TOOL_ID, OWNER_OUTLOOK_TOOL_ID}
                        for tool, _, _ in observations.values())
 
         def allowed(actor_id: str, tool_id: str, args: dict[str, Any]) -> bool:
@@ -535,6 +554,10 @@ class OwnerReadConversationProcessor:
                 return True
             if private_provider_observed():
                 return False
+            if tool_id == OWNER_OUTLOOK_TOOL_ID:
+                return (outlook_enabled and atomic is not None and not args
+                        and not any(tool == SCHEDULED_TASK_TOOL_ID for tool, _, _ in observations.values())
+                        and context.messages.verify_trusted_local_owner_claim(context.claim_receipt, task))
             if tool_id == OWNER_CALENDAR_TOOL_ID:
                 try:
                     zone = context.user_timezone_provider(actor) if 'day_offset' in args else None
@@ -667,6 +690,9 @@ class OwnerReadConversationProcessor:
                 return (actor_id == actor and self._authorized(task, context)
                         and (not scheduled_origin or payload.get('status') == 'complete')
                         and valid_owner_gmail(actor_id, args, payload, context=execution_context))
+            if tool_id == OWNER_OUTLOOK_TOOL_ID:
+                return (outlook_enabled and actor_id == actor and self._authorized(task, context)
+                        and valid_owner_outlook(actor_id, args, payload, context=execution_context))
             if tool_id == OWNER_CALENDAR_TOOL_ID:
                 return (calendar_enabled and actor_id == actor and self._authorized(task, context)
                         and valid_owner_calendar(actor_id, args, payload, context=execution_context))
@@ -772,6 +798,11 @@ class OwnerReadConversationProcessor:
                 if tool_id == OWNER_CALENDAR_TOOL_ID:
                     return json.dumps({'status': payload['status'],
                         'notice': 'The host will deliver the Calendar result privately. Return an answer now.'})
+                if tool_id == OWNER_OUTLOOK_TOOL_ID:
+                    return json.dumps({'status': payload['status'], 'notice': 'The host will display the verified Outlook '
+                        'Inbox outcome privately. Return kind "answer" with only the BCP 47 language tag of the current '
+                        'request in text. Prefer the language subtag alone unless the request makes the region clear. '
+                        'Do not write a sentence or report any count.'})
                 if tool_id == OWNER_GMAIL_SEARCH_TOOL_ID:
                     return gmail_search_prompt(payload, refinement_arguments=args if can_refine_gmail_search() else None)
                 if tool_id == READ_MEMORY_SOURCE_TOOL_ID:
@@ -943,6 +974,8 @@ class OwnerReadConversationProcessor:
                 # The private reply cannot cause an effect. The Inbox content
                 # grant covers only the configured summary model, not reviewers.
                 return len(text.encode('utf-8')) <= 4096
+            if outlook_observation() is not None:
+                return text == 'Outlook Inbox check recorded.' or outlook_display_locale(text) is not None
             # New multi-turn paths must not turn a free-form model claim into
             # evidence of a persistent effect. Deterministic atomic effect
             # handlers select their own confirmations separately. Until a
@@ -1185,7 +1218,8 @@ class OwnerReadConversationProcessor:
                 return self._failure(task, 'owner_read_draft_handoff_unavailable')
         return ProcessingResult(snapshot=StateSnapshot(task_owner=actor, current_work=task.goal,
             metadata={'engine': 'single_loop_experimental', 'intelligence_schema_version': 1,
-                      'status': 'draft_only', 'draft': '' if gmail_search_observation() is not None else result.response,
+                      'status': 'draft_only',
+                      'draft': '' if gmail_search_observation() is not None or outlook_observation() is not None else result.response,
                       'delivery': 'not_integrated'}),
             status=ProcessingStatus.WAITING)
 

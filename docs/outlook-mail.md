@@ -1,4 +1,32 @@
-# Optional Outlook/Hotmail read-only acquisition (#118)
+# Outlook / Hotmail
+
+## Personal Inbox in Desktop
+
+In **Settings → Integrations → Outlook / Hotmail**, connect your personal Microsoft
+account, return to Desktop, and grant access to the Inbox unread count until the
+date you choose. One personal Inbox can have active access at a time. Ask in your
+private Desktop conversation how many messages are unread in your Hotmail Inbox.
+The result reports the number Microsoft returned and the observation time.
+
+The Inbox grant references a fixed source in the connected mailbox. Alphonse uses
+Microsoft Graph's well-known `inbox` folder and requests only its ID and unread
+count. Setup requests delegated `Mail.ReadBasic` using Microsoft’s personal
+account authority. No message subjects, bodies, attachments, other folders,
+calendar events or send permissions are used. Authorization is checked while
+reading and again before the result can be displayed. Conversation history records
+that the result was displayed without storing the count in the conversation ledger.
+
+Configure `ALPHONSE_MICROSOFT_OAUTH_CLIENT_ID` and
+`ALPHONSE_MICROSOFT_OAUTH_REDIRECT_URI` for a public desktop registration supporting
+personal Microsoft accounts. Use the exact configured localhost callback.
+Microsoft sign-in and the local Inbox grant are separate. Refresh expired access
+from the account's settings with an active grant. If Microsoft rejects access,
+reconnect the original account. Revoking Inbox access stops future use. Removing
+the account disables and deletes local credentials. Microsoft manages provider
+consent removal through its account controls. [Managed OAuth](oauth-accounts.md) ·
+[Graph folder read](https://learn.microsoft.com/en-us/graph/api/mailfolder-get?view=graph-rest-1.0)
+
+## Project-scoped Outlook mail acquisition (#118)
 
 `GraphMailAdapter` implements the shared `ReadAdapter` contract for Microsoft
 personal Outlook.com/Hotmail and eligible work/school mailboxes. It uses delegated

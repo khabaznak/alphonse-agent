@@ -33,6 +33,20 @@ it("offers a recovery route only when one was supplied for this request", () => 
   expect(renderToStaticMarkup(<ConversationTimelineEntry {...common} onReviewRecovery={() => {}} />)).toContain("Review request status");
 });
 
+it("only offers Outlook settings from a live recovery result for its owner", () => {
+  const message: ChatMessage = { id: "owner:hot", role: "assistant", content: "Refresh Microsoft access.",
+    private_reply_owner: "owner", private_outlook_inbox: { status: "refresh_required" } };
+  const common = { message, questions: [], user: "owner", timezone: "UTC", onDone: async () => {},
+    projectName: "", memoize: false, renderMarkdown: false, failures: [], onFailureDismissedChange: () => {},
+    onOpenOutlookSettings: () => {} };
+  expect(renderToStaticMarkup(<ConversationTimelineEntry {...common} />)).toContain("Open Outlook / Hotmail settings");
+  expect(renderToStaticMarkup(<ConversationTimelineEntry {...common} user="other" />)).not.toContain("Open Outlook / Hotmail settings");
+  expect(renderToStaticMarkup(<ConversationTimelineEntry {...common} message={{ ...message, private_outlook_inbox: {
+    status: "complete", result: { count: 0, observed_at: "2026-11-26T17:00:00Z", timezone: "UTC" },
+  } }} />))
+    .not.toContain("Open Outlook / Hotmail settings");
+});
+
 it("keeps contextual recovery owner-scoped, and drops unsupported actions in model prose", () => {
   const id = "c".repeat(32);
   const message: ChatMessage = {

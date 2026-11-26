@@ -15,6 +15,7 @@ from alphonse.agent_v2.core.messages.experimental_claim_checkpoint import _claim
 from .owner_atomic_checkpoint import observation_digest, _decision_digest
 from .owner_failure_diagnostics import public_failure_code
 from .owner_gmail import OWNER_GMAIL_TOOL_ID, owner_gmail_failure_message
+from .owner_outlook import OWNER_OUTLOOK_TOOL_ID, owner_outlook_failure_message
 from .owner_gmail_search import OWNER_GMAIL_SEARCH_TOOL_ID
 from .owner_web import is_web_failure_observation
 from .candidate_decision_policy import ACTIVITY_INTENTS
@@ -28,6 +29,7 @@ _LABELS = {
     'native.owner_clock': 'Checked the clock',
     'native.owner_schedules': 'Checked schedules',
     'native.owner_gmail_unread': 'Checked unread mail',
+    OWNER_OUTLOOK_TOOL_ID: 'Checked Outlook Inbox',
     OWNER_GMAIL_SEARCH_TOOL_ID: 'Searched Gmail',
     'native.owner_calendar_agenda': 'Checked Google Calendar',
     'native.skill_catalog': 'Checked available skills',
@@ -44,6 +46,7 @@ _TOOL_KINDS = {
     'native.owner_clock': 'clock',
     'native.owner_schedules': 'schedules',
     'native.owner_gmail_unread': 'mail',
+    OWNER_OUTLOOK_TOOL_ID: 'mail',
     OWNER_GMAIL_SEARCH_TOOL_ID: 'mail_search',
     'native.owner_calendar_agenda': 'calendar',
     'native.skill_catalog': 'skills',
@@ -175,6 +178,8 @@ def _activity(actor: str, refs: list, observations: dict, pending: object, *,
                 outcome = 'no_results'
         elif tool == OWNER_GMAIL_TOOL_ID and owner_gmail_failure_message(item.get('gmail_observation')):
             outcome = 'source_failed'
+        elif tool == OWNER_OUTLOOK_TOOL_ID and owner_outlook_failure_message(item.get('outlook_observation')):
+            outcome = 'source_failed'
         elif tool == OWNER_GMAIL_SEARCH_TOOL_ID:
             mail = item.get('gmail_search_observation')
             if isinstance(mail, dict) and mail.get('status') == 'unavailable':
@@ -229,6 +234,9 @@ def _events(actor: str, refs: list, observations: dict, pending: object) -> list
                 outcome = 'No results returned'
         elif tool == OWNER_GMAIL_TOOL_ID and owner_gmail_failure_message(item.get('gmail_observation')):
             events.append({'label': 'Attempted an unread mail check', 'outcome': 'The Inbox count could not be verified'})
+            continue
+        elif tool == OWNER_OUTLOOK_TOOL_ID and owner_outlook_failure_message(item.get('outlook_observation')):
+            events.append({'label': 'Attempted an Outlook Inbox check', 'outcome': 'The unread count could not be verified'})
             continue
         event = {'label': _LABELS[tool], 'outcome': outcome}
         if tool == OWNER_GMAIL_SEARCH_TOOL_ID:

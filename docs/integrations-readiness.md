@@ -54,7 +54,10 @@ exact redirect URI, delegated permissions, consent policy/admin decisions,
 publisher domain/verification status and privacy/support URLs, with dated evidence.
 Actual values: **not supplied; not verified**. Configure
 `ALPHONSE_MICROSOFT_OAUTH_CLIENT_ID` and `ALPHONSE_MICROSOFT_OAUTH_REDIRECT_URI`.
-The implementation uses `/common` authorization/token endpoints. For the advertised
+The owner Desktop Inbox count uses `/consumers` and requires a registration
+that supports personal Microsoft accounts, such as `PersonalMicrosoftAccount`
+or `AzureADandPersonalMicrosoftAccount`. A real Hotmail callback and Graph read
+remain to be qualified. The shared acquisition setup uses `/common`. For the advertised
 personal plus work/school coverage, register
 `AzureADandPersonalMicrosoftAccount` (accounts in any organizational directory
 and personal Microsoft accounts). Hotmail/Outlook.com are personal accounts.
@@ -91,12 +94,13 @@ actually chosen; a provider token's broader scope does not expand an Alphonse gr
   checks. Roster scope breadth must be disclosed even though the adapter checks
   only the connected student's enrollment. No Drive, submissions, writes or
   all-students coursework scope is requested.
-- Microsoft uses `openid`, `offline_access` and selected delegated
-  `https://graph.microsoft.com/Mail.Read` or
+- Microsoft uses `openid`, `offline_access` and the selected delegated scope.
+  Desktop Inbox count uses `https://graph.microsoft.com/Mail.ReadBasic`.
+  Shared acquisition uses `https://graph.microsoft.com/Mail.Read` or
   `https://graph.microsoft.com/Calendars.Read`. No `User.Read` is requested by this
   implementation; qualify the actual OIDC userinfo identity path in registration
   evidence rather than silently adding permissions. `Mail.ReadBasic` cannot supply
-  the message bodies/attachments needed by this adapter.
+  the message bodies and attachments used by shared mail acquisition.
 
 Provider permission descriptions and current sensitivity classifications must be
 captured from the actual registration, not inferred from the word “readonly”. See

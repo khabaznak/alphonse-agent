@@ -84,6 +84,14 @@ describe("mergeFreshConversationHistory", () => {
     expect(mergeFreshConversationHistory([receipt], [pickup])).toEqual([{ ...receipt, content: pickup.content, private_reply_owner: "owner" }]);
     expect(mergeFreshConversationHistory([receipt], [])).toEqual([receipt]);
   });
+
+  it("retains Outlook recovery only while the owner-scoped pickup is live", () => {
+    const receipt: ChatMessage = { id: "owner:outlook", role: "assistant", content: "Inbox status displayed privately", sequence: 8 };
+    const pickup: ChatMessage = { id: receipt.id, role: "assistant", content: "Refresh Microsoft access",
+      private_reply_owner: "owner", private_outlook_inbox: { status: "refresh_required" } };
+    expect(mergeFreshConversationHistory([receipt], [pickup])).toEqual([{ ...receipt, ...pickup }]);
+    expect(mergeFreshConversationHistory([receipt], [])).toEqual([receipt]);
+  });
 });
 
 it("orders late unsequenced deliveries chronologically and deterministically", () => {

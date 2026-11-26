@@ -2,7 +2,8 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { openAccountConsent, optionalManagement } from "./api";
 import { IntegrationIcon } from "./IntegrationIcon";
 import { AccountServiceDetail } from "./AccountServiceDetail";
-import { Catalog, Connection, Definition, GmailLabel, Grant, Member, Policy, ProjectChecks, ResponseFence, days, defaultDefinition, editableDefinition, friendly, isGrantCurrent, isOwnerReadGrant, labels, sourceDefinition, validateDefinition } from "./integrationManagement";
+import { OutlookInboxSettings } from "./OutlookInboxSettings";
+import { Catalog, Connection, Definition, GmailLabel, Grant, Member, OUTLOOK_INBOX_UNREAD, Policy, ProjectChecks, ResponseFence, days, defaultDefinition, editableDefinition, friendly, isGrantCurrent, isOwnerReadGrant, labels, sourceDefinition, validateDefinition } from "./integrationManagement";
 
 function useManaged<T>(action: string, values: Record<string, unknown>, identity: string) {
   const [data, setData] = useState<T | null>(null);
@@ -37,23 +38,51 @@ const ACCOUNT_SERVICES: AccountService[] = [
 ];
 
 export function AccountServiceCards({ catalog, unavailable = false, onChoose }: { catalog: Catalog | null; unavailable?: boolean; onChoose: (provider: string, capability: string) => void }) {
-  return <div className="integration-service-grid">{ACCOUNT_SERVICES.map(service => {
+  return <div className="integration-service-grid">{ACCOUNT_SERVICES.map(base => {
+    const outlookInbox = catalog?.owner_outlook_inbox_setup && base.provider === "microsoft";
+    const service = outlookInbox ? { ...base, capability: OUTLOOK_INBOX_UNREAD, description: "Check the unread count in your Outlook or Hotmail Inbox." } : base;
     const provider = catalog?.providers.find(item => item.provider === service.provider);
     const configured = Boolean(provider?.capabilities.includes(service.capability));
     const ownerSetup = catalog?.owner_gmail_setup_only || catalog?.owner_google_setup_only;
-    const unsupported = Boolean(ownerSetup && service.name !== "Gmail"
+    const unsupported = Boolean(ownerSetup && !outlookInbox && service.name !== "Gmail"
       && !(catalog?.owner_google_setup_only && service.name === "Google Calendar"));
-    const connections = (catalog?.connections || []).filter(item => item.provider === service.provider && item.capabilities.includes(service.capability));
-    const connected = connections.filter(item => item.status === "connected"
+    const connections = (catalog?.connections || []).filter(item => item.provider === service.provider
+      && (item.capabilities.includes(service.capability) || outlookInbox && !item.capabilities.length));
+    const usable = connections.filter(item => item.status === "connected"
       && item.credential_health !== "absent" && item.credential_health !== "credential_backend_unavailable"
       && item.access_token_status !== "unavailable"
-      && !(ownerSetup && item.access_token_status === "refresh_required")).length;
-    const existing = connections.length > 0;
-    return <article className="mockup-settings-card integration-service-card" key={service.name}><div className="integration-card-heading"><IntegrationIcon service={service.icon} /><div><h3>{service.name}</h3><p>{service.description}</p></div></div><small className="integration-card-status">{!catalog ? (unavailable ? "Account management unavailable" : "Checking availability…") : unsupported ? "Not yet available in this version" : connected ? `${connected} ${connected === 1 ? "account" : "accounts"} connected` : existing ? "Account needs attention" : configured ? "Available to connect" : "Provider setup required"}</small><div className="integration-card-footer"><span>{service.capability === "mail_read" ? "Email" : "Calendar"}</span><button type="button" disabled={!catalog || unsupported} aria-label={`${existing ? "Manage" : configured ? "Connect" : "View setup for"} ${service.name}`} onClick={() => onChoose(service.provider, service.capability)}>{unsupported ? "Unavailable" : existing ? "Manage →" : configured ? "Connect →" : "View setup →"}</button></div></article>;
+      && !(ownerSetup && item.access_token_status === "refresh_required")
+      && (!outlookInbox || (item.capabilities.includes(service.capability) && !item.credential_deletion_pending && !item.revocation_pending)));
+    const connected = usable.length;
+    const existing = connections.some(account => !outlookInbox || account.status !== "disconnected"
+      || account.credential_deletion_pending || account.revocation_pending);
+    const inboxGrants = outlookInbox ? catalog.grants.filter(grant => isOwnerReadGrant(catalog, grant, OUTLOOK_INBOX_UNREAD)
+      && isGrantCurrent(grant)) : [];
+    const hasInboxAccess = inboxGrants.length === 1 && usable.some(account => account.connection_id === inboxGrants[0].connection_id);
+    const status = !catalog ? (unavailable ? "Account management unavailable" : "Checking availability…")
+      : unsupported ? "Not yet available in this version"
+      : outlookInbox && !configured ? "Provider setup required"
+      : outlookInbox && inboxGrants.length > 1 ? "Inbox grants need attention"
+      : outlookInbox && connected ? (hasInboxAccess ? "Inbox access granted" : "Connected · Inbox access needed")
+      : connected ? `${connected} ${connected === 1 ? "account" : "accounts"} connected`
+      : existing ? "Account needs attention" : configured ? "Available to connect" : "Provider setup required";
+    const action = unsupported ? "Unavailable" : existing ? "Manage" : configured ? "Connect" : "View setup";
+    return <article className="mockup-settings-card integration-service-card" key={service.name}>
+      <div className="integration-card-heading"><IntegrationIcon service={service.icon} /><div><h3>{service.name}</h3><p>{service.description}</p></div></div>
+      <small className="integration-card-status">{status}</small>
+      <div className="integration-card-footer">
+        <span>{service.capability === "calendar_read" ? "Calendar" : "Email"}</span>
+        <button type="button" data-outlook-inbox-card={outlookInbox || undefined} disabled={!catalog || unsupported}
+          aria-label={`${action}${action === "View setup" ? " for" : ""} ${service.name}`}
+          onClick={() => onChoose(service.provider, service.capability)}>{action}{!unsupported && " →"}</button>
+      </div>
+    </article>;
   })}<article className="mockup-settings-card integration-service-card"><div className="integration-card-heading"><IntegrationIcon service="outlook" /><div><h3>Outlook Calendar</h3><p>Access events from a Microsoft calendar.</p></div></div><small className="integration-card-status">Not yet available</small><div className="integration-card-footer"><span>Calendar</span></div></article></div>;
 }
 
-export function OptionalAccounts({ identity, messaging }: { identity: string; messaging?: React.ReactNode }) {
+export function OptionalAccounts({ identity, messaging, onConversation, outlookRequested, onOutlookOpened }: {
+  identity: string; messaging?: React.ReactNode; onConversation?: () => void; outlookRequested?: boolean; onOutlookOpened?: () => void;
+}) {
   const managed = useManaged<Catalog>('catalog', {}, identity);
   const mismatch = Boolean(managed.data && managed.data.actor_user_id !== identity);
   const data = mismatch ? null : managed.data; const error = mismatch ? 'The active account session does not match the selected household member. Reconnect the correct session to manage accounts.' : managed.error; const refresh = managed.refresh;
@@ -66,7 +95,27 @@ export function OptionalAccounts({ identity, messaging }: { identity: string; me
   const [accessFromService, setAccessFromService] = useState(false);
   const [disconnectFor, setDisconnectFor] = useState<Connection | null>(null);
   const heading = useRef<HTMLHeadingElement>(null);
-  const chooseService = (nextProvider: string, capability: string) => { setProvider(nextProvider); setServiceCapability(capability); setGrantFor(null); setView("service"); };
+  const chooseService = (nextProvider: string, capability: string) => {
+    if (capability === OUTLOOK_INBOX_UNREAD) setNotice("");
+    setProvider(nextProvider); setServiceCapability(capability); setGrantFor(null); setView("service");
+  };
+  useEffect(() => {
+    if (!outlookRequested || !data?.owner_outlook_inbox_setup) return;
+    chooseService("microsoft", OUTLOOK_INBOX_UNREAD);
+    onOutlookOpened?.();
+  }, [outlookRequested, data?.owner_outlook_inbox_setup, onOutlookOpened]);
+  const outlookService = serviceCapability === OUTLOOK_INBOX_UNREAD;
+  useEffect(() => {
+    if (view !== "service" || !outlookService) return;
+    heading.current?.focus();
+  }, [outlookService, view]);
+  const returnToOverview = () => {
+    setView("overview"); setGrantFor(null); setDisconnectFor(null);
+    if (outlookService) window.requestAnimationFrame(() => {
+      const control = heading.current?.parentElement?.querySelector<HTMLButtonElement>('button[data-outlook-inbox-card]:not(:disabled)');
+      (control || heading.current)?.focus();
+    });
+  };
   const run = async (action: string, values: Record<string, unknown>) => {
     setBusy(true); setNotice("");
     try { await optionalManagement(action, values); setNotice(action === "refresh_gmail_access" ? "Gmail access refreshed." : "Saved. Dependent checks may require review."); await refresh(); }
@@ -102,11 +151,14 @@ export function OptionalAccounts({ identity, messaging }: { identity: string; me
     heading.current?.focus();
     void refresh();
   };
-  return <section className="optional-management"><h3 tabIndex={-1} ref={heading} className="integration-context-heading">{view === "overview" ? "Personal accounts" : view === "access" ? (data?.owner_gmail_setup_only ? "Account access" : "Account access and skills") : service?.name}</h3><StatusText>{error || notice}</StatusText>
-    {view === "overview" ? <><div className="integration-owner-note"><strong>{data ? `Managing accounts as ${data.members.find(m => m.user_id === data.actor_user_id)?.display_name || data.actor_user_id}` : "Personal accounts"}</strong><p>Each household member connects their own accounts and chooses what Alphonse can access.</p></div><AccountServiceCards catalog={data} unavailable={Boolean(error)} onChoose={chooseService} />{data && <button className="integration-link" onClick={() => { setAccessFromService(false); setView("access"); }}>{data.owner_gmail_setup_only ? "Review access grants →" : "Review access grants and skill accounts →"}</button>}{messaging}<p className="integration-privacy"><strong>Personal by default.</strong> Access to an account requires explicit permission. Connecting an account does not start monitoring.</p></> : <><button className="integration-back" onClick={() => { setView("overview"); setGrantFor(null); setDisconnectFor(null); }}>← All integrations</button>{data && <>
+  return <section className="optional-management"><h3 tabIndex={-1} ref={heading} className="integration-context-heading"
+    data-outlook-settings-heading={view === "service" && outlookService || undefined}>{view === "overview" ? "Personal accounts" : view === "access" ? (data?.owner_gmail_setup_only ? "Account access" : "Account access and skills") : service?.name}</h3><StatusText>{error || notice}</StatusText>
+    {view === "overview" ? <><div className="integration-owner-note"><strong>{data ? `Managing accounts as ${data.members.find(m => m.user_id === data.actor_user_id)?.display_name || data.actor_user_id}` : "Personal accounts"}</strong><p>Each household member connects their own accounts and chooses what Alphonse can access.</p></div><AccountServiceCards catalog={data} unavailable={Boolean(error)} onChoose={chooseService} />{data && <button className="integration-link" onClick={() => { setAccessFromService(false); setView("access"); }}>{data.owner_gmail_setup_only ? "Review access grants →" : "Review access grants and skill accounts →"}</button>}{messaging}<p className="integration-privacy"><strong>Personal by default.</strong> Access to an account requires explicit permission. Connecting an account does not start monitoring.</p></> : <><button className="integration-back" onClick={returnToOverview}>← All integrations</button>{data && <>
       {view === "access" && accessFromService && <button className="integration-back" onClick={() => { setView("service"); finishGrant(); }}>← {service?.name} settings</button>}
       <p>Managing accounts as {data.members.find(m => m.user_id === data.actor_user_id)?.display_name || data.actor_user_id}.</p>
-      {view === "service" && <><AccountServiceDetail key={`${provider}:${serviceCapability}`} catalog={data} provider={provider} capability={serviceCapability} busy={busy}
+      {view === "service" && outlookService && data.owner_outlook_inbox_setup && <OutlookInboxSettings
+        key={data.actor_user_id} catalog={data} onRefresh={refresh} onConversation={onConversation} />}
+      {view === "service" && !outlookService && <><AccountServiceDetail key={`${provider}:${serviceCapability}`} catalog={data} provider={provider} capability={serviceCapability} busy={busy}
         onRefresh={() => void refresh()} onConnect={(label, scopes) => void begin(label, scopes)}
         onReconnect={(connection, scopes) => void begin(connection.display_name, scopes, connection)}
         onRefreshAccess={(connection, grant) => void run('refresh_gmail_access', { connection_id: connection.connection_id,
@@ -126,6 +178,9 @@ export function OptionalAccounts({ identity, messaging }: { identity: string; me
             onSave={() => { setNotice("Gmail label access saved."); finishGrant(); }} />
         : grantFor && !editingGmailLabel && <GrantEditor key={`${grantFor.connection_id}:${grantOperation}:${editingGrant?.grant_id || "new"}`} account={grantFor} grant={editingGrant} operation={grantOperation} catalog={data} onDone={finishGrant} />}
       <h4>Explicit grants</h4><p>Grants you gave or received appear here.</p>{data.grants.map(g => <GrantCard key={g.grant_id} grant={g} catalog={data} busy={busy} run={run} onEdit={() => {
+        if (g.operations.length === 1 && g.operations[0] === OUTLOOK_INBOX_UNREAD) {
+          setNotice(""); chooseService("microsoft", OUTLOOK_INBOX_UNREAD); return;
+        }
         const account = data.connections.find(c => c.connection_id === g.connection_id);
         if (account) selectGrant(account, g.operations[0], g,
           g.operations[0] === 'mail_content_read' && g.resources[0] !== 'INBOX' && Boolean(g.gmail_label_name));
@@ -140,7 +195,8 @@ function BindingPicker({ catalog, run, busy }: { catalog: Catalog; run: (a: stri
 function GrantCard({ grant: g, catalog, busy, run, onEdit }: { grant: Grant; catalog: Catalog; busy: boolean; onEdit: () => void; run: (a: string, v: Record<string, unknown>) => Promise<void> }) {
   const [skill, setSkill] = useState("");
   const isGmailContent = g.operations.length === 1 && g.operations[0] === 'mail_content_read';
-  const resource = isGmailContent && g.gmail_label_name ? g.gmail_label_name : g.resources.join(', ');
+  const isOutlookInbox = g.operations.length === 1 && g.operations[0] === OUTLOOK_INBOX_UNREAD;
+  const resource = isOutlookInbox ? "Outlook / Hotmail Inbox" : isGmailContent && g.gmail_label_name ? g.gmail_label_name : g.resources.join(', ');
   const accountName = catalog.connections.find(account => account.connection_id === g.connection_id)?.display_name || g.connection_id;
   const status = g.revoked_at ? 'Revoked' : isGrantCurrent(g) ? 'Granted' : 'Expired';
   return <article className="project-detail">
@@ -148,7 +204,7 @@ function GrantCard({ grant: g, catalog, busy, run, onEdit }: { grant: Grant; cat
     <p>{g.operations.map(o => labels[o] || friendly(o)).join(', ')} in {resource} · {g.expires_at
       ? `Expires ${new Date(g.expires_at).toLocaleString()}`
       : isGmailContent ? 'Until revoked' : 'No expiry available'} · {status}</p>
-    {isGmailContent && isOwnerReadGrant(catalog, g) ? <p>Private Desktop conversation</p>
+    {(isGmailContent || isOutlookInbox) && isOwnerReadGrant(catalog, g) ? <p>Private Desktop conversation</p>
       : <p>Recipients: {g.recipient_user_ids.map(id => catalog.members.find(m => m.user_id === id)?.display_name || id).join(', ')} · Project: {catalog.projects.find(p => p.project_id === g.project_id)?.name || (g.project_id ? 'Restricted project' : 'Any permitted project')}</p>}
     {g.grantor_user_id === catalog.actor_user_id && !g.revoked_at && <>
       {(!(catalog.owner_gmail_setup_only || catalog.owner_google_setup_only) || isOwnerReadGrant(catalog, g)) &&

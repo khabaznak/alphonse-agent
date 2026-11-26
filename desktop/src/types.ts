@@ -101,6 +101,12 @@ export type CommittedEffect = {
   execution_may_have_started: boolean;
 };
 
+export type OutlookInboxStatus = "complete" | "inbox_access_required" | "account_ambiguous" | "paused"
+  | "refresh_required" | "reconnect_required" | "provider_denied" | "provider_busy" | "read_unavailable";
+export type OutlookInboxResult = { count: number; observed_at: string; timezone: string; locale?: string };
+export type OutlookInboxOutcome = { status: "complete"; result: OutlookInboxResult }
+  | { status: Exclude<OutlookInboxStatus, "complete"> };
+
 export type ChatMessage = {
   id: string;
   role: "user" | "assistant" | "system";
@@ -114,4 +120,5 @@ export type ChatMessage = {
   private_reply_owner?: string;
   private_reply_plain_text?: boolean;
   private_reply_surface?: A2uiSurface;
+  private_outlook_inbox?: OutlookInboxOutcome;
 };

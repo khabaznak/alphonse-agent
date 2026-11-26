@@ -3,14 +3,17 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const service = vi.hoisted(() => ({ ingress: vi.fn(), followup: vi.fn(), steer: vi.fn(), followupList: vi.fn(), history: vi.fn(), recoveryList: vi.fn(), drafts: vi.fn(), ownerStatus: vi.fn() }));
+const service = vi.hoisted(() => ({ ingress: vi.fn(), followup: vi.fn(), steer: vi.fn(), followupList: vi.fn(), history: vi.fn(), recoveryList: vi.fn(), drafts: vi.fn(), ownerStatus: vi.fn(), takeDraft: vi.fn(), optionalManagement: vi.fn() }));
 vi.mock("./api", () => ({
   ensureDaemon: async () => {}, playAlertSound: async () => {}, showInFinder: async () => {}, stopDaemon: async () => {},
+  optionalManagement: service.optionalManagement,
   daemonRequest: async (method: string, params: Record<string, unknown> = {}) => {
     if (method === "current_user") return { onboarded: true, workspace_configured: true, user: { user_id: "fixture", display_name: "Fixture", role: "admin", is_active: true } };
     if (method === "desktop_poll") return { next_sequence: 0, next_ui_sequence: 0, daemon_id: "fixture", questions: [], events: [], deliveries: [], ui_events: [], status: { queue: { ready: 0, processing: 0 }, activity: { state: "idle" }, active_work: {} } };
     if (method === "experimental_owner_status") return params.message_id ? service.ownerStatus(params.message_id) : { processing_ready: true, owner_only: true, paused_legacy_requests: 0 };
     if (method === "experimental_owner_ingress") return service.ingress(params);
+    if (method === "experimental_owner_take_draft") return service.takeDraft(params.message_id);
+    if (method === "experimental_owner_ack_draft") return { status: "client_acknowledged" };
     if (method === "experimental_owner_followup_list") return service.followupList();
     if (method === "experimental_owner_recovery_list") return service.recoveryList();
     if (method === "experimental_owner_composer_list") return service.drafts();
@@ -44,8 +47,55 @@ describe("confirmed conversation sends", () => {
     service.followupList.mockResolvedValue({ items: [] }); service.history.mockReset(); service.history.mockResolvedValue({ messages: [] }); service.recoveryList.mockReset(); service.recoveryList.mockResolvedValue({ items: [] }); service.drafts.mockReset(); service.drafts.mockResolvedValue({ items: [] });
     service.followup.mockResolvedValue({ status: "queued" }); service.steer.mockResolvedValue({ status: "accepted" });
     service.ownerStatus.mockReset(); service.ownerStatus.mockResolvedValue({ status: "pending" });
+    service.takeDraft.mockReset(); service.optionalManagement.mockReset();
   });
   afterEach(() => vi.restoreAllMocks());
+  it("focuses the composer and Outlook heading when handing off in both directions", async () => {
+    service.optionalManagement.mockResolvedValue({
+      actor_user_id: "fixture", owner_outlook_inbox_setup: true,
+      providers: [{ provider: "microsoft", capabilities: ["outlook_inbox_unread"] }],
+      connections: [{ connection_id: "hotmail", provider: "microsoft", display_name: "Hotmail", revision: 1,
+        status: "connected", capabilities: ["outlook_inbox_unread"] }],
+      grants: [{ grant_id: "inbox", connection_id: "hotmail", grantor_user_id: "fixture", beneficiary_user_id: "fixture",
+        project_id: null, operations: ["outlook_inbox_unread"], resources: ["outlook:inbox"], recipient_user_ids: ["fixture"],
+        expires_at: "2099-01-01T00:00:00Z", revoked_at: "", revision: 1 }],
+      bindings: [], members: [{ user_id: "fixture", display_name: "Fixture" }], projects: [], skills: [], sources: [],
+    });
+    const element = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(element);
+    try {
+      await act(async () => { root.render(<App />); await flush(); });
+      const textarea = element.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message Alphonse"]')!;
+      await act(async () => typeValue(textarea, "Existing draft"));
+      await act(async () => element.querySelector<HTMLButtonElement>('button[title="Settings"]')!.click());
+      await act(async () => element.querySelector<HTMLButtonElement>('button[title="Integrations"]')!.click());
+      await act(async () => element.querySelector<HTMLButtonElement>('button[aria-label="Manage Outlook / Hotmail"]')!.click());
+      const open = [...element.querySelectorAll("button")].find(button => button.textContent === "Open Conversation")!;
+      open.focus();
+      // Keyboard input belongs to the composer as soon as navigation commits.
+      // No animation frame should be needed to override the workspace focus.
+      vi.spyOn(window, "requestAnimationFrame").mockImplementation(() => 1);
+      await act(async () => open.click());
+      expect(document.activeElement).toBe(textarea);
+      expect(textarea.value).toBe("Existing draft");
+      expect(service.ingress).not.toHaveBeenCalled();
+
+      const messageId = "a".repeat(32);
+      service.ingress.mockResolvedValue({ message_id: messageId });
+      service.ownerStatus.mockResolvedValue({ status: "ready" });
+      service.takeDraft.mockResolvedValue({ message_id: messageId, message: "Refresh Microsoft access.", kind: "answer",
+        outlook_inbox_status: "refresh_required", acknowledgement_token: "fixture-token", delivery_status: "started_unconfirmed" });
+      await act(async () => { textarea.closest("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); await flush(); });
+      const recover = [...element.querySelectorAll("button")].find(button => button.textContent === "Open Outlook / Hotmail settings")!;
+      recover.focus();
+      await act(async () => recover.click());
+      expect(document.activeElement).toBe(element.querySelector("[data-outlook-settings-heading]"));
+      expect(document.activeElement?.textContent).toBe("Outlook / Hotmail");
+    } finally {
+      await act(async () => root.unmount());
+      element.remove();
+    }
+  });
   it("clears the exact whitespace-padded draft after confirmed send", async () => {
     let confirm!: (value: unknown) => void;
     service.ingress.mockImplementation(() => new Promise((resolve) => { confirm = resolve; }));
