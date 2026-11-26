@@ -9,7 +9,7 @@ function Fixture() {
   const [compact, setCompact] = useState(false);
   const [empty, setEmpty] = useState(false);
   return <main className="fixture">
-    <h1>Action digest Critic fixture</h1>
+    <h1>Evidence review Critic fixture</h1>
     <p>Synthetic Gmail and Google Calendar results</p>
     <div className="fixture-controls">
       <button type="button" aria-pressed={compact} onClick={() => setCompact(!compact)}>Compact conversation</button>

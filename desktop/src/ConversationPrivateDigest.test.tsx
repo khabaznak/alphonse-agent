@@ -9,7 +9,7 @@ const components: A2uiComponent[] = [
   { id: "root", component: "Card", children: ["title", "findings", "citation", "sources"] },
   { id: "title", component: "Text", variant: "heading", text: "Deadlines & next steps" },
   { id: "findings", component: "Markdown", text:
-    "## What changed\n\n- **New date** [8](#source-8)\n- [External](https://example.invalid) [9](#source-9)\n\n![Image](https://example.invalid/pixel)\n<script>no</script>" },
+    "## What changed\n\n- **New date** [8](#source-8) [8] `[8]` [10]\n- [External](https://example.invalid) [9](#source-9)\n\n![Image](https://example.invalid/pixel)\n<script>no</script>" },
   { id: "citation", component: "EmailCitation", sourceNumber: 8 },
   { id: "sources", component: "Disclosure", label: "Cited emails", children: ["source_list"] },
   { id: "source_list", component: "List", children: ["source_8"] },
@@ -26,13 +26,13 @@ function stream(items: A2uiComponent[], messageId = "mail") {
   ];
 }
 
-describe("private Action digest", () => {
+describe("private Gmail Evidence review", () => {
   it("does not admit a citation to another source even if the source number is syntactically valid", () => {
     const invalid = components.map((item) => item.id === "citation" ? { ...item, sourceNumber: 9 } : item);
     expect(decodePrivateProviderSurface(stream(invalid), "mail", "gmail")).toBeUndefined();
   });
 
-  it("formats synthesis and opens and focuses the exact literal excerpt from either citation form", async () => {
+  it("formats synthesis, displays evidence, and focuses the exact literal excerpt from each citation form", async () => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     const host = document.body.appendChild(document.createElement("div"));
     const react = createRoot(host);
@@ -46,17 +46,17 @@ describe("private Action digest", () => {
       expect(host.querySelector(".provider-markdown ul li strong")?.textContent).toBe("New date");
       expect(host.querySelectorAll("a, img, script")).toHaveLength(0);
       const citations = [...host.querySelectorAll<HTMLButtonElement>('button[aria-label="Read email source 8"]')];
-      expect(citations).toHaveLength(2);
-      const disclosure = host.querySelector("details")!;
-      expect(disclosure.open).toBe(false);
+      expect(citations).toHaveLength(3);
+      expect(host.querySelector(".provider-evidence-pane ol q")).not.toBeNull();
+      expect(host.querySelector("code")?.textContent).toBe("[8]");
+      expect(host.querySelector(".provider-markdown")?.textContent).toContain("[10]");
       for (const button of citations) {
-        disclosure.open = false;
         await act(async () => button.click());
         const source = host.querySelector('[data-email-source="8"]')!;
-        expect(disclosure.open).toBe(true);
+        expect(source.getAttribute("data-selected-source")).toBe("true");
         expect(document.activeElement).toBe(source);
-        expect(source.querySelector("blockquote")?.textContent).toBe("**literal** <img src=https://example.invalid>");
-        expect(source.querySelector("blockquote strong")).toBeNull();
+        expect(source.querySelector("q")?.textContent).toBe("**literal** <img src=https://example.invalid>");
+        expect(source.querySelector("q strong")).toBeNull();
       }
     } finally {
       await act(async () => react.unmount());

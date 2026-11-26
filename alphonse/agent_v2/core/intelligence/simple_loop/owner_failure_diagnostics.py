@@ -7,6 +7,10 @@ from __future__ import annotations
 
 import json
 import re
+import hashlib
+import hmac
+import os
+import sqlite3
 
 _DESCRIPTIONS = {
     'time_limit': 'The request reached its time limit before completion.',
@@ -36,6 +40,66 @@ _DESCRIPTIONS = {
     'clarification_review_unavailable': 'The clarification check was unavailable.',
     'needs_attention': 'The recorded checkpoint did not specify a recognized cause.',
 }
+
+
+def _resolve_failed_request(conn, actor: str, message_id: str) -> tuple[dict, str]:
+    """Resolve an exact blocked Desktop request under its current owner.
+
+    The binding is historical context only, never authorization for an action.
+    Rechecking the entire checkpoint makes later changes fail closed.
+    """
+    try:
+        if not conn.in_transaction or not isinstance(actor, str) or not actor or not isinstance(message_id, str) or re.fullmatch(r'[0-9a-f]{32}', message_id) is None:
+            raise ValueError
+        row = conn.execute('''SELECT c.task_state_json, o.history_event_id, e.content, e.observed_at
+            FROM v2_task_checkpoints c
+            JOIN v2_trusted_owner_ingress o ON o.message_id=c.task_id AND o.owner_id=c.owner_id
+            JOIN v2_users u ON u.user_id=c.owner_id AND u.is_active=1 AND u.role IN ('admin','owner')
+            JOIN v2_user_settings s ON s.key='admin_user_id' AND s.value=c.owner_id
+            JOIN v2_conversation_events e ON e.event_id=o.history_event_id
+            WHERE c.task_id=? AND c.owner_id=? AND coalesce(c.project_id,'')=''
+              AND o.peer_uid=? AND o.history_version=1 AND e.owner_user_id=? AND e.project_id=''
+              AND e.role='user' AND e.source='desktop' AND e.source_message_id=?''',
+            (message_id, actor, os.getuid(), actor, 'inbound:' + message_id)).fetchone()
+        if row is None:
+            raise ValueError
+        raw = json.loads(row['task_state_json'])
+        from alphonse.agent_v2.core.messages.sqlite_queue import finalized_owner_history_matches
+        state = raw['metadata']['single_loop_checkpoint']['state']
+        if (raw.get('task_id') != message_id or raw.get('message_id') != message_id
+                or raw.get('user') != actor or raw.get('project_id', '') != ''
+                or state.get('task_id') != message_id or state.get('actor') != actor
+                or state.get('status') != 'blocked'
+                or not finalized_owner_history_matches(conn, message_id, actor, raw)):
+            raise ValueError
+        content = row['content']
+        if not isinstance(content, str):
+            raise ValueError
+        diagnostic = {'message_id': message_id, 'conversation_source_id': 'conversation:' + row['history_event_id'],
+                      'request_excerpt': content[:500], 'request_excerpt_truncated': len(content) > 500,
+                      'observed_at': row['observed_at'] or None,
+                      'description': _DESCRIPTIONS[public_failure_code(state.get('blocker'))],
+                      'effects': 'not established by this diagnostic'}
+        digest = hashlib.sha256(json.dumps([actor, message_id, row['history_event_id'], row['task_state_json']],
+            ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
+        return diagnostic, digest
+    except (sqlite3.Error, ValueError, TypeError, KeyError, IndexError, AttributeError):
+        raise ValueError('owner_failure_reference_unavailable') from None
+
+
+def bind_failed_request(conn, actor: str, message_id: str) -> dict:
+    _, digest = _resolve_failed_request(conn, actor, message_id)
+    return {'message_id': message_id, 'sha256': digest}
+
+
+def load_bound_failed_request(conn, actor: str, binding: object) -> dict:
+    if (not isinstance(binding, dict) or set(binding) != {'message_id', 'sha256'}
+            or not isinstance(binding['sha256'], str) or re.fullmatch(r'[0-9a-f]{64}', binding['sha256']) is None):
+        raise ValueError('owner_failure_reference_unavailable')
+    diagnostic, digest = _resolve_failed_request(conn, actor, binding['message_id'])
+    if not hmac.compare_digest(binding['sha256'], digest):
+        raise ValueError('owner_failure_reference_unavailable')
+    return diagnostic
 
 def public_failure_code(error: object, *, cancelled: bool = False) -> str:
     if cancelled:
@@ -129,8 +193,23 @@ def recent_owner_failures(queue, events, *, actor: str, project_id: str, current
             # Internal legacy category names (e.g. model_unavailable) can
             # overstate the evidence. Give the model the fixed description,
             # not the code or raw blocker.
-            diagnostic = {'message_id': message_id, 'description': _DESCRIPTIONS[code],
+            # The checkpoint/history binding above establishes which exact
+            # owner request failed. Supply a bounded excerpt and its matching
+            # conversation source ID so a later question need not infer a
+            # relationship between unrelated opaque IDs. The request is quoted
+            # historical content, not authority for a new action.
+            request_text = str(getattr(event, 'content', '') or '')
+            diagnostic = {'message_id': message_id,
+                          'conversation_source_id': 'conversation:' + str(event.event_id),
+                          'request_excerpt': request_text[:500],
+                          'request_excerpt_truncated': len(request_text) > 500,
+                          'observed_at': getattr(event, 'observed_at', None) or None,
+                          'description': _DESCRIPTIONS[code],
                           'effects': 'not established by this diagnostic'}
+            from .owner_failure_recovery import checkpoint_failure_recovery
+            recovery = checkpoint_failure_recovery(task)
+            if recovery is not None:
+                diagnostic['suggested_followup'] = recovery['reply']
             try:
                 # Reuse the same sanitized, actor-bound activity available to
                 # Desktop. Never copy raw arguments, outputs or provider text.

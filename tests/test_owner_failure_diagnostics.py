@@ -28,7 +28,8 @@ def test_only_exact_safe_failure_categories_are_public():
     ('openai_codex_timeout', 'model_timeout', 'The model provider timed out.'),
     ('private provider payload', 'model_unavailable', 'The model step failed; its specific cause was not recorded.'),
 ])
-def test_owner_followup_sees_prior_safe_failure_without_private_provider_text(tmp_path, monkeypatch, failure, code, description):
+@pytest.mark.parametrize('first_prompt', ['Synthetic first request', 'Synthetic first request ' + ('x' * 600)])
+def test_owner_followup_sees_prior_safe_failure_without_private_provider_text(tmp_path, monkeypatch, failure, code, description, first_prompt):
     class Provider:
         supports_image_input = False
         def __init__(self):
@@ -60,23 +61,31 @@ def test_owner_followup_sees_prior_safe_failure_without_private_provider_text(tm
     monkeypatch.setattr(daemon.ipc, 'stop', lambda: None)
     daemon.start()
     try:
-        first = queue.enqueue_trusted_local_owner(prompt='Synthetic first request', peer_uid=os.getuid())
+        first = queue.enqueue_trusted_local_owner(prompt=first_prompt, peer_uid=os.getuid())
         deadline = time.monotonic() + 8
         while time.monotonic() < deadline and daemon.owner_message_status(first) in {'pending', 'processing'}:
             time.sleep(.01)
         assert daemon.owner_message_status_payload(first) == {'status': 'failed', 'failure_code': code}
-        second = queue.enqueue_trusted_local_owner(prompt='What happened to the previous request?', peer_uid=os.getuid())
+        second = queue.enqueue_trusted_local_owner(prompt='What happened to the previous request?', peer_uid=os.getuid(),
+                                                   failed_request_message_id=first)
         deadline = time.monotonic() + 8
         while time.monotonic() < deadline and daemon.owner_message_status(second) in {'pending', 'processing'}:
             time.sleep(.01)
         assert daemon.owner_message_status(second) == 'ready'
         assert description in provider.prompts[-1]
+        assert 'explicitly_referenced_failed_request' in provider.prompts[-1]
+        assert first in provider.prompts[-1]
         assert 'not established by this diagnostic' in provider.prompts[-1]
         assert failure not in provider.prompts[-1]
         assert '"failure_code"' not in provider.prompts[-1]
         events = conversation.list_before_source(owner_user_id=owner.user_id, project_id='',
                                                  source_message_id='inbound:' + second, limit=16)
-        assert recent_owner_failures(queue, events, actor=owner.user_id, project_id='', current_message_id=second)[0]['description'] == description
+        prior = recent_owner_failures(queue, events, actor=owner.user_id, project_id='', current_message_id=second)[0]
+        assert prior['description'] == description
+        assert prior['request_excerpt'] == first_prompt[:500]
+        assert prior['request_excerpt_truncated'] is (len(first_prompt) > 500)
+        assert prior['conversation_source_id'] == 'conversation:' + events[0].event_id
+        assert 'Synthetic first request' in provider.prompts[-1]
         assert recent_owner_failures(queue, events, actor='other-owner', project_id='', current_message_id=second) == []
         assert recent_owner_failures(queue, events, actor=owner.user_id, project_id='other-project', current_message_id=second) == []
         assert recent_owner_failures(queue, [replace(events[0], event_id='forged')], actor=owner.user_id,

@@ -63,6 +63,28 @@ def test_codex_catalog_filters_hidden_models(tmp_path, monkeypatch: pytest.Monke
     assert status["catalog_cli_matches_runtime"] is True
 
 
+def test_refresh_rechecks_the_configured_executable_and_catalog(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cli = tmp_path / "codex"
+    cli.write_text("#!/bin/sh\nprintf 'codex-cli 0.156.1\\n'\n", encoding="utf-8")
+    cli.chmod(0o700)
+    catalog = tmp_path / "models_cache.json"
+    catalog.write_text(json.dumps({"client_version": "0.171.0", "models": [{"slug": "gpt-6.1-terra"}]}), encoding="utf-8")
+    monkeypatch.setenv("ALPHONSE_V2_CODEX_CLI_BIN", str(cli))
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    monkeypatch.delenv("ALPHONSE_V2_CODEX_MODELS_CACHE_PATH", raising=False)
+
+    old = provider_status("openai_codex")
+    assert old["cli_path"] == str(cli)
+    assert old["catalog_cli_matches_runtime"] is False
+    assert old["models"][0]["model_id"] == "gpt-6.1-terra"
+
+    cli.write_text("#!/bin/sh\nprintf 'codex-cli 0.171.0-alpha.13.2\\n'\n", encoding="utf-8")
+    refreshed = provider_status("openai_codex")
+    assert refreshed["cli_path"] == str(cli)
+    assert refreshed["cli_version"] == "codex-cli 0.171.0-alpha.13.2"
+    assert refreshed["catalog_cli_matches_runtime"] is True
+
+
 def test_validation_failure_does_not_replace_active_selection(monkeypatch: pytest.MonkeyPatch) -> None:
     store = SQLiteInferenceSettingsStore(":memory:")
     store.save(InferenceSettingsRecord(model_id="working"))

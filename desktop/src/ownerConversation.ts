@@ -1,12 +1,13 @@
 /** Opt-in owner-conversation transport; the daemon remains the authority. */
 import type { CommittedEffect } from "./types";
 import { decodePrivateProviderSurface, type A2uiSurface } from "./a2ui";
+import { decodeFailureRecovery, type FailureRecovery } from "./conversationFailures";
 export type OwnerRequest = <T>(method: string, params?: Record<string, unknown>) => Promise<T>;
 
 type Pending = { messageId: string; pickupStarted: boolean; paused?: boolean; acknowledgementToken?: string; acknowledgementInFlight?: boolean; acknowledgementRetryAttempted?: boolean };
 type Status = "pending" | "continuation_paused" | "continuation_accepted" | "continuation_declined" | "ready" | "started_unconfirmed" | "client_acknowledged" | "failed" | "unavailable";
 export type OwnerCapability = { owner_only?: boolean; processing_ready?: boolean; continuation_available?: boolean; blocking_reason?: string | null; paused_legacy_requests?: number };
-type StatusReply = OwnerCapability & { status?: Status; failure_code?: string };
+type StatusReply = OwnerCapability & { status?: Status; failure_code?: string; failure_recovery?: unknown };
 type Pickup = { message_id: string; message: string; acknowledgement_token: string; delivery_status: string; kind?: "answer" | "question"; committed_effect?: CommittedEffect; private_calendar?: true; private_gmail?: true; private_a2ui?: unknown };
 type OwnerIngressReply = { message_id: string; accepted_at?: string };
 
@@ -69,9 +70,16 @@ export function ownerFailureMessage(code?: string): string {
     ? messages[code] : "The request could not be completed; its result may be unavailable or unconfirmed.";
 }
 
+export class FailedReferenceUnavailableError extends Error {
+  constructor() {
+    super("That failed request is no longer available to reference. Remove the reference or select it again; your draft was not sent.");
+    this.name = "FailedReferenceUnavailableError";
+  }
+}
+
 /** A confirmed failed request can be displayed beside its own message. */
 export class OwnerRequestFailed extends Error {
-  constructor(readonly messageId: string, readonly failureCode?: string) {
+  constructor(readonly messageId: string, readonly failureCode?: string, readonly recovery?: FailureRecovery) {
     super(ownerFailureMessage(failureCode));
     this.name = "OwnerRequestFailed";
   }
@@ -141,13 +149,16 @@ export class OwnerConversation {
     if (!current) this.pending.set(messageId, { messageId, pickupStarted: false });
   }
 
-  async send(prompt: string, replyToMessageId?: string): Promise<OwnerIngressReply> {
+  async send(prompt: string, replyToMessageId?: string, failedRequestMessageId?: string): Promise<OwnerIngressReply> {
     const blocked = this.blockingState();
     if (blocked === "working") throw new Error("Wait for the current conversation to finish.");
     if (blocked === "acknowledgement") throw new Error("The answer is shown, but saving it to conversation history is not confirmed. Check earlier work and recovery before sending another message.");
     if (blocked === "uncertain") throw new Error("The previous message or answer has an uncertain result. Check earlier work and recovery before sending another message.");
     if (replyToMessageId !== undefined && !/^[0-9a-f]{32}$/.test(replyToMessageId)) {
       throw new Error("This question could not be selected for a reply.");
+    }
+    if (failedRequestMessageId !== undefined && (!/^[0-9a-f]{32}$/.test(failedRequestMessageId) || replyToMessageId !== undefined)) {
+      throw new Error("This failed request could not be selected for a reply.");
     }
     this.submitting = true;
     let queued: OwnerIngressReply;
@@ -157,8 +168,13 @@ export class OwnerConversation {
       try {
         queued = await this.request("experimental_owner_ingress", {
           prompt, ...(replyToMessageId === undefined ? {} : { reply_to_message_id: replyToMessageId }),
+          ...(failedRequestMessageId === undefined ? {} : { failed_request_message_id: failedRequestMessageId }),
         });
-      } catch {
+      } catch (cause) {
+        // This exact daemon rejection is issued before enqueue; transport failures remain uncertain.
+        if (failedRequestMessageId && cause instanceof Error && cause.message === "ValueError: owner_failure_reference_unavailable") {
+          throw new FailedReferenceUnavailableError();
+        }
         this.submissionUncertain = true;
         throw new Error("Message submission could not be confirmed. Check the conversation before sending it again.");
       }
@@ -218,7 +234,7 @@ export class OwnerConversation {
       if (state.status !== "ready") {
         if (state.status === "failed") this.pending.delete(pending.messageId);
         pending.pickupStarted = true;
-        if (state.status === "failed") throw new OwnerRequestFailed(pending.messageId, state.failure_code);
+        if (state.status === "failed") throw new OwnerRequestFailed(pending.messageId, state.failure_code, decodeFailureRecovery(state.failure_recovery));
         throw new Error(state.status === "started_unconfirmed"
           ? "The answer could not be confirmed. It will not be fetched again automatically."
           : "This conversation needs attention; its result may be unavailable or unconfirmed.");

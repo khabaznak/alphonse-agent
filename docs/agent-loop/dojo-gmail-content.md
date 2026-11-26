@@ -219,3 +219,61 @@ a source opened the disclosure, displayed the corresponding excerpt, and moved
 focus to that source. A separate live Calendar request displayed one event
 under its local date in the Mexico City timezone. Multi-day grouping was
 exercised with the synthetic fixture. Live message and event content are omitted.
+
+## Action digest visual adherence
+
+The earlier 8.9/10 review covered browsing, interaction and result states. A
+subsequent side-by-side review failed both cards against the approved mock.
+Differences included typography, provider icons, the inline citation position,
+date and time row spacing, and the expanded source styling.
+
+After those corrections, the Critic independently recaptured the approved cards
+and production renderer in Chromium. All 12 pairs had matching dimensions and
+zero differing RGB pixels. The matrix covered 350 px and 670 px card widths,
+light and dark themes, Gmail citations collapsed and expanded, and the Agenda
+card with two day groups. It used matching synthetic data. The keyboard check
+still opened the numbered citation and focused its exact source. The matrix
+measures the matched card crops in Chromium. Live account results, other browser
+engines and assistive technologies are outside the visual measurement.
+
+### Evidence review feedback
+
+The owner subsequently supplied the **Evidence review** mock and a screenshot of
+a regular native Desktop Gmail summary. The Critic failed the Gmail layout. The
+regular summary showed one column and an expanded disclosure, while the mock
+shows a findings column with inline citation buttons and a visible source column
+with excerpts. The conversation background also differed. The Critic failed the
+current Calendar renderer against this mock because the events are displayed as
+lists and the reference uses a Day / Time / Event table. Native Calendar, compact
+and dark comparisons remain pending.
+
+Visual acceptance requires zero differing pixels in matched captures using the
+owner-selected variant, the native Desktop content route, identical synthetic
+content, and a crop that includes the visible card surroundings. Each measured
+state must pass individually. The earlier Chromium Action digest crop matches
+apply to that matrix alone.
+
+### Evidence review implementation
+
+Desktop now presents the findings and cited excerpts side by side at wide
+widths and stacks them at narrow widths. A bounded bare citation such as `[1]`
+is linked to the matching observed source, and an unknown number remains
+literal. Calendar renders the date-sorted events in a Day / Time / Event table.
+
+With identical synthetic content, the Evidence review comparator found zero
+differing pixels in 16 Chromium pairs. These include each card, their panel,
+and Gmail with a source selected by pointer. The Critic independently captured
+the native WebKit panel in light and dark at 350 px and 670 px. The first
+programmatic activation showed the Desktop keyboard focus outline. Trusted
+window-local pointer events exposed a remaining citation border transition,
+which was removed from the citation button to match the reference. All eight
+final native pairs matched exactly across the resting and pointer-selected
+states, including each card and the surrounding panel. A separate keyboard
+check confirmed visible focus on the exact cited excerpt.
+
+In a separate run, the Critic submitted a single ordinary Gmail request from
+the real native Desktop composer to a disposable owner daemon. The provider
+and model were scripted. The reply rendered the wide evidence panel and made
+the valid `[1]` a button. Selecting it focused the exact visible excerpt.
+Unmatched `[2]` stayed literal. After pickup, the conversation ledger retained
+the user and assistant turns and omitted the private excerpt.

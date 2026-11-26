@@ -6,19 +6,25 @@ from typing import Any
 
 from alphonse.agent_v2.core.inference.models import InferencePurpose, InferenceRequest
 
+ACTIVITY_INTENTS = frozenset({'find_information', 'check_state', 'make_change', 'other'})
 
-def action_schema(*, fixture_sources: tuple[str, ...] | None = None) -> dict[str, Any]:
+
+def action_schema(*, fixture_sources: tuple[str, ...] | None = None, include_activity_intent: bool = False) -> dict[str, Any]:
     """Build the shared wire schema with an optional fixture source constraint."""
     arguments: dict[str, Any] = {'type': ['object', 'null']}
     if fixture_sources is not None:
         arguments = {'anyOf': [
             {'type': 'object', 'properties': {'source': {'type': 'string', 'enum': list(fixture_sources)}},
              'required': ['source'], 'additionalProperties': False}, {'type': 'null'}]}
-    return {'type': 'object', 'properties': {
+    properties = {
         'kind': {'type': 'string', 'enum': ['tool', 'answer', 'question']},
         'tool_id': {'type': ['string', 'null']}, 'arguments': arguments,
         'text': {'type': ['string', 'null']},
-    }, 'required': ['kind', 'tool_id', 'arguments', 'text'], 'additionalProperties': False}
+    }
+    if include_activity_intent:
+        properties['activity_intent'] = {'type': ['string', 'null'],
+                                         'enum': ['find_information', 'check_state', 'make_change', 'other', None]}
+    return {'type': 'object', 'properties': properties, 'required': list(properties), 'additionalProperties': False}
 
 
 def validate_source_progress(progress: Any) -> dict[str, list[str]]:
@@ -45,6 +51,12 @@ def make_request(*, projection: str, catalog: list[dict[str, Any]], cancellation
     Optional source progress is host-provided observation metadata, never an
     oracle or an authorization decision. Hosts decide whether it is available.
     """
+    action_fields = 'Always include kind, tool_id, arguments, and text; use null for fields not needed. '
+    if 'activity_intent' in output_schema.get('properties', {}):
+        action_fields += (
+            'Include activity_intent as the intended purpose of a tool action: '
+            'find_information, check_state, make_change, or other. Use null when unsure and for other actions. '
+        )
     instructions = (
         'You are choosing one action for Alphonse, not executing the action in Codex. '
         'Alphonse has the following host tools available: ' + json.dumps(catalog, ensure_ascii=False) + '. '
@@ -61,7 +73,7 @@ def make_request(*, projection: str, catalog: list[dict[str, Any]], cancellation
         'by itself arrange a request to do work or report it at a later time. Arrange the '
         'requested future action using an available capability, or explain what prevents it; '
         'do not silently substitute an immediate answer. '
-        'Always include kind, tool_id, arguments, and text; use null for fields not needed. '
+        f"{action_fields}"
         'Before claiming an action changed something, verify the outcome against the actual requested '
         'target using available observations or a separate readback; a command exit alone does not '
         'establish the intended effect. Do not repeat a mutation merely to check it. '
@@ -172,7 +184,12 @@ def normalize_action(value: dict[str, Any], allowed_tool_ids: frozenset[str]) ->
     """Reject malformed actions; host invocation validates tool arguments and authority."""
     decision = dict(value)
     decision.pop('usage', None)  # Never trust model-authored accounting.
-    valid = set(decision) == {'kind', 'tool_id', 'arguments', 'text'}
+    # Accept the original four-field protocol for existing providers and
+    # fixtures; versioned intent is optional and can only be an enum or null.
+    base = {'kind', 'tool_id', 'arguments', 'text'}
+    valid = set(decision) in (base, base | {'activity_intent'})
+    intent = decision.get('activity_intent')
+    valid = valid and (intent is None or (isinstance(intent, str) and intent in ACTIVITY_INTENTS))
     kind = decision.get('kind')
     if kind == 'tool':
         valid = (valid and isinstance(decision.get('tool_id'), str)
@@ -180,7 +197,7 @@ def normalize_action(value: dict[str, Any], allowed_tool_ids: frozenset[str]) ->
                  and decision.get('text') is None)
     elif kind in ('answer', 'question'):
         valid = (valid and isinstance(decision.get('text'), str) and bool(decision['text'].strip())
-                 and decision.get('tool_id') is None and decision.get('arguments') is None)
+                 and decision.get('tool_id') is None and decision.get('arguments') is None and intent is None)
     else:
         valid = False
     return decision if valid else {'kind': 'invalid'}

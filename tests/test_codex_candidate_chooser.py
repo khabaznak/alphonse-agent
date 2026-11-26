@@ -20,6 +20,10 @@ def vec(actions=0, model_calls=0, input_tokens=0, output_tokens=0):
     return dict(actions=actions, model_calls=model_calls, input_tokens=input_tokens, output_tokens=output_tokens)
 
 
+# The reservation covers the complete serialized request, including the shared instructions.
+FIXTURE_INPUT_RESERVATION = 8192
+
+
 def make_case(tmp_path, store_type, *, allow_unknown):
     provider = CodexSubscriptionProvider(model='gpt-6-luna')
     events, calls, prompts = [], [], []
@@ -36,7 +40,7 @@ def make_case(tmp_path, store_type, *, allow_unknown):
         return InferenceResult(json_value=value, raw_response=json.dumps(value), usage={})
     provider.generate_json = generate
     chooser = CodexSubscriptionChooser(provider=provider, model='gpt-6-luna',
-        max_input_tokens=4096, emit=events.append)
+        max_input_tokens=FIXTURE_INPUT_RESERVATION, emit=events.append)
     registry = InMemoryToolRegistry()
     descriptor = ToolDescriptor('native.fixture_read', 'fixture_read', ToolKind.NATIVE, read_only=True,
         argument_schema={'type': 'object', 'properties': {'source': {'type': 'string'}}, 'required': ['source']})
@@ -54,7 +58,7 @@ def make_case(tmp_path, store_type, *, allow_unknown):
         lambda actor, ref: sources[ref],
         lambda actor, tool, args: actor == 'fixture-user' and tool == 'native.fixture_read' and args == {'source': 'index'},
         record, lambda actor, text, refs: text == '42' and refs == ('ref',), lambda: 100,
-        input_reservation=4096, output_reservation=512,
+        input_reservation=FIXTURE_INPUT_RESERVATION, output_reservation=512,
         synthetic_allow_unreported_usage=allow_unknown)
     return SimpleNamespace(host=host, state=CandidateState('task', 'fixture-user', 'goal'),
                            events=events, calls=calls, prompts=prompts)
@@ -67,7 +71,7 @@ def test_synthetic_loop_charges_reservations_and_preserves_unknown(tmp_path):
     assert case.calls == [{'source': 'index'}] and len(case.prompts) == 2
     budget = case.host.budgets.load('task').usage()
     assert len(budget['unknown_usage']) == 2
-    assert budget['charged']['input_tokens'] == 8192
+    assert budget['charged']['input_tokens'] == 2 * FIXTURE_INPUT_RESERVATION
     assert budget['charged']['output_tokens'] == 1024
     assert all(e['provider_usage'] == {'input_tokens': None, 'output_tokens': None} for e in case.events)
     assert all(e['usage_diagnostics']['input']['source'] == 'estimated' for e in case.events)
@@ -187,4 +191,4 @@ def test_unconfigured_source_cannot_enter_tool_manifest(tmp_path):
     case = make_case(tmp_path, SyntheticEvaluationBudgetStore, allow_unknown=True)
     with pytest.raises(ValueError, match='invalid_fixture_sources'):
         CodexSubscriptionChooser(provider=case.host.choose.provider, model='gpt-6-luna',
-            max_input_tokens=4096, emit=lambda _: None, allowed_source_names=('secret',))
+            max_input_tokens=FIXTURE_INPUT_RESERVATION, emit=lambda _: None, allowed_source_names=('secret',))

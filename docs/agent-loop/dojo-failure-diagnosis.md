@@ -42,6 +42,78 @@ Desktop's displayed failure status is currently held in daemon memory and may
 be unavailable after a restart; the scoped checkpoint-backed follow-up context
 is a separate path and is not proof that a notice was durably displayed.
 
+## Recovery after an unreadable model response
+
+This scripted regression runs the actual Codex response parser, owner worker,
+checkpoint, and Desktop IPC with disposable state. A stub supplies a timeout
+and partial output for one local command. The next model response contains
+invalid JSON in the tool arguments. Run each case with a fresh journal.
+
+```sh
+.venv/bin/python -m alphonse.agent_v2.evaluation.dojo_model_parse_recovery \
+  /tmp/dojo-parse-recovers.json --case recovers
+.venv/bin/python -m pytest tests/test_dojo_model_parse_recovery.py
+```
+
+The `recovers` case expects a usable reply after one model-only retry.
+The `malformed_again` and `tries_to_replay` cases expect a failed request
+with the recorded timeout and unconfirmed effects available in the work log.
+`unknown_usage` checks that the same evidence is available when missing
+provider usage precludes a retry. All four check the observed dispatch count,
+reported usage, fixed parse stages, and absence of the rejected response in
+subsequent prompts and the checkpoint. A separate Desktop test checks that the
+work log opens on the format failure. The scenarios exercise scripted model
+transport and Bash results. Real model behavior, process effects, and device
+state remain unassessed.
+
+To use a real model for the retry, add `--model` to the `recovers` case.
+The command selection, timeout, and invalid arguments remain scripted. The
+live retry sees the synthetic reachability reply and the incomplete service
+check. The journal keeps the exact live reply, any provider-reported usage,
+the permitted action kinds in the response schema, the parser or chooser
+outcome for each call, and the test client's acknowledgement on delivery.
+
+```sh
+.venv/bin/python -m alphonse.agent_v2.evaluation.dojo_model_parse_recovery \
+  /tmp/dojo-parse-luna.json --case recovers --model gpt-6-luna
+```
+
+The [initial setup attempt](evidence/dojo-model-parse-luna-20261125-01.json)
+stopped at `coding_skill_store_mismatch` before a model call. After correcting
+the fixture setup, the [first live retry](evidence/dojo-model-parse-luna-20261125-02.json)
+reported 16,273 input and 68 output tokens, but the request failed with
+`model_response_invalid`. Only the injected parse stage was recorded. The
+runner did not yet capture the live reply, so the specific rejection reason
+remains unknown. The work log preserved the timeout and unconfirmed effects.
+
+The [second live retry](evidence/dojo-model-parse-luna-20261125-03.json)
+returned a valid answer. It reported the reachability reply, the start of the
+service check, and the timeout, with the service result still unknown. The
+test client retrieved and acknowledged the draft in a 5.356-second run.
+The retry reported 14,948 input and 70 output tokens. Each live attempt had
+one simulated command dispatch. The installed Desktop, a real device, and
+general recovery reliability remain unassessed.
+
+Five further Luna attempts used the same fixture with per-call response
+capture. All produced a normalized `answer`, and the test client acknowledged
+each draft. Every answer reported the observed reachability reply, the start
+of the service check, the timeout, and uncertainty about the final result.
+Each run recorded one simulated command dispatch and one live model call.
+The full runs took 5.323–6.239 seconds. The receipts include provider-reported
+token counts and the exact returned text.
+[04](evidence/dojo-model-parse-luna-20261125-04.json),
+[05](evidence/dojo-model-parse-luna-20261125-05.json),
+[06](evidence/dojo-model-parse-luna-20261125-06.json),
+[07](evidence/dojo-model-parse-luna-20261125-07.json),
+[08](evidence/dojo-model-parse-luna-20261125-08.json).
+
+The earlier live rejection remains unexplained. The scripted
+`tries_to_replay` case confirms that a well-formed `tool` decision gets the
+same public failure code. The response schema still permits `tool`, while
+the recovery loop accepts only an answer or a question. The loop blocks the
+tool before dispatch. All five new live retries chose `answer`, so these
+runs leave the earlier decision kind unknown.
+
 ## Initial development observations
 
 The `work_log` case asks about a prior synthetic agreement and injects a model
@@ -75,6 +147,17 @@ The client acknowledged the answer. This is a known behavioral gap, not a
 complete self-diagnosis pass. A subsequent scripted test also changes the
 disposable fixture's admin identity and checks that access is rejected; this
 does not establish protection against a same-UID host process or other channels.
+
+After binding each failure description to the authorized original request's
+conversation source ID and a bounded, explicitly clipped request excerpt, the
+[third work-log attempt](evidence/dojo-work-log-20261125-03.json) identified the
+exact failed request, reported the recorded history search and said the model
+failure's cause and request outcome were unknown. It used one search and two
+reported model calls, plus an injected failed call; 64,021 input and 334 output
+tokens were reported. It took 17.128 seconds, and the test client acknowledged
+the answer. Unknown-request and changed-fixture-admin probes were rejected.
+This is one synthetic development attempt, not evidence of general reliability,
+actual provider-outage behavior, Desktop rendering, or verified effects.
 
 In the [elapsed attempt](evidence/dojo-failure-elapsed-20261125-01.json), the
 initial IPC status reported `time_limit`; the follow-up described the time

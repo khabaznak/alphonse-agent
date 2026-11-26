@@ -532,6 +532,23 @@ def test_legacy_model_unavailable_diagnostic_is_also_retryable() -> None:
     assert _scheduled_failure_is_non_retryable("openai_codex_model_unavailable: gpt-5.5") is False
 
 
+def test_model_access_warning_for_previous_model_does_not_mark_new_selection(monkeypatch) -> None:
+    runtime = build_runtime_host()
+    store = runtime.inference_settings_store
+    store.save(InferenceSettingsRecord(model_id="gpt-6-luna"))
+    daemon = V2Daemon(runtime)
+    monkeypatch.setattr(
+        "alphonse.agent_v2.inference_settings.InferenceProviderDescriptor.validate",
+        lambda self, model_id: ("codex-cli 0.171.0", "2026-11-26T16:30:00Z"),
+    )
+    saved = daemon.update_inference_settings(provider_key="openai_codex", model_id="gpt-6.1-terra")
+
+    daemon._record_selected_model_access_warning("openai_codex_model_access_rejected: gpt-6-luna")
+
+    assert store.get().to_dict() == saved
+    assert store.get().validation_error == ""
+
+
 def test_controlled_v3_plan_validation_failure_is_not_retried() -> None:
     error = "v3_task_failed:v3_phase_plan_invalid:completion_condition_invalid"
 

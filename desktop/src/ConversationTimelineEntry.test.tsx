@@ -33,6 +33,28 @@ it("offers a recovery route only when one was supplied for this request", () => 
   expect(renderToStaticMarkup(<ConversationTimelineEntry {...common} onReviewRecovery={() => {}} />)).toContain("Review request status");
 });
 
+it("keeps contextual recovery owner-scoped, and drops unsupported actions in model prose", () => {
+  const id = "c".repeat(32);
+  const message: ChatMessage = {
+    id, role: "user", source: "desktop", content: "Fixture request",
+    failure_recovery: {
+      reply: "**Je ne peux pas confirmer le résultat.** [Consultez le journal](https://example.com)",
+      language: "fr-CA", activity: { label: "<b>Voir l’activité</b>", detail: "Vérification enregistrée." },
+    },
+  };
+  const common = { message, questions: [], user: "owner", timezone: "UTC", onDone: async () => {},
+    projectName: "", memoize: false, renderMarkdown: true,
+    failures: [{ messageId: id, failureCode: "source_unavailable", dismissed: false }], onFailureDismissedChange: () => {} };
+  const ownerHtml = renderToStaticMarkup(<ConversationTimelineEntry {...common} showFailureRecovery />);
+  expect(ownerHtml).toContain('lang="fr-CA"');
+  expect(ownerHtml).toContain("&lt;b&gt;Voir l’activité&lt;/b&gt;");
+  expect(ownerHtml).toContain("Consultez le journal");
+  expect(ownerHtml).not.toContain("href=");
+  expect(renderToStaticMarkup(<ConversationTimelineEntry {...common} />)).not.toContain("Je ne peux pas");
+  const malformed = { ...message, failure_recovery: { reply: "", language: "fr-CA" } };
+  expect(renderToStaticMarkup(<ConversationTimelineEntry {...common} message={malformed} showFailureRecovery />)).toContain("Alphonse could not complete this request");
+});
+
 it("places the failure before its closed work log, with an honest unverified-answer message", () => {
   const message: ChatMessage = { id: "a".repeat(32), role: "user", content: "What should we do next?" };
   const html = renderToStaticMarkup(<ConversationTimelineEntry message={message} questions={[]} user="owner" timezone="UTC" onDone={async () => {}} projectName="" memoize={false} renderMarkdown={false} failures={[{messageId: message.id, failureCode: "answer_unverified", dismissed: false}]} onFailureDismissedChange={() => {}} workLogRequest={async () => ({}) as never} />);
