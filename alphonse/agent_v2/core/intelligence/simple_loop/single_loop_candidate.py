@@ -621,6 +621,15 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
                 result = {'status': 'success', 'result': deepcopy(private.observation)}
             except Exception:
                 result = {'status': 'failed', 'result': None}
+        elif tool_id in {'native.owner_gmail_search', 'native.owner_calendar_agenda'}:
+            # The generic invocation path redacts sensitive results before
+            # returning them. These owner-only reads feed the verified pickup
+            # path directly without publishing a generic event or memory entry.
+            try:
+                observation = ToolInvocationService(context=host.context, task=host.task).execute_or_raise(tool_id, args)
+                result = {'status': 'success', 'result': observation}
+            except Exception:
+                result = {'status': 'failed', 'result': None}
         elif disposable:
             try:
                 result = host.execute_disposable_tool(state.actor, tool_id, deepcopy(args))

@@ -1,13 +1,30 @@
 export type Member = { user_id: string; display_name: string };
 export type Source = { skill_id: string; role: string; binding_id: string; connection_id: string; grant_id: string; operation: string; resources: string[]; recipient_user_ids: string[]; project_id: string | null; display_name: string };
 export type Connection = { connection_id: string; provider: string; display_name: string; revision: number; status: string; health_code: string; capabilities: string[]; credential_health?: string; access_token_status?: string; credential_deletion_pending?: boolean; revocation_pending?: boolean };
-export type Grant = { grant_id: string; connection_id: string; grantor_user_id: string; beneficiary_user_id: string; project_id: string | null; operations: string[]; resources: string[]; recipient_user_ids: string[]; expires_at: string; revision: number; revoked_at: string };
-export type Catalog = { actor_user_id: string; owner_gmail_setup_only?: boolean; connections: Connection[]; grants: Grant[]; members: Member[]; providers: { provider: string; capabilities: string[] }[]; sources: Source[]; skills: { skill_id: string; name: string }[]; bindings: { binding_id: string; skill_id: string; grant_id: string }[]; projects: { project_id: string; name: string }[] };
+export type Grant = { grant_id: string; connection_id: string; grantor_user_id: string; beneficiary_user_id: string; project_id: string | null; operations: string[]; resources: string[]; recipient_user_ids: string[]; expires_at: string | null; revision: number; revoked_at: string; gmail_label_name?: string | null };
+export type GmailLabel = { id: string; name: string };
+export type Catalog = { actor_user_id: string; owner_gmail_setup_only?: boolean; owner_google_setup_only?: boolean; owner_gmail_content_setup?: boolean; owner_gmail_label_setup?: boolean; connections: Connection[]; grants: Grant[]; members: Member[]; providers: { provider: string; capabilities: string[] }[]; sources: Source[]; skills: { skill_id: string; name: string }[]; bindings: { binding_id: string; skill_id: string; grant_id: string }[]; projects: { project_id: string; name: string }[] };
+
+export function isOwnerReadGrant(catalog: Catalog, grant: Grant, operation = grant.operations[0]): boolean {
+  const owner = catalog.actor_user_id;
+  return grant.beneficiary_user_id === owner && grant.grantor_user_id === owner && !grant.revoked_at
+    && grant.project_id === null && grant.recipient_user_ids.length === 1 && grant.recipient_user_ids[0] === owner
+    && grant.operations.length === 1 && grant.operations[0] === operation && grant.resources.length === 1
+    && (operation === 'mail_read' && grant.resources[0] === 'INBOX'
+      || catalog.owner_gmail_content_setup === true && operation === 'mail_content_read' && grant.resources[0] === 'INBOX'
+      || catalog.owner_gmail_label_setup === true && operation === 'mail_content_read' && Boolean(grant.gmail_label_name)
+      || catalog.owner_google_setup_only === true && operation === 'calendar_read');
+}
+export function isGrantCurrent(grant: Grant): boolean {
+  return grant.expires_at === null
+    ? grant.operations.length === 1 && grant.operations[0] === 'mail_content_read'
+    : Date.parse(grant.expires_at) > Date.now();
+}
 export type Definition = { project_id: string; source_bindings: Omit<Source, "display_name" | "recipient_user_ids" | "project_id">[]; query: { text: string }; trigger: { kind: "schedule"; weekdays: number[]; local_time: string }; timezone: string; retrieval_window: { weekdays: number[]; start: string; end: string }; duration: { ongoing: boolean; starts_at: string; ends_at: string | null }; budgets: { max_pages: number; max_items: number; max_bytes: number; max_model_calls: number; max_runtime_seconds: number }; initial_lookback_days: number; recipient_user_ids: string[]; skill_hints: string[]; notification_mode: string; missed_run?: { kind: string; max_lateness_seconds?: number } };
 export type Policy = Definition & { policy_id: string; revision: number; status: string };
 export type Run = { check_run_id: string; state: string; outcome: string; error_code: string; window_start: string; window_end: string; stale: boolean; offline: boolean; pending_analysis: boolean; coverage: Record<string, unknown> };
 export type ProjectChecks = { checks: { policy: Policy; runs: Run[]; next_run_at: string | null }[]; findings: { finding_id: string; summary: string; state: string; due_at: string | null; timezone: string | null; uncertainty: string[]; coverage: Record<string, unknown>; deliveries: Record<string, { state: string }> }[]; sources: Source[] };
-export const labels: Record<string, string> = { mail_read: "Read mail", calendar_read: "Read calendar events", read: "Read", search: "Search", list: "List", changes: "Read changes", 'attachments.read': "Read attachments" };
+export const labels: Record<string, string> = { mail_read: "Read mail", mail_content_read: "Find and summarize emails", calendar_read: "Read calendar events", read: "Read", search: "Search", list: "List", changes: "Read changes", 'attachments.read': "Read attachments" };
 export const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 export function defaultDefinition(projectId: string): Definition {
   return { project_id: projectId, source_bindings: [], query: { text: "" }, trigger: { kind: "schedule", weekdays: [0, 1, 2, 3, 4], local_time: "08:00" }, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, retrieval_window: { weekdays: [0, 1, 2, 3, 4], start: "08:00", end: "09:00" }, duration: { ongoing: false, starts_at: new Date().toISOString(), ends_at: null }, budgets: { max_pages: 5, max_items: 100, max_bytes: 1000000, max_model_calls: 2, max_runtime_seconds: 60 }, initial_lookback_days: 30, recipient_user_ids: [], skill_hints: [], notification_mode: "material_changes", missed_run: { kind: "next_allowed_window" } };

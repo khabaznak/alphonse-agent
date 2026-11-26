@@ -4,7 +4,7 @@
 reusable Agent Skills package. This is product-maintained service support, not a
 copy of an individual household artifact. Its SKILL.md, ordinary Python script and
 references use existing skill discovery/installation, account bindings and native
-Bash. There are no calendar tools, script manifests or catalog entries. Package
+Bash. The package has no script manifests or per-script tool entries. Package
 exports contain no account state. See its references for connection, request and
 authorization procedures. No automatic invitations are supported.
 
@@ -12,11 +12,52 @@ Project-scoped read context and incremental sync extend this package through
 `integrations/google_calendar.py` and the existing `SourceAcquisition` service
 (#119). They reuse account bindings, secure managed OAuth and the existing project
 scheduler/evidence/finding stores. The interactive script retains its exact write
-authorization, readback and retry guards. No new Calendar tool, registry, scheduler
-or automatic invitation is introduced. Connecting an account starts no monitoring.
+authorization, readback and retry guards. Connecting an account starts no monitoring.
 Legacy `google-calendar` script bindings are preserved; they are not silently
 converted to managed `google` grants. An owner explicitly connects/selects the
 managed account and calendar IDs, following [secure account setup](secure-credentials.md).
+
+## Owner Desktop agenda
+
+The owner can ask for event titles and times in a date range of up to 32 days in
+Desktop Conversation. Enable the [Google Calendar API](https://developers.google.com/workspace/guides/enable-apis)
+in the Google Cloud project that owns Alphonse’s OAuth client. In **Settings → Integrations → Google Calendar**, connect
+the Google account, then choose **Manage access**. Copy the exact calendar ID from
+that calendar’s **Integrate calendar** settings in Google Calendar and choose an
+expiry for the owner-only grant. Google’s `primary` alias is unavailable here. If
+more than one calendar is authorized, choose which one to keep enabled in access
+settings. An expired access token requires reconnecting the Calendar account.
+
+Alphonse reads up to 40 event occurrences from one exact calendar and reports
+when there are more results. Ask a separate Calendar question for a shorter
+range when needed. The Desktop agenda handles reads only. The family-calendar
+package's separately authorized write workflows and project sync continue to
+have their own setup and controls.
+
+Event titles and times appear in the live Desktop result. The conversation
+history records that the result was displayed and the model receives only the
+read status. The existing local task checkpoint holds the bounded observation
+to support verified pickup without another provider read. That database remains
+within the same local OS principal’s trust boundary. A grant change, lost claim,
+or expired observation invalidates pickup. The live event details are cleared
+when the conversation view reloads. Telegram and scheduled requests cannot use
+this agenda path.
+
+## Live events in the Agenda widget
+
+The owner’s Agenda widget and Detailed Agenda show event titles and times from
+the same explicitly granted calendar alongside scheduled work. Today, Week,
+and Month read the displayed range. All-day dates follow the calendar’s dates,
+and timed events use the owner’s timezone. If a response exceeds the one-page
+limit of 200 events, Agenda marks coverage as limited. An unavailable read
+leaves scheduled work visible.
+
+The open view refreshes on navigation, Calendar configuration changes, window
+focus and a 30-second poll. Only verified local owner requests with the exact
+active grant can receive events. The direct Agenda request uses managed OAuth
+renewal if its token expires. A revoked authorization requires reconnecting.
+Agenda sends event data to the active Desktop view and does not send it to the
+model or store it in conversation history.
 
 ## Managed project read context and sync (#119)
 

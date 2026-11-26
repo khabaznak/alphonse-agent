@@ -14,12 +14,14 @@ import json
 import re
 from urllib.parse import quote
 
+from alphonse.agent_v2.accounts import GMAIL_CONTENT_OPERATION, exact_gmail_label_id
 from alphonse.agent_v2.integrations.acquisition import CursorExpired, SourcePage, SourceRecord
 from alphonse.agent_v2.integrations.oauth import SCOPES
 from alphonse.agent_v2.services.project_check_worker import CheckStopped
 
 SCOPE = SCOPES['google']['mail_read']
 ALL_MAIL = 'gmail:all'  # Explicit mailbox-wide grant, including Spam and Trash.
+GMAIL_LABEL_SEARCH_MAX = 5
 _ID = re.compile(r'^[A-Za-z0-9_-]{1,4096}$')
 
 
@@ -83,28 +85,31 @@ class GmailAdapter:
         self.transport = transport or GmailTransport()
         self.clock = clock or (lambda: datetime.now(timezone.utc))
 
-    def _authorize(self, context):
+    def _authorize(self, context, operation='mail_read'):
         context.guard()
         if self.clock() >= context.deadline:
             raise CheckStopped('partial', 'gmail_deadline')
         h = context.grant
-        if h.provider_key != 'google' or h.operation != 'mail_read' or not h.resources:
+        if h.provider_key != 'google' or h.operation != operation or not h.resources:
             raise PermissionError('gmail_scope_denied')
         for r in h.resources:
             if r != ALL_MAIL:
                 _id(r)
         oauth = self.oauth(context.session) if callable(self.oauth) else self.oauth
         authorization = dict(connection_id=h.connection_id, grant_id=h.grant_id,
-            operation='mail_read', resources=list(h.resources), recipient_user_ids=list(h.recipient_user_ids),
+            operation=operation, resources=list(h.resources), recipient_user_ids=list(h.recipient_user_ids),
             required_scopes=[SCOPE], project_id=context.project_id, expected_grant_revision=h.grant_revision)
+        if operation == GMAIL_CONTENT_OPERATION:
+            authorization['owner_gmail_content'] = True
         oauth.accounts.authorize(context.session, **authorization)
         return oauth, authorization
 
-    def _get(self, context, path, params, budget):
-        oauth, authorization = self._authorize(context)
+    def _get(self, context, path, params, budget, *, operation='mail_read'):
+        oauth, authorization = self._authorize(context, operation)
         if budget[0] <= 0:
             raise CheckStopped('partial', 'gmail_bytes_budget')
         token = oauth.token(context.session, authorization=authorization)
+        context.guard()
         try:
             value, size = self.transport.get(path, params=params, token=token,
                 deadline=context.deadline, max_bytes=budget[0])
@@ -121,7 +126,7 @@ class GmailAdapter:
         budget[0] -= size
         context.on_bytes(size)
         # Revocation/cancellation during I/O fences this result and the next call.
-        self._authorize(context)
+        self._authorize(context, operation)
         oauth.accounts.authorize(context.session, **authorization)
         return value
 
@@ -152,13 +157,19 @@ class GmailAdapter:
     def _stamp(self, state):
         return json.dumps(state, sort_keys=True)
 
-    def _record(self, context, resource, source_id, budget):
-        value = self._get(context, 'messages/' + _id(source_id), {'format': 'full'}, budget)
+    def _record(self, context, resource, source_id, budget, *, operation='mail_read', window=None):
+        value = self._get(context, 'messages/' + _id(source_id), {'format': 'full'}, budget, operation=operation)
         if value.get('id') != source_id:
             raise ValueError('gmail_identity_mismatch')
-        if resource != ALL_MAIL and resource not in value.get('labelIds', []):
+        labels = value.get('labelIds')
+        if resource != ALL_MAIL and (not isinstance(labels, list) or resource not in labels):
             raise ScopeMoved('gmail_message_outside_scope')
-        timestamp = datetime.fromtimestamp(int(value['internalDate']) / 1000, timezone.utc).isoformat()
+        if (operation == GMAIL_CONTENT_OPERATION and resource not in ('SPAM', 'TRASH')
+                and ('SPAM' in labels or 'TRASH' in labels)):
+            raise ScopeMoved('gmail_message_outside_scope')
+        received = datetime.fromtimestamp(int(value['internalDate']) / 1000, timezone.utc)
+        if window is not None and not window[0] <= received <= window[1]:
+            raise ScopeMoved('gmail_message_outside_window')
         # Convert provider MIME to inert RFC822, leaving attachment data unopened.
         count = [0]
         def mime(part):
@@ -195,7 +206,54 @@ class GmailAdapter:
             if header['name'].lower() in {'subject', 'from', 'to', 'date', 'message-id'}:
                 # Header injection is rejected by the standard email library.
                 msg[header['name']] = header['value']
-        return SourceRecord(resource, source_id, str(value['historyId']), timestamp, msg.as_bytes())
+        return SourceRecord(resource, source_id, str(value['historyId']), received.isoformat(), msg.as_bytes())
+
+    def search_label(self, context, *, query, since, until):
+        """Read one page for the owner's exact authorized label."""
+        operation = GMAIL_CONTENT_OPERATION
+        resources = context.grant.resources
+        if (len(resources) != 1 or not exact_gmail_label_id(resources[0]) or context.project_id is not None
+                or context.limits.pages != 1 or not 0 < context.limits.items <= GMAIL_LABEL_SEARCH_MAX
+                or not isinstance(query, str) or len(query) > 256 or since >= until):
+            raise PermissionError('gmail_label_search_scope_denied')
+        resource, = resources
+        budget = [context.limits.bytes]
+        # Gmail query syntax is only a search filter. Recheck both the exact
+        # provider label and returned message time before accepting any body.
+        bounds = f'after:{int(since.timestamp()) - 1} before:{int(until.timestamp()) + 1}'
+        params = {'q': f'({query}) {bounds}' if query else bounds, 'labelIds': resource,
+                  'maxResults': context.limits.items,
+                  'includeSpamTrash': 'true' if resource in ('SPAM', 'TRASH') else 'false'}
+        value = self._get(context, 'messages', params, budget, operation=operation)
+        items, continuation = value.get('messages', []), value.get('nextPageToken')
+        if (not isinstance(items, list) or
+                ('nextPageToken' in value and (not isinstance(continuation, str) or not continuation))):
+            raise CheckStopped('partial', 'gmail_response_invalid')
+        records, seen = [], set()
+        covered = len(items) <= context.limits.items
+        for item in items[:context.limits.items]:
+            try:
+                message_id = item['id']
+                _id(message_id)
+                if message_id in seen:
+                    covered = False
+                    continue
+                seen.add(message_id)
+                records.append(self._record(context, resource, message_id, budget,
+                                            operation=operation, window=(since, until)))
+            except GmailHTTPError as exc:
+                if exc.status != 404:
+                    raise
+                covered = False
+            except CheckStopped as exc:
+                if exc.outcome != 'partial':
+                    raise
+                covered = False
+                break
+            except (ScopeMoved, AttributeError, KeyError, OverflowError, TypeError, ValueError):
+                covered = False
+        return SourcePage(tuple(records), complete=not continuation, coverage_complete=covered,
+                          bytes_read=context.limits.bytes - budget[0])
 
     def search(self, context, *, query, since, cursor=None):
         self._authorize(context)

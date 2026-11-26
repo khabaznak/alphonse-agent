@@ -7,6 +7,7 @@ import re
 
 from alphonse.agent_v2.core.messages.sqlite_queue import finalized_owner_history_matches
 from .owner_failure_diagnostics import public_failure_code
+from .owner_gmail import OWNER_GMAIL_TOOL_ID, owner_gmail_failure_message
 
 _LABELS = {
     'native.search_memory': 'Searched conversation history',
@@ -17,6 +18,8 @@ _LABELS = {
     'native.owner_clock': 'Checked the clock',
     'native.owner_schedules': 'Checked schedules',
     'native.owner_gmail_unread': 'Checked unread mail',
+    'native.owner_gmail_search': 'Searched Gmail',
+    'native.owner_calendar_agenda': 'Checked Google Calendar',
     'native.skill_catalog': 'Checked available skills',
     'native.owner_named_skill': 'Checked a named skill',
 }
@@ -49,6 +52,9 @@ def _events(actor: str, refs: list, observations: dict, pending: object) -> list
                 outcome = 'The source could not be read'
             elif tool == 'native.web_search' and isinstance(web, dict) and web.get('result_count') == 0:
                 outcome = 'No results returned'
+        elif tool == OWNER_GMAIL_TOOL_ID and owner_gmail_failure_message(item.get('gmail_observation')):
+            events.append({'label': 'Attempted an unread mail check', 'outcome': 'The Inbox count could not be verified'})
+            continue
         events.append({'label': _LABELS[tool], 'outcome': outcome})
     if isinstance(pending, dict) and pending.get('kind') == 'tool':
         events.append({'label': 'Tool action', 'outcome': 'Reserved; execution or effects are unconfirmed'})

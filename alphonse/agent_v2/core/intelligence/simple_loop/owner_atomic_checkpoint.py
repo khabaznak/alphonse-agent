@@ -411,6 +411,10 @@ class OwnerAtomicCheckpoint:
                     or selected.get('evidence_bindings_sha256') != _decision_digest(observations)):
                 raise CheckpointConflict('owner_desktop_pickup_unavailable')
             from .owner_gmail import OWNER_GMAIL_TOOL_ID, valid_owner_gmail_locked
+            from .owner_calendar import OWNER_CALENDAR_TOOL_ID, valid_owner_calendar_locked
+            from .owner_gmail_search import (
+                OWNER_GMAIL_SEARCH_TOOL_ID, private_gmail_search_result, valid_owner_gmail_search_locked,
+            )
             from .owner_reminder_create import OWNER_REMINDER_CREATE_TOOL_ID, valid_reminder_locked
             from .owner_schedule_create import SCHEDULED_TASK_TOOL_ID, valid_schedule_locked
             from .owner_schedule_cancel import valid_cancel_locked
@@ -423,8 +427,19 @@ class OwnerAtomicCheckpoint:
                     raise CheckpointConflict('owner_knowledge_binding_unavailable')
                 if (binding.get('tool_id') == OWNER_GMAIL_TOOL_ID
                         and (state.status != 'completed' or not valid_owner_gmail_locked(conn, self.task.user,
-                                binding.get('gmail_observation'), context=context))):
+                                binding.get('gmail_observation'), context=context,
+                                desktop_pickup=not self.scheduled_origin))):
                     raise CheckpointConflict('owner_gmail_authority_unavailable')
+                if (binding.get('tool_id') == OWNER_CALENDAR_TOOL_ID
+                        and (state.status != 'completed' or not valid_owner_calendar_locked(
+                            conn, self.task.user, binding.get('arguments'), binding.get('calendar_observation'),
+                            context=context))):
+                    raise CheckpointConflict('owner_calendar_authority_unavailable')
+                if (binding.get('tool_id') == OWNER_GMAIL_SEARCH_TOOL_ID
+                        and (state.status != 'completed' or not valid_owner_gmail_search_locked(
+                            conn, self.task.user, binding.get('arguments'), binding.get('gmail_search_observation'),
+                            context=context))):
+                    raise CheckpointConflict('owner_gmail_search_authority_unavailable')
                 if (binding.get('tool_id') == OWNER_REMINDER_CREATE_TOOL_ID
                         and not valid_reminder_locked(conn, self.task.user, binding.get('arguments'),
                                                       binding.get('reminder_observation'), task=self.task)):
@@ -443,10 +458,17 @@ class OwnerAtomicCheckpoint:
             metadata.pop('owner_read_ready_handoff', None)
             result = self.store._write(conn, row, raw, state, budget)
             from .owner_clock import display_response
-            response = {'message_id': self.task.message_id, 'message': display_response(state.response, observations),
+            response = {'message_id': self.task.message_id,
+                        'message': display_response(state.response, observations, private_desktop=True),
                         'kind': selected['kind'],
                         'delivery_status': 'started_unconfirmed', 'acknowledgement_token': acknowledgement_token}
             for binding in observations.values():
+                if (binding.get('tool_id') == OWNER_CALENDAR_TOOL_ID
+                        and binding['calendar_observation']['status'] in ('complete', 'partial')):
+                    response['private_calendar'] = True
+                if (binding.get('tool_id') == OWNER_GMAIL_SEARCH_TOOL_ID
+                        and private_gmail_search_result(binding['gmail_search_observation'])):
+                    response['private_gmail'] = True
                 if (binding.get('tool_id') == SCHEDULED_TASK_TOOL_ID
                         and binding.get('arguments', {}).get('operation') == 'cancel'):
                     effect = binding['schedule_observation']
@@ -905,6 +927,12 @@ class OwnerAtomicCheckpoint:
             from .owner_gmail import OWNER_GMAIL_TOOL_ID
             if tool_id == OWNER_GMAIL_TOOL_ID:
                 observations[evidence_ref]['gmail_observation'] = deepcopy(observation)
+            from .owner_calendar import OWNER_CALENDAR_TOOL_ID
+            if tool_id == OWNER_CALENDAR_TOOL_ID:
+                observations[evidence_ref]['calendar_observation'] = deepcopy(observation)
+            from .owner_gmail_search import OWNER_GMAIL_SEARCH_TOOL_ID
+            if tool_id == OWNER_GMAIL_SEARCH_TOOL_ID:
+                observations[evidence_ref]['gmail_search_observation'] = deepcopy(observation)
             if tool_id in WEB_TOOL_IDS:
                 observations[evidence_ref]['web_observation'] = deepcopy(observation)
             state.evidence_sources.append(evidence_ref)

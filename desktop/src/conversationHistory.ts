@@ -4,14 +4,17 @@ export function mergeFreshConversationHistory(
   history: ChatMessage[],
   messagesReceivedDuringReload: ChatMessage[],
 ): ChatMessage[] {
-  const merged = [...history];
-  const knownIds = new Set(merged.map((message) => message.id));
+  const merged = new Map(history.map((message) => [message.id, message]));
   for (const message of messagesReceivedDuringReload) {
-    if (knownIds.has(message.id)) continue;
-    knownIds.add(message.id);
-    merged.push(message);
+    const previous = merged.get(message.id);
+    if (!previous) merged.set(message.id, message);
+    else if (message.private_reply_owner && previous.role === "assistant") {
+      // The live, owner-scoped pickup has the agenda. History only stores its receipt.
+      merged.set(message.id, { ...previous, content: message.content, private_reply_owner: message.private_reply_owner,
+        ...(message.private_reply_plain_text ? { private_reply_plain_text: true } : {}) });
+    }
   }
-  return orderConversationMessages(merged);
+  return orderConversationMessages([...merged.values()]);
 }
 
 export function orderConversationMessages(messages: ChatMessage[]): ChatMessage[] {

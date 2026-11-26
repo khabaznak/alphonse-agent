@@ -47,4 +47,11 @@ describe("conversation content", () => {
     expect(html).not.toContain('href="javascript:');
     expect(render({ id: "s", role: "system", content: "Connection lost" })).toContain('aria-label="System notice"');
   });
+  it("renders private mail summaries without creating links or remote image requests", () => {
+    const content = "![probe](https://example.invalid/image.png)\nhttps://example.invalid/link";
+    const html = render({ id: "mail", role: "assistant", content, private_reply_plain_text: true });
+    expect(html).toContain(content);
+    expect(html).not.toContain("href=");
+    expect(html).not.toContain("<img");
+  });
 });

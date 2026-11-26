@@ -105,7 +105,11 @@ class GmailUnreadService:
                     "coverage": "provider_label_count", "observed_at": self.clock().isoformat()}
         except CheckStopped as exc:
             return {"status": exc.outcome, "reason": exc.code}
-        except (PermissionError, OAuthError):
+        except OAuthError as exc:
+            reason = ('gmail_access_expired' if exc.args == ('oauth_refresh_required',)
+                      else 'gmail_authorization_unavailable')
+            return {"status": "blocked", "reason": reason}
+        except PermissionError:
             return {"status": "blocked", "reason": "gmail_authorization_unavailable"}
         except GmailHTTPError:
             return {"status": "unknown", "reason": "gmail_provider_error"}

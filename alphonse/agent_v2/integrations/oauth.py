@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 import hashlib
 import base64
 import json
@@ -18,7 +19,10 @@ import threading
 import time
 from urllib.parse import parse_qs, urlsplit, urlencode
 
-from alphonse.agent_v2.accounts import AccountService, AccountSession
+from alphonse.agent_v2.accounts import (
+    AccountService, AccountSession, GMAIL_CONTENT_OPERATION, GMAIL_READ_SCOPE,
+    exact_gmail_label_id, valid_gmail_label_name,
+)
 
 
 class OAuthError(ValueError):
@@ -66,7 +70,7 @@ def safe_callback_message(exc: Exception) -> str:
 
 SCOPES = {
     'google': {
-        'mail_read': 'https://www.googleapis.com/auth/gmail.readonly',
+        'mail_read': GMAIL_READ_SCOPE,
         'calendar_discover': 'https://www.googleapis.com/auth/calendar.calendarlist.readonly',
         'calendar_read': 'https://www.googleapis.com/auth/calendar.events.readonly',
         'classroom_read': 'https://www.googleapis.com/auth/classroom.coursework.me.readonly',
@@ -477,36 +481,144 @@ class OAuthService:
     def _read(self, record):
         return self.store.credential_vault.get(record.credential_ref, record.integration_id, record.credential_generation)
 
-    def token(self, session: AccountSession, *, authorization: dict):
+    def _refresh_access_token(self, session, record, token, *, fixed_scopes=False):
+        scopes = record.connection['granted_scopes']
+        try:
+            token, granted = self._validated(self.clients[record.provider_key].refresh(token, scopes),
+                                             scopes, old=token, provider=record.provider_key)
+            if fixed_scopes and granted != scopes:
+                raise OAuthError('oauth_scopes_changed')
+        except Exception as exc:
+            # Failed validation may have consumed a rotating refresh token.
+            if getattr(exc, 'error', '') in {'temporarily_unavailable', 'server_error'}:
+                raise OAuthError('oauth_provider_unavailable') from None
+            self._require_reconnect(record)
+            raise OAuthError('oauth_reauth_required') from None
+        try:
+            self._persist(session, record, token, scopes=granted)
+        except Exception:
+            self._require_reconnect(record)
+            raise OAuthError('oauth_refresh_not_persisted') from None
+        return token
+
+    def token(self, session: AccountSession, *, authorization: dict, expected_connection_revision=None):
         """Managed executor boundary: reauthorize each page/use, including after I/O.
 
         authorization is the complete explicit AccountService.authorize request.
         Never register this method as a general tool or expose its result via IPC.
         """
-        record, _ = self.accounts.authorize(session, **authorization)
+        def authorized_record():
+            record, _ = self.accounts.authorize(session, **authorization)
+            if (expected_connection_revision is not None
+                    and record.connection['revision'] != expected_connection_revision):
+                raise OAuthError('oauth_revision_conflict')
+            return record
+
+        record = authorized_record()
         if record.provider_key not in self.clients:
             raise OAuthError('oauth_provider_unconfigured')
         with self._lease(record.integration_id):
-            record, _ = self.accounts.authorize(session, **authorization)
+            record = authorized_record()
             token = self._read(record)
             if float(token.get('expires_at', 0)) <= time.time() + 60:
-                try:
-                    token, granted = self._validated(self.clients[record.provider_key].refresh(token,
-                        record.connection['granted_scopes']), record.connection['granted_scopes'], old=token, provider=record.provider_key)
-                except Exception as exc:
-                    # A timeout/invalid response may have consumed a rotating
-                    # refresh token. Require reconnect rather than replay it.
-                    if getattr(exc, 'error', '') in {'temporarily_unavailable', 'server_error'}:
-                        raise OAuthError('oauth_provider_unavailable') from None
-                    self._require_reconnect(record)
-                    raise OAuthError('oauth_reauth_required') from None
-                try:
-                    self._persist(AccountSession(record.connection['owner_user_id']), record, token, scopes=granted)
-                except Exception:
-                    self._require_reconnect(record)
-                    raise OAuthError('oauth_refresh_not_persisted') from None
-            self.accounts.authorize(session, **authorization)
+                token = self._refresh_access_token(AccountSession(record.connection['owner_user_id']), record, token)
+            authorized_record()
             return token['access_token']
+
+    def list_gmail_labels(self, session: AccountSession, *, connection_id: str, expected_revision: int):
+        """List label names and IDs from the connected Gmail account for owner settings."""
+        from alphonse.agent_v2.integrations.gmail import GmailHTTPError, GmailTransport
+        from alphonse.agent_v2.services.project_check_worker import CheckStopped
+
+        if (type(expected_revision) is not int or expected_revision < 1
+                or not isinstance(connection_id, str) or not connection_id.strip()):
+            raise ValueError('gmail_label_list_request_invalid')
+
+        def eligible_record():
+            record = self._owned(session, connection_id)
+            owner = self.accounts.users.admin_user()
+            connection = record.connection
+            if (owner is None or not owner.is_active or owner.role not in ('owner', 'admin')
+                    or owner.user_id != session.actor_user_id or record.provider_key != 'google'
+                    or 'mail_read' not in connection['capabilities']
+                    or GMAIL_READ_SCOPE not in connection['granted_scopes']):
+                raise PermissionError('owner_only_account_scope_unavailable')
+            if connection['revision'] != expected_revision:
+                raise OAuthError('oauth_revision_conflict')
+            if (not record.enabled or connection['status'] != 'connected'
+                    or connection['health_code'] != 'healthy' or not record.credential_ref
+                    or record.revocation_pending or record.credential_deletion_pending):
+                raise OAuthError('oauth_connection_unavailable')
+            return record
+
+        eligible_record()
+        if 'google' not in self.clients:
+            raise OAuthError('oauth_provider_unconfigured')
+        with self._lease(connection_id):
+            record = eligible_record()
+            token = self._read(record)
+            if not self._access_token_current(token):
+                self._refresh_access_token(session, record, token, fixed_scopes=True)
+                record = eligible_record()
+                token = self._read(record)
+            if not self._access_token_current(token):
+                raise OAuthError('oauth_refresh_required')
+            try:
+                response, _ = GmailTransport().get('labels', params={'fields': 'labels(id,name)'},
+                    token=token['access_token'], deadline=datetime.now(timezone.utc) + timedelta(seconds=8),
+                    max_bytes=4 * 1024 * 1024)
+            except (GmailHTTPError, CheckStopped, ImportError):
+                raise OAuthError('gmail_label_list_unavailable') from None
+            current = eligible_record()
+            if (current.connection != record.connection or current.credential_ref != record.credential_ref
+                    or current.credential_generation != record.credential_generation):
+                raise OAuthError('oauth_revision_conflict')
+        labels = response.get('labels', []) if isinstance(response, dict) else None
+        if not isinstance(labels, list) or len(labels) > 10100:
+            raise OAuthError('gmail_label_list_unavailable')
+        by_id = {}
+        for label in labels:
+            if not isinstance(label, dict):
+                raise OAuthError('gmail_label_list_unavailable')
+            label_id, name = label.get('id'), label.get('name')
+            if exact_gmail_label_id(label_id) and valid_gmail_label_name(name):
+                if label_id in by_id and by_id[label_id] != name:
+                    raise OAuthError('gmail_label_list_unavailable')
+                by_id[label_id] = name
+        return {'labels': [{'id': label_id, 'name': name} for label_id, name in sorted(
+            by_id.items(), key=lambda item: (item[1].casefold(), item[1], item[0]))]}
+
+    def refresh_gmail_access(self, session: AccountSession, *, connection_id: str,
+                             expected_revision: int, grant_id: str, grant_revision: int):
+        """Owner-initiated credential maintenance, separate from Gmail reads."""
+        if (type(expected_revision) is not int or type(grant_revision) is not int
+                or expected_revision < 1 or grant_revision < 1
+                or not isinstance(connection_id, str) or not isinstance(grant_id, str)):
+            raise ValueError('oauth_refresh_request_invalid')
+        record = self._owned(session, connection_id)
+        if record.provider_key != 'google' or 'mail_read' not in record.connection['capabilities']:
+            raise PermissionError('owner_only_account_scope_unavailable')
+        with self.store._connect() as db:
+            grant = db.execute('SELECT definition FROM v2_account_grants WHERE grant_id=? AND connection_id=?',
+                               (grant_id, connection_id)).fetchone()
+        if grant is None:
+            raise PermissionError('account_grant_missing')
+        definition = json.loads(grant['definition'])
+        content_grant = definition.get('operations') == [GMAIL_CONTENT_OPERATION]
+        if not content_grant and record.connection['capabilities'] != ['mail_read']:
+            raise PermissionError('owner_only_account_scope_unavailable')
+        resources = definition.get('resources') if content_grant else ['INBOX']
+        if not isinstance(resources, list) or len(resources) != 1 or not exact_gmail_label_id(resources[0]):
+            raise PermissionError('account_grant_denied')
+        self.token(session, expected_connection_revision=expected_revision, authorization={
+            'connection_id': connection_id, 'grant_id': grant_id,
+            'operation': GMAIL_CONTENT_OPERATION if content_grant else 'mail_read', 'owner_gmail_content': content_grant,
+            'resources': resources, 'recipient_user_ids': [session.actor_user_id],
+            'required_scopes': [SCOPES['google']['mail_read']], 'project_id': None,
+            'expected_grant_revision': grant_revision,
+        })
+        value = self.health(session, connection_id)
+        return {'status': value['status'], 'access_token_status': value['access_token_status']}
 
     def token_without_refresh(self, session: AccountSession, *, authorization: dict):
         """Use a currently valid token without any refresh or credential mutation.

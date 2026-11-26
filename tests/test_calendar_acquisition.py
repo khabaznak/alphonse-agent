@@ -232,6 +232,31 @@ def test_fixed_transport_bounds_and_no_credential_forwarding(monkeypatch, case):
     assert calls[0][1]['allow_redirects'] is False and calls[0][1]['stream'] is True
 
 
+@pytest.mark.parametrize('body, expected', [
+    ({'error': {'details': [{'reason': 'SERVICE_DISABLED', 'metadata': {'secret': 'private'}}]}}, True),
+    ({'error': {'errors': [{'reason': 'accessNotConfigured'}]}}, True),
+    ({'error': {'errors': [{'reason': 'forbidden', 'message': 'SERVICE_DISABLED private'}]}}, False),
+    ({'error': {'details': [{'reason': 'SERVICE_DISABLED'}], 'message': 'x' * 8192}}, False),
+])
+def test_transport_classifies_api_disabled_without_exposing_the_provider_response(monkeypatch, body, expected):
+    from datetime import datetime, timezone
+    import requests
+    from alphonse.agent_v2.integrations.google_calendar import CalendarTransport
+
+    class Response:
+        status_code = 403
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def iter_content(self, **kwargs): yield json.dumps(body).encode()
+
+    monkeypatch.setattr(requests, 'get', lambda *args, **kwargs: Response())
+    with pytest.raises(CalendarHTTPError) as exc:
+        CalendarTransport().get('calendars/exact/events', params={}, token='fake-token',
+                                deadline=datetime.now(timezone.utc) + timedelta(seconds=1), max_bytes=16384)
+    assert exc.value.api_disabled is expected
+    assert str(exc.value) == 'calendar_http_error'
+
+
 from test_account_grants import f, expiry
 from test_project_checks import checks as base_checks, active
 from test_project_check_scheduling import scheduled

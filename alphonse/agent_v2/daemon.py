@@ -312,6 +312,14 @@ class V2Daemon:
             from alphonse.agent_v2.core.intelligence.simple_loop.owner_gmail import OwnerGmailService
             self.runtime.owner_gmail_service = OwnerGmailService(
                 self.runtime.integration_management.accounts, self.optional_accounts)
+        if self.experimental_owner_only and self.runtime.owner_calendar_service is None:
+            from alphonse.agent_v2.core.intelligence.simple_loop.owner_calendar import OwnerCalendarService
+            self.runtime.owner_calendar_service = OwnerCalendarService(
+                self.runtime.integration_management.accounts, self.optional_accounts)
+        if self.experimental_owner_only and self.runtime.owner_gmail_search_service is None:
+            from alphonse.agent_v2.core.intelligence.simple_loop.owner_gmail_search import OwnerGmailSearchService
+            self.runtime.owner_gmail_search_service = OwnerGmailSearchService(
+                self.runtime.integration_management.accounts, self.optional_accounts)
         self.runtime.integration_management.dispatcher = self.project_check_dispatcher
         self.runtime.integration_management.findings = self.findings
         self.project_check_worker = (
@@ -695,6 +703,8 @@ class V2Daemon:
                     identity_resolver=self.runtime.identity_resolver,
                     project_store=self.runtime.project_store,
                     owner_gmail_service=self.runtime.owner_gmail_service,
+                    owner_calendar_service=self.runtime.owner_calendar_service,
+                    owner_gmail_search_service=self.runtime.owner_gmail_search_service,
                     schedule_store=self.runtime.schedule_store,
                     owner_schedule_store=self.runtime.owner_schedule_store,
                     owner_schedule_creation_enabled=(self.runtime.owner_schedule_store is not None),
@@ -968,6 +978,8 @@ class V2Daemon:
                     identity_resolver=self.runtime.identity_resolver,
                     project_store=self.runtime.project_store,
                     owner_gmail_service=self.runtime.owner_gmail_service,
+                    owner_calendar_service=self.runtime.owner_calendar_service,
+                    owner_gmail_search_service=self.runtime.owner_gmail_search_service,
                     schedule_store=self.runtime.schedule_store,
                     owner_schedule_store=self.runtime.owner_schedule_store,
                     skill_store=self.runtime.core.skill_store,

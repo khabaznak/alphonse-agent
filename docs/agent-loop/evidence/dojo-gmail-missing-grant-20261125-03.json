@@ -1,0 +1,7 @@
+{
+  "case": "missing-grant",
+  "error_type": "PermissionError",
+  "model": "gpt-6-luna",
+  "started_at": "2026-11-26T00:48:08.783896+00:00",
+  "status": "infrastructure_error"
+}

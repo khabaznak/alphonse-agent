@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import socket
@@ -18,6 +19,9 @@ from uuid import uuid4
 
 
 PROTOCOL_VERSION = 1
+_MAX_IPC_HANDLERS = 32
+_IPC_SOCKET_TIMEOUT_SECONDS = 5
+logger = logging.getLogger(__name__)
 
 
 def default_socket_path() -> Path:
@@ -403,18 +407,19 @@ class V2DaemonServer:
                 except OSError:
                     break
                 with self._quiescence:
-                    if not self._accepting_handlers:
+                    if not self._accepting_handlers or len(self._handlers) >= _MAX_IPC_HANDLERS:
                         connection.close()
                         continue
+                    connection.settimeout(_IPC_SOCKET_TIMEOUT_SECONDS)
                     thread = threading.Thread(target=self._handle_tracked, args=(connection,), daemon=True)
                     self._handlers.add(thread)
                     try:
                         thread.start()
-                    except Exception:
+                    except RuntimeError:
                         self._handlers.remove(thread)
                         connection.close()
                         self._quiescence.notify_all()
-                        raise
+                        logger.warning('Could not start an IPC request handler')
         finally:
             with self._quiescence:
                 self._listener_running = False
@@ -423,6 +428,9 @@ class V2DaemonServer:
     def _handle_tracked(self, connection: socket.socket) -> None:
         try:
             self._handle(connection)
+        except OSError:
+            # A client may close the socket before receiving its reply.
+            pass
         finally:
             with self._quiescence:
                 self._handlers.discard(threading.current_thread())
@@ -479,6 +487,9 @@ class V2DaemonServer:
                     result = self._owner_scheduled_delivery(connection, request)
                 elif isinstance(request, dict) and request.get('method') in {'legacy_notification_list', 'legacy_notification_archive'}:
                     result = self._legacy_notification_review(connection, request)
+                elif isinstance(request, dict) and request.get('method') == 'agenda':
+                    self._local_peer_uid(connection)
+                    result = self._dispatch(request, agenda_peer_verified=True)
                 else:
                     result = self._dispatch(request)
                 response = {"version": PROTOCOL_VERSION, "request_id": _request_id(request), "ok": True, "result": result}
@@ -941,7 +952,7 @@ class V2DaemonServer:
         return uid
 
     def _optional_management(self, connection, request):
-        from alphonse.agent_v2.accounts import AccountSession
+        from alphonse.agent_v2.accounts import AccountSession, GMAIL_CONTENT_OPERATION, exact_gmail_label_id
         self._local_peer_uid(connection)
         params = request.get('params', {})
         if not isinstance(params, dict) or set(params) - {'action', 'values'}:
@@ -968,16 +979,25 @@ class V2DaemonServer:
         if not isinstance(values, dict):
             raise ValueError('management_values_invalid')
         if owner_only:
-            if action not in {'catalog', 'begin', 'save_grant', 'revoke_grant', 'pause', 'disconnect', 'retry_deletion'}:
+            if action not in {'catalog', 'begin', 'save_grant', 'revoke_grant', 'pause', 'disconnect',
+                              'retry_deletion', 'refresh_gmail_access', 'list_gmail_labels'}:
                 raise PermissionError('owner_only_account_action_unavailable')
             if action == 'catalog' and values:
                 raise ValueError('management_values_invalid')
-            if action == 'begin' and (values.get('provider') != 'google' or values.get('capabilities') != ['mail_read']):
+            if action == 'begin' and (values.get('provider') != 'google'
+                    or values.get('capabilities') not in (['mail_read'], ['calendar_read'])):
                 raise PermissionError('owner_only_account_scope_unavailable')
-            if action == 'save_grant' and (values.get('beneficiary_user_id') != owner.user_id
-                    or values.get('operations') != ['mail_read'] or values.get('resources') != ['INBOX']
-                    or values.get('recipient_user_ids') != [owner.user_id] or values.get('project_id') is not None):
-                raise PermissionError('owner_only_account_scope_unavailable')
+            if action == 'save_grant':
+                from .core.intelligence.simple_loop.owner_calendar import exact_calendar_id
+                operations, resources = values.get('operations'), values.get('resources')
+                inbox = operations == ['mail_read'] and resources == ['INBOX']
+                gmail_content = (operations == [GMAIL_CONTENT_OPERATION] and isinstance(resources, list)
+                                 and len(resources) == 1 and exact_gmail_label_id(resources[0]))
+                calendar = (operations == ['calendar_read'] and isinstance(resources, list)
+                            and len(resources) == 1 and exact_calendar_id(resources[0]))
+                if (not (inbox or gmail_content or calendar) or values.get('beneficiary_user_id') != owner.user_id
+                        or values.get('recipient_user_ids') != [owner.user_id] or values.get('project_id') is not None):
+                    raise PermissionError('owner_only_account_scope_unavailable')
             if action == 'revoke_grant':
                 grant_id = values.get('grant_id')
                 with self.daemon.runtime.integration_store._connect() as db:
@@ -986,17 +1006,19 @@ class V2DaemonServer:
                 if (grant_record is None or grant_record.provider_key != 'google'
                         or grant_record.connection.get('owner_user_id') != owner.user_id):
                     raise PermissionError('owner_only_account_scope_unavailable')
-            if action in {'begin', 'save_grant', 'pause', 'disconnect', 'retry_deletion'}:
+            if action in {'begin', 'save_grant', 'pause', 'disconnect', 'retry_deletion', 'list_gmail_labels'}:
                 connection_id = values.get('connection_id')
                 record = self.daemon.runtime.integration_store.get(connection_id) if isinstance(connection_id, str) else None
                 if record is not None and (record.provider_key != 'google'
                         or record.connection.get('owner_user_id') != owner.user_id):
                     raise PermissionError('owner_only_account_scope_unavailable')
-                if (action == 'begin' and record is not None
-                        and set(record.connection.get('capabilities', ())) - {'mail_read'}):
+                if (action == 'begin' and record is not None and record.connection.get('capabilities')
+                        and record.connection['capabilities'] != values.get('capabilities')):
                     # A narrow reconnect would silently replace broader consent.
                     raise PermissionError('owner_only_combined_account_reconnect_unavailable')
         oauth = self.daemon.optional_accounts(session)
+        if owner_only and action == 'refresh_gmail_access':
+            return oauth.refresh_gmail_access(session, **values)
         management = self.daemon.runtime.integration_management
         management.oauth = oauth
         if action == 'begin':
@@ -1012,18 +1034,24 @@ class V2DaemonServer:
         # Callback exchange is accepted only by the loopback listener, never raw IPC.
         if action == 'complete':
             raise PermissionError('oauth_callback_transport_required')
+        if owner_only and (action == 'list_gmail_labels'
+                or (action == 'save_grant' and values.get('operations') == [GMAIL_CONTENT_OPERATION])):
+            return management.request(session, action, values, channel='owner_desktop')
         result = management.request(session, action, values)
         if owner_only and action == 'catalog':
             result['owner_gmail_setup_only'] = True
-            result['providers'] = [dict(provider='google', capabilities=['mail_read'])
-                                   for provider in result['providers'] if provider['provider'] == 'google'
-                                   and 'mail_read' in provider['capabilities']]
+            result['owner_google_setup_only'] = True
+            result['owner_gmail_content_setup'] = True
+            result['owner_gmail_label_setup'] = True
+            result['providers'] = [dict(provider='google', capabilities=[capability
+                for capability in ('mail_read', 'calendar_read') if capability in provider['capabilities']])
+                for provider in result['providers'] if provider['provider'] == 'google']
             result['connections'] = [item for item in result['connections'] if item['provider'] == 'google']
             connection_ids = {item['connection_id'] for item in result['connections']}
             result['grants'] = [grant for grant in result['grants'] if grant['connection_id'] in connection_ids]
         return result
 
-    def _dispatch(self, request: Any) -> dict[str, Any]:
+    def _dispatch(self, request: Any, *, agenda_peer_verified: bool = False) -> dict[str, Any]:
         if not isinstance(request, dict):
             raise ValueError("daemon_request_object_required")
         version = request.get("version")
@@ -1531,7 +1559,10 @@ class V2DaemonServer:
         if method == "agenda":
             from alphonse.agent_v2.agenda import agenda
             return agenda(self.daemon.runtime, actor=str(params.get("actor_user_id") or ""),
-                          start_day=str(params.get("start_day") or ""), end_day=str(params.get("end_day") or ""))
+                          start_day=str(params.get("start_day") or ""), end_day=str(params.get("end_day") or ""),
+                          include_owner_calendar=agenda_peer_verified is True
+                          and getattr(self.daemon, "experimental_owner_only", False) is True,
+                          include_calendar_events=params.get("include_calendar_events") is True)
         if method == "scheduled_tasks":
             status = str(params.get("status") or "").strip() or None
             return {"tasks": self.daemon.scheduled_tasks(
