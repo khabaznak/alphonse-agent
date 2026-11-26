@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { CALENDAR_CONFIGURATION_CHANGED } from "./agendaDates";
 
 export async function ensureDaemon(): Promise<void> {
   await invoke("ensure_daemon");
@@ -44,7 +45,12 @@ export async function playAlertSound(path = ""): Promise<void> {
 
 // Identity is derived by the daemon from the OS peer, never from UI user fields.
 export async function optionalManagement<T>(action: string, values: Record<string, unknown> = {}): Promise<T> {
-  return daemonRequest<T>("optional_management", { action, values });
+  const result = await daemonRequest<T>("optional_management", { action, values });
+  if (typeof window !== "undefined" && (["catalog", "pause", "disconnect", "revoke_grant"].includes(action)
+      || (action === "save_grant" && Array.isArray(values.operations) && values.operations.includes("calendar_read")))) {
+    window.dispatchEvent(new Event(CALENDAR_CONFIGURATION_CHANGED));
+  }
+  return result;
 }
 
 export async function openAccountConsent(url: string): Promise<void> {

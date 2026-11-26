@@ -108,4 +108,6 @@ export type ChatMessage = {
   project_id?: string;
   sequence?: number;
   committed_effect?: CommittedEffect;
+  private_reply_owner?: string;
+  private_reply_plain_text?: boolean;
 };

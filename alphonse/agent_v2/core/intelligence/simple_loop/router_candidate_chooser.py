@@ -26,7 +26,8 @@ class RouterCandidateChooser:
                  max_input_tokens: int, cancellation_checker: Callable[[], bool] | None = None,
                  observation_progress: Callable[[], dict[str, list[str]]] | None = None,
                  allow_owner_reminder: bool = False, allow_disposable_bash: bool = False,
-                 allow_owner_schedule: bool = False, allow_owner_host_bash: bool = False):
+                 allow_owner_schedule: bool = False, allow_owner_host_bash: bool = False,
+                 private_mail_summary: bool = False):
         if not isinstance(router, InferenceRouter) or type(max_input_tokens) is not int or max_input_tokens <= 0:
             raise ValueError('candidate_router_configuration_invalid')
         if (not isinstance(task, TaskState) or not isinstance(task.task_id, str) or not task.task_id.strip()
@@ -42,6 +43,9 @@ class RouterCandidateChooser:
             raise ValueError('candidate_router_configuration_invalid')
         if not isinstance(tools, tuple):
             raise ValueError('candidate_router_tools_invalid')
+        if type(private_mail_summary) is not bool or (private_mail_summary and tools):
+            raise ValueError('candidate_router_configuration_invalid')
+        self.private_mail_summary = private_mail_summary
         catalog = []
         seen = set()
         for tool in tools:
@@ -94,7 +98,7 @@ class RouterCandidateChooser:
             request = make_request(projection=projection, catalog=self._catalog,
                 output_schema=action_schema(), cancellation_checker=self.cancellation_checker,
                 task_id=self._identity[0], user=self._identity[1], project_id=self._identity[2],
-                source_progress=progress)
+                source_progress=progress, private_mail_summary=self.private_mail_summary)
         except Exception:
             raise ValueError('candidate_router_source_progress_unavailable') from None
         if (self._task.task_id, self._task.user, self._task.project_id) != self._identity:

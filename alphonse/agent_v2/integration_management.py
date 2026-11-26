@@ -6,7 +6,9 @@ import threading
 import time
 from uuid import uuid4
 
-from alphonse.agent_v2.accounts import AccountSession
+from alphonse.agent_v2.accounts import (
+    AccountSession, GMAIL_CONTENT_OPERATION, exact_gmail_label_id, valid_gmail_label_name,
+)
 from alphonse.agent_v2.project_checks import _digest
 
 
@@ -225,6 +227,14 @@ class IntegrationManagement:
             return {'findings': self.finding_views(session)}
         if action == 'catalog':
             return self.catalog(session)
+        if action == 'list_gmail_labels':
+            if channel != 'owner_desktop':
+                raise PermissionError('gmail_label_list_requires_desktop')
+            if set(values) != {'connection_id', 'expected_revision'}:
+                raise ValueError('gmail_label_list_request_invalid')
+            if self.oauth is None:
+                raise ValueError('oauth_setup_unavailable')
+            return self.oauth.list_gmail_labels(session, **values)
         if action == 'project':
             return self.project(session, **values)
         if action == 'review':
@@ -237,6 +247,29 @@ class IntegrationManagement:
                 self.dispatcher.sync(now=datetime.now(timezone.utc))
             return result
         if action == 'save_grant':
+            operations = values.get('operations')
+            if 'expected_connection_revision' in values:
+                raise ValueError('management_values_invalid')
+            if isinstance(operations, (list, tuple)) and GMAIL_CONTENT_OPERATION in operations:
+                if channel != 'owner_desktop':
+                    raise PermissionError('gmail_content_grant_requires_desktop')
+                resources, name = values.get('resources'), values.get('gmail_label_name')
+                if not isinstance(resources, list) or len(resources) != 1 or not exact_gmail_label_id(resources[0]):
+                    raise ValueError('account_grant_invalid')
+                if resources != ['INBOX'] or name is not None:
+                    if not valid_gmail_label_name(name):
+                        raise ValueError('gmail_label_selection_stale')
+                    if self.oauth is None:
+                        raise ValueError('oauth_setup_unavailable')
+                    connection_id = values.get('connection_id')
+                    record = self.accounts.integrations.get(connection_id) if isinstance(connection_id, str) else None
+                    if record is None or not record.connection:
+                        raise ValueError('account_connection_missing')
+                    revision = record.connection['revision']
+                    catalog = self.oauth.list_gmail_labels(session, connection_id=connection_id, expected_revision=revision)
+                    if {'id': resources[0], 'name': name} not in catalog['labels']:
+                        raise ValueError('gmail_label_selection_stale')
+                    values = {**values, 'expected_connection_revision': revision}
             return self.accounts.save_grant(session, **values)
         if action == 'revoke_grant':
             self.accounts.revoke_grant(session, **values)

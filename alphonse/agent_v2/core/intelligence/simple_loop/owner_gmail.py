@@ -6,7 +6,7 @@ import json
 import os
 from typing import Any
 
-from alphonse.agent_v2.accounts import AccountSession
+from alphonse.agent_v2.accounts import AccountSession, GMAIL_CONTENT_OPERATION
 from alphonse.agent_v2.core.core import ToolDescriptor, ToolKind
 from alphonse.agent_v2.core.messages.sqlite_queue import SQLiteMessageQueue
 from alphonse.agent_v2.core.tools.registry import ToolDefinition
@@ -16,6 +16,18 @@ from alphonse.agent_v2.services.project_check_worker import CheckStopped
 from .owner_direct_claim import verify_owner_execution_claim
 
 OWNER_GMAIL_TOOL_ID = 'native.owner_gmail_unread'
+_FAILURE_MESSAGES = {
+    'inbox_access_required': ('I couldn’t check Gmail. In Settings → Integrations → Gmail, grant Inbox access '
+                              'for unread counts.'),
+    'account_ambiguous': ('I couldn’t check Gmail because multiple Gmail accounts have Inbox access. '
+                          'Keep Inbox access enabled for the account you want to use.'),
+    'renewal_required': ('I couldn’t check Gmail. In Settings → Integrations → Gmail, refresh access or '
+                         'reconnect your account, then try again.'),
+    'reconnect_required': ('I couldn’t check Gmail. Reconnect your Gmail account in Settings → Integrations '
+                           'and try again.'),
+    'read_unavailable': ('I couldn’t verify the Gmail Inbox unread count. Check the account and Inbox '
+                         'access in Settings → Integrations and try again.'),
+}
 _SCHEMA = {'type': 'object', 'properties': {
     'unit': {'type': 'string', 'enum': ['messages', 'threads'], 'default': 'messages',
              'description': 'Count unread messages by default; use threads only when asked about conversations or threads.'},
@@ -38,6 +50,19 @@ class _NoRefreshOAuth:
         return self.service.token_without_refresh(session, authorization=authorization)
 
 
+def _failure(reason: str) -> dict[str, Any]:
+    return {'schema_version': 1, 'status': 'unavailable', 'provider': 'gmail', 'reason': reason}
+
+
+def owner_gmail_failure_message(payload: Any) -> str | None:
+    if (isinstance(payload, dict) and set(payload) == {'schema_version', 'status', 'provider', 'reason'}
+            and type(payload['schema_version']) is int and payload['schema_version'] == 1
+            and payload['status'] == 'unavailable' and payload['provider'] == 'gmail'
+            and isinstance(payload['reason'], str)):
+        return _FAILURE_MESSAGES.get(payload['reason'])
+    return None
+
+
 class OwnerGmailService:
     """Bounded label count; never activates account selection or token refresh."""
     def __init__(self, accounts, oauth_factory, *, transport=None, clock=None):
@@ -48,15 +73,27 @@ class OwnerGmailService:
     def binding(self, actor: str) -> dict[str, Any]:
         candidates = self.reader._candidates(AccountSession(actor), 'INBOX', None)
         accounts = {row[0].integration_id for row in candidates}
-        if len(accounts) != 1:
+        if not accounts:
             raise PermissionError('owner_gmail_account_unavailable')
+        if len(accounts) > 1:
+            raise PermissionError('owner_gmail_account_ambiguous')
         record, grant, resource = sorted(candidates, key=lambda row: (row[2] == ALL_MAIL, row[1]['grant_id']))[0]
         return {'connection_id': record.integration_id, 'connection_revision': record.connection['revision'],
                 'credential_generation': record.credential_generation,
                 'grant_id': grant['grant_id'], 'grant_revision': grant['revision'], 'resource': resource}
 
     def observe(self, actor: str, *, guard, unit: str = 'messages') -> dict[str, Any]:
-        before = self.binding(actor)
+        guard()
+        try:
+            before = self.binding(actor)
+        except PermissionError as exc:
+            guard()
+            if exc.args == ('owner_gmail_account_unavailable',):
+                return _failure('inbox_access_required')
+            if exc.args == ('owner_gmail_account_ambiguous',):
+                return _failure('account_ambiguous')
+            raise
+
         def recheck():
             guard()
             if self.binding(actor) != before:
@@ -64,6 +101,9 @@ class OwnerGmailService:
         recheck()
         result = self.reader.count(AccountSession(actor), label_id='INBOX', unit=unit, guard=recheck)
         recheck()
+        if result.get('status') in ('blocked', 'partial', 'unknown'):
+            return _failure({'gmail_reauth_required': 'reconnect_required', 'gmail_access_expired': 'renewal_required'}
+                            .get(result.get('reason'), 'read_unavailable'))
         if (result.get('status') != 'complete' or result.get('connection_id') != before['connection_id']
                 or result.get('label_id') != 'INBOX' or result.get('unit') != unit):
             raise ValueError('owner_gmail_unavailable')
@@ -98,15 +138,23 @@ def execute_owner_gmail(arguments: dict[str, Any], *, context: Any) -> dict[str,
     def guard():
         if not _authorized(actor, context):
             raise CheckStopped('cancelled', 'owner_gmail_claim_unavailable')
-    return service.observe(actor, guard=guard, unit=unit)
+    result = service.observe(actor, guard=guard, unit=unit)
+    if result.get('reason') == 'inbox_access_required':
+        from .owner_gmail_search import count_with_inbox_content_grant
+        return count_with_inbox_content_grant(actor, unit, context=context, otherwise=result)
+    return result
 
 
 def valid_owner_gmail(actor: str, arguments: dict[str, Any], payload: dict[str, Any], *, context: Any) -> bool:
     """Recheck authority and freshness without recontacting Gmail or refreshing credentials."""
     try:
         service = getattr(context, 'owner_gmail_service', None)
-        if (not isinstance(service, OwnerGmailService) or not _authorized(actor, context)
-                or not isinstance(payload, dict) or set(payload) != {'schema_version', 'status', 'provider',
+        if not isinstance(service, OwnerGmailService) or not _authorized(actor, context):
+            return False
+        if owner_gmail_failure_message(payload) is not None:
+            owner_gmail_unit(arguments)
+            return True
+        if (not isinstance(payload, dict) or set(payload) != {'schema_version', 'status', 'provider',
                     'label_id', 'unit', 'count', 'observed_at', 'authority'}
                 or type(payload['schema_version']) is not int or payload['schema_version'] != 1
                 or payload['status'] != 'complete' or payload['provider'] != 'gmail'
@@ -118,12 +166,17 @@ def valid_owner_gmail(actor: str, arguments: dict[str, Any], payload: dict[str, 
         now = datetime.now(timezone.utc)
         if observed.tzinfo is None or not timedelta(0) <= now - observed <= timedelta(minutes=5):
             return False
-        return service.binding(actor) == payload['authority'] and _authorized(actor, context)
+        authority = payload['authority']
+        if isinstance(authority, dict) and authority.get('operation') == GMAIL_CONTENT_OPERATION:
+            from .owner_gmail_search import valid_content_grant_count
+            return valid_content_grant_count(actor, authority, context=context)
+        return service.binding(actor) == authority and _authorized(actor, context)
     except Exception:
         return False
 
 
-def valid_owner_gmail_locked(conn: Any, actor: str, payload: dict[str, Any], *, context: Any) -> bool:
+def valid_owner_gmail_locked(conn: Any, actor: str, payload: dict[str, Any], *, context: Any,
+                            desktop_pickup: bool = False) -> bool:
     """Fence the DB-backed grant and connection in the owner pickup transaction.
 
     Credential-vault state is external to SQLite and is checked immediately
@@ -136,25 +189,30 @@ def valid_owner_gmail_locked(conn: Any, actor: str, payload: dict[str, Any], *, 
                 or not os.path.samefile(queue.db_path, service.accounts.integrations.db_path)
                 or not os.path.samefile(queue.db_path, service.accounts.users.db_path)):
             return False
+        actor_row = conn.execute('SELECT is_active FROM v2_users WHERE user_id=?', (actor,)).fetchone()
+        if actor_row is None or actor_row['is_active'] != 1:
+            return False
+        if owner_gmail_failure_message(payload) is not None:
+            return True
         if (not isinstance(payload, dict) or payload.get('status') != 'complete'
                 or payload.get('provider') != 'gmail' or payload.get('label_id') != 'INBOX'
                 or payload.get('unit') not in ('messages', 'threads') or type(payload.get('count')) is not int
                 or payload['count'] < 0 or not isinstance(payload.get('authority'), dict)):
             return False
         authority = payload['authority']
+        observed = datetime.fromisoformat(payload['observed_at'])
+        now = datetime.now(timezone.utc)
+        if observed.tzinfo is None or not timedelta(0) <= now - observed <= timedelta(minutes=5):
+            return False
+        if authority.get('operation') == GMAIL_CONTENT_OPERATION:
+            from .owner_gmail_search import valid_content_grant_count_locked
+            return desktop_pickup and valid_content_grant_count_locked(conn, actor, authority, context=context)
         if (set(authority) != {'connection_id', 'connection_revision', 'credential_generation',
                                'grant_id', 'grant_revision', 'resource'}
                 or any(type(authority.get(key)) is not int or authority[key] < 1
                        for key in ('connection_revision', 'credential_generation', 'grant_revision'))
                 or any(not isinstance(authority.get(key), str) or not authority[key]
                        for key in ('connection_id', 'grant_id', 'resource'))):
-            return False
-        observed = datetime.fromisoformat(payload['observed_at'])
-        now = datetime.now(timezone.utc)
-        if observed.tzinfo is None or not timedelta(0) <= now - observed <= timedelta(minutes=5):
-            return False
-        actor_row = conn.execute('SELECT is_active FROM v2_users WHERE user_id=?', (actor,)).fetchone()
-        if actor_row is None or actor_row['is_active'] != 1:
             return False
         eligible = []
         rows = conn.execute('''SELECT g.grant_id,g.connection_id,g.revision,g.definition,

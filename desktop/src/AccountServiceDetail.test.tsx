@@ -47,6 +47,34 @@ describe("account service detail", () => {
     expect(html).toContain("Grant INBOX access before asking for the unread count");
     expect(html).toContain("Manage access");
   });
+  it("offers credential refresh after an expired Gmail connection has Inbox access", () => {
+    const connected = account({ access_token_status: "refresh_required" });
+    const grant = { grant_id: "grant", connection_id: "one", grantor_user_id: "owner", beneficiary_user_id: "owner",
+      project_id: null, operations: ["mail_read"], resources: ["INBOX"], recipient_user_ids: ["owner"],
+      expires_at: new Date(Date.now() + 60_000).toISOString(), revision: 1, revoked_at: "" };
+    const value = props({ onRefreshAccess: vi.fn(), catalog: { ...catalog, connections: [connected] } });
+    const before = renderToStaticMarkup(<AccountServiceDetail {...value} />);
+    expect(before).toContain("Access expired");
+    expect(before).toContain("Manage access");
+    expect(before).not.toContain('>Refresh access<');
+    const after = renderToStaticMarkup(<AccountServiceDetail {...value} catalog={{ ...value.catalog, grants: [grant] }} />);
+    expect(after).toContain('>Refresh access<');
+  });
+  it("offers separate content access and refreshes with a content-only grant", () => {
+    const connected = account({ access_token_status: "refresh_required" });
+    const grant = { grant_id: "content", connection_id: "one", grantor_user_id: "owner", beneficiary_user_id: "owner",
+      project_id: null, operations: ["mail_content_read"], resources: ["INBOX"], recipient_user_ids: ["owner"],
+      expires_at: new Date(Date.now() + 60_000).toISOString(), revision: 1, revoked_at: "" };
+    const value = props({ onRefreshAccess: vi.fn(), onGrantContent: vi.fn(),
+      catalog: { ...catalog, owner_gmail_content_setup: true, connections: [connected] } });
+    const before = renderToStaticMarkup(<AccountServiceDetail {...value} />);
+    expect(before).toContain('Grant Inbox content access');
+    expect(before).not.toContain('>Refresh access<');
+    const after = renderToStaticMarkup(<AccountServiceDetail {...value} catalog={{ ...value.catalog, grants: [grant] }} />);
+    expect(after).toContain('Manage Inbox content access');
+    expect(after).toContain('>Refresh access<');
+    expect(after).not.toContain('Grant INBOX access before asking for the unread count');
+  });
   it("does not label unavailable credentials or another service as connected", () => {
     const accounts = [account({ credential_health: 'credential_backend_unavailable', access_token_status: 'unavailable' }), account({ connection_id: 'two', capabilities: ['calendar_read'] })];
     const html = renderToStaticMarkup(<AccountServiceDetail {...props({ catalog: { ...catalog, connections: accounts } })} />);

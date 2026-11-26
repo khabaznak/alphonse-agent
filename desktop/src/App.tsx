@@ -378,7 +378,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
     setMessages((current) => {
       // Polls repeat pending questions. Preserve identity (and reading position)
       // when that message is already present instead of triggering auto-scroll.
-      if (current.some((existing) => existing.id === message.id)) return current;
+      if (!message.private_reply_owner && current.some((existing) => existing.id === message.id)) return current;
       const next = mergeFreshConversationHistory(current, [message]);
       return next;
     });
@@ -548,12 +548,15 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
             // Preserve the last list and continue pickup/acknowledgement of existing work.
           }
           let sawQuestion = false;
-          const acknowledgementRecovered = await ownerConversation.poll((messageId, answer, kind, committedEffect) => {
+          const acknowledgementRecovered = await ownerConversation.poll((messageId, answer, kind, committedEffect, privateReply) => {
+            if (ownerConversationRef.current !== ownerConversation) return;
             appendMessage({
               // Match the daemon's durable outbound:owner:<message_id> source
               // identity so a later history refresh does not duplicate it.
               id: `owner:${messageId}`, role: "assistant", content: answer,
               created_at: new Date().toISOString(), project_id: "", committed_effect: committedEffect,
+              private_reply_owner: privateReply ? user : undefined,
+              private_reply_plain_text: privateReply === "gmail" || undefined,
             });
             sawQuestion = kind === "question";
             setOwnerClarificationNotice(kind === "question"
@@ -719,9 +722,11 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
 
   useEffect(() => {
     if (!user || !conversationHasUnseenMessages || activeHistoryRefreshRef.current || conversationHistoryLoadingRef.current) return;
+    const request = conversationHistoryRequestRef.current;
     activeHistoryRefreshRef.current = true;
     void daemonRequest<HistoryResponse>("desktop_conversation_history", { user, local_date: conversationDay, limit: 500 })
       .then(async (history) => {
+        if (conversationHistoryRequestRef.current !== request) return;
         setMessages((current) => {
           const refreshed = mergeFreshConversationHistory(history.messages, current);
           return refreshed;
@@ -896,7 +901,8 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const timelineRenderVersion = diagnosticBehavior.memoizesTimeline ? 0 : diagnosticRenderTick;
   const questionTaskIds = new Set(questions.map((question) => question.task_id));
   const timelineNodes: ReactNode[] = useMemo(() => buildConversationTimeline(
-      messages,
+      messages.filter((message) => !message.private_reply_owner || (isAdmin
+        && message.private_reply_owner === user && messageLocalDay(message.created_at, timezone) === conversationDay)),
       progressTaskIds,
       {},
       {},
@@ -912,7 +918,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       const archivedSurface = archivedProgress[item.taskId];
       const surface = archivedSurface || surfaces[`task-progress:${item.taskId}`];
       return surface ? <TaskProgressBubble key={item.key} surface={surface} archived={Boolean(archivedSurface)} connected={connected} timezone={timezone} /> : null;
-    }), [archivedProgress, clientId, connected, contextProjects, diagnosticBehavior.memoizesMessages, diagnosticBehavior.plainTextMessages, messages, ownerConversation, ownerFailures, ownerRecoveryItems, ownerConversationWorking, activeConversationMessageId, isAdmin, poll, refreshOwnerRecovery, progressTaskIds, questionTaskIds, questions, surfaces, timelineRenderVersion, timezone, user]);
+    }), [archivedProgress, clientId, connected, contextProjects, conversationDay, diagnosticBehavior.memoizesMessages, diagnosticBehavior.plainTextMessages, messages, ownerConversation, ownerFailures, ownerRecoveryItems, ownerConversationWorking, activeConversationMessageId, isAdmin, poll, refreshOwnerRecovery, progressTaskIds, questionTaskIds, questions, surfaces, timelineRenderVersion, timezone, user]);
 
   useEffect(() => {
     if (workspace !== "attention" || !ownerRecoveryFocus) return;

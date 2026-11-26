@@ -2,7 +2,7 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { openAccountConsent, optionalManagement } from "./api";
 import { IntegrationIcon } from "./IntegrationIcon";
 import { AccountServiceDetail } from "./AccountServiceDetail";
-import { Catalog, Connection, Definition, Grant, Member, Policy, ProjectChecks, ResponseFence, days, defaultDefinition, editableDefinition, friendly, labels, sourceDefinition, validateDefinition } from "./integrationManagement";
+import { Catalog, Connection, Definition, GmailLabel, Grant, Member, Policy, ProjectChecks, ResponseFence, days, defaultDefinition, editableDefinition, friendly, isGrantCurrent, isOwnerReadGrant, labels, sourceDefinition, validateDefinition } from "./integrationManagement";
 
 function useManaged<T>(action: string, values: Record<string, unknown>, identity: string) {
   const [data, setData] = useState<T | null>(null);
@@ -40,12 +40,14 @@ export function AccountServiceCards({ catalog, unavailable = false, onChoose }: 
   return <div className="integration-service-grid">{ACCOUNT_SERVICES.map(service => {
     const provider = catalog?.providers.find(item => item.provider === service.provider);
     const configured = Boolean(provider?.capabilities.includes(service.capability));
-    const unsupported = catalog?.owner_gmail_setup_only === true && service.name !== "Gmail";
+    const ownerSetup = catalog?.owner_gmail_setup_only || catalog?.owner_google_setup_only;
+    const unsupported = Boolean(ownerSetup && service.name !== "Gmail"
+      && !(catalog?.owner_google_setup_only && service.name === "Google Calendar"));
     const connections = (catalog?.connections || []).filter(item => item.provider === service.provider && item.capabilities.includes(service.capability));
     const connected = connections.filter(item => item.status === "connected"
       && item.credential_health !== "absent" && item.credential_health !== "credential_backend_unavailable"
       && item.access_token_status !== "unavailable"
-      && !(catalog?.owner_gmail_setup_only && service.name === "Gmail" && item.access_token_status === "refresh_required")).length;
+      && !(ownerSetup && item.access_token_status === "refresh_required")).length;
     const existing = connections.length > 0;
     return <article className="mockup-settings-card integration-service-card" key={service.name}><div className="integration-card-heading"><IntegrationIcon service={service.icon} /><div><h3>{service.name}</h3><p>{service.description}</p></div></div><small className="integration-card-status">{!catalog ? (unavailable ? "Account management unavailable" : "Checking availability…") : unsupported ? "Not yet available in this version" : connected ? `${connected} ${connected === 1 ? "account" : "accounts"} connected` : existing ? "Account needs attention" : configured ? "Available to connect" : "Provider setup required"}</small><div className="integration-card-footer"><span>{service.capability === "mail_read" ? "Email" : "Calendar"}</span><button type="button" disabled={!catalog || unsupported} aria-label={`${existing ? "Manage" : configured ? "Connect" : "View setup for"} ${service.name}`} onClick={() => onChoose(service.provider, service.capability)}>{unsupported ? "Unavailable" : existing ? "Manage →" : configured ? "Connect →" : "View setup →"}</button></div></article>;
   })}<article className="mockup-settings-card integration-service-card"><div className="integration-card-heading"><IntegrationIcon service="outlook" /><div><h3>Outlook Calendar</h3><p>Access events from a Microsoft calendar.</p></div></div><small className="integration-card-status">Not yet available</small><div className="integration-card-footer"><span>Calendar</span></div></article></div>;
@@ -58,13 +60,16 @@ export function OptionalAccounts({ identity, messaging }: { identity: string; me
   const [view, setView] = useState<'overview' | 'service' | 'access'>('overview');
   const [notice, setNotice] = useState(""); const [busy, setBusy] = useState(false);
   const [provider, setProvider] = useState('google'); const [serviceCapability, setServiceCapability] = useState("mail_read");
+  const [grantOperation, setGrantOperation] = useState("mail_read");
   const [grantFor, setGrantFor] = useState<Connection | null>(null); const [editingGrant, setEditingGrant] = useState<Grant | undefined>();
+  const [editingGmailLabel, setEditingGmailLabel] = useState(false);
+  const [accessFromService, setAccessFromService] = useState(false);
   const [disconnectFor, setDisconnectFor] = useState<Connection | null>(null);
   const heading = useRef<HTMLHeadingElement>(null);
   const chooseService = (nextProvider: string, capability: string) => { setProvider(nextProvider); setServiceCapability(capability); setGrantFor(null); setView("service"); };
   const run = async (action: string, values: Record<string, unknown>) => {
     setBusy(true); setNotice("");
-    try { await optionalManagement(action, values); setNotice("Saved. Dependent checks may require review."); await refresh(); }
+    try { await optionalManagement(action, values); setNotice(action === "refresh_gmail_access" ? "Gmail access refreshed." : "Saved. Dependent checks may require review."); await refresh(); }
     catch (cause) { setNotice(cause instanceof Error ? cause.message : String(cause)); await refresh(); }
     finally { setBusy(false); }
   };
@@ -77,27 +82,54 @@ export function OptionalAccounts({ identity, messaging }: { identity: string; me
     finally { setBusy(false); }
   };
   const service = ACCOUNT_SERVICES.find(item => item.provider === provider && item.capability === serviceCapability) || ACCOUNT_SERVICES.find(item => item.provider === provider);
+  const selectGrant = (account: Connection, operation: string, grant?: Grant, gmailLabel = false) => {
+    setEditingGmailLabel(gmailLabel);
+    if (view === "service") setAccessFromService(true);
+    setNotice("");
+    setGrantFor(account); setGrantOperation(operation); setEditingGrant(grant); setView("access");
+  };
+  const manageGrant = (account: Connection, operation: string) => {
+    if (!data) return;
+    const existing = data.grants.find(grant => grant.connection_id === account.connection_id
+      && isOwnerReadGrant(data, grant, operation)
+      && (operation !== 'mail_content_read' || grant.resources[0] === 'INBOX'));
+    selectGrant(account, operation, existing);
+  };
+  const currentGrantAccount = data?.connections.find(account => account.connection_id === grantFor?.connection_id);
+  const currentGmailLabelGrant = data?.grants.find(grant => grant.grant_id === editingGrant?.grant_id && !grant.revoked_at);
+  const finishGrant = () => {
+    setGrantFor(null);
+    heading.current?.focus();
+    void refresh();
+  };
   return <section className="optional-management"><h3 tabIndex={-1} ref={heading} className="integration-context-heading">{view === "overview" ? "Personal accounts" : view === "access" ? (data?.owner_gmail_setup_only ? "Account access" : "Account access and skills") : service?.name}</h3><StatusText>{error || notice}</StatusText>
-    {view === "overview" ? <><div className="integration-owner-note"><strong>{data ? `Managing accounts as ${data.members.find(m => m.user_id === data.actor_user_id)?.display_name || data.actor_user_id}` : "Personal accounts"}</strong><p>Each household member connects their own accounts and chooses what Alphonse can access.</p></div><AccountServiceCards catalog={data} unavailable={Boolean(error)} onChoose={chooseService} />{data && <button className="integration-link" onClick={() => setView("access")}>{data.owner_gmail_setup_only ? "Review access grants →" : "Review access grants and skill accounts →"}</button>}{messaging}<p className="integration-privacy"><strong>Personal by default.</strong> Access to an account requires explicit permission. Connecting an account does not start monitoring.</p></> : <><button className="integration-back" onClick={() => { setView("overview"); setGrantFor(null); setDisconnectFor(null); }}>← All integrations</button>{data && <>
+    {view === "overview" ? <><div className="integration-owner-note"><strong>{data ? `Managing accounts as ${data.members.find(m => m.user_id === data.actor_user_id)?.display_name || data.actor_user_id}` : "Personal accounts"}</strong><p>Each household member connects their own accounts and chooses what Alphonse can access.</p></div><AccountServiceCards catalog={data} unavailable={Boolean(error)} onChoose={chooseService} />{data && <button className="integration-link" onClick={() => { setAccessFromService(false); setView("access"); }}>{data.owner_gmail_setup_only ? "Review access grants →" : "Review access grants and skill accounts →"}</button>}{messaging}<p className="integration-privacy"><strong>Personal by default.</strong> Access to an account requires explicit permission. Connecting an account does not start monitoring.</p></> : <><button className="integration-back" onClick={() => { setView("overview"); setGrantFor(null); setDisconnectFor(null); }}>← All integrations</button>{data && <>
+      {view === "access" && accessFromService && <button className="integration-back" onClick={() => { setView("service"); finishGrant(); }}>← {service?.name} settings</button>}
       <p>Managing accounts as {data.members.find(m => m.user_id === data.actor_user_id)?.display_name || data.actor_user_id}.</p>
-      {view === "service" && <><AccountServiceDetail catalog={data} provider={provider} capability={serviceCapability} busy={busy}
+      {view === "service" && <><AccountServiceDetail key={`${provider}:${serviceCapability}`} catalog={data} provider={provider} capability={serviceCapability} busy={busy}
         onRefresh={() => void refresh()} onConnect={(label, scopes) => void begin(label, scopes)}
         onReconnect={(connection, scopes) => void begin(connection.display_name, scopes, connection)}
-        onGrant={connection => {
-          const existing = data.grants.find(grant => grant.connection_id === connection.connection_id
-            && grant.beneficiary_user_id === data.actor_user_id && !grant.revoked_at
-            && grant.project_id === null && grant.operations.length === 1 && grant.operations[0] === 'mail_read'
-            && grant.resources.length === 1 && grant.resources[0] === 'INBOX'
-            && grant.recipient_user_ids.length === 1 && grant.recipient_user_ids[0] === data.actor_user_id);
-          setEditingGrant(existing); setGrantFor(connection); setView("access");
-        }}
+        onRefreshAccess={(connection, grant) => void run('refresh_gmail_access', { connection_id: connection.connection_id,
+          expected_revision: connection.revision, grant_id: grant.grant_id, grant_revision: grant.revision })}
+        onGrant={connection => manageGrant(connection, serviceCapability)}
+        onGrantContent={connection => manageGrant(connection, 'mail_content_read')}
+        onAddGmailLabel={connection => selectGrant(connection, 'mail_content_read', undefined, true)}
+        onEditGmailLabel={(connection, grant) => selectGrant(connection, 'mail_content_read', grant, true)}
         onPause={connection => void run('pause', { connection_id: connection.connection_id, expected_revision: connection.revision })}
         onDisconnect={setDisconnectFor}
         onRetryDeletion={connection => void run('retry_deletion', { connection_id: connection.connection_id, expected_revision: connection.revision })} />
         {disconnectFor && <div className="project-detail" role="group" aria-label="Confirm account removal"><p>Remove {disconnectFor.display_name}? Alphonse will stop local access and revoke its grants. Provider revocation or credential cleanup may remain pending. A recovery record is retained.</p><button disabled={busy} onClick={() => { void run('disconnect', { connection_id: disconnectFor.connection_id, expected_revision: disconnectFor.revision }); setDisconnectFor(null); heading.current?.focus(); }}>Remove account</button><button disabled={busy} onClick={() => { setDisconnectFor(null); heading.current?.focus(); }}>Keep account</button></div>}
       </>}{view === "access" && <>
-      {grantFor && <GrantEditor key={`${grantFor.connection_id}:${editingGrant?.grant_id || "new"}`} account={grantFor} grant={editingGrant} catalog={data} onDone={() => { setGrantFor(null); heading.current?.focus(); void refresh(); }} />}
-      <h4>Explicit grants</h4><p>Grants you gave or received appear here.</p>{data.grants.map(g => <GrantCard key={g.grant_id} grant={g} catalog={data} busy={busy} run={run} onEdit={() => { const c = data.connections.find(c => c.connection_id === g.connection_id); if (c) { setGrantFor(c); setEditingGrant(g); } }} />)}
+      {editingGmailLabel && currentGrantAccount && data.owner_gmail_label_setup && (!editingGrant || currentGmailLabelGrant)
+        ? <OwnerGmailLabelGrant key={`${data.actor_user_id}:${currentGrantAccount.connection_id}:${currentGrantAccount.revision}:${currentGmailLabelGrant?.grant_id || "new"}:${currentGmailLabelGrant?.revision || 0}`}
+            account={currentGrantAccount} grant={currentGmailLabelGrant} catalog={data} onCancel={finishGrant}
+            onSave={() => { setNotice("Gmail label access saved."); finishGrant(); }} />
+        : grantFor && !editingGmailLabel && <GrantEditor key={`${grantFor.connection_id}:${grantOperation}:${editingGrant?.grant_id || "new"}`} account={grantFor} grant={editingGrant} operation={grantOperation} catalog={data} onDone={finishGrant} />}
+      <h4>Explicit grants</h4><p>Grants you gave or received appear here.</p>{data.grants.map(g => <GrantCard key={g.grant_id} grant={g} catalog={data} busy={busy} run={run} onEdit={() => {
+        const account = data.connections.find(c => c.connection_id === g.connection_id);
+        if (account) selectGrant(account, g.operations[0], g,
+          g.operations[0] === 'mail_content_read' && g.resources[0] !== 'INBOX' && Boolean(g.gmail_label_name));
+      }} />)}
       {!data.owner_gmail_setup_only && <><h4>Choose a skill account role</h4><p>A grant permits access; selecting a role chooses which permitted account a skill uses.</p><BindingPicker catalog={data} run={run} busy={busy} /></>}
     </>}</>}</>}</section>;
 }
@@ -107,20 +139,190 @@ function BindingPicker({ catalog, run, busy }: { catalog: Catalog; run: (a: stri
 }
 function GrantCard({ grant: g, catalog, busy, run, onEdit }: { grant: Grant; catalog: Catalog; busy: boolean; onEdit: () => void; run: (a: string, v: Record<string, unknown>) => Promise<void> }) {
   const [skill, setSkill] = useState("");
-  return <article className="project-detail"><h5>{catalog.members.find(m => m.user_id === g.beneficiary_user_id)?.display_name} · {g.connection_id}</h5><p>{g.operations.map(o => labels[o] || friendly(o)).join(', ')}: {g.resources.join(', ')}; expires {g.expires_at}. {g.revoked_at ? 'Revoked' : 'Granted'}</p><p>Recipients: {g.recipient_user_ids.map(id => catalog.members.find(m => m.user_id === id)?.display_name || id).join(', ')} · Project: {catalog.projects.find(p => p.project_id === g.project_id)?.name || (g.project_id ? 'Restricted project' : 'Any permitted project')}</p>{g.grantor_user_id === catalog.actor_user_id && !g.revoked_at && <>{(!catalog.owner_gmail_setup_only || (g.beneficiary_user_id === catalog.actor_user_id && g.project_id === null && g.operations.length === 1 && g.operations[0] === 'mail_read' && g.resources.length === 1 && g.resources[0] === 'INBOX' && g.recipient_user_ids.length === 1 && g.recipient_user_ids[0] === catalog.actor_user_id)) && <button disabled={busy} onClick={onEdit}>Revise access grant</button>}<button disabled={busy} onClick={() => void run('revoke_grant', { grant_id: g.grant_id, expected_revision: g.revision })}>Revoke grant</button>{!catalog.owner_gmail_setup_only && <><label>Associate with skill<select value={skill} onChange={e => setSkill(e.target.value)}><option value="">Choose skill</option>{catalog.skills.map(s => <option key={s.skill_id} value={s.skill_id}>{s.name}</option>)}</select></label><button disabled={busy || !skill} onClick={() => void run('bind_grant', { grant_id: g.grant_id, skill_id: skill })}>Create skill binding</button></>}</>}</article>;
+  const isGmailContent = g.operations.length === 1 && g.operations[0] === 'mail_content_read';
+  const resource = isGmailContent && g.gmail_label_name ? g.gmail_label_name : g.resources.join(', ');
+  const accountName = catalog.connections.find(account => account.connection_id === g.connection_id)?.display_name || g.connection_id;
+  const status = g.revoked_at ? 'Revoked' : isGrantCurrent(g) ? 'Granted' : 'Expired';
+  return <article className="project-detail">
+    <h5>{catalog.members.find(m => m.user_id === g.beneficiary_user_id)?.display_name} · {accountName}</h5>
+    <p>{g.operations.map(o => labels[o] || friendly(o)).join(', ')} in {resource} · {g.expires_at
+      ? `Expires ${new Date(g.expires_at).toLocaleString()}`
+      : isGmailContent ? 'Until revoked' : 'No expiry available'} · {status}</p>
+    {isGmailContent && isOwnerReadGrant(catalog, g) ? <p>Private Desktop conversation</p>
+      : <p>Recipients: {g.recipient_user_ids.map(id => catalog.members.find(m => m.user_id === id)?.display_name || id).join(', ')} · Project: {catalog.projects.find(p => p.project_id === g.project_id)?.name || (g.project_id ? 'Restricted project' : 'Any permitted project')}</p>}
+    {g.grantor_user_id === catalog.actor_user_id && !g.revoked_at && <>
+      {(!(catalog.owner_gmail_setup_only || catalog.owner_google_setup_only) || isOwnerReadGrant(catalog, g)) &&
+        <button disabled={busy} onClick={onEdit} aria-label={isGmailContent ? `Revise access to ${resource}` : undefined}>Revise access grant</button>}
+      <button disabled={busy} aria-label={isGmailContent ? `Revoke access to ${resource}` : undefined}
+        onClick={() => void run('revoke_grant', { grant_id: g.grant_id, expected_revision: g.revision })}>Revoke grant</button>
+      {!catalog.owner_gmail_setup_only && <><label>Associate with skill<select value={skill} onChange={e => setSkill(e.target.value)}><option value="">Choose skill</option>{catalog.skills.map(s => <option key={s.skill_id} value={s.skill_id}>{s.name}</option>)}</select></label><button disabled={busy || !skill} onClick={() => void run('bind_grant', { grant_id: g.grant_id, skill_id: skill })}>Create skill binding</button></>}
+    </>}
+  </article>;
 }
-function GrantEditor({ account, catalog, grant, onDone }: { account: Connection; catalog: Catalog; grant?: Grant; onDone: () => void }) {
-  if (catalog.owner_gmail_setup_only) return <OwnerInboxGrant account={account} catalog={catalog} grant={grant} onDone={onDone} />;
+
+function grantErrorCode(cause: unknown): string {
+  const message = cause instanceof Error ? cause.message : String(cause);
+  return message.replace(/^\w+: /, "");
+}
+
+function gmailLabelError(cause: unknown, fallback: string): string {
+  switch (grantErrorCode(cause)) {
+    case 'oauth_refresh_required':
+      return 'Gmail access expired. Return to Gmail settings to refresh access or reconnect, then try again.';
+    case 'owner_only_account_scope_unavailable':
+    case 'oauth_connection_unavailable':
+    case 'oauth_reauth_required':
+      return 'Gmail read access is unavailable. Return to Gmail settings and reconnect the account.';
+    case 'oauth_provider_unconfigured':
+      return 'Gmail account setup is unavailable. Check the provider configuration before trying again.';
+    case 'oauth_provider_unavailable':
+      return 'Google could not refresh Gmail access. Try again.';
+    case 'oauth_revision_conflict':
+      return 'The Gmail connection changed. Return to Gmail settings, refresh account status, and try again.';
+    case 'gmail_label_selection_stale':
+      return 'The selected Gmail label changed. Load Gmail labels again and review the selection.';
+    default:
+      return fallback;
+  }
+}
+
+function useOwnerGrantExpiry(grant: Grant | undefined, allowStanding: boolean) {
+  const id = useId();
+  const [untilRevoked, setUntilRevoked] = useState(allowStanding && (!grant || grant.expires_at === null));
+  const [date, setDate] = useState(localInput(grant?.expires_at || null));
+  const expiry = new Date(date);
+  const valid = untilRevoked || expiry.getTime() > Date.now();
+  return { id, allowStanding, untilRevoked, setUntilRevoked, date, setDate, expiry, valid };
+}
+
+function OwnerGrantExpiry({ expiry }: { expiry: ReturnType<typeof useOwnerGrantExpiry> }) {
+  const { id, allowStanding, untilRevoked, setUntilRevoked, date, setDate } = expiry;
+  return <>
+    {allowStanding && <><label htmlFor={`${id}-mode`}>Access duration</label>
+      <select id={`${id}-mode`} value={untilRevoked ? "standing" : "date"} onChange={e => setUntilRevoked(e.target.value === "standing")}>
+        <option value="standing">Until revoked</option><option value="date">Choose an end date</option>
+      </select></>}
+    {!untilRevoked && <><label htmlFor={`${id}-date`}>Access expires (local time)</label>
+      <input id={`${id}-date`} type="datetime-local" required value={date} onChange={e => setDate(e.target.value)} /></>}
+  </>;
+}
+
+function OwnerGmailLabelGrant({ account, catalog, grant, onCancel, onSave }: { account: Connection; catalog: Catalog; grant?: Grant; onCancel: () => void; onSave: () => void }) {
+  const id = useId();
+  const heading = useRef<HTMLHeadingElement>(null);
+  const fence = useRef(new ResponseFence());
+  const [options, setOptions] = useState<GmailLabel[] | null>(null);
+  const [labelId, setLabelId] = useState(grant?.resources[0] || "");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [notice, setNotice] = useState("");
+  const expiry = useOwnerGrantExpiry(grant, true);
+  const loadLabels = useCallback(async () => {
+    const ticket = fence.current.start();
+    setOptions(null);
+    setNotice("");
+    setLoading(true);
+    try {
+      const result = await optionalManagement<{ labels: GmailLabel[] }>('list_gmail_labels', {
+        connection_id: account.connection_id, expected_revision: account.revision,
+      });
+      if (fence.current.current(ticket)) setOptions(result.labels);
+    } catch (cause) {
+      if (fence.current.current(ticket)) setNotice(gmailLabelError(cause, 'Gmail labels could not be loaded. Try again.'));
+    } finally {
+      if (fence.current.current(ticket)) setLoading(false);
+    }
+  }, [account.connection_id, account.revision]);
+  useEffect(() => {
+    heading.current?.focus();
+    void loadLabels();
+    return () => fence.current.invalidate();
+  }, [loadLabels]);
+  const grantedIds = new Set(catalog.grants.filter(g => g.connection_id === account.connection_id
+    && isOwnerReadGrant(catalog, g, 'mail_content_read')).map(g => g.resources[0]));
+  const choices = options?.filter(label => grant
+    ? label.id === grant.resources[0]
+    : label.id !== 'INBOX' && !grantedIds.has(label.id));
+  const selected = choices?.find(label => label.id === labelId);
+  const save = async () => {
+    if (!selected || !expiry.valid || saving || loading) return;
+    const ticket = fence.current.start();
+    setSaving(true);
+    setNotice("");
+    try {
+      await optionalManagement('save_grant', {
+        grant_id: grant?.grant_id || `grant_${crypto.randomUUID()}`,
+        connection_id: account.connection_id,
+        expected_revision: grant?.revision || 0,
+        beneficiary_user_id: catalog.actor_user_id,
+        operations: ['mail_content_read'],
+        resources: [selected.id],
+        gmail_label_name: selected.name,
+        recipient_user_ids: [catalog.actor_user_id],
+        expires_at: expiry.untilRevoked ? null : expiry.expiry.toISOString(),
+        project_id: null,
+      });
+      if (fence.current.current(ticket)) onSave();
+    } catch (cause) {
+      if (fence.current.current(ticket)) {
+        if (grantErrorCode(cause) === 'gmail_label_selection_stale') {
+          setOptions(null);
+          setLabelId(grant?.resources[0] || "");
+        }
+        setNotice(gmailLabelError(cause, 'Gmail label access could not be saved. Try again.'));
+      }
+    } finally {
+      if (fence.current.current(ticket)) setSaving(false);
+    }
+  };
+  return <section className="project-detail">
+    <h4 ref={heading} tabIndex={-1}>{grant ? 'Manage Gmail label access' : 'Add Gmail label access'}</h4>
+    <p>Alphonse can find and summarize messages under one label for your private Desktop conversation. For summaries, matching excerpts go to your configured AI model.</p>
+    <StatusText>{loading ? 'Loading Gmail labels…' : notice}</StatusText>
+    {!loading && !options && <button type="button" disabled={saving} onClick={() => void loadLabels()}>Load Gmail labels again</button>}
+    {choices?.length === 0 && <p>{grant ? 'Gmail no longer lists this label on the account.' : 'All available labels already have access or use the Inbox permission.'}</p>}
+    {choices && choices.length > 0 && <form onSubmit={e => { e.preventDefault(); void save(); }}>
+      <fieldset disabled={saving}>
+        <label htmlFor={`${id}-label`}>Gmail label</label>
+        <select id={`${id}-label`} required value={labelId} disabled={Boolean(grant)} onChange={e => setLabelId(e.target.value)}>
+          <option value="">Choose a label</option>
+          {choices.map(label => <option key={label.id} value={label.id}>{label.name}</option>)}
+        </select>
+        {grant && selected && selected.name !== grant.gmail_label_name && <p>Gmail now calls this label {selected.name}. Review the name before saving.</p>}
+        <OwnerGrantExpiry expiry={expiry} />
+        <button disabled={!selected || !expiry.valid}>{grant ? 'Save label access' : 'Authorize label access'}</button>
+      </fieldset>
+    </form>}
+    <button type="button" disabled={saving} onClick={onCancel}>Cancel</button>
+  </section>;
+}
+
+function GrantEditor({ account, catalog, grant, operation, onDone }: { account: Connection; catalog: Catalog; grant?: Grant; operation: string; onDone: () => void }) {
+  if (catalog.owner_gmail_setup_only || catalog.owner_google_setup_only) return <OwnerReadGrant account={account} catalog={catalog} grant={grant} operation={operation} onDone={onDone} />;
   return <GeneralGrantEditor account={account} catalog={catalog} grant={grant} onDone={onDone} />;
 }
-function OwnerInboxGrant({ account, catalog, grant, onDone }: { account: Connection; catalog: Catalog; grant?: Grant; onDone: () => void }) {
-  const [expires, setExpires] = useState(localInput(grant?.expires_at || null));
+function OwnerReadGrant({ account, catalog, grant, operation, onDone }: { account: Connection; catalog: Catalog; grant?: Grant; operation: string; onDone: () => void }) {
+  const calendar = operation === 'calendar_read';
+  const gmailContent = operation === 'mail_content_read';
+  const [resource, setResource] = useState(calendar ? grant?.resources[0] || '' : 'INBOX');
+  const expiry = useOwnerGrantExpiry(grant, gmailContent && catalog.owner_gmail_label_setup === true);
   const [busy, setBusy] = useState(false); const [notice, setNotice] = useState("");
   const save = async () => { setBusy(true); setNotice(""); try {
-    await optionalManagement('save_grant', { grant_id: grant?.grant_id || `grant_${crypto.randomUUID()}`, connection_id: account.connection_id, expected_revision: grant?.revision || 0, beneficiary_user_id: catalog.actor_user_id, operations: ['mail_read'], resources: ['INBOX'], recipient_user_ids: [catalog.actor_user_id], expires_at: new Date(expires).toISOString(), project_id: null });
+    await optionalManagement('save_grant', { grant_id: grant?.grant_id || `grant_${crypto.randomUUID()}`, connection_id: account.connection_id, expected_revision: grant?.revision || 0, beneficiary_user_id: catalog.actor_user_id, operations: [operation], resources: [resource.trim()], recipient_user_ids: [catalog.actor_user_id], expires_at: expiry.untilRevoked ? null : expiry.expiry.toISOString(), project_id: null });
     onDone();
   } catch (cause) { setNotice(cause instanceof Error ? cause.message : String(cause)); setBusy(false); } };
-  return <section className="project-detail"><h4>Allow access to your Gmail INBOX</h4><p>This grants you access to read your INBOX through Alphonse until the time you choose. It does not start monitoring.</p><StatusText>{notice}</StatusText><form onSubmit={e => { e.preventDefault(); void save(); }}><label htmlFor="owner-inbox-expiry">Access expires (local time)</label><input id="owner-inbox-expiry" type="datetime-local" required value={expires} onChange={e => setExpires(e.target.value)} /><button disabled={busy || !expires}>Authorize INBOX access</button></form><button disabled={busy} onClick={onDone}>Cancel</button></section>;
+  return <section className="project-detail">
+    <h4>{calendar ? 'Allow access to one Google calendar' : gmailContent ? 'Allow access to Gmail Inbox content' : 'Allow access to your Gmail INBOX'}</h4>
+    {gmailContent ? <p>This lets Alphonse count unread Inbox mail and find matching messages in your private Desktop conversation. For summaries, matching excerpts go to your configured AI model.</p>
+      : <p>{calendar ? 'This lets you ask for event titles and times in your private Desktop conversation until the grant expires.' : 'This lets you ask for the unread INBOX count until the grant expires.'}</p>}
+    <StatusText>{notice}</StatusText>
+    <form onSubmit={e => { e.preventDefault(); if (expiry.valid && resource.trim() && !busy) void save(); }}>
+      {calendar && <><label htmlFor="owner-calendar-id">Exact calendar ID</label><input id="owner-calendar-id" type="text" required maxLength={512} value={resource} onChange={e => setResource(e.target.value)} />
+        <small>Copy the calendar ID from Google Calendar’s settings for that calendar, under Integrate calendar.</small></>}
+      <OwnerGrantExpiry expiry={expiry} />
+      <button disabled={busy || !expiry.valid || !resource.trim()}>{calendar ? 'Authorize calendar access' : gmailContent ? 'Authorize Inbox content access' : 'Authorize INBOX access'}</button>
+    </form><button disabled={busy} onClick={onDone}>Cancel</button>
+  </section>;
 }
 function GeneralGrantEditor({ account, catalog, grant, onDone }: { account: Connection; catalog: Catalog; grant?: Grant; onDone: () => void }) {
   const id = useId(); const [beneficiary, setBeneficiary] = useState(grant?.beneficiary_user_id || ""); const [operations, setOperations] = useState<string[]>(grant?.operations || []); const [resources, setResources] = useState(grant?.resources.join("\n") || ""); const [recipients, setRecipients] = useState<string[]>(grant?.recipient_user_ids || []); const [expires, setExpires] = useState(localInput(grant?.expires_at || null)); const [project, setProject] = useState(grant?.project_id || ""); const [review, setReview] = useState(false); const [notice, setNotice] = useState(""); const [busy, setBusy] = useState(false); const focus = useRef<HTMLHeadingElement>(null);

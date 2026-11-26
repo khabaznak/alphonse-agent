@@ -6,6 +6,31 @@ loads no provider SDK, credentials or network connections. Connecting an account
 alone installs no checks and starts no monitoring. There are no send, modify,
 watch, delete, or mailbox configuration operations.
 
+## Desktop search and summaries
+
+In **Settings → Integrations → Gmail**, connect the account and grant content
+access to Inbox or to a label you select from Gmail. Choose an optional end date
+or leave access active until you revoke it. Each grant covers one exact Gmail
+label. Inbox content access also covers the unread-count check in the owner's
+Desktop conversation. The count-only grant is available on its own. Label
+selection and Gmail content searches can renew Google credentials with the
+existing connection. Reconnect if Google withdraws or expires its authorization.
+
+When asked in the owner’s Desktop Conversation, Alphonse searches one granted
+label and can summarize excerpts from up to five matching messages. Use the
+full Gmail name for a nested label, such as `Family/School`. A message may be
+archived or outside Inbox and still match the selected label. A request that
+omits a label defaults to Inbox. The search normally covers 90 days and may
+extend to 365 days. The reply identifies its scope, sources and any incomplete
+coverage. [Gmail search semantics](https://developers.google.com/workspace/gmail/api/guides/filtering)
+
+The configured inference model receives the bounded matching excerpts in a
+summary step with no Alphonse tools. Email text remains untrusted evidence.
+The private result is rendered as plain text in Desktop. The task checkpoint
+holds bounded excerpts and the draft for verified pickup. Ordinary conversation
+history records a receipt without message content. Google access, the local
+grant, and the owner claim are rechecked before pickup.
+
 ## Clean install and authorization
 
 Follow [managed OAuth setup](oauth-accounts.md) and install the optional

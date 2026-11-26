@@ -1189,6 +1189,34 @@ def test_ipc_stop_preserves_replacement_socket():
             replacement.close()
 
 
+def test_ipc_listener_survives_temporary_request_thread_failure(monkeypatch):
+    import socket
+    import tempfile
+    import threading
+    from pathlib import Path
+    from alphonse.agent_v2.ipc import V2DaemonClient, V2DaemonServer
+
+    with tempfile.TemporaryDirectory(dir='/tmp', prefix='alp-ipc-') as directory:
+        path = Path(directory) / 'daemon.sock'
+        server = V2DaemonServer(SimpleNamespace(), path)
+        server.start()
+        try:
+            def thread_unavailable(_):
+                raise RuntimeError("can't start new thread")
+
+            with monkeypatch.context() as patch:
+                patch.setattr(threading.Thread, 'start', thread_unavailable)
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+                    connection.settimeout(2)
+                    connection.connect(str(path))
+                    assert connection.recv(1) == b''
+            assert server.is_serving()
+            assert V2DaemonClient(path).ping()['status'] == 'ready'
+        finally:
+            server.stop()
+            assert server.wait_quiescent(timeout=2)
+
+
 def test_daemon_exits_when_ipc_listener_dies():
     import threading
     daemon = object.__new__(V2Daemon)

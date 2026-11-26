@@ -1,0 +1,45 @@
+{
+  "answer": "I couldn’t check Gmail. In Settings → Integrations → Gmail, refresh access or reconnect your account, then try again.",
+  "case": "expired-token",
+  "client_acknowledgement": "client_acknowledged",
+  "credentials_unchanged": true,
+  "decisions": [
+    {
+      "kind": "tool",
+      "status": "returned",
+      "tool_id": "native.owner_gmail_unread",
+      "usage": {
+        "input_tokens": 15063,
+        "output_tokens": 45
+      }
+    },
+    {
+      "kind": "answer",
+      "status": "returned",
+      "tool_id": null,
+      "usage": {
+        "input_tokens": 13796,
+        "output_tokens": 54
+      }
+    }
+  ],
+  "elapsed_seconds": 10.94,
+  "fake_gmail_calls": [],
+  "fake_oauth_calls": [],
+  "fixture_unread_messages": null,
+  "goal": "Could you check how many unread messages I have in my Gmail inbox?",
+  "ipc": {
+    "status": "ready"
+  },
+  "kind": "answer",
+  "limitations": [
+    "Disposable Google fixture and Unix socket client. No live Google account or installed Desktop UI.",
+    "Host observations do not cover inference-provider behavior outside Alphonse.",
+    "Client acknowledgement does not establish human receipt.",
+    "The run does not assess other mail capabilities, languages generally or reliability over repeated attempts."
+  ],
+  "model": "gpt-6-luna",
+  "private_markers_absent": true,
+  "response_review": "requires_manual_review",
+  "started_at": "2026-11-26T00:48:42.711607+00:00"
+}

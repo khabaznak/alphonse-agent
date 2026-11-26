@@ -77,6 +77,13 @@ describe("mergeFreshConversationHistory", () => {
       created_at: "2026-11-16T06:00:01Z" };
     expect(mergeFreshConversationHistory([durable], [optimistic])).toEqual([durable]);
   });
+
+  it("retains a private agenda during a live refresh and shows the receipt on a fresh load", () => {
+    const receipt: ChatMessage = { id: "owner:calendar", role: "assistant", content: "Calendar results displayed privately", sequence: 7 };
+    const pickup: ChatMessage = { id: receipt.id, role: "assistant", content: "Synthetic appointment", private_reply_owner: "owner" };
+    expect(mergeFreshConversationHistory([receipt], [pickup])).toEqual([{ ...receipt, content: pickup.content, private_reply_owner: "owner" }]);
+    expect(mergeFreshConversationHistory([receipt], [])).toEqual([receipt]);
+  });
 });
 
 it("orders late unsequenced deliveries chronologically and deterministically", () => {
