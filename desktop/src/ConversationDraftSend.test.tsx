@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const service = vi.hoisted(() => ({ ingress: vi.fn(), followup: vi.fn(), steer: vi.fn(), followupList: vi.fn() }));
+const service = vi.hoisted(() => ({ ingress: vi.fn(), followup: vi.fn(), steer: vi.fn(), followupList: vi.fn(), drafts: vi.fn() }));
 vi.mock("./api", () => ({
   ensureDaemon: async () => {}, playAlertSound: async () => {}, showInFinder: async () => {}, stopDaemon: async () => {},
   daemonRequest: async (method: string, params: Record<string, unknown> = {}) => {
@@ -12,6 +12,7 @@ vi.mock("./api", () => ({
     if (method === "experimental_owner_status") return params.message_id ? { status: "pending" } : { processing_ready: true, owner_only: true, paused_legacy_requests: 0 };
     if (method === "experimental_owner_ingress") return service.ingress(params);
     if (method === "experimental_owner_followup_list") return service.followupList();
+    if (method === "experimental_owner_composer_list") return service.drafts();
     if (method === "experimental_owner_composer_save") return { id: params.id, status: "saved" };
     if (method === "experimental_owner_followup_add") return service.followup(params);
     if (method === "experimental_owner_steer_add") return service.steer(params);
@@ -39,7 +40,7 @@ describe("confirmed conversation sends", () => {
     window.matchMedia = vi.fn().mockReturnValue({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() });
     HTMLElement.prototype.scrollTo = vi.fn();
     service.ingress.mockReset(); service.followup.mockReset(); service.steer.mockReset(); service.followupList.mockReset();
-    service.followupList.mockResolvedValue({ items: [] });
+    service.followupList.mockResolvedValue({ items: [] }); service.drafts.mockReset(); service.drafts.mockResolvedValue({ items: [] });
     service.followup.mockResolvedValue({ status: "queued" }); service.steer.mockResolvedValue({ status: "accepted" });
   });
   afterEach(() => vi.restoreAllMocks());
@@ -123,6 +124,18 @@ describe("confirmed conversation sends", () => {
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 950)); });
     expect(textarea.value).toBe(edited ? "newer draft" : "");
     expect(service.followup).toHaveBeenCalledTimes(1);
+    await act(async () => root.unmount()); element.remove();
+  });
+
+  it("keeps saved-draft controls accessible separately from the message editor", async () => {
+    service.drafts.mockResolvedValue({ items: Array.from({ length: 6 }, (_, index) => ({ id: String(index).repeat(32), active_message_id: "a".repeat(32), prompt: `Saved draft ${index}`, resolution: "not_submitted" })) });
+    const element = document.createElement("div"); document.body.appendChild(element); const root = createRoot(element);
+    await act(async () => { root.render(<App />); await flush(); }); await act(async () => { await flush(); });
+    const context = element.querySelector<HTMLElement>('[aria-label="Request context"]')!;
+    const textarea = element.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message Alphonse"]')!;
+    expect(context.tabIndex).toBe(0); expect(context.textContent).toContain("Saved draft 5");
+    expect(context.contains(textarea)).toBe(false);
+    expect([...context.querySelectorAll("button")].filter((button) => button.textContent === "Restore draft")).toHaveLength(6);
     await act(async () => root.unmount()); element.remove();
   });
 
