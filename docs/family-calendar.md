@@ -34,7 +34,10 @@ range when needed. The Desktop agenda handles reads only. The family-calendar
 package's separately authorized write workflows and project sync continue to
 have their own setup and controls.
 
-Event titles and times appear in the live Desktop result. The conversation
+Event titles and times appear in a day-grouped card in the live Desktop
+conversation. Timed events use the owner's local timezone. Multi-day all-day
+events include their last day, and an event with only a start time says its end
+is unspecified. The conversation
 history records that the result was displayed and the model receives only the
 read status. The existing local task checkpoint holds the bounded observation
 to support verified pickup without another provider read. That database remains

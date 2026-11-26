@@ -23,6 +23,7 @@ from alphonse.agent_v2.integrations.oauth import OAuthError
 from alphonse.agent_v2.services.project_check_worker import CheckStopped
 
 from .owner_gmail import _NoRefreshOAuth, _failure
+from .gmail_digest import parse_gmail_digest
 
 OWNER_GMAIL_SEARCH_TOOL_ID = 'native.owner_gmail_search'
 MAX_QUERY = 256
@@ -436,9 +437,21 @@ def gmail_search_prompt(payload):
                            'supported by the reviewed excerpts and identify any inferences. For action reviews, put '
                            'upcoming deadlines and concrete tasks first with a source number for each. Use the latest '
                            'explicit correction when a sender changes a deadline. Preserve missing dates and time '
-                           'zones as unknown. Use plain text with one item per line. Omit unrelated personal or '
-                           'sensitive details and URLs. State uncertainty or incomplete coverage when relevant. An email statement is '
-                           'evidence of what its sender wrote, not independent verification.',
+                           'zones as unknown. Omit unrelated personal or sensitive details and URLs. An email statement '
+                           'is evidence of what its sender wrote, not independent verification. '
+                           'Return a single JSON object serialized as the answer text, with exactly "summary" (concise '
+                           'Markdown, optionally empty when the actions answer the request) and "actions" (an array, '
+                           'empty for informational mail without requested actions). Each action has exactly "date" '
+                           '(an explicit, evidenced YYYY-MM-DD or null; do not guess a year), "when" (human-readable '
+                           'date and time with the known zone, or an empty string when no date was given), "title" '
+                           '(a plain-text action), "detail" (brief Markdown, or empty), and "sources" (an array of 1–6 '
+                           'existing source numbers). Put every actionable deadline the user requested in its own '
+                           'action row. A registration closing is a deadline to register. If the source gives a '
+                           'month and day without a year, use date:null and keep the evidenced date in "when". '
+                           'Cite both sources for a revised deadline when available. '
+                           'Use links such as [3](#source-3) for citations in Markdown text. Do not repeat a task from '
+                           'the action rows in the summary. Use at most eight distinct actions and keep the serialized '
+                           'text within 3800 bytes. Use Markdown headings, lists and emphasis where helpful.',
                        'messages': [{'source_number': index, **message}
                                     for index, message in enumerate(payload['messages'], 1)]}, ensure_ascii=False)
 
@@ -458,7 +471,7 @@ def format_gmail_search_observation(payload, response='', *, private_delivery=Fa
     days = payload['lookback_days']
     lines = [f"{gmail_source_title(payload)} · Last {days} {'day' if days == 1 else 'days'}"]
     if count:
-        summary = gmail_summary_text(response)
+        summary = parse_gmail_digest(gmail_summary_text(response), count).as_text()
         if summary:
             lines += ['', 'Summary of the reviewed excerpts', summary]
         lines += ['', 'Reviewed messages']

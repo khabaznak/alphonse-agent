@@ -15,7 +15,7 @@ from alphonse.agent_v2.core.questions import QuestionInterrupt
 
 A2UI_VERSION = "v0.9.1"
 ALPHONSE_DESKTOP_CATALOG_ID = "alphonse.desktop.catalog.v2"
-SUPPORTED_COMPONENTS = frozenset({"Card", "Row", "Column", "List", "Text", "Button", "TextInput", "Status", "Divider", "Icon", "CheckBox", "ChoicePicker", "DateTimeInput", "Table", "Disclosure"})
+SUPPORTED_COMPONENTS = frozenset({"Card", "Row", "Column", "List", "Text", "Button", "TextInput", "Status", "Divider", "Icon", "CheckBox", "ChoicePicker", "DateTimeInput", "Table", "Disclosure", "Markdown", "EmailCitation"})
 SUPPORTED_ICONS = frozenset({"check", "info", "warning", "error", "calendar", "clock", "list", "progress"})
 
 
@@ -291,6 +291,11 @@ def validate_envelope(message: dict[str, Any]) -> None:
             if kind == "Disclosure" and (not isinstance(component.get("label"), str)
                     or not component["label"].strip() or not isinstance(component.get("children"), list)):
                 raise ValueError("a2ui_disclosure_invalid")
+            if kind == "Markdown" and (not isinstance(component.get("text"), str) or len(component["text"]) > 4000):
+                raise ValueError("a2ui_markdown_invalid")
+            if kind == "EmailCitation" and (type(component.get("sourceNumber")) is not int
+                    or not 1 <= component["sourceNumber"] <= 20):
+                raise ValueError("a2ui_email_citation_invalid")
             if kind in {"TextInput", "CheckBox", "DateTimeInput", "ChoicePicker"}:
                 value = component.get("value")
                 if not isinstance(value, dict) or not str(value.get("path") or "").startswith("/"):
