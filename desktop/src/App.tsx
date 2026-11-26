@@ -1116,7 +1116,22 @@ function SettingsWorkspace({ isAdmin, user, initialTab, workspaceRequired, enter
     });
     if (typeof selected === "string") onDesktopNotificationsChange({ ...desktopNotifications, soundFile: selected });
   };
-  const verify = async (kind: "search" | "fetch") => { try { const current = await daemonRequest<{ user: { user_id: string } | null }>("current_user"); if (!current.user) return; const result = await daemonRequest<{ result: { exception?: { message?: string } } }>("verify_web_tools", { actor_user_id: current.user.user_id, kind }); setWebNotice(result.result.exception?.message || `${kind === "search" ? "SearXNG search" : "Public fetch"} verified.`); } catch (cause) { setWebNotice(cause instanceof Error ? cause.message : "Verification failed"); } };
+  const verify = async (kind: "search" | "fetch") => {
+    try {
+      const current = await daemonRequest<{ user: { user_id: string } | null }>("current_user");
+      if (!current.user) return;
+      const { result } = await daemonRequest<{ result: { exception?: { message?: string }; result_count?: number; partial?: boolean } }>(
+        "verify_web_tools", { actor_user_id: current.user.user_id, kind },
+      );
+      if (result.exception?.message) setWebNotice(result.exception.message);
+      else if (kind === "fetch") setWebNotice("Public fetch verified.");
+      else if (result.partial) setWebNotice("SearXNG returned partial results. Some upstream search engines failed.");
+      else if ((result.result_count ?? 0) > 0) setWebNotice("SearXNG search verified.");
+      else setWebNotice("SearXNG responded, but the verification query returned no results.");
+    } catch (cause) {
+      setWebNotice(cause instanceof Error ? cause.message : "Verification failed");
+    }
+  };
   const saveMemory = async () => { if (!memory) return; try { const current = await daemonRequest<{ user: { user_id: string } | null }>("current_user"); if (!current.user) return; const result = await daemonRequest<{ settings: MemorySettings }>("save_memory_settings", { actor_user_id: current.user.user_id, values: memory }); setMemory(result.settings); setMemoryNotice("Saved. New tasks use these limits."); } catch (cause) { setMemoryNotice(cause instanceof Error ? cause.message : "Memory settings could not be saved"); } };
   const allowed = canOpenSettingsSection(tab, isAdmin);
   return <section className="settings-workspace">

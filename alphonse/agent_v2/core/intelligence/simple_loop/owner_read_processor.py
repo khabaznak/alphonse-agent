@@ -48,7 +48,7 @@ from .dojo_bash_guard import valid_dojo_observation, valid_dojo_session
 from .owner_knowledge_snapshot import (OWNER_KNOWLEDGE_TOOL_ID, owner_knowledge_projection,
                                         snapshot_owner_knowledge)
 from .owner_private_knowledge_read import read_private_knowledge
-from .owner_web import WEB_TOOL_IDS, authorized_web_action, valid_web_observation, is_web_failure_observation
+from .owner_web import WEB_TOOL_IDS, authorized_web_action, valid_web_observation, is_web_failure_observation, web_fetch_covers
 from datetime import datetime, timezone
 
 
@@ -392,6 +392,8 @@ class OwnerReadConversationProcessor:
                 allow_owner_host_bash=host_bash_enabled)
             mail_summary_chooser = RouterCandidateChooser(router=context.inference, task=task, tools=(),
                 max_input_tokens=65536, cancellation_checker=context.is_cancelled, private_mail_summary=True)
+            web_summary_chooser = RouterCandidateChooser(router=context.inference, task=task, tools=(),
+                max_input_tokens=65536, cancellation_checker=context.is_cancelled)
             if outlook_enabled:
                 outlook_chooser = RouterCandidateChooser(router=context.inference, task=task, tools=(),
                     max_input_tokens=65536, cancellation_checker=context.is_cancelled)
@@ -406,17 +408,33 @@ class OwnerReadConversationProcessor:
                 mail_refinement_chooser = RouterCandidateChooser(router=context.inference, task=task,
                     tools=(refinement_descriptor,), max_input_tokens=65536, cancellation_checker=context.is_cancelled)
 
-            def chooser(projection: str, max_output_tokens: int) -> dict:
+            def prepare_choice(projection: str, max_output_tokens: int):
                 outlook = outlook_observation()
                 if outlook is not None:
-                    decision = outlook_chooser(projection, min(4096, max_output_tokens))
-                    locale = outlook_display_locale(decision.get('text')) if decision.get('kind') == 'answer' else None
-                    return {'kind': 'answer', 'text': locale or 'Outlook Inbox check recorded.', 'usage': decision['usage']}
+                    generate = outlook_chooser.prepare(projection, min(4096, max_output_tokens))
+                    return lambda: finish_decision(generate(), outlook=outlook)
                 mail = gmail_search_observation()
                 if mail is not None:
                     refining = can_refine_gmail_search()
-                    mail_chooser = mail_refinement_chooser if refining else mail_summary_chooser
-                    decision = mail_chooser(projection, min(4096, max_output_tokens))
+                    selected = mail_refinement_chooser if refining else mail_summary_chooser
+                    generate = selected.prepare(projection, min(4096, max_output_tokens))
+                    return lambda: finish_decision(generate(), mail=mail, refining=refining)
+                if web_research_needs_summary():
+                    return web_summary_chooser.prepare(projection + (
+                        '\nThe research budget allows no further lookup with time for another answer. '
+                        'Answer now using the authorized observations. Cite sources that support the conclusion '
+                        'and identify any part of the request that remains unverified.'), max_output_tokens)
+                generate = base_chooser.prepare(projection, max_output_tokens)
+                return lambda: finish_decision(generate())
+
+            def chooser(projection: str, max_output_tokens: int) -> dict:
+                return prepare_choice(projection, max_output_tokens)()
+
+            def finish_decision(decision, *, outlook=None, mail=None, refining=False):
+                if outlook is not None:
+                    locale = outlook_display_locale(decision.get('text')) if decision.get('kind') == 'answer' else None
+                    return {'kind': 'answer', 'text': locale or 'Outlook Inbox check recorded.', 'usage': decision['usage']}
+                if mail is not None:
                     if ((decision.get('kind') == 'question' and not private_gmail_search_result(mail))
                             or (refining and decision.get('kind') == 'tool'
                                 and not allowed(actor, OWNER_GMAIL_SEARCH_TOOL_ID, decision['arguments']))):
@@ -424,7 +442,6 @@ class OwnerReadConversationProcessor:
                         # answer when no executable refinement was proposed.
                         return {'kind': 'answer', 'text': 'Gmail search result recorded.', 'usage': decision['usage']}
                     return decision
-                decision = base_chooser(projection, max_output_tokens)
                 # Owner search requires a complete page before it becomes
                 # evidence. Use the native maximum when the model omits a
                 # limit so nine to thirty hits do not fail at the smaller
@@ -776,7 +793,10 @@ class OwnerReadConversationProcessor:
                                   'provides no source content or evidence that the requested '
                                   'information is true; consider another available route or '
                                   'explain the limitation. The remote service may have received '
-                                  'the request even when the response failed.',
+                                  'the request even when the response failed. A search marked partial '
+                                  'has results, but some upstream engines failed. A search with error '
+                                  'searxng_upstream_unavailable failed at the upstream engines; '
+                                  'do not describe it as a search that found no matches.',
                         'observation': payload}, ensure_ascii=False, sort_keys=True)
                 if tool_id == 'native.bash':
                     # Each model decision is stateless. Preserve the authorized
@@ -1112,6 +1132,36 @@ class OwnerReadConversationProcessor:
             return bool(bound and bound[0] == tool_id and bound[1] == args
                         and is_web_failure_observation(tool_id, bound[2]) and access(actor_id, ref))
 
+        def covered_web_fetch(actor_id, tool_id, args, refs):
+            if tool_id != 'native.web_fetch' or not allowed(actor_id, tool_id, args):
+                return None
+            descriptor = context.tools.get(tool_id)
+            max_chars = descriptor.metadata.get('fetch_max_chars') if descriptor is not None else None
+            for ref in reversed(refs):
+                bound = observations.get(ref)
+                if (ref not in (continuation_evidence_baseline or ()) and bound and bound[0] == tool_id
+                        and access(actor_id, ref) and web_fetch_covers(args, bound[1], bound[2], max_chars=max_chars)):
+                    return ref
+            return None
+
+        def web_research_needs_summary():
+            if not any(tool in WEB_TOOL_IDS for tool, _, _ in observations.values()):
+                return False
+            current = (atomic.load(expected_version=atomic.version)[0].budget if atomic is not None
+                       else self.budgets.load(task.task_id))
+            charged = current.usage()['charged']
+            remaining = {key: current.limits.total[key] - current.limits.final_reserve[key] - charged[key]
+                         for key in ('actions', 'model_calls')}
+            return remaining['actions'] <= 0 or remaining['model_calls'] <= 1
+
+        from .evidence_projection import observation_excerpt
+
+        def compact_source(ref, content, limit):
+            tool = observations[ref][0]
+            if tool in WEB_TOOL_IDS:
+                return observation_excerpt(content, limit)
+            return content
+
         paused = False
         def checkpoint_pause(state):
             nonlocal paused
@@ -1175,7 +1225,8 @@ class OwnerReadConversationProcessor:
             authorize_host_bash=authorize_host_bash if host_bash_enabled else None,
             execute_host_bash=execute_host_bash if host_bash_enabled else None,
             defer_identical_failed_read=defer_identical_failed_read,
-            checkpoint_pause=checkpoint_pause)
+            covered_web_fetch=covered_web_fetch,
+            checkpoint_pause=checkpoint_pause, prepare_choice=prepare_choice, compact_source=compact_source)
         try:
             result = run_candidate(candidate_state, host)
         except Exception:

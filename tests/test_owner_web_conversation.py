@@ -19,7 +19,8 @@ from alphonse.agent_v2.daemon import V2Daemon
 from alphonse.agent_v2.runtime import build_runtime_host
 from alphonse.agent_v2.users import V2UserStore
 from alphonse.agent_v2.web_tools_settings import WebToolsSettings
-from alphonse.agent_v2.core.intelligence.simple_loop.owner_web import valid_web_observation, web_failure_observation
+from alphonse.agent_v2.core.intelligence.simple_loop.owner_web import valid_web_observation, web_failure_observation, web_fetch_covers
+from alphonse.agent_v2.core.intelligence.simple_loop.owner_work_log import owner_work_log
 
 
 def test_only_explicit_non_authorization_web_failures_are_recoverable():
@@ -61,17 +62,38 @@ def test_unresolvable_fetch_is_a_confirmed_read_failure(monkeypatch):
         'status': 'failed', 'tool_id': 'native.web_fetch', 'error_code': 'web_fetch_unresolvable_host'}
 
 
+def test_web_fetch_coverage_preserves_expansion_and_distinct_queries():
+    original = {'url': 'https://example.test/start', 'max_chars': 100}
+    final_url = 'https://example.test/report?p=1'
+    observation = {'url': original['url'], 'final_url': final_url, 'status_code': 200, 'truncated': False}
+    assert web_fetch_covers({'url': final_url + '#details', 'max_chars': 500}, original, observation)
+    assert not web_fetch_covers({'url': 'https://example.test/report?p=2'}, original, observation)
+    truncated = {**observation, 'truncated': True}
+    assert web_fetch_covers({'url': final_url, 'max_chars': 100}, original, truncated)
+    assert not web_fetch_covers({'url': final_url, 'max_chars': 500}, original, truncated)
+    capped = {**original, 'max_chars': 30000}
+    assert web_fetch_covers({'url': final_url, 'max_chars': 50000}, capped, truncated, max_chars=12000)
+    assert not web_fetch_covers({'url': final_url, 'max_chars': 50000}, original, truncated, max_chars=12000)
+    assert not web_fetch_covers({'url': final_url}, original, {'status': 'failed'})
+
+
 @pytest.mark.parametrize('repeat_failed_read', [False, True])
-def test_owner_can_choose_another_web_route_after_search_failure(tmp_path, monkeypatch, repeat_failed_read):
+@pytest.mark.parametrize('http_status,error_code', [(503, 'searxng_http_error'),
+                                                   (200, 'searxng_upstream_unavailable')])
+def test_owner_can_choose_another_web_route_after_search_failure(tmp_path, monkeypatch, repeat_failed_read,
+                                                                 http_status, error_code):
     calls = []
     settings = WebToolsSettings(enabled=True, searxng_base_url='https://example.test')
     search_definition = build_web_search_tool_definition(settings)
     fetch_definition = build_web_fetch_tool_definition(settings)
-    failure = {'output': None, 'exception': {'code': 'searxng_http_error', 'message': 'secret local URL',
-                             'retryable': True, 'status_code': 503}}
+    upstream_response = SimpleNamespace(status_code=http_status, json=lambda: {
+        'results': [], 'unresponsive_engines': [['synthetic engine', 'secret local URL']]})
+    monkeypatch.setattr('alphonse.agent_v2.core.tools.registry.native.web.requests.get',
+                        lambda *_args, **_kwargs: upstream_response)
     fetched = {'url': 'https://example.test/report', 'final_url': 'https://example.test/report',
                'status_code': 200, 'content_type': 'text/plain', 'title': 'Synthetic',
                'text': 'Synthetic public report.', 'truncated': False}
+    use_last_research_decision = http_status == 200 and repeat_failed_read
 
     class Provider:
         supports_image_input = False
@@ -81,7 +103,7 @@ def test_owner_can_choose_another_web_route_after_search_failure(tmp_path, monke
                 decision = {'kind': 'tool', 'tool_id': 'native.web_search',
                             'arguments': {'query': 'sample query'}, 'text': None}
             elif self.calls == 2:
-                assert 'searxng_http_error' in request.prompt
+                assert error_code in request.prompt
                 assert 'provides no source content' in request.prompt
                 assert 'secret local URL' not in request.prompt
                 if repeat_failed_read:
@@ -89,13 +111,24 @@ def test_owner_can_choose_another_web_route_after_search_failure(tmp_path, monke
                                 'arguments': {'query': 'sample query'}, 'text': None}
                 else:
                     decision = {'kind': 'tool', 'tool_id': 'native.web_fetch',
-                                'arguments': {'url': 'https://example.test/report'}, 'text': None}
+                                'arguments': {'url': 'https://example.test/report', 'max_chars': 100}, 'text': None}
             elif repeat_failed_read and self.calls == 3:
                 assert 'immediate repeat was not dispatched' in request.prompt
                 decision = {'kind': 'tool', 'tool_id': 'native.web_fetch',
-                            'arguments': {'url': 'https://example.test/report'}, 'text': None}
+                            'arguments': {'url': 'https://example.test/report', 'max_chars': 100}, 'text': None}
+            elif (self.calls == (4 if repeat_failed_read else 3)
+                  or (use_last_research_decision and self.calls < 11)):
+                assert 'Synthetic public report.' in request.prompt
+                assert 'The research budget allows no further lookup' not in request.prompt
+                decision = {'kind': 'tool', 'tool_id': 'native.web_fetch',
+                            'arguments': {'url': 'https://example.test/report#content', 'max_chars': 500}, 'text': None}
             else:
                 assert 'Synthetic public report.' in request.prompt
+                assert 'A requested page is already recorded at' in request.prompt
+                if use_last_research_decision:
+                    assert self.calls == 11
+                    assert 'host tools available: []' in request.prompt
+                    assert 'The research budget allows no further lookup' in request.prompt
                 decision = {'kind': 'answer', 'tool_id': None, 'arguments': None, 'text': 'Synthetic answer.'}
             return InferenceResult(json_value=decision, raw_response=json.dumps(decision),
                                    usage={'input_tokens': 100, 'output_tokens': 20})
@@ -109,11 +142,16 @@ def test_owner_can_choose_another_web_route_after_search_failure(tmp_path, monke
     registry = InMemoryToolRegistry()
     registry.register(build_search_memory_tool_definition())
     registry.register(build_read_memory_source_tool_definition())
-    for definition, value in ((search_definition, failure), (fetch_definition, fetched)):
-        def invoke(args, value=value, tool_id=definition.descriptor.tool_id):
-            calls.append(tool_id)
-            return value
-        registry.register(ToolDefinition(definition.descriptor, invoke, definition.argument_schema))
+    def search(args):
+        calls.append(search_definition.descriptor.tool_id)
+        return search_definition.callable(args)
+
+    def fetch(_args):
+        calls.append(fetch_definition.descriptor.tool_id)
+        return fetched
+
+    registry.register(ToolDefinition(search_definition.descriptor, search, search_definition.argument_schema))
+    registry.register(ToolDefinition(fetch_definition.descriptor, fetch, fetch_definition.argument_schema))
     runtime = build_runtime_host(user_store=users, messages=queue, question_store=SQLiteQuestionStore(path),
         conversation_store=conversation, outbox=SQLiteOutboundStore(path), tools=registry,
         inference=InferenceRouter(provider=Provider(), default_profile=ModelProfile('test', 'fixture', 'offline')),
@@ -134,8 +172,12 @@ def test_owner_can_choose_another_web_route_after_search_failure(tmp_path, monke
         saved, observations = checkpoint.load(expected_version=checkpoint.version)
         assert sorted(v['outcome'] for v in saved.budget.to_dict()['reservations'].values()
                       if v['kind'] == 'tool') == ['failure', 'success']
-        assert any(item.get('web_observation', {}).get('error_code') == 'searxng_http_error'
+        assert any(item.get('web_observation', {}).get('error_code') == error_code
                    for item in observations.values())
+        assert observations[saved.state.reused_web_fetch_ref]['web_observation'] == fetched
+        if http_status == 200:
+            log = owner_work_log(queue, message)
+            assert log['events'][0]['outcome'] == 'Upstream search engines failed'
         with queue._connect() as conn:
             raw = conn.execute('SELECT task_state_json FROM v2_task_checkpoints WHERE task_id=?',
                                (message,)).fetchone()['task_state_json']
@@ -159,6 +201,9 @@ def test_web_observation_rejects_actor_change_cancellation_tampering_and_revocat
     result = {'query': 'synthetic', 'provider': 'searxng', 'result_count': 0,
               'results': [], 'answers': [], 'suggestions': []}
     assert valid_web_observation('owner', 'native.web_search', args, result, context=context, task=task)
+    partial = {**result, 'partial': True, 'result_count': 1, 'results': [{'title': 'Synthetic'}]}
+    assert valid_web_observation('owner', 'native.web_search', args, partial, context=context, task=task)
+    assert not valid_web_observation('owner', 'native.web_search', args, {**result, 'partial': True}, context=context, task=task)
     assert not valid_web_observation('other', 'native.web_search', args, result, context=context, task=task)
     assert not valid_web_observation('owner', 'native.web_search', args, {**result, 'query': 'other'}, context=context, task=task)
     assert not valid_web_observation('owner', 'native.web_search', args, {**result, 'answers': ['x' * 50000]}, context=context, task=task)

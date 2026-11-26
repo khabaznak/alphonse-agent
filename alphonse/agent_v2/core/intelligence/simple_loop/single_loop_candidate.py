@@ -16,6 +16,7 @@ from typing import Any, Callable
 from uuid import uuid4
 
 from alphonse.agent_v2.core.inference.models import ModelResponseParseError
+from alphonse.agent_v2.core.intelligence.context_projection import ContextBudgetExceeded
 from .evidence_projection import EvidenceAccessError, EvidenceSource, project_evidence
 from .task_budget import BudgetExhausted, SQLiteTaskBudgetStore, SyntheticEvaluationBudgetStore
 from .prerequisite import FEEDBACK, MissingPrerequisite
@@ -68,6 +69,10 @@ class CandidateState:
     prerequisite_retries: int = 0
     retry_feedback_pending: bool = False
     parse_repair_pending: bool = False
+    # Preserve progress metadata in checkpoints written by development builds.
+    progress_reviewed_count: int = 0
+    progress_assessment: str = 'unknown'
+    reused_web_fetch_ref: str = ''
 
     def request_parse_repair(self, budget) -> bool:
         if self.invalid_decision_retries or budget.usage()['unknown_usage'] or not budget.within_work_limits():
@@ -78,7 +83,7 @@ class CandidateState:
         return True
 
     def snapshot(self) -> dict[str, Any]:
-        return {'schema_version': 7, **deepcopy(asdict(self))}
+        return {'schema_version': 9, **deepcopy(asdict(self))}
 
     @classmethod
     def restore(cls, snapshot: dict[str, Any]) -> 'CandidateState':
@@ -86,7 +91,7 @@ class CandidateState:
             raise ValueError('candidate_checkpoint_invalid')
         version = snapshot.get('schema_version')
         base = {'schema_version', 'task_id', 'actor', 'goal_source', 'evidence_sources', 'status', 'response', 'blocker', 'inflight'}
-        if type(version) is not int or version not in (1, 2, 3, 4, 5, 6, 7):
+        if type(version) is not int or version not in (1, 2, 3, 4, 5, 6, 7, 8, 9):
             raise ValueError('candidate_checkpoint_version_unsupported')
         expected = base if version == 1 else base | {'unsupported_retries', 'recovery_pending'}
         if version >= 3:
@@ -99,6 +104,10 @@ class CandidateState:
             expected |= {'retry_feedback_pending'}
         if version >= 7:
             expected |= {'parse_repair_pending'}
+        if version >= 8:
+            expected |= {'progress_reviewed_count', 'progress_assessment'}
+        if version >= 9:
+            expected |= {'reused_web_fetch_ref'}
         if set(snapshot) != expected:
             raise ValueError('candidate_checkpoint_invalid')
         state = cls(**{key: deepcopy(value) for key, value in snapshot.items() if key != 'schema_version'})
@@ -107,6 +116,9 @@ class CandidateState:
                 or not isinstance(state.evidence_sources, list)
                 or any(not isinstance(x, str) or not x.strip() for x in state.evidence_sources)
                 or len(set(state.evidence_sources)) != len(state.evidence_sources)
+                or type(state.progress_reviewed_count) is not int
+                or not 0 <= state.progress_reviewed_count <= len(state.evidence_sources)
+                or state.progress_assessment not in ('progress', 'no_progress', 'unknown')
                 or any(not isinstance(x, str) for x in (state.response, state.blocker, state.inflight))
                 or type(state.unsupported_retries) is not int or not 0 <= state.unsupported_retries <= 2
                 or type(state.recovery_pending) is not bool
@@ -122,7 +134,9 @@ class CandidateState:
         if (state.prerequisite_feedback not in {'', *FEEDBACK}
                 or type(state.prerequisite_retries) is not int or not 0 <= state.prerequisite_retries <= 2
                 or (state.prerequisite_feedback and not state.prerequisite_retries)
-                or type(state.retry_feedback_pending) is not bool):
+                or type(state.retry_feedback_pending) is not bool
+                or not isinstance(state.reused_web_fetch_ref, str)
+                or (state.reused_web_fetch_ref and state.reused_web_fetch_ref not in state.evidence_sources)):
             raise ValueError('candidate_checkpoint_invalid')
         return state
 
@@ -195,9 +209,12 @@ class CandidateHost:
     authorize_host_bash: Callable[[str, str, dict[str, Any]], bool] | None = None
     execute_host_bash: Callable[[str, dict[str, Any], str], dict[str, Any]] | None = None
     defer_identical_failed_read: Callable[[str, str, dict[str, Any], tuple[str, ...]], bool] | None = None
+    covered_web_fetch: Callable[[str, str, dict[str, Any], tuple[str, ...]], str | None] | None = None
     # The host may durably pause at a quiescent boundary. It must persist and
     # fence the pause before returning True; this callback grants no authority.
     checkpoint_pause: Callable[[CandidateState], bool] | None = None
+    prepare_choice: Callable[[str, int], Callable[[], dict]] | None = None
+    compact_source: Callable[[str, str, int], str] | None = None
 
 
 def _save(host: CandidateHost, state: CandidateState, *, consume_decision: bool = False,
@@ -247,23 +264,32 @@ def _mark_steering_included(host: CandidateHost, decision: dict, fingerprint: st
         return False
 
 
-def _project(host: CandidateHost, state: CandidateState):
+def _project(host: CandidateHost, state: CandidateState, compact_limit: int = 0):
     sources = [EvidenceSource(state.goal_source, 'goal')]
     sources.extend(EvidenceSource(ref, 'observation', required=True) for ref in state.evidence_sources)
+    def compact(ref, content):
+        # Preserve the requested page when other observations can be shortened
+        # enough. The smallest tier remains available for large pages.
+        if ref == state.reused_web_fetch_ref and compact_limit > 512:
+            return content
+        return host.compact_source(ref, content, compact_limit)
     return project_evidence(sources, actor=state.actor, budget=host.projection_budget,
-                            authorize=host.authorize_source, load=host.load_source)
+                            authorize=host.authorize_source, load=host.load_source,
+                            compact=compact if compact_limit else None)
 
 
 def _projection_fingerprint(projection) -> str:
     # Include actual visible bytes and coverage metadata, not just source IDs:
     # authorized sources may change without changing their stable identities.
     payload = {'text': projection.text, 'coverage': projection.manifest.get('coverage')}
+    if 'compacted_source_digests' in projection.manifest:
+        payload['compacted_source_digests'] = projection.manifest['compacted_source_digests']
     return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode('utf-8')).hexdigest()
 
 
-def _is_fresh(host: CandidateHost, state: CandidateState, expected: str) -> bool:
+def _is_fresh(host: CandidateHost, state: CandidateState, expected: str, compact_limit: int = 0) -> bool:
     try:
-        return _projection_fingerprint(_project(host, state)) == expected
+        return _projection_fingerprint(_project(host, state, compact_limit)) == expected
     except Exception:
         return False
 
@@ -310,8 +336,6 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
         if repairing_parse and _deadline_elapsed(host):
             return _terminal(host, state, 'blocked', repair_failure)
         try:
-            projection = _project(host, state)
-            fingerprint = _projection_fingerprint(projection)
             # A chooser that adds framing must declare a full-input cap no
             # larger than the durable input reservation. This is only a local
             # accounting check; external transport enforcement is separate.
@@ -322,7 +346,7 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
             # The projection length is only part of the input. A chooser may
             # add framing, tool schemas or other material; its complete cap and
             # the output cap must be enforced by the external transport.
-            decision_input = projection.text
+            decision_input = ''
             if state.recovery_pending:
                 decision_input += ('\nA previous answer was not verified; the reason may be unknown. '
                                    'Consider relevant authorized sources or another approach. If you cannot '
@@ -333,6 +357,10 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
             if state.retry_feedback_pending:
                 decision_input += ('\nThe previous identical read failed, so its immediate repeat was not dispatched. '
                                    'Consider another available route or explain what remains unavailable.')
+            if state.reused_web_fetch_ref:
+                decision_input += (f'\nA requested page is already recorded at {state.reused_web_fetch_ref}. '
+                                   'Use the recorded text. If it leaves a material gap, choose a different source '
+                                   'or explain what remains uncertain. Repeating the same fetch cannot add evidence.')
             if repairing_parse:
                 decision_input += ('\nThe previous model response could not be decoded. Return one valid answer or '
                                    'question using the recorded observations. Explain any limits of the evidence. '
@@ -349,8 +377,34 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
                                    'source if needed, ask if essential information remains unavailable, or '
                                    'give a supported answer. Do not read unrelated sources just to exhaust '
                                    'the catalog.')
-            if len(decision_input.encode('utf-8')) > host.input_reservation:
+            prepared = None
+            limits = (0, 4096, 1536, 512) if host.compact_source else (0,)
+            for compact_limit in limits:
+                try:
+                    projection = _project(host, state, compact_limit)
+                except ContextBudgetExceeded:
+                    if host.compact_source is None:
+                        raise
+                    continue
+                prompt = projection.text + decision_input
+                if len(prompt.encode('utf-8')) > host.input_reservation:
+                    continue
+                try:
+                    prepared = (host.prepare_choice(prompt, host.output_reservation)
+                                if host.prepare_choice else lambda: host.choose(prompt, host.output_reservation))
+                except ValueError as exc:
+                    category = _chooser_failure_category(exc)
+                    if category == 'input_exceeds_reservation':
+                        continue
+                    if category == 'cancelled' and _cancelled(host):
+                        return _terminal(host, state, 'cancelled', 'cancelled')
+                    raise
+                break
+            if prepared is None:
                 return _terminal(host, state, 'blocked', repair_failure or 'candidate_input_reservation_too_small')
+            fingerprint = _projection_fingerprint(projection)
+            if host.prepare_choice is not None and not _is_fresh(host, state, fingerprint, compact_limit):
+                return _terminal(host, state, 'blocked', 'candidate_evidence_changed_or_revoked')
             call_id = 'model-' + uuid4().hex
             amounts = {'actions': 0, 'model_calls': 1, 'input_tokens': host.input_reservation,
                        'output_tokens': host.output_reservation}
@@ -382,7 +436,7 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
         chooser_failure = ''
         parse_error = None
         try:
-            decision = host.choose(decision_input, host.output_reservation)
+            decision = prepared()
         except ModelResponseParseError as exc:
             parse_error = exc
             decision = None
@@ -459,7 +513,7 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
                 return _terminal(host, state, 'blocked', repair_failure)
             continue
         # A still-authorized source may nevertheless have changed during inference.
-        if not _is_fresh(host, state, fingerprint):
+        if not _is_fresh(host, state, fingerprint, compact_limit):
             return _terminal(host, state, 'blocked', 'candidate_evidence_changed_or_revoked')
         kind = decision.get('kind')
         if repairing_parse and (not isinstance(kind, str) or kind not in {'answer', 'question'}):
@@ -513,7 +567,7 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
                 return _terminal(host, state, 'blocked', 'candidate_verification_unavailable')
             if _cancelled(host):
                 return _terminal(host, state, 'cancelled', 'cancelled')
-            if not _is_fresh(host, state, fingerprint):
+            if not _is_fresh(host, state, fingerprint, compact_limit):
                 return _terminal(host, state, 'blocked', 'candidate_evidence_changed_or_revoked')
             if _cancelled(host):
                 return _terminal(host, state, 'cancelled', 'cancelled')
@@ -543,6 +597,17 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
         if kind != 'tool' or not isinstance(decision.get('tool_id'), str) or not isinstance(decision.get('arguments'), dict):
             return _terminal(host, state, 'blocked', 'candidate_decision_invalid')
         tool_id, args = decision['tool_id'], deepcopy(decision['arguments'])
+        if host.covered_web_fetch is not None and tool_id == 'native.web_fetch':
+            try:
+                covered = host.covered_web_fetch(state.actor, tool_id, deepcopy(args), tuple(state.evidence_sources))
+                if covered is not None and (not isinstance(covered, str) or covered not in state.evidence_sources):
+                    raise ValueError('covered_web_fetch_invalid')
+            except Exception:
+                return _terminal(host, state, 'blocked', 'candidate_retry_policy_unavailable')
+            if covered is not None:
+                state.reused_web_fetch_ref = covered
+                _save(host, state, consume_decision=True)
+                continue
         if host.defer_identical_failed_read is not None:
             try:
                 defer = host.defer_identical_failed_read(state.actor, tool_id, deepcopy(args), tuple(state.evidence_sources))
@@ -576,7 +641,7 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
             if (host.atomic_checkpoint is None or not callable(commit)
                     or descriptor is None or descriptor.read_only is not False
                     or _cancelled(host) or _deadline_elapsed(host)
-                    or not _is_fresh(host, state, fingerprint)):
+                    or not _is_fresh(host, state, fingerprint, compact_limit)):
                 return _terminal(host, state, 'blocked', unavailable)
             try:
                 if not _mark_steering_included(host, decision, fingerprint):
@@ -588,7 +653,7 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
                     continue
                 return committed
             except MissingPrerequisite as exc:
-                if (_cancelled(host) or not _is_fresh(host, state, fingerprint)
+                if (_cancelled(host) or not _is_fresh(host, state, fingerprint, compact_limit)
                         or exc.code not in FEEDBACK or state.prerequisite_retries >= 2):
                     return _terminal(host, state, 'blocked', 'candidate_prerequisite_unavailable')
                 state.prerequisite_feedback = exc.code
@@ -649,7 +714,7 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
             permitted = False
         if not permitted:
             return _terminal(host, state, 'blocked', 'candidate_read_denied')
-        if not _is_fresh(host, state, fingerprint):
+        if not _is_fresh(host, state, fingerprint, compact_limit):
             return _terminal(host, state, 'blocked', 'candidate_evidence_changed_or_revoked')
         if _cancelled(host):
             return _terminal(host, state, 'cancelled', 'cancelled')
@@ -720,7 +785,7 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
             permitted = False
         if not permitted:
             return _terminal(host, state, 'blocked', 'candidate_read_revoked')
-        if not _is_fresh(host, state, fingerprint):
+        if not _is_fresh(host, state, fingerprint, compact_limit):
             return _terminal(host, state, 'blocked', 'candidate_evidence_changed_or_revoked')
         if result.get('status') != 'success':
             # Explicit, completed read-tool failures are useful observations.
@@ -755,7 +820,7 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
             permitted = False
         if not permitted:
             return _terminal(host, state, 'blocked', 'candidate_read_revoked')
-        if not _is_fresh(host, state, fingerprint):
+        if not _is_fresh(host, state, fingerprint, compact_limit):
             return _terminal(host, state, 'blocked', 'candidate_evidence_changed_or_revoked')
         try:
             ref = (host.record_private_knowledge(state.actor, tool_id, deepcopy(args), deepcopy(result), private_digest)

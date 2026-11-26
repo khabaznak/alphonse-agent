@@ -57,6 +57,7 @@ _WEB_FAILURE_DETAILS = {
     'searxng_timeout': 'timeout',
     'searxng_http_error': 'http_error',
     'searxng_invalid_json': 'invalid_response',
+    'searxng_upstream_unavailable': 'upstream_search_failed',
     'web_fetch_timeout': 'timeout',
     'web_fetch_http_error': 'http_error',
     'web_fetch_unresolvable_host': 'unresolvable_host',
@@ -173,8 +174,10 @@ def _activity(actor: str, refs: list, observations: dict, pending: object, *,
             web = item.get('web_observation')
             if isinstance(web, dict) and web.get('status') == 'failed':
                 outcome = 'source_failed'
+            elif tool == 'native.web_search' and isinstance(web, dict) and web.get('partial') is True:
+                outcome = 'partial'
             elif (tool == 'native.web_search' and isinstance(web, dict)
-                  and type(web.get('result_count')) is int and web['result_count'] == 0):
+                  and type(web.get('result_count')) is int and web['result_count'] == 0 and not web.get('answers')):
                 outcome = 'no_results'
         elif tool == OWNER_GMAIL_TOOL_ID and owner_gmail_failure_message(item.get('gmail_observation')):
             outcome = 'source_failed'
@@ -229,8 +232,13 @@ def _events(actor: str, refs: list, observations: dict, pending: object) -> list
         elif tool in {'native.web_search', 'native.web_fetch'}:
             web = item.get('web_observation')
             if isinstance(web, dict) and web.get('status') == 'failed':
-                outcome = 'The source could not be read'
-            elif tool == 'native.web_search' and isinstance(web, dict) and web.get('result_count') == 0:
+                outcome = ('Upstream search engines failed'
+                           if is_web_failure_observation(tool, web) and web['error_code'] == 'searxng_upstream_unavailable'
+                           else 'The source could not be read')
+            elif tool == 'native.web_search' and isinstance(web, dict) and web.get('partial') is True:
+                outcome = 'Partial results returned because some search engines failed'
+            elif (tool == 'native.web_search' and isinstance(web, dict)
+                  and web.get('result_count') == 0 and not web.get('answers')):
                 outcome = 'No results returned'
         elif tool == OWNER_GMAIL_TOOL_ID and owner_gmail_failure_message(item.get('gmail_observation')):
             events.append({'label': 'Attempted an unread mail check', 'outcome': 'The Inbox count could not be verified'})

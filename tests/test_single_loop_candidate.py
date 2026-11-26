@@ -499,9 +499,14 @@ def test_cancellation_prevents_format_repair_call(fixture):
 
 def test_older_candidate_snapshots_restore_without_format_retries():
     snapshot = CandidateState('task', 'actor', 'goal').snapshot()
-    for version in (1, 2, 3, 6):
+    for version in (1, 2, 3, 6, 7, 8):
         old = {**snapshot, 'schema_version': version}
-        old.pop('parse_repair_pending')
+        old.pop('reused_web_fetch_ref')
+        if version < 8:
+            old.pop('progress_reviewed_count')
+            old.pop('progress_assessment')
+        if version < 7:
+            old.pop('parse_repair_pending')
         if version < 4:
             for key in ('answer_review_state', 'prerequisite_feedback', 'prerequisite_retries', 'retry_feedback_pending'):
                 old.pop(key)
@@ -515,6 +520,23 @@ def test_older_candidate_snapshots_restore_without_format_retries():
         assert restored.invalid_decision_retries == 0 and not restored.decision_format_pending
         assert not restored.parse_repair_pending
         assert restored.answer_review_state == 'not_started'
+        assert restored.progress_reviewed_count == 0 and restored.progress_assessment == 'unknown'
+        assert restored.reused_web_fetch_ref == ''
+
+
+def test_reused_web_fetch_retains_middle_of_recorded_page_when_compacting(fixture):
+    from alphonse.agent_v2.core.intelligence.simple_loop.evidence_projection import observation_excerpt
+    from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_candidate import _project
+
+    fixture.sources['web-page'] = 'x' * 4600 + 'important middle' + 'x' * 4600
+    fixture.sources['other-page'] = 'y' * 9200
+    state = CandidateState.restore(CandidateState('task', 'fixture-user', 'goal',
+        evidence_sources=['web-page', 'other-page'], reused_web_fetch_ref='web-page').snapshot())
+    host = replace(fixture.host, projection_budget=16000,
+                   compact_source=lambda _ref, text, limit: observation_excerpt(text, limit))
+    projection = _project(host, state, 4096)
+    assert 'important middle' in projection.text
+    assert set(projection.manifest['compacted_source_digests']) == {'other-page'}
 
 
 def test_deferred_retry_survives_restore_and_stops_repeated_selection(fixture):
@@ -799,6 +821,29 @@ def test_projection_larger_than_reservation_never_calls_model(fixture):
     assert result.blocker == 'candidate_input_reservation_too_small'
     assert not called
     assert host.budgets.load('task').usage()['charged'] == vector()
+
+
+def test_compaction_does_not_hide_evidence_changes_from_the_freshness_check(fixture):
+    from alphonse.agent_v2.core.intelligence.simple_loop.evidence_projection import observation_excerpt
+
+    fixture.state.evidence_sources = ['result']
+    fixture.sources['result'] = 'a' * 1000 + 'old' + 'b' * 1000
+
+    def prepare(prompt, _):
+        assert 'observation excerpted' in prompt and 'old' not in prompt
+
+        def choose():
+            fixture.sources['result'] = fixture.sources['result'].replace('old', 'new')
+            return {'kind': 'answer', 'text': 'The value is 42.',
+                    'usage': {'input_tokens': 100, 'output_tokens': 20}}
+
+        return choose
+
+    host = replace(fixture.host, input_reservation=1024, prepare_choice=prepare,
+                   compact_source=lambda ref, text, limit: observation_excerpt(text, limit))
+    result = run_candidate(fixture.state, host)
+    assert result.blocker == 'candidate_evidence_changed_or_revoked'
+    assert fixture.calls == []
 
 
 def test_crash_after_settlement_before_evidence_checkpoint_does_not_repeat_read(fixture):

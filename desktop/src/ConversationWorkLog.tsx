@@ -16,6 +16,7 @@ const TOOL_LABELS: Record<string, string> = {
 };
 const OUTCOME_LABELS: Record<string, string> = {
   recorded: "an observation was recorded", no_results: "no results were returned", source_failed: "could not be completed",
+  partial: "returned partial results because some search engines failed",
   timed_out: "timed out", interrupted: "was interrupted", exit_zero: "ended; what it achieved is unknown", exit_nonzero: "ended with a nonzero status; what that means for this request is unknown", unknown: "outcome is unknown",
 };
 const COMMAND_OUTCOMES: Record<string, string> = {
@@ -27,6 +28,7 @@ const INTENT_LABELS: Record<string, string> = {
 };
 const DETAIL_LABELS: Record<string, string> = {
   timeout: "The request timed out", http_error: "An HTTP error was reported", invalid_response: "The response could not be read",
+  upstream_search_failed: "Upstream search engines failed",
   unresolvable_host: "The source address could not be resolved", output_too_large: "The response was too large",
 };
 const PARSE_STAGE_LABELS: Record<string, string> = {

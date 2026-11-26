@@ -5,17 +5,39 @@ truth, or authorization for subsequent effects. Recovery retains the observed
 response and never repeats an external request.
 """
 import json
+from urllib.parse import urldefrag
 
 from alphonse.agent_v2.core.tools.invocation import ToolInvocationService
-from alphonse.agent_v2.core.tools.registry.native.web import WEB_FETCH_TOOL_ID, WEB_SEARCH_TOOL_ID
+from alphonse.agent_v2.core.tools.registry.native.web import (
+    WEB_FETCH_TOOL_ID, WEB_SEARCH_TOOL_ID, effective_web_fetch_max_chars,
+)
 
 WEB_TOOL_IDS = frozenset((WEB_FETCH_TOOL_ID, WEB_SEARCH_TOOL_ID))
 MAX_WEB_OBSERVATION_BYTES = 48000
 
+
+def web_fetch_covers(arguments, recorded_arguments, observation, *, max_chars=None):
+    """Whether a successful page snapshot already covers this fetch request."""
+    if not (200 <= observation.get('status_code', 0) < 300):
+        return False
+    url, _ = urldefrag(arguments['url'].strip())
+    if url not in (urldefrag(observation['url']).url, urldefrag(observation['final_url']).url):
+        return False
+    if observation['truncated'] is False:
+        return True
+    requested = arguments.get('max_chars')
+    recorded = recorded_arguments.get('max_chars')
+    if type(max_chars) is int and max_chars > 0:
+        return effective_web_fetch_max_chars(requested, max_chars) <= effective_web_fetch_max_chars(recorded, max_chars)
+    # An omitted limit uses the configured maximum. A larger explicit limit
+    # can expand a capture made with a smaller explicit limit.
+    return recorded is None or (requested is not None and max(1, requested) <= max(1, recorded))
+
 # Only failures explicitly returned by the native read tools are known
 # outcomes. Uncaught exceptions and malformed results remain unconfirmed.
 _WEB_FAILURE_CODES = {
-    WEB_SEARCH_TOOL_ID: frozenset({'searxng_timeout', 'searxng_http_error', 'searxng_invalid_json'}),
+    WEB_SEARCH_TOOL_ID: frozenset({'searxng_timeout', 'searxng_http_error', 'searxng_invalid_json',
+                                  'searxng_upstream_unavailable'}),
     WEB_FETCH_TOOL_ID: frozenset({'web_fetch_timeout', 'web_fetch_http_error', 'web_fetch_unresolvable_host',
         'web_fetch_output_too_large', 'web_fetch_output_invalid'}),
 }
@@ -82,13 +104,16 @@ def valid_web_observation(actor, tool_id, arguments, observation, *, context, ta
         if is_web_failure_observation(tool_id, observation):
             return True
         if tool_id == WEB_SEARCH_TOOL_ID:
-            return (set(observation) == {'query', 'provider', 'result_count', 'results', 'answers', 'suggestions'}
+            keys = {'query', 'provider', 'result_count', 'results', 'answers', 'suggestions'}
+            return (set(observation) - {'partial'} == keys
                     and observation['query'] == arguments.get('query', '').strip()
                     and observation['provider'] == 'searxng' and type(observation['result_count']) is int
                     and isinstance(observation['results'], list)
                     and observation['result_count'] == len(observation['results']) <= 20
                     and isinstance(observation['answers'], list) and isinstance(observation['suggestions'], list)
-                    and all(isinstance(item, dict) for item in observation['results']))
+                    and all(isinstance(item, dict) for item in observation['results'])
+                    and ('partial' not in observation or (observation['partial'] is True
+                         and bool(observation['results'] or observation['answers']))))
         return (set(observation) == {'url', 'final_url', 'status_code', 'content_type', 'title', 'text', 'truncated'}
                 and observation['url'] == arguments.get('url', '').strip()
                 and all(isinstance(observation[key], str) for key in ('url', 'final_url', 'content_type', 'title', 'text'))
