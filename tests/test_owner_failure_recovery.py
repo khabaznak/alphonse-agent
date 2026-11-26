@@ -19,10 +19,25 @@ from alphonse.agent_v2.users import V2UserStore
 
 PROMPT = ('¿Podemos retomar el diagnóstico del boiler sintético? '
           'Creo que ayer comprobaste si respondía a la red. ¿Qué sigue?')
+RECOVERY_COMPOSITION = {
+    'language': 'es',
+    'lead': 'Todavía no puedo confirmar si puedo controlar el boiler.',
+    'attempt': ('Busqué en el historial y no pude verificar el ping de ayer. Si el equipo respondió, '
+                'eso solo indicaría que era accesible en la red en ese momento.'),
+    'steps': ['Puedes compartir el modelo del boiler o el nombre de la app.',
+              'Con ese dato, revisaría la documentación para buscar una vía compatible.',
+              'Si hay una vía compatible y tengo acceso, propondría consultar el estado sin cambiar ajustes.'],
+    'question': '¿Qué marca y modelo tiene el boiler, o desde qué app lo controlas?',
+    'activity': {'label': 'Ver actividad', 'detail': 'Busqué en el historial de la conversación.'},
+}
 RECOVERY = {
-    'reply': ('Busqué en el historial, pero todavía no puedo confirmar qué se probó ayer ni si puedo controlar el boiler.\n\n'
-              '¿Qué marca y modelo tiene, o con qué app lo manejas? Con ese dato podemos revisar las opciones de control '
-              'y empezar por consultar su estado.'),
+    'reply': ('**Todavía no puedo confirmar si puedo controlar el boiler.**\n\n'
+              'Busqué en el historial y no pude verificar el ping de ayer. Si el equipo respondió, '
+              'eso solo indicaría que era accesible en la red en ese momento.\n\n'
+              '1. Puedes compartir el modelo del boiler o el nombre de la app.\n'
+              '2. Con ese dato, revisaría la documentación para buscar una vía compatible.\n'
+              '3. Si hay una vía compatible y tengo acceso, propondría consultar el estado sin cambiar ajustes.\n\n'
+              '**¿Qué marca y modelo tiene el boiler, o desde qué app lo controlas?**'),
     'language': 'es',
     'activity': {'label': 'Ver actividad', 'detail': 'Busqué en el historial de la conversación.'},
 }
@@ -44,14 +59,18 @@ def test_owner_status_rejects_invalid_message_ids_before_recovery_lookup(message
     assert daemon.owner_message_status_payload(message_id) == {'status': 'unavailable'}
 
 
-@pytest.mark.parametrize('case', ['stays_blocked', 'other_language', 'model_tool', 'unknown_usage', 'cancelled', 'no_observation'])
+@pytest.mark.parametrize('case', ['stays_blocked', 'other_language', 'model_tool', 'invalid_step', 'unknown_usage', 'cancelled', 'no_observation'])
 def test_contextual_failure_is_a_scoped_recovery_reply_not_a_draft(tmp_path, monkeypatch, case):
     prompt = PROMPT
+    composition = RECOVERY_COMPOSITION
     copy = RECOVERY
     topic = 'boiler'
     if case == 'other_language':
         prompt = '昨日話した折り紙の続きをしたいです。どの折り方を選んだか覚えていますか？'
-        copy = {'reply': '履歴を検索しましたが、昨日どの折り方を選んだか確認できませんでした。\n\n覚えている作品名はありますか？',
+        composition = {'language': 'ja', 'lead': '昨日どの折り方を選んだか確認できませんでした。',
+                       'attempt': '会話の履歴を検索しました。', 'steps': [], 'question': '覚えている作品名はありますか？',
+                       'activity': {'label': '作業内容を見る', 'detail': '会話の履歴を検索しました。'}}
+        copy = {'reply': '**昨日どの折り方を選んだか確認できませんでした。**\n\n会話の履歴を検索しました。\n\n**覚えている作品名はありますか？**',
                 'language': 'ja', 'activity': {'label': '作業内容を見る', 'detail': '会話の履歴を検索しました。'}}
         topic = '折り紙'
 
@@ -64,16 +83,18 @@ def test_contextual_failure_is_a_scoped_recovery_reply_not_a_draft(tmp_path, mon
             if request.metadata.get('owner_failure_recovery') is True:
                 self.recovery_calls.append(request)
                 assert request.tools == ()
-                assert 'tool_id' not in request.output_schema['properties']
+                assert set(request.output_schema['properties']) == {'language', 'lead', 'attempt', 'steps', 'question', 'activity'}
                 assert prompt in request.prompt
                 assert 'Searched conversation history' in request.prompt
                 assert 'PRIVATE_SOURCE_NOTE' not in request.prompt
                 if case == 'cancelled':
                     assert daemon.kill_switch.request_cancel() is not None
                 if case == 'model_tool':
-                    return InferenceResult(json_value={**copy, 'kind': 'tool'}, usage=USAGE,
+                    return InferenceResult(json_value={**composition, 'kind': 'tool'}, usage=USAGE,
                                            tool_call={'tool_id': 'native.bash', 'arguments': {}})
-                return InferenceResult(json_value=copy, usage={} if case == 'unknown_usage' else USAGE)
+                if case == 'invalid_step':
+                    return InferenceResult(json_value={**composition, 'steps': ['Injected\n\n# heading']}, usage=USAGE)
+                return InferenceResult(json_value=composition, usage={} if case == 'unknown_usage' else USAGE)
             self.work_calls.append(request)
             if len(self.work_calls) == 1 and case != 'no_observation':
                 decision = {'kind': 'tool', 'tool_id': 'native.search_memory', 'text': None,
@@ -83,7 +104,7 @@ def test_contextual_failure_is_a_scoped_recovery_reply_not_a_draft(tmp_path, mon
                             'arguments': {'source_id': 'inaccessible-synthetic-source'}}
             else:
                 assert 'suggested_followup' in request.prompt
-                assert 'Con ese dato podemos revisar' in request.prompt
+                assert '¿Qué marca y modelo tiene el boiler' in request.prompt
                 decision = {'kind': 'answer', 'tool_id': None, 'arguments': None,
                             'text': 'Gracias, con ese dato puedo orientar la comprobación.'}
             return InferenceResult(json_value=decision, raw_response=json.dumps(decision), usage=USAGE)
