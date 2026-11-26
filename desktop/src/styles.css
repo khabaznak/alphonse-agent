@@ -1769,3 +1769,16 @@ button.mockup-skill-card > p { flex: 1; }
 .conversation-work-log ol { padding-left: 1.4rem; margin: .5rem 0; }
 .conversation-work-log li { margin: .25rem 0; }
 .conversation-work-log small { display: block; }
+
+/* Keep the conversation and At hand independently visible at compact widths. */
+@media (max-width: 1199px) {
+  .desktop-shell.at-hand-open { grid-template-columns: var(--nav-width) minmax(0, 1fr) min(280px, 35vw); }
+  .at-hand-drawer { position: static; width: auto; box-shadow: none; }
+}
+/* Long recovery/context stacks scroll independently; the editor stays reachable. */
+.composer-support { max-height: min(16vh, 120px); overflow-y: auto; overscroll-behavior: contain; }
+.composer-support:empty { display: none; }
+.composer-support:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+/* Keep widget titles legible when their controls need a second row. */
+.widget-heading { flex-wrap: wrap; }
+.at-hand-drawer .widget-heading h3 { flex: 1 0 90px; overflow-wrap: normal; word-break: normal; }
