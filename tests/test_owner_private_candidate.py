@@ -70,10 +70,10 @@ def test_private_dispatch_keeps_digest_out_of_model_and_emits_no_tool_events(set
     if mode == 'cancel_after_read':
         # The call remains in flight; cancellation never makes its result available
         # or silently replays the read on recovery.
-        from alphonse.agent_v2.core.intelligence.simple_loop.single_loop_checkpoint import CheckpointConflict
-        with pytest.raises(CheckpointConflict):
-            run_candidate(CandidateState(atomic.task.task_id, owner.user_id, 'goal'), host)
+        result = run_candidate(CandidateState(atomic.task.task_id, owner.user_id, 'goal'), host)
+        assert result.status == 'cancelled'
         saved, bindings = atomic.load(expected_version=atomic.version)
+        assert saved.state.status == 'cancelled'
         assert saved.state.inflight and bindings == {}
         assert len(prompts) == 1 and not evidence and not events and not telemetry
         return

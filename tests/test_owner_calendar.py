@@ -75,7 +75,7 @@ class ScriptedProvider:
 
 
 @contextmanager
-def calendar_worker(f, root, wire, provider, *, model='fixture', socket=False):
+def calendar_worker(f, root, wire, provider, *, model='fixture', socket=False, configure_runtime=None):
     path = Path(f.accounts.users.db_path)
     with patch.dict(os.environ, {'ALPHONSE_V2_DB_PATH': str(path)}), patch.object(Path, 'home', classmethod(lambda cls: root)):
         queue = SQLiteMessageQueue(path, experimental_claim_fencing=True)
@@ -88,6 +88,8 @@ def calendar_worker(f, root, wire, provider, *, model='fixture', socket=False):
             inference=InferenceRouter(provider=provider, default_profile=ModelProfile('openai', model, 'calendar-dojo')),
             tools=registry, coding_skill_service=object(), experimental_owner_read=True, owner_selected_draft_sink=lambda *_: None)
         runtime.owner_calendar_service = OwnerCalendarService(f.accounts, lambda _: f.service, transport=wire)
+        if configure_runtime is not None:
+            configure_runtime(runtime)
         daemon = V2Daemon(runtime, daemon_id='calendar-dojo', experimental_owner_only=True)
         daemon._acquire_single_instance_lock = lambda: None
         daemon._release_single_instance_lock = lambda: None
@@ -135,6 +137,11 @@ def test_calendar_titles_are_private_to_verified_desktop_pickup(f, tmp_path):
         history = conversation.list(owner_user_id='owner')
         assert history[-1].content == 'Google Calendar results were displayed privately in Desktop.'
         assert TITLE not in '\n'.join(event.content for event in history)
+        restored = daemon.desktop_conversation_history(user='owner', include_verified_private_cards=True)
+        [reply] = [row for row in restored if row['id'] == f'owner:{message}']
+        assert reply['private_card'] == {'provider': 'calendar', 'envelopes': answer['private_a2ui']}
+        f.accounts.revoke_grant(f.owner, grant_id='grant', expected_revision=1)
+        assert TITLE not in repr(daemon.desktop_conversation_history(user='owner', include_verified_private_cards=True))
         assert len(wire.calls) == 1 and wire.calls[0][0] == 'calendars/family%40group.calendar.google.com/events'
         assert wire.calls[0][1]['params']['timeMin'] == WINDOW['time_min']
         assert 'description' not in wire.calls[0][1]['params']['fields']

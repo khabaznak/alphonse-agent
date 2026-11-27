@@ -40,6 +40,10 @@ holds bounded excerpts and the draft for verified pickup. Ordinary conversation
 history records a receipt without message content. Google access, the local
 grant, and the owner claim are rechecked before pickup.
 
+Authenticated owner Desktop history can reconstruct an acknowledged card from
+its retained snapshot. The daemon rechecks the same account and label grant.
+When the snapshot or grant is unavailable, Desktop shows the receipt.
+
 ## Clean install and authorization
 
 Follow [managed OAuth setup](oauth-accounts.md) and install the optional

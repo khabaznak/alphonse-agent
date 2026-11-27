@@ -17,6 +17,7 @@ from alphonse.agent_v2.core.inference.openai_codex import _json_envelope
 from alphonse.agent_v2.core.inference.router import InferenceRouter, _simple_loop_failure_category
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from .candidate_decision_policy import action_schema, make_request, normalize_action, validate_source_progress
+from .owner_disposable_handoff import OWNER_DISPOSABLE_HANDOFF_TOOL_ID
 
 
 class RouterCandidateChooser:
@@ -27,6 +28,7 @@ class RouterCandidateChooser:
                  observation_progress: Callable[[], dict[str, list[str]]] | None = None,
                  allow_owner_reminder: bool = False, allow_disposable_bash: bool = False,
                  allow_owner_schedule: bool = False, allow_owner_host_bash: bool = False,
+                 allow_disposable_handoff: bool = False,
                  private_mail_summary: bool = False):
         if not isinstance(router, InferenceRouter) or type(max_input_tokens) is not int or max_input_tokens <= 0:
             raise ValueError('candidate_router_configuration_invalid')
@@ -39,7 +41,8 @@ class RouterCandidateChooser:
         if observation_progress is not None and not callable(observation_progress):
             raise ValueError('candidate_router_configuration_invalid')
         if (type(allow_owner_reminder) is not bool or type(allow_disposable_bash) is not bool
-                or type(allow_owner_schedule) is not bool or type(allow_owner_host_bash) is not bool):
+                or type(allow_owner_schedule) is not bool or type(allow_owner_host_bash) is not bool
+                or type(allow_disposable_handoff) is not bool):
             raise ValueError('candidate_router_configuration_invalid')
         if not isinstance(tools, tuple):
             raise ValueError('candidate_router_tools_invalid')
@@ -53,6 +56,7 @@ class RouterCandidateChooser:
                     or (tool.read_only is not True and not (tool.read_only is False and
                         ((allow_owner_reminder and tool.tool_id == 'native.owner_reminder_create') or
                          (allow_owner_schedule and tool.tool_id == 'native.scheduled_task') or
+                         (allow_disposable_handoff and tool.tool_id == OWNER_DISPOSABLE_HANDOFF_TOOL_ID) or
                          ((allow_disposable_bash or allow_owner_host_bash) and tool.tool_id == 'native.bash'))))
                     or not isinstance(tool.tool_id, str)
                     or not tool.tool_id.strip() or tool.tool_id in seen

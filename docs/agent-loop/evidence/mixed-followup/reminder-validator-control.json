@@ -1,0 +1,13 @@
+{
+  "compound_live_goal": {
+    "status": "rejected",
+    "code": "owner_reminder_request_invalid"
+  },
+  "standalone_control": {
+    "status": "accepted",
+    "canonical": {
+      "message": "Run the test print",
+      "due_at": "2026-12-03T21:00:00+00:00"
+    }
+  }
+}

@@ -234,6 +234,23 @@ class TaskBudget:
         return all(charged[key] <= self.limits.total[key] - self.limits.final_reserve[key]
                    for key in DIMENSIONS)
 
+    def within_total_limits(self) -> bool:
+        """Check task-wide charges, including the final lane."""
+        return self._fits_total(self.usage()['charged'])
+
+    def model_settlement_fits_total(self, reservation_id: str, *, input_tokens: int, output_tokens: int) -> bool:
+        """Check the total with actual usage replacing this model call's forecast."""
+        row = self._reservations.get(reservation_id)
+        if row is None or row['kind'] != 'model' or row['status'] != 'reserved':
+            raise ValueError('budget_reservation_not_pending')
+        charged = self.usage()['charged']
+        for key, actual in (('input_tokens', input_tokens), ('output_tokens', output_tokens)):
+            charged[key] += _integer(actual, key) - row['reserved'][key]
+        return self._fits_total(charged)
+
+    def _fits_total(self, charged: Mapping[str, int]) -> bool:
+        return all(charged[key] <= self.limits.total[key] for key in DIMENSIONS)
+
     def reserve(self, reservation_id: str, *, kind: str, amounts: Mapping[str, int],
                 now_ms: int, lane: str = "work", cancelled: bool = False,
                 _synthetic_allow_settled_unknown: bool = False) -> int:

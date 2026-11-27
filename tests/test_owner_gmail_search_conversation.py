@@ -2,6 +2,8 @@
 from datetime import datetime, timedelta, timezone
 import json
 import os
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import pytest
 
@@ -187,6 +189,43 @@ def test_search_evidence_and_summary_stay_in_private_desktop_path(f, tmp_path, c
         assert all(marker not in repr(daemon.runtime.core.telemetry_events if hasattr(daemon.runtime.core, 'telemetry_events')
                                       else daemon.runtime.telemetry_events) for marker in (SUBJECT, BODY, SUMMARY))
         assert len(wire.calls) == 2
+
+
+def test_acknowledged_mail_card_is_restored_only_in_authorized_desktop_history(f, monkeypatch):
+    from alphonse.agent_v2.core.intelligence.simple_loop import owner_gmail_search
+
+    seed_mail(f)
+    wire, provider = inbox_fixture(), ScriptedSummary(summary=SUMMARY + ' [1]')
+    with TemporaryDirectory(prefix='card-', dir='/tmp') as path, calendar_worker(
+            f, Path(path), wire, provider, socket=True) as (daemon, queue, conversation, client):
+        daemon.runtime.owner_gmail_search_service = OwnerGmailSearchService(f.accounts, lambda _: f.service, transport=wire)
+        mid = queue.enqueue_trusted_local_owner(prompt=GOAL, peer_uid=os.getuid())
+        assert worker_status(lambda: daemon.owner_message_status(mid)) == 'ready'
+
+        def history(user='owner', **params):
+            return client.request('desktop_conversation_history', user=user, **params)
+
+        assert not any('private_card' in row for row in history(include_private_cards=True)['messages'])
+        draft = daemon.take_owner_desktop_draft(mid)
+        daemon.acknowledge_owner_desktop_draft(mid, draft['acknowledgement_token'])
+
+        class Later(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return datetime.now(tz) + timedelta(hours=1)
+
+        monkeypatch.setattr(owner_gmail_search, 'datetime', Later)
+        assert SUBJECT not in json.dumps(history())
+        restored = history(include_private_cards=True)
+        assert restored['private_cards_checked'] is True
+        [reply] = [row for row in restored['messages'] if row['id'] == f'owner:{mid}']
+        assert reply['private_card'] == {'provider': 'gmail', 'envelopes': draft['private_a2ui']}
+        with pytest.raises(Exception, match='desktop_private_history_unavailable'):
+            history(user='other', include_private_cards=True)
+        f.accounts.revoke_grant(f.owner, grant_id='content', expected_revision=1)
+        assert SUBJECT not in json.dumps(history(include_private_cards=True))
+        assert all(SUBJECT not in item.content for item in conversation.list(owner_user_id='owner'))
+        assert len(wire.calls) == 2 and len(provider.prompts) == 2
 
 
 @pytest.mark.parametrize('revoked_before_pickup', [False, True])

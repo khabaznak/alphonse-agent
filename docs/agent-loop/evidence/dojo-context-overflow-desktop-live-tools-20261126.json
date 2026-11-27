@@ -1,0 +1,478 @@
+{
+  "date_local": "2026-11-26",
+  "scenario": "Same Spanish QR-17 question and fictional catalog facts through native Desktop, with live tool selection",
+  "setup": "Fresh disposable owner and SQLite database for each native Tauri development run. The live reasoning model chose every working tool, and live Jev assessed progress. A mock public search ranks the same three fictional sources against each incoming query. All three mock source bodies include synthetic padding to expose the context limit. The two controls change only their indicated budget dimension in the disposable runner.",
+  "oracle": "The registry verifies light blue for QR-17. The available specification applies to QR-16 and explicitly excludes QR-17, leaving maximum storage temperature unverified.",
+  "runs": [
+    {
+      "arm": "production limits",
+      "first_rejected_envelope_utf8_bytes": 82280,
+      "first_accepted_compact_envelope_utf8_bytes": 29843,
+      "rejected_preflights": 1,
+      "finding_present_at_first_compacted_call": true,
+      "fully_retained_observations": 4,
+      "searches": [
+        {
+          "number": 1,
+          "query": "Lysmere QR-17 sample color maximum storage temperature",
+          "source": "spec-qr-16"
+        },
+        {
+          "number": 2,
+          "query": "\"Lysmere\" \"QR-17\" color",
+          "source": "sample-registry"
+        },
+        {
+          "number": 3,
+          "query": "\"Lysmere\" \"QR-17\" \"storage\" temperature",
+          "source": "spec-qr-16"
+        },
+        {
+          "number": 4,
+          "query": "\"QR-17\" Lysmere maximum storage temperature specification",
+          "source": "spec-qr-16"
+        }
+      ],
+      "tool_searches_after_first_compaction": 2,
+      "working_llm": {
+        "model": "gpt-6.1-terra",
+        "calls": 5,
+        "usage": {
+          "input_tokens": 120138,
+          "output_tokens": 380
+        },
+        "decisions": [
+          {
+            "number": 1,
+            "decision": {
+              "kind": "tool",
+              "tool_id": "native.web_search",
+              "arguments": {
+                "query": "Lysmere QR-17 sample color maximum storage temperature",
+                "limit": 20
+              },
+              "text": null,
+              "activity_intent": "find_information"
+            },
+            "usage": {
+              "input_tokens": 17715,
+              "output_tokens": 55
+            },
+            "seconds": 6.374
+          },
+          {
+            "number": 2,
+            "decision": {
+              "kind": "tool",
+              "tool_id": "native.web_search",
+              "arguments": {
+                "query": "\"Lysmere\" \"QR-17\" color",
+                "limit": 10
+              },
+              "text": null,
+              "activity_intent": "find_information"
+            },
+            "usage": {
+              "input_tokens": 32670,
+              "output_tokens": 59
+            },
+            "seconds": 4.695
+          },
+          {
+            "number": 3,
+            "decision": {
+              "kind": "tool",
+              "tool_id": "native.web_search",
+              "arguments": {
+                "query": "\"Lysmere\" \"QR-17\" \"storage\" temperature"
+              },
+              "text": null,
+              "activity_intent": "find_information"
+            },
+            "usage": {
+              "input_tokens": 21411,
+              "output_tokens": 61
+            },
+            "seconds": 4.69
+          },
+          {
+            "number": 4,
+            "decision": {
+              "kind": "tool",
+              "tool_id": "native.web_search",
+              "arguments": {
+                "query": "\"QR-17\" Lysmere maximum storage temperature specification",
+                "limit": 10
+              },
+              "text": null,
+              "activity_intent": "find_information"
+            },
+            "usage": {
+              "input_tokens": 23255,
+              "output_tokens": 78
+            },
+            "seconds": 7.922
+          },
+          {
+            "number": 5,
+            "decision": {
+              "kind": "answer",
+              "tool_id": null,
+              "arguments": null,
+              "text": "La muestra QR-17 es de color **azul celeste**, según el [registro de muestras de Lysmere](https://catalog.lys-mere.test/sample-registry).\n\nNo pude verificar la temperatura máxima de almacenamiento de QR-17. La [especificación localizada](https://catalog.lys-mere.test/spec-qr-16) indica expresamente que su temperatura corresponde solo a QR-16 y que QR-17 queda fuera de esa ficha.",
+              "activity_intent": null
+            },
+            "usage": {
+              "input_tokens": 25087,
+              "output_tokens": 127
+            },
+            "seconds": 6.019
+          }
+        ]
+      },
+      "jev": {
+        "provider_model": "jev-1.14.0",
+        "after_actions": 3,
+        "assessment": "progress",
+        "probabilities": {
+          "new_fact": 0.98,
+          "advances_question": 0.89
+        },
+        "usage": {
+          "input_tokens": 2869,
+          "output_tokens": 39
+        },
+        "seconds": 0.29
+      },
+      "task": {
+        "status": "completed",
+        "blocker": "",
+        "limits": {
+          "actions": 10,
+          "input_tokens": 786432,
+          "model_calls": 12,
+          "output_tokens": 196608
+        },
+        "final_reserve": {
+          "actions": 0,
+          "input_tokens": 65536,
+          "model_calls": 1,
+          "output_tokens": 16384
+        },
+        "charged": {
+          "actions": 4,
+          "input_tokens": 120138,
+          "model_calls": 5,
+          "output_tokens": 380
+        }
+      },
+      "final_lane": {
+        "calls": 0,
+        "model": null,
+        "usage": null,
+        "settlement": null,
+        "stored_report": false
+      },
+      "native_desktop_answer": "La muestra QR-17 es de color **azul celeste**, según el [registro de muestras de Lysmere](https://catalog.lys-mere.test/sample-registry).\n\nNo pude verificar la temperatura máxima de almacenamiento de QR-17. La [especificación localizada](https://catalog.lys-mere.test/spec-qr-16) indica expresamente que su temperatura corresponde solo a QR-16 y que QR-17 queda fuera de esa ficha.",
+      "elapsed_seconds_first_preflight_to_last_model_return": 30.938
+    },
+    {
+      "arm": "fixture-only three-action limit",
+      "first_rejected_envelope_utf8_bytes": 82279,
+      "first_accepted_compact_envelope_utf8_bytes": 29839,
+      "rejected_preflights": 1,
+      "finding_present_at_first_compacted_call": true,
+      "fully_retained_observations": 3,
+      "searches": [
+        {
+          "number": 1,
+          "query": "Lysmere QR-17 sample color maximum storage temperature",
+          "source": "spec-qr-16"
+        },
+        {
+          "number": 2,
+          "query": "Lysmere \"QR-17\" color sample",
+          "source": "sample-registry"
+        },
+        {
+          "number": 3,
+          "query": "Lysmere \"QR-17\" maximum storage temperature",
+          "source": "spec-qr-16"
+        }
+      ],
+      "tool_searches_after_first_compaction": 1,
+      "working_llm": {
+        "model": "gpt-6.1-terra",
+        "calls": 4,
+        "usage": {
+          "input_tokens": 91438,
+          "output_tokens": 301
+        },
+        "decisions": [
+          {
+            "number": 1,
+            "decision": {
+              "kind": "tool",
+              "tool_id": "native.web_search",
+              "arguments": {
+                "query": "Lysmere QR-17 sample color maximum storage temperature",
+                "limit": 10
+              },
+              "text": null,
+              "activity_intent": "find_information"
+            },
+            "usage": {
+              "input_tokens": 17710,
+              "output_tokens": 55
+            },
+            "seconds": 5.531
+          },
+          {
+            "number": 2,
+            "decision": {
+              "kind": "tool",
+              "tool_id": "native.web_search",
+              "arguments": {
+                "query": "Lysmere \"QR-17\" color sample"
+              },
+              "text": null,
+              "activity_intent": "find_information"
+            },
+            "usage": {
+              "input_tokens": 32670,
+              "output_tokens": 53
+            },
+            "seconds": 4.993
+          },
+          {
+            "number": 3,
+            "decision": {
+              "kind": "tool",
+              "tool_id": "native.web_search",
+              "arguments": {
+                "query": "Lysmere \"QR-17\" maximum storage temperature"
+              },
+              "text": null,
+              "activity_intent": "find_information"
+            },
+            "usage": {
+              "input_tokens": 21397,
+              "output_tokens": 54
+            },
+            "seconds": 4.583
+          },
+          {
+            "number": 4,
+            "decision": {
+              "kind": "answer",
+              "tool_id": null,
+              "arguments": null,
+              "text": "La muestra QR-17 es de color **azul celeste**, según el [registro de muestras de Lysmere](https://catalog.lys-mere.test/sample-registry), tal como aparece en el resultado de búsqueda consultado.\n\nNo pude verificar su temperatura máxima de almacenamiento. La [ficha de especificaciones de QR-16](https://catalog.lys-mere.test/spec-qr-16) indica expresamente que su temperatura corresponde solo a QR-16 y que QR-17 queda fuera de esa ficha.",
+              "activity_intent": null
+            },
+            "usage": {
+              "input_tokens": 19661,
+              "output_tokens": 139
+            },
+            "seconds": 6.273
+          }
+        ]
+      },
+      "jev": {
+        "provider_model": "jev-1.14.0",
+        "after_actions": 3,
+        "assessment": "progress",
+        "probabilities": {
+          "new_fact": 0.98,
+          "advances_question": 0.88
+        },
+        "usage": {
+          "input_tokens": 2867,
+          "output_tokens": 39
+        },
+        "seconds": 0.23
+      },
+      "task": {
+        "status": "completed",
+        "blocker": "",
+        "limits": {
+          "actions": 3,
+          "input_tokens": 786432,
+          "model_calls": 12,
+          "output_tokens": 196608
+        },
+        "final_reserve": {
+          "actions": 0,
+          "input_tokens": 65536,
+          "model_calls": 1,
+          "output_tokens": 16384
+        },
+        "charged": {
+          "actions": 3,
+          "input_tokens": 91438,
+          "model_calls": 4,
+          "output_tokens": 301
+        }
+      },
+      "final_lane": {
+        "calls": 0,
+        "model": null,
+        "usage": null,
+        "settlement": null,
+        "stored_report": false
+      },
+      "native_desktop_answer": "La muestra QR-17 es de color **azul celeste**, según el [registro de muestras de Lysmere](https://catalog.lys-mere.test/sample-registry), tal como aparece en el resultado de búsqueda consultado.\n\nNo pude verificar su temperatura máxima de almacenamiento. La [ficha de especificaciones de QR-16](https://catalog.lys-mere.test/spec-qr-16) indica expresamente que su temperatura corresponde solo a QR-16 y que QR-17 queda fuera de esa ficha.",
+      "elapsed_seconds_first_preflight_to_last_model_return": 22.27
+    },
+    {
+      "arm": "fixture-only 125000-token working input limit",
+      "first_rejected_envelope_utf8_bytes": 82305,
+      "first_accepted_compact_envelope_utf8_bytes": 29843,
+      "rejected_preflights": 1,
+      "finding_present_at_first_compacted_call": false,
+      "fully_retained_observations": 3,
+      "searches": [
+        {
+          "number": 1,
+          "query": "Lysmere muestra QR-17 color temperatura máxima almacenamiento",
+          "source": "spec-qr-16"
+        },
+        {
+          "number": 2,
+          "query": "\"Lysmere\" \"QR-17\" color storage temperature",
+          "source": "spec-qr-16"
+        },
+        {
+          "number": 3,
+          "query": "\"Lysmere\" \"QR-17\" color",
+          "source": "sample-registry"
+        }
+      ],
+      "tool_searches_after_first_compaction": 1,
+      "working_llm": {
+        "model": "gpt-6.1-terra",
+        "calls": 3,
+        "usage": {
+          "input_tokens": 71784,
+          "output_tokens": 172
+        },
+        "decisions": [
+          {
+            "number": 1,
+            "decision": {
+              "kind": "tool",
+              "tool_id": "native.web_search",
+              "arguments": {
+                "query": "Lysmere muestra QR-17 color temperatura máxima almacenamiento",
+                "limit": 10
+              },
+              "text": null,
+              "activity_intent": "find_information"
+            },
+            "usage": {
+              "input_tokens": 17714,
+              "output_tokens": 55
+            },
+            "seconds": 5.114
+          },
+          {
+            "number": 2,
+            "decision": {
+              "kind": "tool",
+              "tool_id": "native.web_search",
+              "arguments": {
+                "query": "\"Lysmere\" \"QR-17\" color storage temperature",
+                "limit": 10
+              },
+              "text": null,
+              "activity_intent": "find_information"
+            },
+            "usage": {
+              "input_tokens": 32670,
+              "output_tokens": 61
+            },
+            "seconds": 9.365
+          },
+          {
+            "number": 3,
+            "decision": {
+              "kind": "tool",
+              "tool_id": "native.web_search",
+              "arguments": {
+                "query": "\"Lysmere\" \"QR-17\" color"
+              },
+              "text": null,
+              "activity_intent": "find_information"
+            },
+            "usage": {
+              "input_tokens": 21400,
+              "output_tokens": 56
+            },
+            "seconds": 4.467
+          }
+        ]
+      },
+      "jev": {
+        "provider_model": "jev-1.14.0",
+        "after_actions": 3,
+        "assessment": "progress",
+        "probabilities": {
+          "new_fact": 0.98,
+          "advances_question": 0.93
+        },
+        "usage": {
+          "input_tokens": 2864,
+          "output_tokens": 39
+        },
+        "seconds": 0.214
+      },
+      "task": {
+        "status": "blocked",
+        "blocker": "BudgetExhausted:budget_exhausted:input_tokens",
+        "limits": {
+          "actions": 10,
+          "input_tokens": 190536,
+          "model_calls": 12,
+          "output_tokens": 196608
+        },
+        "final_reserve": {
+          "actions": 0,
+          "input_tokens": 65536,
+          "model_calls": 1,
+          "output_tokens": 16384
+        },
+        "charged": {
+          "actions": 3,
+          "input_tokens": 86838,
+          "model_calls": 4,
+          "output_tokens": 299
+        }
+      },
+      "final_lane": {
+        "calls": 1,
+        "model": "gpt-6.1-terra",
+        "usage": {
+          "input_tokens": 15054,
+          "output_tokens": 127
+        },
+        "settlement": "success",
+        "stored_report": true
+      },
+      "native_desktop_answer": "El extracto del [registro de muestras de Lysmere](https://catalog.lys-mere.test/sample-registry) indica que QR-17 es de color azul celeste. No se pudo verificar su temperatura máxima de almacenamiento: la [ficha encontrada](https://catalog.lys-mere.test/spec-qr-16) señala que su temperatura corresponde solo a QR-16 y excluye a QR-17. La revisión alcanzó el límite de tokens de entrada; un siguiente paso sería consultar una ficha de almacenamiento específica de QR-17.",
+      "elapsed_seconds_first_preflight_to_last_model_return": 26.493
+    }
+  ],
+  "observations": [
+    "All runs dispatched another search after compaction and correctly reported the available facts in Desktop.",
+    "The production-limit run finished in the working lane after four tool actions. Two distinct queries after compaction returned the same already-observed QR-16 specification.",
+    "At the three-action cap, the web loop offered an answer-only working call and completed.",
+    "The working input budget control blocked reservation for the next working call and used one answer-only final-lane call. Desktop displayed the final report beside the work log."
+  ],
+  "cost": "Provider-reported token usage is listed separately for the work model, Jev, and the final model. Monetary cost is unknown.",
+  "unassessed": [
+    "Different requests and models",
+    "Independent reliability across more repetitions",
+    "External effects and real catalog content",
+    "Installed release build"
+  ]
+}

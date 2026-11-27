@@ -20,6 +20,7 @@ from alphonse.agent_v2.core.intelligence.context_projection import ContextBudget
 from .evidence_projection import EvidenceAccessError, EvidenceSource, project_evidence
 from .task_budget import BudgetExhausted, SQLiteTaskBudgetStore, SyntheticEvaluationBudgetStore
 from .prerequisite import FEEDBACK, MissingPrerequisite
+from .owner_disposable_handoff import OWNER_DISPOSABLE_HANDOFF_TOOL_ID
 from alphonse.agent_v2.core.tools.invocation import ToolInvocationService
 
 
@@ -191,6 +192,7 @@ class CandidateHost:
     # effect, budget and terminal checkpoint; it never dispatches generic tools.
     commit_owner_reminder: Callable[[Any, dict, str], Any] | None = None
     commit_owner_schedule: Callable[[Any, dict, str], Any] | None = None
+    commit_disposable_handoff: Callable[[Any, dict, str], Any] | None = None
     allow_question: Callable[[str], bool] | None = None
     # Trusted owner host only. Neither callback is supplied by the model.
     read_private_knowledge: Callable[[], Any] | None = None
@@ -215,6 +217,7 @@ class CandidateHost:
     checkpoint_pause: Callable[[CandidateState], bool] | None = None
     prepare_choice: Callable[[str, int], Callable[[], dict]] | None = None
     compact_source: Callable[[str, str, int], str] | None = None
+    review_progress_checkpoint: Callable[[CandidateState], str] | None = None
 
 
 def _save(host: CandidateHost, state: CandidateState, *, consume_decision: bool = False,
@@ -335,6 +338,14 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
         repair_failure = 'candidate_model_response_invalid' if repairing_parse else ''
         if repairing_parse and _deadline_elapsed(host):
             return _terminal(host, state, 'blocked', repair_failure)
+        if (host.review_progress_checkpoint is not None and not repairing_parse
+                and len(state.evidence_sources) - state.progress_reviewed_count >= 3):
+            assessment = host.review_progress_checkpoint(state)
+            state.progress_assessment = assessment if assessment in ('progress', 'no_progress') else 'unknown'
+            state.progress_reviewed_count = len(state.evidence_sources)
+            _save(host, state)
+            if _cancelled(host):
+                return _terminal(host, state, 'cancelled', 'cancelled')
         try:
             # A chooser that adds framing must declare a full-input cap no
             # larger than the durable input reservation. This is only a local
@@ -347,6 +358,11 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
             # add framing, tool schemas or other material; its complete cap and
             # the output cap must be enforced by the external transport.
             decision_input = ''
+            if (not repairing_parse and state.progress_assessment == 'no_progress'
+                    and state.progress_reviewed_count == len(state.evidence_sources)):
+                decision_input += ('\nA checkpoint review found no clear progress. Reassess the approach '
+                                   'using the evidence so far. Choose a materially different authorized route if '
+                                   'one can resolve an open question, or explain what prevents progress.')
             if state.recovery_pending:
                 decision_input += ('\nA previous answer was not verified; the reason may be unknown. '
                                    'Consider relevant authorized sources or another approach. If you cannot '
@@ -635,11 +651,13 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
         mutation = {
             'native.owner_reminder_create': (host.commit_owner_reminder, 'owner_reminder_unavailable'),
             'native.scheduled_task': (host.commit_owner_schedule, 'owner_schedule_unavailable'),
+            OWNER_DISPOSABLE_HANDOFF_TOOL_ID: (host.commit_disposable_handoff, 'owner_disposable_handoff_unavailable'),
         }.get(tool_id)
         if mutation is not None:
             commit, unavailable = mutation
             if (host.atomic_checkpoint is None or not callable(commit)
-                    or descriptor is None or descriptor.read_only is not False
+                    or (tool_id != OWNER_DISPOSABLE_HANDOFF_TOOL_ID
+                        and (descriptor is None or descriptor.read_only is not False))
                     or _cancelled(host) or _deadline_elapsed(host)
                     or not _is_fresh(host, state, fingerprint, compact_limit)):
                 return _terminal(host, state, 'blocked', unavailable)
@@ -647,8 +665,7 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
                 if not _mark_steering_included(host, decision, fingerprint):
                     return _terminal(host, state, 'blocked', 'candidate_steering_unavailable')
                 committed = commit(state, decision, fingerprint)
-                if (tool_id == 'native.scheduled_task' and args.get('operation') == 'cancel'
-                        and isinstance(committed, CandidateState) and committed.status == 'running'):
+                if isinstance(committed, CandidateState) and committed.status == 'running':
                     state = committed
                     continue
                 return committed

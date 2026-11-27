@@ -1,0 +1,275 @@
+{
+  "date_local": "2026-11-26",
+  "scenario": "A fictional Spanish catalog inquiry through the native Desktop composer",
+  "setup": "Isolated native Tauri development build and actual owner worker over a fresh Unix socket and SQLite database for each arm. Scripted work decisions select mocked public searches so the overflow and action limit are repeatable. Jev judgments and the final answer use configured live providers. Between arms only the token density of equal-byte padding changes.",
+  "oracle": "The fictional sample registry says QR-17 is light blue. The storage sheet is for QR-16 and explicitly excludes QR-17. No available fixture source verifies the QR-17 maximum storage temperature.",
+  "attempts": [
+    {
+      "arm": "space-separated padding",
+      "overflow": {
+        "cap_utf8_bytes": 65536,
+        "first_rejected_envelope_utf8_bytes": 84760,
+        "first_accepted_compact_envelope_utf8_bytes": 32355,
+        "next_dispatched_tool_action": 6,
+        "full_large_observations_retained": 2,
+        "rejected_preflights_charged_as_model_calls": 0
+      },
+      "jev": {
+        "provider_model": "jev-1.14.0",
+        "thresholds": {
+          "no": 0.2,
+          "yes": 0.8
+        },
+        "checkpoints": [
+          {
+            "after_actions": 3,
+            "probabilities": {
+              "new_fact": 0.52,
+              "advances_question": 0.14
+            },
+            "usage": {
+              "input_tokens": 1144,
+              "output_tokens": 39
+            },
+            "seconds": 0.221
+          },
+          {
+            "after_actions": 6,
+            "probabilities": {
+              "new_fact": 0.99,
+              "advances_question": 0.92
+            },
+            "usage": {
+              "input_tokens": 3085,
+              "output_tokens": 39
+            },
+            "seconds": 0.209
+          },
+          {
+            "after_actions": 9,
+            "probabilities": {
+              "new_fact": 0.09,
+              "advances_question": 0.09
+            },
+            "usage": {
+              "input_tokens": 3822,
+              "output_tokens": 39
+            },
+            "seconds": 0.23
+          }
+        ],
+        "replan_guidance_observed_in_work_call": 4,
+        "last_recorded_assessment": "unknown"
+      },
+      "hard_limit": {
+        "failure_code": "action_limit",
+        "tool_dispatches": 10,
+        "scripted_work_model_calls": 11,
+        "final_model": "gpt-6.1-terra",
+        "final_calls": 1,
+        "final_request_utf8_bytes": 12532,
+        "final_reservation_tokens": {
+          "input_tokens": 16384,
+          "output_tokens": 2048
+        },
+        "final_provider_usage": {
+          "input_tokens": 16392,
+          "output_tokens": 159
+        },
+        "final_reservation_outcome": "failure",
+        "report_in_checkpoint": false,
+        "model_report": {
+          "reply": "El fragmento del [registro de muestras de Lysmere](https://catalog.lys-mere.test/sample-registry) indica que QR-17 es de color azul celeste. El [índice de paquetes](https://catalog.lys-mere.test/packet-index) la sitúa en la colección Morrow.\n\nNo se pudo verificar la temperatura máxima de almacenamiento. La [ficha localizada](https://catalog.lys-mere.test/spec-qr-16) corresponde solo a QR-16 y excluye QR-17. Se alcanzó el límite de acciones de herramientas; un siguiente paso útil sería consultar la ficha técnica específica de QR-17 o el paquete de la colección Morrow.",
+          "language": "es"
+        },
+        "desktop_observation": "Generic action-limit notice and work log showing ten observations. The final report was absent."
+      },
+      "elapsed_seconds_first_preflight_to_final_return": 12.688
+    },
+    {
+      "arm": "lower-token-density padding",
+      "overflow": {
+        "cap_utf8_bytes": 65536,
+        "first_rejected_envelope_utf8_bytes": 84760,
+        "first_accepted_compact_envelope_utf8_bytes": 32355,
+        "next_dispatched_tool_action": 6,
+        "full_large_observations_retained": 2,
+        "rejected_preflights_charged_as_model_calls": 0
+      },
+      "jev": {
+        "provider_model": "jev-1.14.0",
+        "thresholds": {
+          "no": 0.2,
+          "yes": 0.8
+        },
+        "checkpoints": [
+          {
+            "after_actions": 3,
+            "probabilities": {
+              "new_fact": 0.5,
+              "advances_question": 0.11
+            },
+            "usage": {
+              "input_tokens": 1140,
+              "output_tokens": 39
+            },
+            "seconds": 0.227
+          },
+          {
+            "after_actions": 6,
+            "probabilities": {
+              "new_fact": 0.99,
+              "advances_question": 0.93
+            },
+            "usage": {
+              "input_tokens": 2565,
+              "output_tokens": 39
+            },
+            "seconds": 0.194
+          },
+          {
+            "after_actions": 9,
+            "probabilities": {
+              "new_fact": 0.16,
+              "advances_question": 0.09
+            },
+            "usage": {
+              "input_tokens": 3302,
+              "output_tokens": 39
+            },
+            "seconds": 0.206
+          }
+        ],
+        "replan_guidance_observed_in_work_call": 4,
+        "last_recorded_assessment": "unknown"
+      },
+      "hard_limit": {
+        "failure_code": "action_limit",
+        "tool_dispatches": 10,
+        "scripted_work_model_calls": 11,
+        "final_model": "gpt-6.1-terra",
+        "final_calls": 1,
+        "final_request_utf8_bytes": 12532,
+        "final_reservation_tokens": {
+          "input_tokens": 16384,
+          "output_tokens": 2048
+        },
+        "final_provider_usage": {
+          "input_tokens": 16115,
+          "output_tokens": 133
+        },
+        "final_reservation_outcome": "success",
+        "report_in_checkpoint": true,
+        "model_report": {
+          "reply": "El fragmento del [registro de muestras de Lysmere](https://catalog.lys-mere.test/sample-registry) indica que QR-17 es azul celeste. No se pudo verificar su temperatura máxima de almacenamiento: la [ficha localizada](https://catalog.lys-mere.test/spec-qr-16) corresponde únicamente a QR-16 y excluye QR-17.\n\nLa búsqueda alcanzó el límite de acciones de herramientas. Como siguiente paso, convendría consultar la ficha técnica específica de QR-17 o el catálogo completo de la colección Morrow.",
+          "language": "es"
+        },
+        "desktop_observation": "Spanish report identified the color and named its source, explained why the temperature remained unverified, and acknowledged the action limit. The expanded work log showed three recorded search results and seven empty searches."
+      },
+      "elapsed_seconds_first_preflight_to_final_return": 12.316
+    },
+    {
+      "arm": "original space-separated padding after final settlement fix",
+      "overflow": {
+        "cap_utf8_bytes": 65536,
+        "first_rejected_envelope_utf8_bytes": 84760,
+        "first_accepted_compact_envelope_utf8_bytes": 32355,
+        "next_dispatched_tool_action": 6,
+        "full_large_observations_retained": 2,
+        "rejected_preflights_charged_as_model_calls": 0
+      },
+      "jev": {
+        "provider_model": "jev-1.14.0",
+        "thresholds": {
+          "no": 0.2,
+          "yes": 0.8
+        },
+        "checkpoints": [
+          {
+            "after_actions": 3,
+            "probabilities": {
+              "new_fact": 0.52,
+              "advances_question": 0.1
+            },
+            "usage": {
+              "input_tokens": 1137,
+              "output_tokens": 39
+            },
+            "seconds": 0.241
+          },
+          {
+            "after_actions": 6,
+            "probabilities": {
+              "new_fact": 0.98,
+              "advances_question": 0.9
+            },
+            "usage": {
+              "input_tokens": 3079,
+              "output_tokens": 39
+            },
+            "seconds": 0.214
+          },
+          {
+            "after_actions": 9,
+            "probabilities": {
+              "new_fact": 0.1,
+              "advances_question": 0.1
+            },
+            "usage": {
+              "input_tokens": 3812,
+              "output_tokens": 39
+            },
+            "seconds": 0.202
+          }
+        ],
+        "replan_guidance_observed_in_work_call": 4,
+        "last_recorded_assessment": "unknown"
+      },
+      "hard_limit": {
+        "failure_code": "action_limit",
+        "tool_dispatches": 10,
+        "scripted_work_model_calls": 11,
+        "final_model": "gpt-6.1-terra",
+        "final_calls": 1,
+        "final_request_utf8_bytes": 12532,
+        "final_reservation_tokens": {
+          "input_tokens": 16384,
+          "output_tokens": 2048
+        },
+        "final_provider_usage": {
+          "input_tokens": 16397,
+          "output_tokens": 162
+        },
+        "final_reservation_outcome": "success",
+        "task_charged": {
+          "actions": 10,
+          "input_tokens": 21897,
+          "model_calls": 12,
+          "output_tokens": 1262
+        },
+        "task_limits": {
+          "actions": 10,
+          "input_tokens": 786432,
+          "model_calls": 12,
+          "output_tokens": 196608
+        },
+        "report_in_checkpoint": true,
+        "model_report": {
+          "reply": "El fragmento del resultado de búsqueda del [registro de muestras de Lysmere](https://catalog.lys-mere.test/sample-registry) indica que QR-17 es de color azul celeste. El [índice de paquetes](https://catalog.lys-mere.test/packet-index) la sitúa en la colección Morrow.\n\nNo se pudo verificar la temperatura máxima de almacenamiento. La [ficha encontrada](https://catalog.lys-mere.test/spec-qr-16) corresponde solo a QR-16 y excluye expresamente a QR-17. Se alcanzó el límite de acciones de herramientas; un siguiente paso sería consultar la ficha técnica específica de QR-17 o su documentación de almacenamiento.",
+          "language": "es"
+        },
+        "desktop_observation": "Displayed the Spanish report and its work log. The report gives the registry-backed color, leaves the maximum temperature unverified, and states that the action limit was reached."
+      },
+      "elapsed_seconds_first_preflight_to_final_return": 13.615
+    }
+  ],
+  "finding": "Both runs continued after compaction. The first final response was generated and grounded in the fixture, then withheld when its reported input exceeded the final reservation by eight tokens. The control remained within the token reservation and displayed the report.",
+  "cost": "Live provider usage is reported above. Monetary cost was unavailable. Scripted work calls made no external model requests.",
+  "unassessed": [
+    "Unscripted working-model choices and response quality",
+    "Other models and task distributions",
+    "Installed release build",
+    "Any real catalog, device, or external effect"
+  ],
+  "after_fix": "The original fixture displayed its final report after actual final input usage exceeded its individual forecast by thirteen tokens. Actual task usage remained within the task totals."
+}

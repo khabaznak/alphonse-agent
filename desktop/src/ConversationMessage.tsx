@@ -35,7 +35,7 @@ function OutlookInboxCount({ result }: { result: OutlookInboxResult }) {
 
 export function ConversationMessage({ message, timezone, projectName = "", renderMarkdown = true }: { message: ChatMessage; timezone: string; projectName?: string; renderMarkdown?: boolean }) {
   const timestamp = message.created_at ? formatMessageTime(message.created_at, timezone) : null;
-  return <article className={`message ${message.role} conversation-message`} aria-label={message.role === "assistant" ? "Alphonse" : message.role === "user" ? "You" : "System notice"}>
+  return <article className={`message ${message.role} conversation-message`} data-conversation-message-id={message.id} aria-label={message.role === "assistant" ? "Alphonse" : message.role === "user" ? "You" : "System notice"}>
     {message.source && !["desktop", "ledger"].includes(message.source) && <small className="message-source" title={`Sent from ${message.source}`}>↗ {sourceLabel(message.source)}</small>}
     {message.project_id && <small className="message-project-association" title="Task project context">Project · {projectName || message.project_id}</small>}
     {message.role === "assistant" && message.private_reply_owner && message.private_outlook_inbox?.status === "complete"

@@ -492,6 +492,15 @@ class V2DaemonServer:
                 elif isinstance(request, dict) and request.get('method') == 'agenda':
                     self._local_peer_uid(connection)
                     result = self._dispatch(request, agenda_peer_verified=True)
+                elif (self.experimental_owner_ingress and getattr(self.daemon, 'experimental_owner_only', False) is True
+                      and isinstance(request, dict) and request.get('method') == 'desktop_conversation_history'
+                      and isinstance(request.get('params'), dict)
+                      and request['params'].get('include_private_cards') is True):
+                    self._local_peer_uid(connection)
+                    actor = self.daemon.runtime.user_store.admin_user()
+                    if actor is None or actor.user_id != request['params'].get('user'):
+                        raise PermissionError('desktop_private_history_unavailable')
+                    result = self._dispatch(request, desktop_private_verified=True)
                 else:
                     result = self._dispatch(request)
                 response = {"version": PROTOCOL_VERSION, "request_id": _request_id(request), "ok": True, "result": result}
@@ -1094,7 +1103,8 @@ class V2DaemonServer:
             result['grants'] = [grant for grant in result['grants'] if grant['connection_id'] in connection_ids]
         return result
 
-    def _dispatch(self, request: Any, *, agenda_peer_verified: bool = False) -> dict[str, Any]:
+    def _dispatch(self, request: Any, *, agenda_peer_verified: bool = False,
+                  desktop_private_verified: bool = False) -> dict[str, Any]:
         if not isinstance(request, dict):
             raise ValueError("daemon_request_object_required")
         version = request.get("version")
@@ -1206,7 +1216,9 @@ class V2DaemonServer:
                     project_id=str(params.get("project_id") or ""),
                     local_date=str(params.get("local_date") or ""),
                     limit=int(params.get("limit") or 100),
-                )
+                    **({'include_verified_private_cards': True} if desktop_private_verified else {}),
+                ),
+                **({'private_cards_checked': True} if desktop_private_verified else {}),
             }
         if method == "desktop_mark_project_seen":
             through = params.get("through_sequence")

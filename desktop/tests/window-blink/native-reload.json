@@ -1,0 +1,193 @@
+{
+  "before" : {
+    "boot" : 1,
+    "cards" : [
+      1,
+      2
+    ],
+    "errorText" : null,
+    "pickups" : [
+      {
+        "boot" : 1,
+        "id" : "11111111111111111111111111111111"
+      },
+      {
+        "boot" : 1,
+        "id" : "22222222222222222222222222222222"
+      }
+    ],
+    "receiptOnlyRows" : 0,
+    "sidebar" : true,
+    "submissions" : 3,
+    "tasks" : [
+      {
+        "index" : 0,
+        "status" : "client_acknowledged"
+      },
+      {
+        "index" : 1,
+        "status" : "client_acknowledged"
+      },
+      {
+        "index" : 2,
+        "status" : "pending"
+      }
+    ],
+    "working" : true
+  },
+  "content_terminations" : 0,
+  "events" : [
+    {
+      "event" : "window_opened",
+      "ms" : 126,
+      "pid" : 12220,
+      "window" : 5479
+    },
+    {
+      "event" : "native_navigation_start",
+      "ms" : 229
+    },
+    {
+      "event" : "native_navigation_commit",
+      "ms" : 234
+    },
+    {
+      "event" : "document_start",
+      "ms" : 235,
+      "sidebar" : false
+    },
+    {
+      "event" : "native_navigation_finish",
+      "ms" : 242
+    },
+    {
+      "event" : "first_frame_without_shell",
+      "ms" : 258,
+      "sidebar" : false
+    },
+    {
+      "event" : "first_shell_frame",
+      "ms" : 341,
+      "sidebar" : true
+    },
+    {
+      "event" : "busy_before_injection",
+      "ms" : 948,
+      "renderer_pid" : 12222
+    },
+    {
+      "event" : "explicit_native_reload",
+      "ms" : 948
+    },
+    {
+      "event" : "native_navigation_start",
+      "ms" : 954
+    },
+    {
+      "event" : "native_navigation_commit",
+      "ms" : 959
+    },
+    {
+      "event" : "document_start",
+      "ms" : 959,
+      "sidebar" : false
+    },
+    {
+      "event" : "first_frame_without_shell",
+      "ms" : 959,
+      "sidebar" : false
+    },
+    {
+      "event" : "native_navigation_finish",
+      "ms" : 962
+    },
+    {
+      "event" : "first_shell_frame",
+      "ms" : 1025,
+      "sidebar" : true
+    }
+  ],
+  "host_pid" : 12220,
+  "mode" : "reload",
+  "navigation_finishes" : 2,
+  "navigation_starts" : 2,
+  "renderer_after" : 12222,
+  "renderer_before" : 12222,
+  "result" : {
+    "afterRecovery" : {
+      "boot" : 2,
+      "cards" : [
+        3
+      ],
+      "errorText" : null,
+      "pickups" : [
+        {
+          "boot" : 1,
+          "id" : "11111111111111111111111111111111"
+        },
+        {
+          "boot" : 1,
+          "id" : "22222222222222222222222222222222"
+        },
+        {
+          "boot" : 2,
+          "id" : "33333333333333333333333333333333"
+        }
+      ],
+      "receiptOnlyRows" : 2,
+      "sidebar" : true,
+      "submissions" : 3,
+      "tasks" : [
+        {
+          "index" : 0,
+          "status" : "client_acknowledged"
+        },
+        {
+          "index" : 1,
+          "status" : "client_acknowledged"
+        },
+        {
+          "index" : 2,
+          "status" : "client_acknowledged"
+        }
+      ],
+      "working" : false
+    },
+    "beforeRecovery" : {
+      "boot" : 2,
+      "cards" : [
+
+      ],
+      "errorText" : null,
+      "pickups" : [
+        {
+          "boot" : 1,
+          "id" : "11111111111111111111111111111111"
+        },
+        {
+          "boot" : 1,
+          "id" : "22222222222222222222222222222222"
+        }
+      ],
+      "receiptOnlyRows" : 2,
+      "sidebar" : true,
+      "submissions" : 3,
+      "tasks" : [
+        {
+          "index" : 0,
+          "status" : "client_acknowledged"
+        },
+        {
+          "index" : 1,
+          "status" : "client_acknowledged"
+        },
+        {
+          "index" : 2,
+          "status" : "ready"
+        }
+      ],
+      "working" : false
+    }
+  },
+  "window" : 5479
+}

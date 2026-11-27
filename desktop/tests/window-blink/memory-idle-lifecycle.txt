@@ -1,0 +1,3 @@
+Timestamp               Ty Process[PID:TID]
+2026-11-27 11:41:16.096 Df alphonse-desktop[45986:8b9ff0] [com.apple.WebKit:ResourceLoading] WebContent[46359] [pageID=8 frameID=4294967297 isMainFrame=1] FrameLoader::loadWithDocumentLoader: main frame load started
+2026-11-27 11:41:16.129 Df alphonse-desktop[45986:8b9ff0] [com.apple.WebKit:Loading] 0x74e8008018 - [pageProxyID=7, webPageID=8, PID=46359] WebPageProxy::didCommitLoadForFrame: frameID=4294967297, isMainFrame=1

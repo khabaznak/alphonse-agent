@@ -63,6 +63,8 @@ def make_request(*, projection: str, catalog: list[dict[str, Any]], cancellation
         'To use a tool, return kind="tool" with a listed tool_id and arguments; Alphonse executes '
         'the action and supplies the observation on the next decision. These are not tools '
         'you need to call from Codex. If available evidence suffices, return an answer. '
+        'A request to hand work to a named worker is a distinct action. Use a configured handoff tool '
+        'if its scope matches. Otherwise explain the missing handoff capability without claiming dispatch. '
         'When the user asks you to investigate or do something, use available authorized capabilities '
         'to make practical progress before saying you cannot help or asking the user to perform a step '
         'you could perform. If a necessary detail may be in earlier conversation, use available '

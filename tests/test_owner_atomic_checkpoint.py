@@ -3,6 +3,7 @@ import json
 import os
 import threading
 import tempfile
+from dataclasses import replace
 from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
 
@@ -215,6 +216,26 @@ def test_reservation_and_observation_are_atomic_and_reloadable(setup):
     assert observations['e1'] == {'actor': task.user, 'tool_id': 'native.read_memory_source',
                                  'arguments': {'source_id': 'conversation:fixture'},
                                  'observation_sha256': observation_digest({'text': 'x'})}
+
+
+@pytest.mark.parametrize('status,blocker', [('blocked', 'candidate_observation_incomplete'), ('cancelled', 'cancelled')])
+def test_terminal_checkpoint_preserves_unresolved_read_without_allowing_dispatch_or_settlement(setup, status, blocker):
+    _, _, _, _, _, task, _, atomic = setup
+    start = atomic.initialize(CandidateState(task.task_id, task.user, 'goal'), make_budget())
+    args = {'source_id': 'conversation:fixture'}
+    reserved = reserve_selected_tool(atomic, start, 'native.read_memory_source', args)
+    for success_status in ('completed', 'waiting_user'):
+        with pytest.raises(CheckpointConflict, match='owner_atomic_state_transition_invalid'):
+            atomic.save_state(replace(reserved.state, status=success_status, response='Unsupported response.'))
+    terminal = atomic.save_state(replace(reserved.state, status=status, blocker=blocker), consume_decision=True)
+    saved, observations = atomic.load(expected_version=terminal.version)
+    assert (saved.state.status, saved.state.blocker) == (status, blocker)
+    assert saved.state.inflight == 'read-1' and saved.budget.usage()['in_flight'] == ['read-1']
+    assert observations == {}
+    assert atomic.check_claim('read-1', 'tool', tool_id='native.read_memory_source', arguments=args) is False
+    with pytest.raises(CheckpointConflict, match='owner_atomic_observation_binding_mismatch'):
+        atomic.settle_read(expected_version=terminal.version, reservation_id='read-1', tool_id='native.read_memory_source',
+                           arguments=args, evidence_ref='late', observation={'text': 'late result'})
 
 
 def test_bash_return_is_unreconciled_and_cannot_be_settled_as_read(setup):
@@ -608,13 +629,14 @@ def test_rejected_reservation_retains_time_observation_and_can_save_blocker(setu
 
 class Provider:
     supports_image_input = False
-    def __init__(self, source_id):
+    def __init__(self, source_id, *, neighbors=0):
         self.source_id, self.requests = source_id, []
+        self.neighbors = neighbors
     def generate_json(self, request):
         self.requests.append(request)
         actions = [
             {'kind': 'tool', 'tool_id': 'native.search_memory', 'arguments': {'query': 'apples', 'source_types': ['conversation']}, 'text': None},
-            {'kind': 'tool', 'tool_id': 'native.read_memory_source', 'arguments': {'source_id': self.source_id, 'neighbors': 0}, 'text': None},
+            {'kind': 'tool', 'tool_id': 'native.read_memory_source', 'arguments': {'source_id': self.source_id, 'neighbors': self.neighbors}, 'text': None},
             {'kind': 'answer', 'tool_id': None, 'arguments': None, 'text': 'Synthetic apples.'},
         ]
         result = actions[len(self.requests) - 1]
@@ -760,14 +782,18 @@ def test_real_owner_processor_to_peer_verified_one_time_pickup(setup, mode, tmp_
         finally:
             server.stop()
 
-def test_real_owner_processor_uses_atomic_checkpoint_and_persists_reads(setup):
+@pytest.mark.parametrize('read_available', [True, False])
+def test_real_owner_processor_checkpoints_history_reads_with_clipped_neighbors_or_missing_source(setup, read_available):
     tmp_path, users, owner, queue, acquired, task, store, _ = setup
     conversation = SQLiteConversationStore(queue.db_path)
     event = conversation.record(owner_user_id=owner.user_id, role='user', content='Synthetic apples. Unique source 9fcb.', source='test', source_message_id='one')
+    conversation.record(owner_user_id=owner.user_id, role='assistant',
+                        content='Long adjacent context. ' * 55 + 'Neighbor tail.',
+                        source='test', source_message_id='two')
     registry = InMemoryToolRegistry()
     registry.register(build_search_memory_tool_definition())
     registry.register(build_read_memory_source_tool_definition())
-    provider = Provider('conversation:' + event.event_id)
+    provider = Provider('conversation:' + (event.event_id if read_available else 'missing'), neighbors=1)
     context = CoreLoopContext(messages=queue, claim_receipt=acquired.claim_receipt, tools=registry,
         inference=InferenceRouter(provider=provider, default_profile=ModelProfile('test', 'fixture', 'offline')),
         conversation_store=conversation, cancellation_checker=lambda: False)
@@ -776,17 +802,24 @@ def test_real_owner_processor_uses_atomic_checkpoint_and_persists_reads(setup):
         authorize_claim=authorize_trusted_owner_claim, save_checkpoint=lambda *_: pytest.fail('legacy checkpoint called'),
         atomic_checkpoints=store, selected_draft_sink=lambda checkpoint, context: delivered_to_server.append((checkpoint, context)))
     result = processor.process(task, context)
+    with queue._connect() as conn:
+        row = store._row(conn, task.task_id)
+        raw = json.loads(row['task_state_json'])
+    state = raw['metadata']['single_loop_checkpoint']['state']
+    observations = raw['metadata']['owner_read_observations']
+    if not read_available:
+        assert result.status == ProcessingStatus.FAILED and result.error == 'candidate_observation_incomplete'
+        assert state['status'] == 'blocked' and state['blocker'] == result.error
+        assert raw['metadata']['owner_read_pending_action']['reservation_id'] == state['inflight']
+        assert set(observations) == set(state['evidence_sources']) and len(observations) == 1
+        assert len(provider.requests) == 2 and not delivered_to_server
+        return
     assert result.status == ProcessingStatus.WAITING, result.error
     assert result.snapshot.metadata['draft'] == 'Synthetic apples.'
     assert len(delivered_to_server) == 1
     assert delivered_to_server[0][0].receipt == acquired.claim_receipt
     assert delivered_to_server[0][1] is context
     assert delivered_to_server[0][0].version > 0
-    with queue._connect() as conn:
-        row = store._row(conn, task.task_id)
-        raw = json.loads(row['task_state_json'])
-    state = raw['metadata']['single_loop_checkpoint']['state']
-    observations = raw['metadata']['owner_read_observations']
     assert state['status'] == 'completed' and len(state['evidence_sources']) == 2
     assert set(observations) == set(state['evidence_sources'])
     assert all('observation' not in binding and len(binding['observation_sha256']) == 64

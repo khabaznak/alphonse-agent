@@ -49,9 +49,10 @@ import { OwnerQuestionSelector } from "./OwnerQuestionSelector";
 import { listOwnerQuestions, type OwnerQuestion } from "./ownerQuestions";
 import { SKILL_NAME_MAX_LENGTH, SKILL_DESCRIPTION_MAX_LENGTH, skillTextLength, limitSkillText } from "./skillFormat";
 import { DESKTOP_COMMANDS, matchingCommands } from "./commands";
-import { mergeFreshConversationHistory } from "./conversationHistory";
+import { desktopHistoryMessages, mergeFreshConversationHistory, type HistoryResponse } from "./conversationHistory";
 import { projectTaskProgress } from "./taskProgress";
 import { buildConversationTimeline } from "./conversationTimeline";
+import { useConversationScroll } from "./useConversationScroll";
 import { A2uiSurfaceView, DESKTOP_CATALOG_ID, type A2uiSurface } from "./a2ui";
 import { followDesktopStyle, readDesktopStyle, saveDesktopStyle, type DesktopStyle } from "./desktopStyle";
 import { desktopDiagnosticBehavior, type DesktopDiagnosticMode } from "./diagnosticMode";
@@ -80,7 +81,6 @@ type PollResponse = {
   legacy_notification_review?: { owner_scoped: number; ambiguous: number; unassigned: number } | null;
   status: { active_work: Record<string, string>; activity: { state?: string }; queue?: { ready?: number; processing?: number; retry_wait?: number } };
 };
-type HistoryResponse = { messages: ChatMessage[] };
 const SETTINGS_ICONS = { general: Settings, appearance: Palette, tools: Wrench, integrations: Plug, notifications: Bell, automations: CalendarClock, model: Brain, "system-one": Gauge, "agent-config": FileText, skills: Sparkles, members: UsersRound };
 const localDay = (timezone: string) => {
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone: timezone || "UTC", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
@@ -102,13 +102,11 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const uiSequence = useRef(0);
   const daemonId = useRef("");
   const delivered = useRef(new Set<string>());
-  const autoScrolledProgressTaskIdsRef = useRef(new Set<string>());
   const conversationHistoryRequestRef = useRef(0);
   const conversationHistoryLoadingRef = useRef(0);
   const activeHistoryRefreshRef = useRef(false);
+  const messagesDuringHistoryRefresh = useRef<ChatMessage[] | null>(null);
   const messagesDuringConversationReloadRef = useRef(new Map<number, ChatMessage[]>());
-  const timelineRef = useRef<HTMLDivElement | null>(null);
-  const followTimelineRef = useRef(true);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const surfacesRef = useRef<Record<string, A2uiSurface>>({});
   const dismissedScheduledSurfacesRef = useRef(readDismissedScheduledSurfaces(window.localStorage));
@@ -141,8 +139,6 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const [projectForView, setProjectForView] = useState({ id: "", request: 0 });
   const [memberName, setMemberName] = useState("");
   const [isAdmin, setIsAdmin] = useState(false);
-  const workspaceRef = useRef(workspace);
-  workspaceRef.current = workspace;
   const workspaceHostRef = useRef<HTMLDivElement>(null);
   const drawerToggleRef = useRef<HTMLButtonElement>(null);
   const navigationFocus = useRef<"composer" | "outlook-settings" | undefined>(undefined);
@@ -332,12 +328,6 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
     }
   };
   useEffect(() => { setComposerProject(null); }, [user]);
-  const followActiveLog = useCallback(() => {
-    window.requestAnimationFrame(() => {
-      const element = timelineRef.current;
-      if (element && workspaceRef.current === "conversation" && followTimelineRef.current) element.scrollTop = element.scrollHeight;
-    });
-  }, []);
   const { state: drawer, act: changeDrawer, saveFailed: drawerSaveFailed, reconcile: reconcileWidgets } = useAtHand(user);
   const [widgetContext, setWidgetContext] = useState<WidgetContext>();
   const [widgetItem, setWidgetItem] = useState<{ member: string; artifactId: string; itemId: string; family: CoordinationData["family"] }>();
@@ -363,6 +353,13 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const archivedProgressRef = useRef<Record<string, A2uiSurface>>({});
   const [archivedProgress, setArchivedProgress] = useState<Record<string, A2uiSurface>>({});
   const [progressTaskIds, setProgressTaskIds] = useState<string[]>([]);
+  const { timelineRef, rememberPosition, followActivity: followActiveLog } = useConversationScroll({
+    scope: JSON.stringify([user, conversationDay, timezone]),
+    visible: workspace === "conversation",
+    messages,
+    working: ownerConversationWorking,
+    progressIds: progressTaskIds,
+  });
   const [enterToSend, setEnterToSend] = useState(() => window.localStorage.getItem("alphonse.desktop.enterToSend") !== "false");
   const [desktopStyle, setDesktopStyle] = useState<DesktopStyle>("system");
   const [widgetCatalogOpen, setWidgetCatalogOpen] = useState(false);
@@ -388,6 +385,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const appendMessage = useCallback((message: ChatMessage) => {
     const messageDay = messageLocalDay(message.created_at, timezoneRef.current);
     if (messageDay && messageDay !== conversationDayRef.current) return;
+    messagesDuringHistoryRefresh.current?.push(message);
     const loadingRequest = conversationHistoryLoadingRef.current;
     if (loadingRequest) {
       const pending = messagesDuringConversationReloadRef.current.get(loadingRequest) || [];
@@ -439,7 +437,6 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       if (stale) return;
       if (!diagnosticBehavior.commitsPollResponses) return;
       if (daemonChanged) {
-        autoScrolledProgressTaskIdsRef.current.clear();
         archivedProgressRef.current = {};
         setArchivedProgress({});
         setProgressTaskIds([]);
@@ -726,55 +723,47 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
     conversationHistoryLoadingRef.current = request;
     messagesDuringConversationReloadRef.current.set(request, []);
     setMessages([]);
-    void daemonRequest<HistoryResponse>("desktop_conversation_history", { user, local_date: conversationDay, limit: 500 })
+    void daemonRequest<HistoryResponse>("desktop_conversation_history", { user, local_date: conversationDay, limit: 500, include_private_cards: isAdmin })
       .then(async (history) => {
         if (conversationHistoryRequestRef.current !== request) return;
         const pending = messagesDuringConversationReloadRef.current.get(request) || [];
-        const refreshed = mergeFreshConversationHistory(history.messages, pending);
+        const refreshed = mergeFreshConversationHistory(desktopHistoryMessages(history, isAdmin ? user : ""), pending);
         setMessages(refreshed);
         conversationHistoryLoadingRef.current = 0;
         messagesDuringConversationReloadRef.current.delete(request);
         await daemonRequest("desktop_mark_conversation_seen", { user, local_date: conversationDay });
-        setConversationHasUnseenMessages(false);
+        if (conversationHistoryRequestRef.current === request) setConversationHasUnseenMessages(false);
       })
       .catch((cause: unknown) => { if (conversationHistoryRequestRef.current === request) setError(cause instanceof Error ? cause.message : "Conversation history could not be loaded"); })
       .finally(() => { if (conversationHistoryRequestRef.current === request) { conversationHistoryLoadingRef.current = 0; messagesDuringConversationReloadRef.current.delete(request); } });
-  }, [conversationDay, user, timezone]);
+  }, [conversationDay, user, isAdmin]);
 
   useEffect(() => {
     if (!user || !conversationHasUnseenMessages || activeHistoryRefreshRef.current || conversationHistoryLoadingRef.current) return;
     const request = conversationHistoryRequestRef.current;
+    const pending: ChatMessage[] = [];
+    messagesDuringHistoryRefresh.current = pending;
     activeHistoryRefreshRef.current = true;
-    void daemonRequest<HistoryResponse>("desktop_conversation_history", { user, local_date: conversationDay, limit: 500 })
+    void daemonRequest<HistoryResponse>("desktop_conversation_history", { user, local_date: conversationDay, limit: 500, include_private_cards: isAdmin })
       .then(async (history) => {
         if (conversationHistoryRequestRef.current !== request) return;
         setMessages((current) => {
-          const refreshed = mergeFreshConversationHistory(history.messages, current);
-          return refreshed;
+          const messages = desktopHistoryMessages(history, isAdmin ? user : "");
+          // A checked history is authoritative for earlier private cards. Retain
+          // reply pickups raced by this refresh and local non-card timeline entries.
+          return mergeFreshConversationHistory(messages, history.private_cards_checked === true
+            ? [...current.filter((message) => !message.private_reply_surface), ...pending]
+            : current);
         });
         await daemonRequest("desktop_mark_conversation_seen", { user, local_date: conversationDay });
-        setConversationHasUnseenMessages(false);
+        if (conversationHistoryRequestRef.current === request) setConversationHasUnseenMessages(false);
       })
-      .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "Conversation history could not be refreshed"))
-      .finally(() => { activeHistoryRefreshRef.current = false; });
-  }, [conversationDay, conversationHasUnseenMessages, user]);
-
-  useEffect(() => {
-    const element = timelineRef.current;
-    if (!element || workspaceRef.current !== "conversation") return;
-    element.scrollTop = element.scrollHeight;
-  }, [messages, ownerConversationWorking]);
-
-  useEffect(() => {
-    const unseen = progressTaskIds.filter((taskId) => !autoScrolledProgressTaskIdsRef.current.has(taskId));
-    if (!unseen.length || workspaceRef.current !== "conversation") return;
-    unseen.forEach((taskId) => autoScrolledProgressTaskIdsRef.current.add(taskId));
-    const frame = window.requestAnimationFrame(() => {
-      const element = timelineRef.current;
-      element?.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [progressTaskIds]);
+      .catch((cause: unknown) => { if (conversationHistoryRequestRef.current === request) setError(cause instanceof Error ? cause.message : "Conversation history could not be refreshed"); })
+      .finally(() => {
+        if (messagesDuringHistoryRefresh.current === pending) messagesDuringHistoryRefresh.current = null;
+        activeHistoryRefreshRef.current = false;
+      });
+  }, [conversationDay, conversationHasUnseenMessages, user, isAdmin]);
 
   useEffect(() => {
     const element = textareaRef.current;
@@ -1020,7 +1009,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
           </div>
         </header>
         {error && <div className="error" role="alert">{error}</div>}
-        <div id="conversation-timeline" className="timeline" ref={timelineRef} tabIndex={-1} aria-live="polite" onScroll={(event) => { const element = event.currentTarget; followTimelineRef.current = element.scrollHeight - element.scrollTop - element.clientHeight <= 24; }}>
+        <div id="conversation-timeline" className="timeline" ref={timelineRef} tabIndex={-1} aria-live="polite" onScroll={rememberPosition}>
           {timelineNodes}
           {ownerConversationWorking && conversationDay === localDay(timezone) && <ConversationActivity />}
           <OwnerContinuation key={user} request={daemonRequest} active={isAdmin && connected && ownerContinuationAvailable && conversationDay === localDay(timezone)} />

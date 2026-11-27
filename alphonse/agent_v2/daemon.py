@@ -720,6 +720,12 @@ class V2Daemon:
                     user_timezone_provider=self.runtime.user_store.timezone,
                     owner_effect_commit=lambda commit: self.kill_switch.commit_if_active(message_id, commit),
                     cancellation_checker=is_cancelled)
+                # The owner progress reviewer may use the configured Jev
+                # destination while it is still enabled. The processor scopes
+                # which observations can be sent there.
+                context.owner_progress_provider_active = lambda provider: (
+                    provider is not None and provider is self.runtime.core.system_one
+                    and getattr(getattr(provider, 'settings', None), 'enabled', False) is True)
                 if continuation_config is not None:
                     context.owner_continuation_config = continuation_config
                 if continuation_version is not None:
@@ -1088,11 +1094,11 @@ class V2Daemon:
             with self._owner_status_lock:
                 if self._owner_statuses.get(message_id) == 'failed':
                     result['failure_code'] = self._owner_failure_codes.get(message_id, 'needs_attention')
-        if status == 'unavailable' or result.get('failure_code') == 'source_unavailable':
+        if status in {'failed', 'unavailable'}:
             from .core.intelligence.simple_loop.owner_failure_recovery import stored_owner_failure_recoveries
             recovery = stored_owner_failure_recoveries(self.runtime.queue, message_id=message_id).get(message_id)
-            if recovery is not None:
-                result.update(status='failed', failure_code='source_unavailable', failure_recovery=recovery)
+            if recovery is not None and (status == 'unavailable' or result.get('failure_code') == recovery['failure_code']):
+                result.update(recovery, status='failed')
         return result
 
     def abandon_owner_message(self, message_id: str) -> dict[str, str]:
@@ -2648,7 +2654,8 @@ class V2Daemon:
             self._desktop_progress_closures.setdefault(key, set()).add(str(delivery.task_id))
         return acknowledged
 
-    def desktop_conversation_history(self, *, user: str, project_id: str = "", local_date: str = "", limit: int = 100) -> list[dict[str, Any]]:
+    def desktop_conversation_history(self, *, user: str, project_id: str = "", local_date: str = "",
+                                     limit: int = 100, include_verified_private_cards: bool = False) -> list[dict[str, Any]]:
         normalized_user = self._admin_user_id(user)
         # project_id remains accepted for old clients, but Desktop history is owner scoped.
         zone = ZoneInfo(self.runtime.user_store.timezone(normalized_user))
@@ -2671,6 +2678,11 @@ class V2Daemon:
         )):
             self._record_question_conversation_event(question)
         timeline = self.runtime.conversation_store.list_between(owner_user_id=normalized_user, start_utc=start.isoformat(), end_utc=end.isoformat())
+        private_cards = {}
+        if include_verified_private_cards and self.experimental_owner_only and user == normalized_user:
+            from .core.intelligence.simple_loop.owner_private_history import private_cards_for_desktop_history
+            private_cards = private_cards_for_desktop_history(
+                self.runtime.queue, owner=normalized_user, events=timeline, timezone_name=zone.key)
         recoveries = {}
         if self.experimental_owner_only:
             from .core.intelligence.simple_loop.owner_failure_recovery import stored_owner_failure_recoveries
@@ -2708,7 +2720,9 @@ class V2Daemon:
                 "sequence": event.sequence,
             }
             if event.role == 'user' and event.source == 'desktop' and message_id in recoveries:
-                messages[message_id].update(failure_code='source_unavailable', failure_recovery=recoveries[message_id])
+                messages[message_id].update(recoveries[message_id])
+            if event.event_id in private_cards:
+                messages[message_id]['private_card'] = private_cards[event.event_id]
             if self.experimental_owner_only and event.source_message_id.startswith('outbound:owner:'):
                 from alphonse.agent_v2.core.intelligence.simple_loop.owner_schedule_cancel import committed_cancel_for_recovery
                 effect = committed_cancel_for_recovery(self.runtime.queue,

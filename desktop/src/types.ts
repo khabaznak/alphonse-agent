@@ -115,6 +115,7 @@ export type ChatMessage = {
   source?: string;
   project_id?: string;
   sequence?: number;
+  failure_code?: string;
   failure_recovery?: unknown;
   committed_effect?: CommittedEffect;
   private_reply_owner?: string;

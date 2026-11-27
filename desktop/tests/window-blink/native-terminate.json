@@ -1,0 +1,202 @@
+{
+  "before" : {
+    "boot" : 1,
+    "cards" : [
+      1,
+      2
+    ],
+    "errorText" : null,
+    "pickups" : [
+      {
+        "boot" : 1,
+        "id" : "11111111111111111111111111111111"
+      },
+      {
+        "boot" : 1,
+        "id" : "22222222222222222222222222222222"
+      }
+    ],
+    "receiptOnlyRows" : 0,
+    "sidebar" : true,
+    "submissions" : 3,
+    "tasks" : [
+      {
+        "index" : 0,
+        "status" : "client_acknowledged"
+      },
+      {
+        "index" : 1,
+        "status" : "client_acknowledged"
+      },
+      {
+        "index" : 2,
+        "status" : "pending"
+      }
+    ],
+    "working" : true
+  },
+  "content_terminations" : 1,
+  "events" : [
+    {
+      "event" : "window_opened",
+      "ms" : 134,
+      "pid" : 12233,
+      "window" : 5481
+    },
+    {
+      "event" : "native_navigation_start",
+      "ms" : 238
+    },
+    {
+      "event" : "native_navigation_commit",
+      "ms" : 244
+    },
+    {
+      "event" : "document_start",
+      "ms" : 244,
+      "sidebar" : false
+    },
+    {
+      "event" : "native_navigation_finish",
+      "ms" : 253
+    },
+    {
+      "event" : "first_frame_without_shell",
+      "ms" : 267,
+      "sidebar" : false
+    },
+    {
+      "event" : "first_shell_frame",
+      "ms" : 353,
+      "sidebar" : true
+    },
+    {
+      "event" : "busy_before_injection",
+      "ms" : 963,
+      "renderer_pid" : 12235
+    },
+    {
+      "event" : "isolated_renderer_stop",
+      "ms" : 1017,
+      "renderer_pid" : 12235
+    },
+    {
+      "event" : "native_web_content_terminated",
+      "ms" : 1019
+    },
+    {
+      "event" : "reload_from_termination_handler",
+      "ms" : 1019
+    },
+    {
+      "event" : "native_navigation_start",
+      "ms" : 1062
+    },
+    {
+      "event" : "native_navigation_commit",
+      "ms" : 1064
+    },
+    {
+      "event" : "document_start",
+      "ms" : 1065,
+      "sidebar" : false
+    },
+    {
+      "event" : "first_frame_without_shell",
+      "ms" : 1065,
+      "sidebar" : false
+    },
+    {
+      "event" : "native_navigation_finish",
+      "ms" : 1070
+    },
+    {
+      "event" : "first_shell_frame",
+      "ms" : 1177,
+      "sidebar" : true
+    }
+  ],
+  "host_pid" : 12233,
+  "mode" : "terminate",
+  "navigation_finishes" : 2,
+  "navigation_starts" : 2,
+  "renderer_after" : 12241,
+  "renderer_before" : 12235,
+  "result" : {
+    "afterRecovery" : {
+      "boot" : 2,
+      "cards" : [
+        3
+      ],
+      "errorText" : null,
+      "pickups" : [
+        {
+          "boot" : 1,
+          "id" : "11111111111111111111111111111111"
+        },
+        {
+          "boot" : 1,
+          "id" : "22222222222222222222222222222222"
+        },
+        {
+          "boot" : 2,
+          "id" : "33333333333333333333333333333333"
+        }
+      ],
+      "receiptOnlyRows" : 2,
+      "sidebar" : true,
+      "submissions" : 3,
+      "tasks" : [
+        {
+          "index" : 0,
+          "status" : "client_acknowledged"
+        },
+        {
+          "index" : 1,
+          "status" : "client_acknowledged"
+        },
+        {
+          "index" : 2,
+          "status" : "client_acknowledged"
+        }
+      ],
+      "working" : false
+    },
+    "beforeRecovery" : {
+      "boot" : 2,
+      "cards" : [
+
+      ],
+      "errorText" : null,
+      "pickups" : [
+        {
+          "boot" : 1,
+          "id" : "11111111111111111111111111111111"
+        },
+        {
+          "boot" : 1,
+          "id" : "22222222222222222222222222222222"
+        }
+      ],
+      "receiptOnlyRows" : 2,
+      "sidebar" : true,
+      "submissions" : 3,
+      "tasks" : [
+        {
+          "index" : 0,
+          "status" : "client_acknowledged"
+        },
+        {
+          "index" : 1,
+          "status" : "client_acknowledged"
+        },
+        {
+          "index" : 2,
+          "status" : "ready"
+        }
+      ],
+      "working" : false
+    }
+  },
+  "window" : 5481
+}

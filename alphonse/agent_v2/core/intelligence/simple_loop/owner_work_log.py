@@ -17,6 +17,8 @@ from .owner_failure_diagnostics import public_failure_code
 from .owner_gmail import OWNER_GMAIL_TOOL_ID, owner_gmail_failure_message
 from .owner_outlook import OWNER_OUTLOOK_TOOL_ID, owner_outlook_failure_message
 from .owner_gmail_search import OWNER_GMAIL_SEARCH_TOOL_ID
+from .owner_disposable_handoff import OWNER_DISPOSABLE_HANDOFF_TOOL_ID
+from .owner_reminder_create import OWNER_REMINDER_CREATE_TOOL_ID, REMINDER_REJECTION
 from .owner_web import is_web_failure_observation
 from .candidate_decision_policy import ACTIVITY_INTENTS
 
@@ -34,6 +36,8 @@ _LABELS = {
     'native.owner_calendar_agenda': 'Checked Google Calendar',
     'native.skill_catalog': 'Checked available skills',
     'native.owner_named_skill': 'Checked a named skill',
+    OWNER_REMINDER_CREATE_TOOL_ID: 'Checked the reminder request',
+    OWNER_DISPOSABLE_HANDOFF_TOOL_ID: 'Requested a Codex handoff',
 }
 
 # These describe the recorded tool, not the assistant's purpose or its effect.
@@ -51,7 +55,31 @@ _TOOL_KINDS = {
     'native.owner_calendar_agenda': 'calendar',
     'native.skill_catalog': 'skills',
     'native.owner_named_skill': 'named_skill',
+    OWNER_REMINDER_CREATE_TOOL_ID: 'reminder',
+    OWNER_DISPOSABLE_HANDOFF_TOOL_ID: 'worker_handoff',
 }
+
+_HANDOFF_OUTCOMES = {
+    'accepted': 'Worker accepted; result pending',
+    'completed': 'Worker result verified',
+    'failed': 'Worker reported a failure',
+    'blocked': 'Handoff blocked',
+    'unknown': 'Handoff unconfirmed',
+}
+
+
+def _handoff_status(item: dict) -> str:
+    observation = item.get('handoff_observation')
+    if (isinstance(observation, dict) and isinstance(observation.get('status'), str)
+            and observation['status'] in _HANDOFF_OUTCOMES
+            and item.get('observation_sha256') == observation_digest(observation)):
+        return observation['status']
+    return 'unknown'
+
+
+def _reminder_rejected(item: dict) -> bool:
+    return (item.get('arguments') == {} and item.get('reminder_rejection') == REMINDER_REJECTION
+            and item.get('observation_sha256') == observation_digest(REMINDER_REJECTION))
 
 _WEB_FAILURE_DETAILS = {
     'searxng_timeout': 'timeout',
@@ -187,6 +215,10 @@ def _activity(actor: str, refs: list, observations: dict, pending: object, *,
             mail = item.get('gmail_search_observation')
             if isinstance(mail, dict) and mail.get('status') == 'unavailable':
                 outcome = 'source_failed'
+        elif tool == OWNER_REMINDER_CREATE_TOOL_ID and _reminder_rejected(item):
+            outcome = 'blocked'
+        elif tool == OWNER_DISPOSABLE_HANDOFF_TOOL_ID:
+            outcome = _handoff_status(item)
         latest = {'tool_kind': kind, 'outcome': outcome, 'effects': effects}
         if tool == OWNER_GMAIL_SEARCH_TOOL_ID:
             latest.update(_gmail_scope(item))
@@ -246,6 +278,10 @@ def _events(actor: str, refs: list, observations: dict, pending: object) -> list
         elif tool == OWNER_OUTLOOK_TOOL_ID and owner_outlook_failure_message(item.get('outlook_observation')):
             events.append({'label': 'Attempted an Outlook Inbox check', 'outcome': 'The unread count could not be verified'})
             continue
+        elif tool == OWNER_REMINDER_CREATE_TOOL_ID and _reminder_rejected(item):
+            outcome = 'Request blocked; no reminder created'
+        elif tool == OWNER_DISPOSABLE_HANDOFF_TOOL_ID:
+            outcome = _HANDOFF_OUTCOMES[_handoff_status(item)]
         event = {'label': _LABELS[tool], 'outcome': outcome}
         if tool == OWNER_GMAIL_SEARCH_TOOL_ID:
             event.update(_gmail_scope(item))

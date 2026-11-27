@@ -1,0 +1,92 @@
+{
+  "case": "mixed-notes-and-delegation-handoff",
+  "model": "gpt-6.1-terra",
+  "reminder_mentioned_first": true,
+  "transport": "Unix IPC test client",
+  "turns": [
+    {
+      "prompt": "What in my Gmail inbox needs my attention? Give me a short digest of the important emails.",
+      "message_id": "f9e7965f875344da8b5e3c810824d446",
+      "status": "failed",
+      "failure_code": "model_auth_unverified",
+      "work_log": {
+        "activity": {
+          "latest": null,
+          "outcome_counts": [],
+          "pending_intent": null,
+          "pending_tool": false,
+          "recorded_action_count": 0,
+          "unconfirmed_effect_count": 0
+        },
+        "events": [],
+        "failure_code": "model_auth_unverified",
+        "notice": "This log shows recorded tool observations; it may not include every activity.",
+        "status": "blocked"
+      },
+      "elapsed_seconds": 0.263
+    }
+  ],
+  "second_prompt": "The hosting invoice is already paid. The workshop name should stay between us. We print Friday, so the subtitle problem is the priority. Please remind me to run the test print at 2026-12-03T15:00:00-06:00. Ask Codex to check the print-preview complaint in print-preview-fixture and propose a patch if it reproduces.",
+  "reminder_expected": {
+    "message": "run the test print",
+    "due_at": "2026-12-03T15:00:00-06:00"
+  },
+  "limitations": [
+    "Synthetic inbox, owner, and repository; no live Google traffic.",
+    "The separate live Codex CLI receives only the pinned synthetic file snapshot and fixed brief. It proposes a change without applying it to the original. An independent local fixture test verifies the proposal.",
+    "This does not render installed Desktop or establish human receipt.",
+    "The standalone reminder grammar currently refuses multi-clause requests.",
+    "One exploratory attempt does not establish model reliability."
+  ],
+  "repo_before": {
+    "check_preview.py": "d1d464f4e359be38d9f57ea27a8e631218f41f825b7a86a2d735c68f04cc8efd",
+    "preview.py": "e4c9b08662abbb4fa6fd1916c2fdd16d5ccd1c2c498dd8b12aa55bcd06d21c4b"
+  },
+  "repo_test_before": 1,
+  "authorized_revision": "b151659918eb65bc399c49a124da06ebe822d44b",
+  "reminders_after": [],
+  "history": [
+    {
+      "role": "user",
+      "content": "What in my Gmail inbox needs my attention? Give me a short digest of the important emails."
+    }
+  ],
+  "coding_job_rows": 0,
+  "coding_jobs_table_present": false,
+  "receiver_receipts": [],
+  "repo_after": {
+    "check_preview.py": "d1d464f4e359be38d9f57ea27a8e631218f41f825b7a86a2d735c68f04cc8efd",
+    "preview.py": "e4c9b08662abbb4fa6fd1916c2fdd16d5ccd1c2c498dd8b12aa55bcd06d21c4b"
+  },
+  "repo_test_after": 1,
+  "status": "first_turn_blocked",
+  "codex_worker": {
+    "worker_model": "gpt-6-luna",
+    "cli_starts": [],
+    "verifications": []
+  },
+  "model_decisions": [
+    {
+      "turn": 1,
+      "tools": [
+        "native.search_memory",
+        "native.read_memory_source",
+        "native.owner_clock",
+        "native.owner_schedules",
+        "native.owner_named_skill",
+        "native.owner_gmail_unread",
+        "native.owner_outlook_unread",
+        "native.owner_calendar_agenda",
+        "native.owner_gmail_search",
+        "native.owner_reminder_create"
+      ],
+      "prior_gmail_receipt_visible": false,
+      "mail_text_marker_visible": false,
+      "private_note_marker_visible": false,
+      "error_type": "ValueError",
+      "error_code": "openai_codex_subscription_auth_unverified"
+    }
+  ],
+  "gmail_calls": [],
+  "elapsed_seconds": 0.898
+}

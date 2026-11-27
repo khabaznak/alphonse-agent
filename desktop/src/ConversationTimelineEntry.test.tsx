@@ -77,3 +77,16 @@ it("places the failure before its closed work log, with an honest unverified-ans
   expect(html.indexOf("Alphonse could not complete this request")).toBeLessThan(html.indexOf('class="conversation-work-log"'));
   expect(html).toMatch(/<details id="conversation-work-log-[^"]+" class="conversation-work-log">/);
 });
+
+it("keeps the work log available beside a report from the final reserved call", () => {
+  const message: ChatMessage = {
+    id: "d".repeat(32), role: "user", source: "desktop", content: "Fixture request",
+    failure_code: "action_limit", failure_recovery: { reply: "I found the catalog entry.", language: "en" },
+  };
+  const html = renderToStaticMarkup(<ConversationTimelineEntry message={message} questions={[]} user="owner"
+    timezone="UTC" onDone={async () => {}} projectName="" memoize={false} renderMarkdown
+    failures={[]} onFailureDismissedChange={() => {}} showFailureRecovery
+    workLogRequest={async () => { throw new Error("static render"); }} />);
+  expect(html).toContain("I found the catalog entry.");
+  expect(html).toContain("Work log");
+});

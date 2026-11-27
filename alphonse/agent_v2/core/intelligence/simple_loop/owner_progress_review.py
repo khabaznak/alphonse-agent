@@ -24,8 +24,10 @@ def window_evidence_refs(current: list[str], baseline: set[str] | None) -> tuple
 def review_progress(*, request: str, observations: list[dict[str, Any]],
                     authorize_disclosure: Callable[[], bool] | None,
                     judge: Callable[..., Any] | None,
-                    no_threshold: float, yes_threshold: float) -> str:
-    """Return progress, no_progress, or unknown; never infer task completion."""
+                    no_threshold: float, yes_threshold: float,
+                    prior_observations: list[dict[str, Any]] | None = None,
+                    incomplete: bool = False) -> str:
+    """Evaluate progress. Incomplete coverage can support a finding, but cannot establish a stall."""
     if (not isinstance(request, str) or not request.strip() or not observations
             or not isinstance(observations, list)
             or not all(isinstance(item, dict) and set(item) == {'tool', 'arguments', 'observation'}
@@ -36,14 +38,22 @@ def review_progress(*, request: str, observations: list[dict[str, Any]],
             or not 0 <= no_threshold < yes_threshold <= 1):
         return 'unknown'
     state = {'request': request, 'observations': observations}
+    if prior_observations is not None:
+        state['prior_observations'] = prior_observations
     try:
         if len(json.dumps(state, ensure_ascii=False, allow_nan=False).encode('utf-8')) > 32768:
             return 'unknown'
         if authorize_disclosure() is not True:
             return 'unknown'
-        probability = judge(state=state)
-        if (type(probability) not in (int, float) or not math.isfinite(probability)
-                or not 0 <= probability <= 1):
+        answer = judge(state=state)
+        if prior_observations is not None:
+            if not isinstance(answer, dict) or set(answer) != {'new_fact', 'advances_question'}:
+                return 'unknown'
+            probabilities = tuple(answer.values())
+        else:
+            probabilities = (answer,)
+        if any(type(value) not in (int, float) or not math.isfinite(value)
+               or not 0 <= value <= 1 for value in probabilities):
             return 'unknown'
         # Revocation cannot retract data already sent, but it must prevent the
         # resulting assessment from being used after disclosure was revoked.
@@ -51,8 +61,8 @@ def review_progress(*, request: str, observations: list[dict[str, Any]],
             return 'unknown'
     except Exception:
         return 'unknown'
-    if probability >= yes_threshold:
+    if all(value >= yes_threshold for value in probabilities):
         return 'progress'
-    if probability <= no_threshold:
+    if any(value <= no_threshold for value in probabilities) and not incomplete:
         return 'no_progress'
     return 'unknown'

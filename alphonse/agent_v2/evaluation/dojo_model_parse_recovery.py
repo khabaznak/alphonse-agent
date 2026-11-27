@@ -66,7 +66,7 @@ def run(case: str, *, timeout: float = 10, model: str | None = None) -> dict:
         adapter = router.provider
         adapter.config = replace(adapter.config, timeout_seconds=55.0)
     real_transport = adapter._run_codex_with_usage
-    real_choose = RouterCandidateChooser.__call__
+    real_choose = RouterCandidateChooser._generate
 
     def transport(prompt, request):
         live_retry = model is not None and len(calls) == 2
@@ -86,10 +86,10 @@ def run(case: str, *, timeout: float = 10, model: str | None = None) -> dict:
         call['reported_usage'] = usage
         return response, usage
 
-    def choose(chooser, projection, output_limit):
+    def choose(chooser, request, output_limit):
         before = len(calls)
         try:
-            decision = real_choose(chooser, projection, output_limit)
+            decision = real_choose(chooser, request, output_limit)
         except Exception as exc:
             if len(calls) > before:
                 if type(exc) is ModelResponseParseError:
@@ -124,7 +124,7 @@ def run(case: str, *, timeout: float = 10, model: str | None = None) -> dict:
         daemon = V2Daemon(runtime, daemon_id='dojo-model-parse', experimental_owner_only=True)
         daemon.ipc = V2DaemonServer(daemon, socket_path=root / 'owner.sock', experimental_owner_ingress=True)
         with (patch.object(adapter, '_run_codex_with_usage', transport),
-              patch.object(RouterCandidateChooser, '__call__', choose),
+              patch.object(RouterCandidateChooser, '_generate', choose),
               patch.object(owner_host_bash, 'execute_bash', observe_timeout),
               patch.object(daemon, '_acquire_single_instance_lock', lambda: None),
               patch.object(daemon, '_release_single_instance_lock', lambda: None)):

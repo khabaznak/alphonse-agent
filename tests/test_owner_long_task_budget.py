@@ -17,10 +17,19 @@ from alphonse.agent_v2.users import V2UserStore
 
 @pytest.mark.parametrize('requested,expected_status,observed', [(6, 'ready', 6), (11, 'failed', 10)])
 def test_owner_worker_handles_long_tasks_and_still_enforces_limit(tmp_path, monkeypatch, requested, expected_status, observed):
+    report = {'reply': 'I observed the local clock before reaching the action limit.', 'language': 'en'}
+
     class Provider:
         supports_image_input = False
         calls = 0
+        final_calls = 0
+
         def generate_json(self, request):
+            if request.metadata.get('owner_failure_recovery'):
+                self.final_calls += 1
+                assert not request.tools and 'local_time' in request.prompt
+                return InferenceResult(json_value=report, raw_response=json.dumps(report),
+                                       usage={'input_tokens': 100, 'output_tokens': 20})
             self.calls += 1
             decision = ({'kind': 'tool', 'tool_id': 'native.owner_clock', 'arguments': {}, 'text': None}
                         if self.calls <= requested else
@@ -52,6 +61,7 @@ def test_owner_worker_handles_long_tasks_and_still_enforces_limit(tmp_path, monk
             time.sleep(.01)
         assert daemon.owner_message_status(message) == expected_status
         assert provider.calls == observed + 1
+        assert provider.final_calls == int(expected_status == 'failed')
         with queue._connect() as conn:
             raw = json.loads(conn.execute('SELECT task_state_json FROM v2_task_checkpoints WHERE task_id=?',
                                           (message,)).fetchone()[0])
@@ -61,6 +71,8 @@ def test_owner_worker_handles_long_tasks_and_still_enforces_limit(tmp_path, monk
             assert 'I observed the clock.' in draft['message']
             daemon.acknowledge_owner_desktop_draft(message, draft['acknowledgement_token'])
         else:
-            assert daemon.owner_message_status_payload(message)['failure_code'] == 'action_limit'
+            assert daemon.owner_message_status_payload(message) == {
+                'status': 'failed', 'failure_code': 'action_limit', 'failure_recovery': report,
+            }
     finally:
         daemon.stop()

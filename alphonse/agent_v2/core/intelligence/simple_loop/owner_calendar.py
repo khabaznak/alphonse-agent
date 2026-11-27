@@ -279,8 +279,7 @@ def _failure_message(payload):
     return None
 
 
-def _valid_payload(arguments, payload, *, context, actor):
-    timezone_name = context.user_timezone_provider(actor) if 'day_offset' in arguments else None
+def _valid_payload(arguments, payload, *, timezone_name=None, presented_at=None):
     if _failure_message(payload):
         calendar_window(arguments, at=datetime.now(timezone.utc), timezone_name=timezone_name)
         return True
@@ -290,7 +289,8 @@ def _valid_payload(arguments, payload, *, context, actor):
         return False
     zone = ZoneInfo(payload['timezone'])
     observed = datetime.fromisoformat(payload['observed_at'])
-    if observed.tzinfo is None or not timedelta(0) <= datetime.now(timezone.utc) - observed <= timedelta(minutes=5):
+    if observed.tzinfo is None or (observed > presented_at if presented_at is not None
+            else not timedelta(0) <= datetime.now(timezone.utc) - observed <= timedelta(minutes=5)):
         return False
     window = calendar_window(arguments, at=observed, timezone_name=timezone_name)
     if payload['window'] != [value.isoformat() for value in window]:
@@ -308,7 +308,8 @@ def _valid_payload(arguments, payload, *, context, actor):
 
 def valid_owner_calendar(actor, arguments, payload, *, context):
     try:
-        if not _authorized(actor, context) or not _valid_payload(arguments, payload, context=context, actor=actor):
+        if not _authorized(actor, context) or not _valid_payload(arguments, payload,
+                timezone_name=context.user_timezone_provider(actor) if 'day_offset' in arguments else None):
             return False
         if _failure_message(payload):
             return True
@@ -326,10 +327,19 @@ def valid_owner_calendar(actor, arguments, payload, *, context):
 
 def valid_owner_calendar_locked(conn, actor, arguments, payload, *, context):
     try:
-        return (_same_database(context, context.owner_calendar_service) and _valid_payload(arguments, payload, context=context, actor=actor)
+        return (_same_database(context, context.owner_calendar_service) and _valid_payload(arguments, payload,
+                    timezone_name=context.user_timezone_provider(actor) if 'day_offset' in arguments else None)
                 and (_failure_message(payload) is not None or _binding(conn, actor)[0] == payload['authority']))
     except (AttributeError, KeyError, OSError, TypeError, ValueError):
         return False
+
+
+def valid_calendar_card_history(conn, actor, arguments, payload, *, presented_at):
+    """Recheck today's grant for a snapshot already delivered privately."""
+    binding, _ = _binding(conn, actor)
+    return (binding is not None and binding == payload.get('authority')
+            and _valid_payload(arguments, payload, presented_at=presented_at,
+                timezone_name=payload.get('timezone') if 'day_offset' in arguments else None))
 
 
 def format_calendar_observation(payload, *, private_delivery=False):

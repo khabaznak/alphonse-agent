@@ -410,7 +410,7 @@ def _arguments_digest(arguments):
     return sha256(json.dumps(arguments, sort_keys=True).encode('ascii')).hexdigest()
 
 
-def _valid_payload(arguments, payload):
+def _valid_payload(arguments, payload, *, presented_at=None):
     _, days, _ = gmail_search_arguments(arguments)
     if _failure_message(payload):
         return True
@@ -426,7 +426,8 @@ def _valid_payload(arguments, payload):
     elif 'label' in arguments:
         return False  # Only original implicit Inbox observations predate the argument digest.
     observed = _utc_timestamp(payload['observed_at'])
-    if not timedelta(0) <= datetime.now(timezone.utc) - observed <= timedelta(minutes=5):
+    if (observed > presented_at if presented_at is not None
+            else not timedelta(0) <= datetime.now(timezone.utc) - observed <= timedelta(minutes=5)):
         return False
     lower = observed - timedelta(days=days)
     for message in payload['messages']:
@@ -470,6 +471,14 @@ def valid_owner_gmail_search_locked(conn, actor, arguments, payload, *, context)
         return binding is not None and binding == payload['authority']
     except (AttributeError, KeyError, OSError, TypeError, ValueError):
         return False
+
+
+def valid_gmail_card_history(conn, actor, arguments, payload, *, presented_at):
+    """Recheck today's grant for a snapshot already delivered privately."""
+    _, _, label = gmail_search_arguments(arguments)
+    binding, _ = _binding(conn, actor, label)
+    return (binding is not None and binding == payload.get('authority')
+            and _valid_payload(arguments, payload, presented_at=presented_at))
 
 
 def private_gmail_search_result(payload):

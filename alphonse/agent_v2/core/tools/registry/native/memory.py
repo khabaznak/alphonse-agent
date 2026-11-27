@@ -17,6 +17,7 @@ SEARCH_MEMORY_TOOL_ID = "native.search_memory"
 SEARCH_MEMORY_TOOL_NAME = "search_memory"
 READ_MEMORY_SOURCE_TOOL_ID = "native.read_memory_source"
 OWNER_CONVERSATION_MAX_CHARS = 36000
+_NEIGHBOR_EXCERPT_CHARS = 1000
 
 
 def complete_conversation_search(actor: str, tool_id: str, arguments: dict[str, Any], payload: dict[str, Any], *,
@@ -122,30 +123,34 @@ def complete_conversation_read(actor: str, tool_id: str, arguments: dict[str, An
     # advance a sequence.
     if (not allow_chunks and (offset != 0 or end != total)
             or allow_chunks and (total > OWNER_CONVERSATION_MAX_CHARS or (offset < total and end == offset))
-            or payload.get('next_offset') != (end if end < total else None)
-            or payload['truncated'] != (offset > 0 or end < total)):
+            or payload.get('next_offset') != (end if end < total else None)):
         return False
-    # A read may also return adjacent messages. The anchor's owner does not
-    # authorize promoting arbitrary neighbor text into the candidate's evidence.
+    # The native truncation flag covers both the anchor page and its bounded
+    # neighbor excerpts. Validate their ownership and clipping independently.
     neighbors = payload.get('neighbors')
     count = arguments.get('neighbors', 2)
     if (type(count) is not int or not 0 <= count <= 5 or not isinstance(neighbors, list)
             or len(neighbors) > 2 * count or payload.get('supporting_sources') != []):
         return False
     seen = {source_id}
+    neighbor_clipped = False
     for neighbor in neighbors:
         if not isinstance(neighbor, dict):
             return False
         neighbor_source = neighbor.get('source')
         neighbor_access = neighbor_source.get('access') if isinstance(neighbor_source, dict) else None
         neighbor_id = neighbor_source.get('source_id') if isinstance(neighbor_source, dict) else None
+        excerpt = neighbor.get('content')
+        clipped = neighbor.get('truncated')
         if (not isinstance(neighbor_id, str) or not neighbor_id.startswith('conversation:')
                 or neighbor_id in seen or neighbor_source.get('kind') != 'conversation'
                 or not isinstance(neighbor_access, dict) or neighbor_access.get('owner_user_id') != actor
-                or not isinstance(neighbor.get('content'), str) or neighbor.get('truncated') is not False):
+                or type(clipped) is not bool or not isinstance(excerpt, str) or len(excerpt) > _NEIGHBOR_EXCERPT_CHARS
+                or (clipped and len(excerpt) != _NEIGHBOR_EXCERPT_CHARS)):
             return False
         seen.add(neighbor_id)
-    return True
+        neighbor_clipped = neighbor_clipped or clipped
+    return payload['truncated'] == (offset > 0 or end < total or neighbor_clipped)
 
 
 def revalidate_conversation_observation(
@@ -514,8 +519,8 @@ def execute_read_memory_source(arguments: dict[str, Any], *, context: ToolExecut
             if (candidate.source.source_id == source_id or candidate.source.source_id == excluded or not candidate.visible_to(requester)
                     or candidate.source.access.owner_user_id != anchor.item.source.access.owner_user_id):
                 continue
-            adjacent.append({"source": candidate.source.to_dict(), "content": candidate.content[:1000],
-                             "truncated": len(candidate.content) > 1000})
+            adjacent.append({"source": candidate.source.to_dict(), "content": candidate.content[:_NEIGHBOR_EXCERPT_CHARS],
+                             "truncated": len(candidate.content) > _NEIGHBOR_EXCERPT_CHARS})
         return {"schema_version": 2, "status": "found", "items": [item], "neighbors": adjacent,
                 "supporting_sources": supporting, "next_offset": end if end < len(text) else None,
                 "truncated": offset > 0 or end < len(text) or any(n["truncated"] for n in adjacent),

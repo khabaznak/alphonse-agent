@@ -15,7 +15,8 @@ from alphonse.agent_v2.core.tools.registry.native.memory import (
 )
 from .owner_atomic_checkpoint import OwnerAtomicCheckpoint, observation_digest
 from .owner_clock import OWNER_CLOCK_TOOL_ID, valid_clock_observation
-from .owner_reminder_create import OWNER_REMINDER_CREATE_TOOL_ID, valid_reminder_observation
+from .owner_reminder_create import OWNER_REMINDER_CREATE_TOOL_ID, REMINDER_REJECTION, valid_reminder_observation
+from .owner_disposable_handoff import DisposableHandoffService, OWNER_DISPOSABLE_HANDOFF_TOOL_ID
 from .owner_schedule_create import SCHEDULED_TASK_TOOL_ID, valid_schedule_observation
 from .owner_schedule_cancel import valid_cancel_observation
 from .owner_gmail import OWNER_GMAIL_TOOL_ID, valid_owner_gmail
@@ -79,6 +80,14 @@ def restore_owner_read_observations(checkpoint: OwnerAtomicCheckpoint, context: 
                 raise OwnerRecoveryUnavailable('owner_recovery_unavailable')
 
         execution = context.tool_execution_context(checkpoint.task)
+        service = getattr(context, '_dojo_handoff_service', None)
+
+        def valid_handoff(args, observation):
+            return (type(service) is DisposableHandoffService and isinstance(observation, dict)
+                    and set(args) == {'worker', 'target', 'operation'}
+                    and all(observation.get(key) == args[key] for key in args)
+                    and service.valid_observation(actor=state.actor, parent_id=state.task_id, observation=observation))
+
         # Once the atomic scheduled effect is committed, its original clock is
         # historical evidence, not a fresh instruction to schedule again.
         historical_schedule_clock = (allow_completed and state.status == 'completed'
@@ -89,6 +98,8 @@ def restore_owner_read_observations(checkpoint: OwnerAtomicCheckpoint, context: 
             item = bindings[ref]
             host_bash = (isinstance(item, dict) and item.get('tool_id') == 'native.bash'
                          and 'host_bash_observation' in item)
+            reminder_rejected = (isinstance(item, dict) and item.get('tool_id') == OWNER_REMINDER_CREATE_TOOL_ID
+                                 and 'reminder_rejection' in item)
             keys = {'actor', 'tool_id', 'arguments', 'observation_sha256'}
             if isinstance(item, dict) and item.get('tool_id') == OWNER_CLOCK_TOOL_ID:
                 keys.add('clock_observation')
@@ -101,7 +112,9 @@ def restore_owner_read_observations(checkpoint: OwnerAtomicCheckpoint, context: 
             if isinstance(item, dict) and item.get('tool_id') == OWNER_GMAIL_SEARCH_TOOL_ID:
                 keys.add('gmail_search_observation')
             if isinstance(item, dict) and item.get('tool_id') == OWNER_REMINDER_CREATE_TOOL_ID:
-                keys.add('reminder_observation')
+                keys.add('reminder_rejection' if reminder_rejected else 'reminder_observation')
+            if isinstance(item, dict) and item.get('tool_id') == OWNER_DISPOSABLE_HANDOFF_TOOL_ID:
+                keys.add('handoff_observation')
             if isinstance(item, dict) and item.get('tool_id') == SCHEDULED_TASK_TOOL_ID:
                 keys.add('schedule_observation')
             if isinstance(item, dict) and item.get('tool_id') == OWNER_KNOWLEDGE_TOOL_ID:
@@ -162,8 +175,16 @@ def restore_owner_read_observations(checkpoint: OwnerAtomicCheckpoint, context: 
                     raise OwnerRecoveryUnavailable('owner_recovery_unavailable')
             elif tool == OWNER_REMINDER_CREATE_TOOL_ID:
                 recheck()
-                observation = item['reminder_observation']
-                if not valid_reminder_observation(state.actor, args, observation, context=execution):
+                observation = item['reminder_rejection'] if reminder_rejected else item['reminder_observation']
+                if reminder_rejected:
+                    if args != {} or observation != REMINDER_REJECTION or type(service) is not DisposableHandoffService:
+                        raise OwnerRecoveryUnavailable('owner_recovery_unavailable')
+                elif not valid_reminder_observation(state.actor, args, observation, context=execution):
+                    raise OwnerRecoveryUnavailable('owner_recovery_unavailable')
+            elif tool == OWNER_DISPOSABLE_HANDOFF_TOOL_ID:
+                recheck()
+                observation = item['handoff_observation']
+                if not valid_handoff(args, observation):
                     raise OwnerRecoveryUnavailable('owner_recovery_unavailable')
             elif tool == SCHEDULED_TASK_TOOL_ID:
                 recheck()
@@ -225,8 +246,9 @@ def restore_owner_read_observations(checkpoint: OwnerAtomicCheckpoint, context: 
                             valid_clock_observation(state.actor, args, observation, context=execution,
                                                     allow_expired=historical_schedule_clock)
                             if tool == OWNER_CLOCK_TOOL_ID else
-                            valid_reminder_observation(state.actor, args, observation, context=execution)
+                            (reminder_rejected or valid_reminder_observation(state.actor, args, observation, context=execution))
                             if tool == OWNER_REMINDER_CREATE_TOOL_ID else
+                            valid_handoff(args, observation) if tool == OWNER_DISPOSABLE_HANDOFF_TOOL_ID else
                             (valid_cancel_observation if args.get('operation') == 'cancel' else valid_schedule_observation)(
                                 state.actor, args, observation, context=execution)
                             if tool == SCHEDULED_TASK_TOOL_ID else

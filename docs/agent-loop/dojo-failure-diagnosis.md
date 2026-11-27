@@ -42,6 +42,41 @@ Desktop's displayed failure status is currently held in daemon memory and may
 be unavailable after a restart; the scoped checkpoint-backed follow-up context
 is a separate path and is not proof that a notice was durably displayed.
 
+## Oversized context and an exhausted action budget
+
+Run the disposable owner-worker exercise with:
+
+```sh
+.venv/bin/python -m pytest -q tests/test_dojo_owner_context_limits.py
+```
+
+The scripted web results contain a timeout, several empty searches and a
+large response with a fictional catalog finding. The checks compare the
+assembled request with the input cap, look for the complete observation in the
+checkpoint, and confirm that rejected preflights consume no model calls. A
+scripted Jev judgment marks the first checkpoint stalled. The next working
+decision receives a prompt to rethink the approach. One case returns a normal
+reply after compaction. Another uses exactly one final, answer-only call when
+the action budget is exhausted and keeps the failure code and report in history.
+
+Both providers and all web results are simulated. The exercise checks routing,
+accounting and publication through the owner worker. Live model judgments,
+external effects and the installed Desktop remain unassessed.
+
+The [native Desktop run with live Jev and a live final answer](evidence/dojo-context-overflow-desktop-live-jev-20261126.json)
+uses disposable catalog results and scripted working decisions. Both attempts
+continued after compaction. Desktop displayed the final report in the control
+and withheld it on the first attempt after an eight-token reservation overrun.
+After final settlement was changed to check the whole task budget, the original
+fixture displayed its final report with 16,397 actual input tokens against a
+16,384-token forecast. The task charged 21,897 input tokens in total.
+
+The [native Desktop rerun with live tool selection](evidence/dojo-context-overflow-desktop-live-tools-20261126.json)
+let the reasoning model choose its searches and used live Jev in each run.
+The production-limit run continued after compaction and answered normally.
+A three-action control used an answer-only working call. A working input
+budget control used the reserved final call and displayed the report in Desktop.
+
 ## Recovery after an unreadable model response
 
 This scripted regression runs the actual Codex response parser, owner worker,
