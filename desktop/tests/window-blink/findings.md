@@ -82,3 +82,33 @@ and renderer termination markers. [Idle samples](memory-idle.json) and
 [reply samples](memory-replies.json) include IPC counts and memory categories.
 [Idle lifecycle](memory-idle-lifecycle.txt) and
 [reply lifecycle](memory-replies-lifecycle.txt) preserve the native markers.
+
+## Dev WebKit memory fix verification
+
+React's development profiler emits User Timing measures with metadata that
+WebKit serializes and retains. The native Vite bootstrap now clears the
+measure buffer every five seconds and cancels the timer on hot replacement.
+The production bundle excludes the cleanup. The TypeScript build and all
+364 Desktop tests passed.
+
+The macOS rerun reused the native development executable, Vite configuration,
+synthetic reply workload, and disposable Unix socket. The workload schedules
+up to 120 cards. The runs acknowledged different card totals, then both
+continued polling after those totals stopped changing. The fixed run used a
+temporary keep-awake assertion to keep polling active for the full 30 minutes.
+
+| Measurement | Unfixed | Fixed |
+| --- | ---: | ---: |
+| Elapsed time | 14m 26s, stopped at the fixture memory ceiling | 30m 00s |
+| Acknowledged cards | 87 | 112 |
+| Desktop polls | 903 | 1,889 |
+| Final physical footprint | 1,229 MiB | 257 MiB |
+| Peak physical footprint | 1,229 MiB | 345 MiB |
+
+The fixed run's median physical footprint was 243 MiB early in steady state
+and 254 MiB in the final five minutes. Median live WebKit native allocations
+were 187 MiB and 186 MiB in those windows. Desktop made 300 polls between the
+first and last samples in the final five-minute window. The renderer kept
+its PID and logged one main-frame commit with no termination.
+
+[Dev WebKit memory samples](memory-dev-samples.csv) records both runs.

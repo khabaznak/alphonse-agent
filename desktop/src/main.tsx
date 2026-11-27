@@ -1,3 +1,4 @@
+import { isTauri } from "@tauri-apps/api/core";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
@@ -5,6 +6,13 @@ import { getDesktopDiagnosticMode, getDesktopDiagnosticProjectId } from "./api";
 import { parseDesktopDiagnosticMode } from "./diagnosticMode";
 import { resolveDesktopSkin } from "./desktopStyle";
 import "./styles.css";
+
+if (import.meta.env.DEV && isTauri()) {
+  // WebKit retains React's development timing measures and serialized details
+  // in the User Timing buffer. Clear it periodically during long dev sessions.
+  const timingCleanup = window.setInterval(() => performance.clearMeasures(), 5_000);
+  import.meta.hot?.dispose(() => window.clearInterval(timingCleanup));
+}
 
 // Paint the system skin while the native diagnostic settings are loading.
 document.documentElement.dataset.alphonseTheme = resolveDesktopSkin("system", window.matchMedia("(prefers-color-scheme: dark)").matches);
