@@ -243,6 +243,7 @@ class V2Daemon:
         self._lock_file: Any | None = None
         self._database_lock_file: Any | None = None
         self._lifecycle_lock = threading.RLock()
+        self._inference_settings_lock = threading.Lock()
         # Protect the whole daemon turn, including work done before core.step.
         # This is local exclusion, not a cross-process claim fence.
         self._run_once_lock = threading.Lock()
@@ -311,6 +312,18 @@ class V2Daemon:
         if self.experimental_owner_only and self.runtime.owner_gmail_service is None:
             from alphonse.agent_v2.core.intelligence.simple_loop.owner_gmail import OwnerGmailService
             self.runtime.owner_gmail_service = OwnerGmailService(
+                self.runtime.integration_management.accounts, self.optional_accounts)
+        if self.experimental_owner_only and self.runtime.owner_outlook_service is None:
+            from alphonse.agent_v2.core.intelligence.simple_loop.owner_outlook import OwnerOutlookService
+            self.runtime.owner_outlook_service = OwnerOutlookService(
+                self.runtime.integration_management.accounts, self.optional_accounts)
+        if self.experimental_owner_only and self.runtime.owner_calendar_service is None:
+            from alphonse.agent_v2.core.intelligence.simple_loop.owner_calendar import OwnerCalendarService
+            self.runtime.owner_calendar_service = OwnerCalendarService(
+                self.runtime.integration_management.accounts, self.optional_accounts)
+        if self.experimental_owner_only and self.runtime.owner_gmail_search_service is None:
+            from alphonse.agent_v2.core.intelligence.simple_loop.owner_gmail_search import OwnerGmailSearchService
+            self.runtime.owner_gmail_search_service = OwnerGmailSearchService(
                 self.runtime.integration_management.accounts, self.optional_accounts)
         self.runtime.integration_management.dispatcher = self.project_check_dispatcher
         self.runtime.integration_management.findings = self.findings
@@ -695,6 +708,9 @@ class V2Daemon:
                     identity_resolver=self.runtime.identity_resolver,
                     project_store=self.runtime.project_store,
                     owner_gmail_service=self.runtime.owner_gmail_service,
+                    owner_outlook_service=self.runtime.owner_outlook_service,
+                    owner_calendar_service=self.runtime.owner_calendar_service,
+                    owner_gmail_search_service=self.runtime.owner_gmail_search_service,
                     schedule_store=self.runtime.schedule_store,
                     owner_schedule_store=self.runtime.owner_schedule_store,
                     owner_schedule_creation_enabled=(self.runtime.owner_schedule_store is not None),
@@ -704,6 +720,12 @@ class V2Daemon:
                     user_timezone_provider=self.runtime.user_store.timezone,
                     owner_effect_commit=lambda commit: self.kill_switch.commit_if_active(message_id, commit),
                     cancellation_checker=is_cancelled)
+                # The owner progress reviewer may use the configured Jev
+                # destination while it is still enabled. The processor scopes
+                # which observations can be sent there.
+                context.owner_progress_provider_active = lambda provider: (
+                    provider is not None and provider is self.runtime.core.system_one
+                    and getattr(getattr(provider, 'settings', None), 'enabled', False) is True)
                 if continuation_config is not None:
                     context.owner_continuation_config = continuation_config
                 if continuation_version is not None:
@@ -766,6 +788,13 @@ class V2Daemon:
                                 scheduled_recorded = True
                             else:
                                 selected_pair[0].mark_ready_handoff()
+                        publish_recovery = getattr(context, '_owner_failure_recovery_publish', None)
+                        if (result is not None and result.status == ProcessingStatus.FAILED
+                                and callable(publish_recovery) and not self._stop.is_set()):
+                            try:
+                                publish_recovery()
+                            except Exception:
+                                pass  # The original failure remains visible.
                         return True
                     cancelled_at_finish, _ = self.kill_switch.finish_handoff(
                         message_id, release=finish_ready_handoff, cancel=lambda: True)
@@ -968,6 +997,9 @@ class V2Daemon:
                     identity_resolver=self.runtime.identity_resolver,
                     project_store=self.runtime.project_store,
                     owner_gmail_service=self.runtime.owner_gmail_service,
+                    owner_outlook_service=self.runtime.owner_outlook_service,
+                    owner_calendar_service=self.runtime.owner_calendar_service,
+                    owner_gmail_search_service=self.runtime.owner_gmail_search_service,
                     schedule_store=self.runtime.schedule_store,
                     owner_schedule_store=self.runtime.owner_schedule_store,
                     skill_store=self.runtime.core.skill_store,
@@ -1052,14 +1084,21 @@ class V2Daemon:
         except Exception:
             return 'unavailable'
 
-    def owner_message_status_payload(self, message_id: str) -> dict[str, str]:
+    def owner_message_status_payload(self, message_id: str) -> dict[str, Any]:
         """Return only an authorized status and, where known, a fixed reason."""
+        if not isinstance(message_id, str) or re.fullmatch(r'[0-9a-f]{32}', message_id) is None:
+            return {'status': 'unavailable'}
         status = self.owner_message_status(message_id)
         result = {'status': status}
         if status == 'failed':
             with self._owner_status_lock:
                 if self._owner_statuses.get(message_id) == 'failed':
                     result['failure_code'] = self._owner_failure_codes.get(message_id, 'needs_attention')
+        if status in {'failed', 'unavailable'}:
+            from .core.intelligence.simple_loop.owner_failure_recovery import stored_owner_failure_recoveries
+            recovery = stored_owner_failure_recoveries(self.runtime.queue, message_id=message_id).get(message_id)
+            if recovery is not None and (status == 'unavailable' or result.get('failure_code') == recovery['failure_code']):
+                result.update(recovery, status='failed')
         return result
 
     def abandon_owner_message(self, message_id: str) -> dict[str, str]:
@@ -1432,13 +1471,18 @@ class V2Daemon:
                 )
 
     def update_inference_settings(self, *, provider_key: str, model_id: str) -> dict[str, str]:
-        settings = validate_and_save_inference_settings(
-            self.runtime.inference_settings_store,
-            provider_key=provider_key,
-            model_id=model_id,
-        )
-        refresh_runtime_inference(self.runtime, settings)
-        return settings.to_dict()
+        if not self._inference_settings_lock.acquire(blocking=False):
+            raise ValueError("inference_settings_busy")
+        try:
+            settings = validate_and_save_inference_settings(
+                self.runtime.inference_settings_store,
+                provider_key=provider_key,
+                model_id=model_id,
+            )
+            refresh_runtime_inference(self.runtime, settings)
+            return settings.to_dict()
+        finally:
+            self._inference_settings_lock.release()
 
     def onboarding_status(self) -> dict[str, object]:
         return self.runtime.user_store.status()
@@ -2278,7 +2322,7 @@ class V2Daemon:
     def verify_web_tools(self, *, actor_user_id: str, kind: str) -> dict[str, Any]:
         self._require_admin(actor_user_id)
         settings = self.runtime.web_tools_settings_store.get()
-        if kind == "search": return execute_web_search({"query": "Alphonse SearXNG verification", "limit": 1}, settings=settings)
+        if kind == "search": return execute_web_search({"query": "Python programming language", "limit": 1}, settings=settings)
         if kind == "fetch": return execute_web_fetch({"url": "https://example.com", "max_chars": 200}, settings=settings)
         raise ValueError("web_tools_verify_kind_invalid")
 
@@ -2610,7 +2654,8 @@ class V2Daemon:
             self._desktop_progress_closures.setdefault(key, set()).add(str(delivery.task_id))
         return acknowledged
 
-    def desktop_conversation_history(self, *, user: str, project_id: str = "", local_date: str = "", limit: int = 100) -> list[dict[str, Any]]:
+    def desktop_conversation_history(self, *, user: str, project_id: str = "", local_date: str = "",
+                                     limit: int = 100, include_verified_private_cards: bool = False) -> list[dict[str, Any]]:
         normalized_user = self._admin_user_id(user)
         # project_id remains accepted for old clients, but Desktop history is owner scoped.
         zone = ZoneInfo(self.runtime.user_store.timezone(normalized_user))
@@ -2633,6 +2678,16 @@ class V2Daemon:
         )):
             self._record_question_conversation_event(question)
         timeline = self.runtime.conversation_store.list_between(owner_user_id=normalized_user, start_utc=start.isoformat(), end_utc=end.isoformat())
+        private_cards = {}
+        if include_verified_private_cards and self.experimental_owner_only and user == normalized_user:
+            from .core.intelligence.simple_loop.owner_private_history import private_cards_for_desktop_history
+            private_cards = private_cards_for_desktop_history(
+                self.runtime.queue, owner=normalized_user, events=timeline, timezone_name=zone.key)
+        recoveries = {}
+        if self.experimental_owner_only:
+            from .core.intelligence.simple_loop.owner_failure_recovery import stored_owner_failure_recoveries
+            recoveries = stored_owner_failure_recoveries(self.runtime.queue, actor=normalized_user,
+                                                        start=start.isoformat(), end=end.isoformat())
         messages: dict[str, dict[str, Any]] = {}
         for event in timeline:
             # Older stores may contain both an outbound question and its
@@ -2664,6 +2719,10 @@ class V2Daemon:
                 "project_id": event.project_id,
                 "sequence": event.sequence,
             }
+            if event.role == 'user' and event.source == 'desktop' and message_id in recoveries:
+                messages[message_id].update(recoveries[message_id])
+            if event.event_id in private_cards:
+                messages[message_id]['private_card'] = private_cards[event.event_id]
             if self.experimental_owner_only and event.source_message_id.startswith('outbound:owner:'):
                 from alphonse.agent_v2.core.intelligence.simple_loop.owner_schedule_cancel import committed_cancel_for_recovery
                 effect = committed_cancel_for_recovery(self.runtime.queue,
@@ -4178,15 +4237,18 @@ class V2Daemon:
 
     def _record_selected_model_access_warning(self, error: str) -> None:
         """Record a transient backend rejection without invalidating a known-good model."""
-        current = self.runtime.inference_settings_store.get()
-        self.runtime.inference_settings_store.save(
-            replace(current, validation_error=str(error or "openai_codex_model_access_rejected"))
-        )
+        store = self.runtime.inference_settings_store
+        current = store.get()
+        reported_model = error.partition(":")[2].strip()
+        if reported_model and reported_model != current.model_id:
+            return
+        store.update_validation_error(current, error or "openai_codex_model_access_rejected")
 
     def _clear_selected_model_access_warning(self) -> None:
-        current = self.runtime.inference_settings_store.get()
+        store = self.runtime.inference_settings_store
+        current = store.get()
         if _model_access_rejection(current.validation_error):
-            self.runtime.inference_settings_store.save(replace(current, validation_error=""))
+            store.update_validation_error(current, "")
 
     def _run_retention_if_due(self, *, force: bool = False) -> None:
         now = datetime.now(timezone.utc)

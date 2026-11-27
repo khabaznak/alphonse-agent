@@ -9,6 +9,7 @@ from alphonse.agent_v2.core.core import ToolDescriptor, ToolKind
 from alphonse.agent_v2.core.tools.registry import ToolDefinition
 
 OWNER_REMINDER_CREATE_TOOL_ID = 'native.owner_reminder_create'
+REMINDER_REJECTION = {'status': 'blocked', 'reason': 'reminder_scope_unconfirmed', 'effect_status': 'none'}
 _SCHEMA = {'type': 'object', 'additionalProperties': False,
     'properties': {'message': {'type': 'string', 'minLength': 1, 'maxLength': 500},
                    'due_at': {'type': 'string', 'description': 'One ISO 8601 datetime with explicit offset in the owner timezone.'},

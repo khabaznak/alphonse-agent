@@ -47,4 +47,37 @@ describe("conversation content", () => {
     expect(html).not.toContain('href="javascript:');
     expect(render({ id: "s", role: "system", content: "Connection lost" })).toContain('aria-label="System notice"');
   });
+  it("renders private mail summaries without creating links or remote image requests", () => {
+    const content = "![probe](https://example.invalid/image.png)\nhttps://example.invalid/link";
+    const html = render({ id: "mail", role: "assistant", content, private_reply_plain_text: true });
+    expect(html).toContain(content);
+    expect(html).not.toContain("href=");
+    expect(html).not.toContain("<img");
+  });
+  it("shows a verified zero from Outlook Inbox with its observation time and locale", () => {
+    const html = render({ id: "outlook", role: "assistant", content: "Fallback copy", private_reply_owner: "owner",
+      private_outlook_inbox: { status: "complete", result: {
+        count: 0, observed_at: "2026-11-26T17:00:00Z", timezone: "America/Mexico_City", locale: "fr-FR",
+      } } });
+    expect(html).toContain('aria-label="Outlook / Hotmail Inbox result"');
+    expect(html).toContain("<dt>Unread messages</dt><dd><bdi lang=\"fr-FR\">0</bdi></dd>");
+    expect(html).toContain('dateTime="2026-11-26T17:00:00Z" lang="fr-FR"');
+    expect(html).toContain("26 nov. 2026");
+    expect(html).not.toContain("Fallback copy");
+  });
+  it("renders the private result and visible literal sources only for the owning reply", () => {
+    const message: ChatMessage = { id: "mail", role: "assistant", content: "fallback", private_reply_owner: "owner",
+      private_reply_surface: { surfaceId: "private-gmail:mail", catalogId: "alphonse.desktop.catalog.v2", dataModel: {}, components: {
+        root: { id: "root", component: "Card", children: ["sources"] },
+        sources: { id: "sources", component: "Disclosure", label: "Reviewed sources", children: ["subject"] },
+        subject: { id: "subject", component: "Text", text: "Packing [updated] <latest>" },
+      } } };
+    const html = render(message);
+    expect(html).toContain("provider-evidence-pane");
+    expect(html).toContain(">Reviewed sources</h4>");
+    expect(html).not.toContain("<details");
+    expect(html).toContain("Packing [updated] &lt;latest&gt;");
+    expect(html).not.toContain("fallback");
+    expect(render({ ...message, private_reply_owner: undefined })).not.toContain("Packing");
+  });
 });

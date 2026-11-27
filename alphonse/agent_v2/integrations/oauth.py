@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 import hashlib
 import base64
 import json
@@ -18,7 +19,11 @@ import threading
 import time
 from urllib.parse import parse_qs, urlsplit, urlencode
 
-from alphonse.agent_v2.accounts import AccountService, AccountSession
+from alphonse.agent_v2.accounts import (
+    AccountService, AccountSession, GMAIL_CONTENT_OPERATION, GMAIL_READ_SCOPE,
+    OUTLOOK_INBOX_OPERATION, OUTLOOK_INBOX_RESOURCE, OUTLOOK_INBOX_SCOPE, account_grant_is_live,
+    exact_gmail_label_id, valid_gmail_label_name,
+)
 
 
 class OAuthError(ValueError):
@@ -60,19 +65,21 @@ def safe_callback_message(exc: Exception) -> str:
         'oauth_account_mismatch': 'This is a different provider account from the saved connection. Reconnect the original account or add another.',
         'oauth_state_expired': 'This connection attempt expired. Start a new connection and try again.',
         'oauth_revision_conflict': 'This connection changed during authorization. Refresh Alphonse and start a new connection.',
+        'oauth_consent_cancelled': 'Microsoft sign-in was cancelled. Return to Alphonse to try again.',
     }
     return messages.get(exc.args[0], generic)
 
 
 SCOPES = {
     'google': {
-        'mail_read': 'https://www.googleapis.com/auth/gmail.readonly',
+        'mail_read': GMAIL_READ_SCOPE,
         'calendar_discover': 'https://www.googleapis.com/auth/calendar.calendarlist.readonly',
         'calendar_read': 'https://www.googleapis.com/auth/calendar.events.readonly',
         'classroom_read': 'https://www.googleapis.com/auth/classroom.coursework.me.readonly',
         'classroom_announcements_read': 'https://www.googleapis.com/auth/classroom.announcements.readonly',
     },
     'microsoft': {'mail_read': 'https://graph.microsoft.com/Mail.Read',
+                  OUTLOOK_INBOX_OPERATION: OUTLOOK_INBOX_SCOPE,
                   'calendar_read': 'https://graph.microsoft.com/Calendars.Read'},
 }
 
@@ -150,23 +157,29 @@ class ProviderClient:
         return OAuth2Session(self.config.client_id, scope=scopes,
                              redirect_uri=self.config.redirect_uri, token=token)
 
+    def _endpoint(self, index, scopes):
+        endpoint = ENDPOINTS[self.config.provider][index]
+        if self.config.provider == 'microsoft' and OUTLOOK_INBOX_SCOPE in scopes:
+            return endpoint.replace('/common/', '/consumers/')
+        return endpoint
+
     def begin(self, scopes, state, verifier):
         challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode('ascii')).digest()).rstrip(b'=').decode('ascii')
         options = dict(code_challenge=challenge, code_challenge_method='S256', prompt='select_account')
         if self.config.provider == 'google':
             options.update(access_type='offline', prompt='consent select_account')
         with self._session(scopes=scopes) as client:
-            return client.authorization_url(ENDPOINTS[self.config.provider][0], state=state, **options)[0]
+            return client.authorization_url(self._endpoint(0, scopes), state=state, **options)[0]
 
     def exchange(self, code, verifier, scopes):
         with self._session() as client:
-            return dict(client.fetch_token(ENDPOINTS[self.config.provider][1], code=code,
+            return dict(client.fetch_token(self._endpoint(1, scopes), code=code,
                         code_verifier=verifier, include_client_id=True,
                         client_secret=self._client_secret(), timeout=20))
 
     def refresh(self, token, scopes):
         with self._session() as client:
-            return dict(client.refresh_token(ENDPOINTS[self.config.provider][1],
+            return dict(client.refresh_token(self._endpoint(1, scopes),
                         refresh_token=token['refresh_token'], client_id=self.config.client_id,
                         client_secret=self._client_secret(),
                         body=urlencode({'scope': ' '.join(scopes)}), timeout=20))
@@ -201,6 +214,16 @@ class _Pending:
     scopes: list[str]
     verifier: str = field(repr=False)
     expires: float = 0
+    attempt_id: str = ''
+
+
+@dataclass(repr=False)
+class _OutlookAttempt:
+    actor: str
+    connection_id: str
+    expires: float
+    status: str = 'pending'
+    reason: str = ''
 
 
 class OAuthService:
@@ -223,6 +246,7 @@ class OAuthService:
         self.clients = {c.provider: (ProviderClient(c, secret_resolver=resolve_client_secret)
                                      if client_factory is ProviderClient else client_factory(c)) for c in clients}
         self.pending = {}
+        self.outlook_attempts = {}
         self.lock = threading.RLock()
         with self.store._connect() as db:
             db.execute('CREATE TABLE IF NOT EXISTS v2_oauth_leases (connection_id TEXT PRIMARY KEY, nonce TEXT NOT NULL)')
@@ -263,6 +287,13 @@ class OAuthService:
         if (provider not in self.clients or not capabilities or len(set(capabilities)) != len(capabilities)
                 or not set(capabilities) <= SCOPES[provider].keys()):
             raise OAuthError('oauth_capability_invalid')
+        outlook = capabilities == [OUTLOOK_INBOX_OPERATION]
+        if OUTLOOK_INBOX_OPERATION in capabilities and not outlook:
+            raise OAuthError('oauth_capability_invalid')
+        if outlook:
+            owner = self.accounts.users.admin_user()
+            if owner is None or not owner.is_active or owner.user_id != session.actor_user_id or owner.role not in ('admin', 'owner'):
+                raise PermissionError('owner_only_account_scope_unavailable')
         record = self.store.get(connection_id)
         if record is not None and expected_revision == 0:
             raise OAuthError('oauth_revision_conflict')
@@ -278,6 +309,8 @@ class OAuthService:
             raise OAuthError('oauth_revision_conflict')
         if record.credential_deletion_pending:
             raise OAuthError('oauth_credential_cleanup_required')
+        if outlook and record.connection['capabilities'] not in ([], [OUTLOOK_INBOX_OPERATION]):
+            raise OAuthError('oauth_capability_invalid')
         scopes = sorted({'openid', *(s for c in capabilities for s in capability_scopes(provider, c))})
         if provider == 'microsoft':
             scopes.append('offline_access')
@@ -298,14 +331,55 @@ class OAuthService:
             raise OAuthError('oauth_setup_unavailable') from None
         with self.lock:
             now = time.monotonic()
+            self.outlook_attempts = {key: value for key, value in self.outlook_attempts.items()
+                                     if value.expires + 300 > now}
+            self._cancel_outlook_attempts(connection_id)
             self.pending = {k: p for k, p in self.pending.items() if p.expires > now and p.connection_id != connection_id}
-            if len(self.pending) >= 128:
+            if len(self.pending) >= 128 or (outlook and len(self.outlook_attempts) >= 128):
                 raise OAuthError('oauth_setup_busy')
+            attempt_id = secrets.token_urlsafe(24) if outlook else ''
+            if outlook:
+                self.outlook_attempts[attempt_id] = _OutlookAttempt(session.actor_user_id, connection_id, now + 300)
             self.pending[state] = _Pending(session.actor_user_id, connection_id, record.connection['revision'],
-                record.credential_generation, list(capabilities), scopes, verifier, now + 300)
+                record.credential_generation, list(capabilities), scopes, verifier, now + 300, attempt_id)
         # URL contains state/challenge only; return to the trusted setup surface,
         # never record in event history, prompts or routine logs.
-        return {'authorization_url': url, 'expires_in': 300}
+        result = {'authorization_url': url, 'expires_in': 300}
+        if outlook:
+            result['attempt_id'] = attempt_id
+        return result
+
+    def _cancel_outlook_attempts(self, connection_id):
+        for attempt in self.outlook_attempts.values():
+            if attempt.connection_id == connection_id and attempt.status == 'pending':
+                attempt.status = 'cancelled'
+
+    def _outlook_attempt(self, session, provider, attempt_id, *, cancel=False):
+        if provider != 'microsoft' or not isinstance(attempt_id, str) or re.fullmatch(r'[A-Za-z0-9_-]{32}', attempt_id) is None:
+            raise OAuthError('oauth_attempt_unavailable')
+        with self.lock:
+            attempt = self.outlook_attempts.get(attempt_id)
+            if attempt is None or attempt.actor != session.actor_user_id:
+                raise OAuthError('oauth_attempt_unavailable')
+            self._owned(session, attempt.connection_id)
+            if attempt.status == 'pending':
+                if attempt.expires <= time.monotonic():
+                    attempt.status = 'expired'
+                elif cancel:
+                    attempt.status = 'cancelled'
+                if attempt.status != 'pending':
+                    self.pending = {state: pending for state, pending in self.pending.items()
+                                    if pending.attempt_id != attempt_id}
+            result = {'status': attempt.status}
+            if attempt.reason:
+                result['reason'] = attempt.reason
+            return result
+
+    def oauth_attempt_status(self, session, *, provider, attempt_id):
+        return self._outlook_attempt(session, provider, attempt_id)
+
+    def cancel_oauth_attempt(self, session, *, provider, attempt_id):
+        return self._outlook_attempt(session, provider, attempt_id, cancel=True)
 
     @contextmanager
     def _lease(self, connection_id):
@@ -320,7 +394,7 @@ class OAuthService:
             with self.store._connect() as db:
                 db.execute('DELETE FROM v2_oauth_leases WHERE connection_id=? AND nonce=?', (connection_id, nonce))
 
-    def _persist(self, session, record, token, *, subject=None, capabilities=None, scopes=None):
+    def _persist(self, session, record, token, *, subject=None, capabilities=None, scopes=None, outlook_grant=None):
         # Validate trusted principal again after network I/O.
         current = self._owned(session, record.integration_id)
         if current.connection != record.connection or current.credential_generation != record.credential_generation:
@@ -349,6 +423,13 @@ class OAuthService:
                 db.execute('BEGIN IMMEDIATE')
                 if self.transaction_guard is not None and self.transaction_guard(db, session) is not True:
                     raise PermissionError('oauth_session_unavailable')
+                if outlook_grant is not None:
+                    row = db.execute('SELECT revision, definition FROM v2_account_grants WHERE grant_id=? AND connection_id=?',
+                                     (outlook_grant['grant_id'], record.integration_id)).fetchone()
+                    if (row is None or row['revision'] != outlook_grant['revision']
+                            or json.loads(row['definition']) != outlook_grant
+                            or not account_grant_is_live(outlook_grant, datetime.now(timezone.utc))):
+                        raise PermissionError('account_grant_denied')
                 cursor = db.execute('''UPDATE v2_integrations SET connection_json=?, credential_ref=?,
                     credential_generation=?, enabled=1, revocation_pending=0, credential_deletion_pending=0,
                     secret_json='{}', updated_at=? WHERE integration_id=? AND connection_json=?
@@ -403,13 +484,45 @@ class OAuthService:
             if not pending or pending.actor != session.actor_user_id:
                 raise OAuthError('oauth_state_invalid')
             self.pending.pop(state)
+        if not pending.attempt_id:
+            return self._complete(session, pending, uri, query)
+        try:
+            return self._complete(session, pending, uri, query)
+        except Exception as exc:
+            with self.lock:
+                attempt = self.outlook_attempts.get(pending.attempt_id)
+                if attempt is not None and attempt.status == 'pending':
+                    code = (exc.args[0] if isinstance(exc, OAuthError) and len(exc.args) == 1
+                            and isinstance(exc.args[0], str) else '')
+                    if code == 'oauth_consent_cancelled':
+                        attempt.status = 'cancelled'
+                    elif code == 'oauth_state_expired':
+                        attempt.status = 'expired'
+                    else:
+                        attempt.status = 'failed'
+                        attempt.reason = {
+                            'oauth_account_mismatch': 'account_mismatch',
+                            'oauth_exchange_access_denied': 'consent_denied',
+                            'oauth_consent_denied': 'consent_denied',
+                            'oauth_scopes_missing': 'consent_incomplete',
+                            'oauth_offline_consent_required': 'consent_incomplete',
+                            'oauth_revision_conflict': 'connection_changed',
+                        }.get(code, 'provider_unavailable')
+            raise
+
+    def _complete(self, session, pending, uri, query):
         if pending.expires <= time.monotonic():
             raise OAuthError('oauth_state_expired')
         record = self._owned(session, pending.connection_id)
         client = self.clients[record.provider_key]
         if (uri._replace(query='').geturl() != client.config.redirect_uri or uri.fragment
-                or len(query.get('state', [])) != 1 or len(query.get('code', [])) != 1
-                or not query['code'][0] or 'error' in query):
+                or len(query.get('state', [])) != 1):
+            raise OAuthError('oauth_callback_invalid')
+        if pending.attempt_id and 'error' in query:
+            if query['error'] == ['access_denied']:
+                raise OAuthError('oauth_consent_cancelled')
+            raise OAuthError('oauth_consent_denied')
+        if len(query.get('code', [])) != 1 or not query['code'][0] or 'error' in query:
             raise OAuthError('oauth_callback_invalid')
         if record.connection['revision'] != pending.revision or record.credential_generation != pending.generation:
             raise OAuthError('oauth_revision_conflict')
@@ -421,6 +534,8 @@ class OAuthService:
             except Exception as exc:
                 raise OAuthError(_exchange_error_code(exc)) from None
             token, granted = self._validated(raw_token, pending.scopes, provider=record.provider_key)
+            if pending.attempt_id:
+                granted = [OUTLOOK_INBOX_SCOPE]
             try:
                 subject = client.subject(token)
                 if not subject or (not record.connection['provider_subject'].startswith('pending:')
@@ -430,7 +545,17 @@ class OAuthService:
                 raise
             except Exception:
                 raise OAuthError('oauth_identity_failed') from None
-            self._persist(session, record, token, subject=subject, capabilities=pending.capabilities, scopes=granted)
+            if pending.attempt_id:
+                with self.lock:
+                    attempt = self.outlook_attempts.get(pending.attempt_id)
+                    if attempt is None or attempt.status != 'pending':
+                        raise OAuthError('oauth_consent_cancelled')
+                    if attempt.expires <= time.monotonic():
+                        raise OAuthError('oauth_state_expired')
+                    self._persist(session, record, token, subject=subject, capabilities=pending.capabilities, scopes=granted)
+                    attempt.status = 'connected'
+            else:
+                self._persist(session, record, token, subject=subject, capabilities=pending.capabilities, scopes=granted)
         return self.health(session, record.integration_id)
 
     def pause(self, session: AccountSession, connection_id: str, expected_revision: int):
@@ -450,9 +575,12 @@ class OAuthService:
         except Exception:
             pass
         self.accounts.save_connection(session, connection_id=connection_id, expected_revision=expected_revision,
-            provider_subject=record.connection['provider_subject'], capabilities=[], granted_scopes=[],
+            provider_subject=record.connection['provider_subject'],
+            capabilities=[OUTLOOK_INBOX_OPERATION] if record.connection['capabilities'] == [OUTLOOK_INBOX_OPERATION] else [],
+            granted_scopes=[],
             status='disconnected', health_code='disconnected')
         with self.lock:
+            self._cancel_outlook_attempts(connection_id)
             self.pending = {s: p for s, p in self.pending.items() if p.connection_id != connection_id}
         # Local authority and credentials are invalidated before provider I/O.
         revoked = False
@@ -477,36 +605,167 @@ class OAuthService:
     def _read(self, record):
         return self.store.credential_vault.get(record.credential_ref, record.integration_id, record.credential_generation)
 
-    def token(self, session: AccountSession, *, authorization: dict):
+    def _refresh_access_token(self, session, record, token, *, fixed_scopes=False, outlook_grant=None):
+        scopes = record.connection['granted_scopes']
+        outlook = record.connection['capabilities'] == [OUTLOOK_INBOX_OPERATION]
+        requested = [OUTLOOK_INBOX_SCOPE] if outlook else scopes
+        try:
+            token, granted = self._validated(self.clients[record.provider_key].refresh(token, requested),
+                                             requested, old=token, provider=record.provider_key)
+            if outlook:
+                granted = [OUTLOOK_INBOX_SCOPE]
+            if (fixed_scopes or outlook) and granted != scopes:
+                raise OAuthError('oauth_scopes_changed')
+        except Exception as exc:
+            # Failed validation may have consumed a rotating refresh token.
+            if getattr(exc, 'error', '') in {'temporarily_unavailable', 'server_error'}:
+                raise OAuthError('oauth_provider_unavailable') from None
+            self._require_reconnect(record)
+            raise OAuthError('oauth_reauth_required') from None
+        try:
+            self._persist(session, record, token, scopes=granted, outlook_grant=outlook_grant)
+        except Exception:
+            self._require_reconnect(record)
+            raise OAuthError('oauth_refresh_not_persisted') from None
+        return token
+
+    def token(self, session: AccountSession, *, authorization: dict, expected_connection_revision=None):
         """Managed executor boundary: reauthorize each page/use, including after I/O.
 
         authorization is the complete explicit AccountService.authorize request.
         Never register this method as a general tool or expose its result via IPC.
         """
-        record, _ = self.accounts.authorize(session, **authorization)
+        def authorized_record():
+            record, grant = self.accounts.authorize(session, **authorization)
+            if (expected_connection_revision is not None
+                    and record.connection['revision'] != expected_connection_revision):
+                raise OAuthError('oauth_revision_conflict')
+            return record, grant
+
+        record, _ = authorized_record()
         if record.provider_key not in self.clients:
             raise OAuthError('oauth_provider_unconfigured')
         with self._lease(record.integration_id):
-            record, _ = self.accounts.authorize(session, **authorization)
+            record, grant = authorized_record()
             token = self._read(record)
             if float(token.get('expires_at', 0)) <= time.time() + 60:
-                try:
-                    token, granted = self._validated(self.clients[record.provider_key].refresh(token,
-                        record.connection['granted_scopes']), record.connection['granted_scopes'], old=token, provider=record.provider_key)
-                except Exception as exc:
-                    # A timeout/invalid response may have consumed a rotating
-                    # refresh token. Require reconnect rather than replay it.
-                    if getattr(exc, 'error', '') in {'temporarily_unavailable', 'server_error'}:
-                        raise OAuthError('oauth_provider_unavailable') from None
-                    self._require_reconnect(record)
-                    raise OAuthError('oauth_reauth_required') from None
-                try:
-                    self._persist(AccountSession(record.connection['owner_user_id']), record, token, scopes=granted)
-                except Exception:
-                    self._require_reconnect(record)
-                    raise OAuthError('oauth_refresh_not_persisted') from None
-            self.accounts.authorize(session, **authorization)
+                outlook_grant = grant if authorization['operation'] == OUTLOOK_INBOX_OPERATION else None
+                token = self._refresh_access_token(AccountSession(record.connection['owner_user_id']), record, token,
+                                                   outlook_grant=outlook_grant)
+            authorized_record()
             return token['access_token']
+
+    def list_gmail_labels(self, session: AccountSession, *, connection_id: str, expected_revision: int):
+        """List label names and IDs from the connected Gmail account for owner settings."""
+        from alphonse.agent_v2.integrations.gmail import GmailHTTPError, GmailTransport
+        from alphonse.agent_v2.services.project_check_worker import CheckStopped
+
+        if (type(expected_revision) is not int or expected_revision < 1
+                or not isinstance(connection_id, str) or not connection_id.strip()):
+            raise ValueError('gmail_label_list_request_invalid')
+
+        def eligible_record():
+            record = self._owned(session, connection_id)
+            owner = self.accounts.users.admin_user()
+            connection = record.connection
+            if (owner is None or not owner.is_active or owner.role not in ('owner', 'admin')
+                    or owner.user_id != session.actor_user_id or record.provider_key != 'google'
+                    or 'mail_read' not in connection['capabilities']
+                    or GMAIL_READ_SCOPE not in connection['granted_scopes']):
+                raise PermissionError('owner_only_account_scope_unavailable')
+            if connection['revision'] != expected_revision:
+                raise OAuthError('oauth_revision_conflict')
+            if (not record.enabled or connection['status'] != 'connected'
+                    or connection['health_code'] != 'healthy' or not record.credential_ref
+                    or record.revocation_pending or record.credential_deletion_pending):
+                raise OAuthError('oauth_connection_unavailable')
+            return record
+
+        eligible_record()
+        if 'google' not in self.clients:
+            raise OAuthError('oauth_provider_unconfigured')
+        with self._lease(connection_id):
+            record = eligible_record()
+            token = self._read(record)
+            if not self._access_token_current(token):
+                self._refresh_access_token(session, record, token, fixed_scopes=True)
+                record = eligible_record()
+                token = self._read(record)
+            if not self._access_token_current(token):
+                raise OAuthError('oauth_refresh_required')
+            try:
+                response, _ = GmailTransport().get('labels', params={'fields': 'labels(id,name)'},
+                    token=token['access_token'], deadline=datetime.now(timezone.utc) + timedelta(seconds=8),
+                    max_bytes=4 * 1024 * 1024)
+            except (GmailHTTPError, CheckStopped, ImportError):
+                raise OAuthError('gmail_label_list_unavailable') from None
+            current = eligible_record()
+            if (current.connection != record.connection or current.credential_ref != record.credential_ref
+                    or current.credential_generation != record.credential_generation):
+                raise OAuthError('oauth_revision_conflict')
+        labels = response.get('labels', []) if isinstance(response, dict) else None
+        if not isinstance(labels, list) or len(labels) > 10100:
+            raise OAuthError('gmail_label_list_unavailable')
+        by_id = {}
+        for label in labels:
+            if not isinstance(label, dict):
+                raise OAuthError('gmail_label_list_unavailable')
+            label_id, name = label.get('id'), label.get('name')
+            if exact_gmail_label_id(label_id) and valid_gmail_label_name(name):
+                if label_id in by_id and by_id[label_id] != name:
+                    raise OAuthError('gmail_label_list_unavailable')
+                by_id[label_id] = name
+        return {'labels': [{'id': label_id, 'name': name} for label_id, name in sorted(
+            by_id.items(), key=lambda item: (item[1].casefold(), item[1], item[0]))]}
+
+    def refresh_gmail_access(self, session: AccountSession, *, connection_id: str,
+                             expected_revision: int, grant_id: str, grant_revision: int):
+        """Owner-initiated credential maintenance, separate from Gmail reads."""
+        if (type(expected_revision) is not int or type(grant_revision) is not int
+                or expected_revision < 1 or grant_revision < 1
+                or not isinstance(connection_id, str) or not isinstance(grant_id, str)):
+            raise ValueError('oauth_refresh_request_invalid')
+        record = self._owned(session, connection_id)
+        if record.provider_key != 'google' or 'mail_read' not in record.connection['capabilities']:
+            raise PermissionError('owner_only_account_scope_unavailable')
+        with self.store._connect() as db:
+            grant = db.execute('SELECT definition FROM v2_account_grants WHERE grant_id=? AND connection_id=?',
+                               (grant_id, connection_id)).fetchone()
+        if grant is None:
+            raise PermissionError('account_grant_missing')
+        definition = json.loads(grant['definition'])
+        content_grant = definition.get('operations') == [GMAIL_CONTENT_OPERATION]
+        if not content_grant and record.connection['capabilities'] != ['mail_read']:
+            raise PermissionError('owner_only_account_scope_unavailable')
+        resources = definition.get('resources') if content_grant else ['INBOX']
+        if not isinstance(resources, list) or len(resources) != 1 or not exact_gmail_label_id(resources[0]):
+            raise PermissionError('account_grant_denied')
+        self.token(session, expected_connection_revision=expected_revision, authorization={
+            'connection_id': connection_id, 'grant_id': grant_id,
+            'operation': GMAIL_CONTENT_OPERATION if content_grant else 'mail_read', 'owner_gmail_content': content_grant,
+            'resources': resources, 'recipient_user_ids': [session.actor_user_id],
+            'required_scopes': [SCOPES['google']['mail_read']], 'project_id': None,
+            'expected_grant_revision': grant_revision,
+        })
+        value = self.health(session, connection_id)
+        return {'status': value['status'], 'access_token_status': value['access_token_status']}
+
+    def refresh_outlook_inbox_access(self, session: AccountSession, *, connection_id: str,
+                                    expected_revision: int, grant_id: str, grant_revision: int):
+        """Refresh only a currently granted personal Inbox connection."""
+        if (type(expected_revision) is not int or type(grant_revision) is not int
+                or expected_revision < 1 or grant_revision < 1
+                or not isinstance(connection_id, str) or not isinstance(grant_id, str)):
+            raise ValueError('oauth_refresh_request_invalid')
+        self._owned(session, connection_id)
+        self.token(session, expected_connection_revision=expected_revision, authorization={
+            'connection_id': connection_id, 'grant_id': grant_id, 'operation': OUTLOOK_INBOX_OPERATION,
+            'resources': [OUTLOOK_INBOX_RESOURCE], 'recipient_user_ids': [session.actor_user_id],
+            'required_scopes': [OUTLOOK_INBOX_SCOPE], 'project_id': None, 'expected_grant_revision': grant_revision,
+            'owner_outlook_inbox': True,
+        })
+        value = self.health(session, connection_id)
+        return {'status': value['status'], 'access_token_status': value['access_token_status']}
 
     def token_without_refresh(self, session: AccountSession, *, authorization: dict):
         """Use a currently valid token without any refresh or credential mutation.
@@ -545,3 +804,30 @@ class OAuthService:
                     granted_scopes=record.connection['granted_scopes'], status='reauth_required', health_code='consent_required')
             except (ValueError, PermissionError):
                 pass  # Concurrent lifecycle mutation already fences the result.
+
+    def require_outlook_reconnect(self, session, record, *, grant_id, grant_revision):
+        """Mark rejected Outlook credentials only while that generation remains current."""
+        current = self._owned(session, record.integration_id)
+        value = current.connection
+        if (current.provider_key != 'microsoft' or value != record.connection
+                or value['capabilities'] != [OUTLOOK_INBOX_OPERATION] or value['status'] != 'connected'
+                or current.credential_generation != record.credential_generation or not current.enabled):
+            return False
+        from alphonse.agent_v2.integrations.store import _now_iso
+        now = _now_iso()
+        replacement = dict(value, status='reauth_required', health_code='consent_required',
+                           revision=value['revision'] + 1, updated_at=now)
+        with self.store._connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            if self.transaction_guard is not None and self.transaction_guard(db, session) is not True:
+                return False
+            row = db.execute('SELECT revision, definition FROM v2_account_grants WHERE grant_id=? AND connection_id=?',
+                             (grant_id, record.integration_id)).fetchone()
+            if (row is None or row['revision'] != grant_revision
+                    or not account_grant_is_live(json.loads(row['definition']), datetime.now(timezone.utc))):
+                return False
+            updated = db.execute('''UPDATE v2_integrations SET connection_json=?, updated_at=?
+                WHERE integration_id=? AND enabled=1 AND credential_generation=? AND connection_json=?''',
+                (json.dumps(replacement, sort_keys=True), now, record.integration_id,
+                 record.credential_generation, json.dumps(value, sort_keys=True)))
+            return updated.rowcount == 1

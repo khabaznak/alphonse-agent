@@ -1,5 +1,10 @@
 # Owner Gmail credential refresh investigation
 
+The owner can now select **Refresh access** in Desktop under **Settings →
+Integrations → Gmail** after granting Inbox access. This explicit settings action
+uses the managed OAuth lifecycle. A conversation still reads only with a usable
+existing token and reports the setup or renewal needed when access is blocked.
+
 The currently enabled owner Gmail unread-count path uses an existing,
 unexpired OAuth access token and never refreshes it. An expired or near-expiry
 token blocks the read. This is a practical limitation: the owner will need an

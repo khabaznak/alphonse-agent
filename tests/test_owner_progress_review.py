@@ -64,6 +64,29 @@ def test_jev_receives_atomic_question_and_returns_probability():
     assert set(seen[0]['questions']) == {'observed_progress'}
 
 
+@pytest.mark.parametrize('probabilities,incomplete,expected', [
+    ((.9, .9), False, 'progress'),
+    ((.9, .1), False, 'no_progress'),
+    ((.9, .1), True, 'unknown'),
+    ((.9, .5), False, 'unknown'),
+])
+def test_checkpoint_novelty_and_usefulness_are_independent(probabilities, incomplete, expected):
+    provider = JevCriterionDecisionProvider.__new__(JevCriterionDecisionProvider)
+    prior = [{**OBSERVATIONS[0], 'observation': {'results': []}}]
+
+    def evaluate(*, state, questions, **_):
+        assert state['prior_observations'] == prior
+        assert state['observations'] == OBSERVATIONS
+        assert set(questions) == {'new_fact', 'advances_question'}
+        return {'answers': {key: {'type': 'noul', 'noul': score}
+                            for key, score in zip(('new_fact', 'advances_question'), probabilities)}}
+
+    provider._evaluate = evaluate
+    assert review_progress(request='Find a synthetic report', observations=OBSERVATIONS,
+        authorize_disclosure=lambda: True, judge=provider.judge_observed_progress,
+        no_threshold=.3, yes_threshold=.7, prior_observations=prior, incomplete=incomplete) == expected
+
+
 def test_question_distinguishes_assessment_and_keeps_v1_unchanged():
     pause = {'schema_version': 2, 'counter': 2, 'metric': 'actions', 'progress_assessment': 'progress'}
     window = {'increment': {'actions': 2, 'model_calls': 4, 'input_tokens': 10, 'output_tokens': 10}, 'elapsed_increment_ms': 5000}

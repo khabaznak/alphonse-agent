@@ -18,9 +18,30 @@ from alphonse.agent_v2.services.project_check_worker import CheckStopped
 
 
 class CalendarHTTPError(Exception):
-    def __init__(self, status):
+    def __init__(self, status, *, api_disabled=False):
         self.status = status
+        self.api_disabled = api_disabled
         super().__init__('calendar_http_error')
+
+
+def _response_bytes(response, deadline, max_bytes):
+    body = bytearray()
+    for chunk in response.iter_content(chunk_size=8192):
+        if datetime.now(timezone.utc) >= deadline or len(body) + len(chunk) > max_bytes:
+            raise CheckStopped('partial', 'calendar_transport_budget')
+        body.extend(chunk)
+    return body
+
+
+def _api_disabled(response, deadline, max_bytes):
+    """Classify a bounded, known Google error without retaining provider text."""
+    try:
+        error = json.loads(_response_bytes(response, deadline, min(max_bytes, 8192)))['error']
+        return any(entry['reason'] in ('SERVICE_DISABLED', 'accessNotConfigured')
+                   for key in ('details', 'errors') for entry in error.get(key, [])
+                   if isinstance(entry, dict) and 'reason' in entry)
+    except (CheckStopped, AttributeError, KeyError, ValueError, TypeError):
+        return False
 
 
 class CalendarTransport:
@@ -34,12 +55,9 @@ class CalendarTransport:
                     params=params, headers={'Authorization': 'Bearer ' + token},
                     timeout=min(20, remaining), stream=True, allow_redirects=False) as response:
                 if response.status_code != 200:
-                    raise CalendarHTTPError(response.status_code)
-                body = bytearray()
-                for chunk in response.iter_content(chunk_size=8192):
-                    if datetime.now(timezone.utc) >= deadline or len(body) + len(chunk) > max_bytes:
-                        raise CheckStopped('partial', 'calendar_transport_budget')
-                    body.extend(chunk)
+                    raise CalendarHTTPError(response.status_code, api_disabled=response.status_code == 403
+                                            and _api_disabled(response, deadline, max_bytes))
+                body = _response_bytes(response, deadline, max_bytes)
                 return json.loads(body), len(body)
         except requests.RequestException:
             raise CheckStopped('partial', 'calendar_transport_unavailable') from None
@@ -95,10 +113,13 @@ class CalendarAdapter:
         if budget[0] <= 0:
             raise CheckStopped('partial', 'calendar_bytes_budget')
         token = oauth.token(context.session, authorization=authorization)
+        context.guard()
         try:
             value, size = self.transport.get(path, params=params, token=token,
                 deadline=context.deadline, max_bytes=budget[0])
         except CalendarHTTPError as exc:
+            if exc.status == 403 and exc.api_disabled:
+                raise CheckStopped('blocked', 'calendar_api_disabled') from None
             if exc.status in {401, 403, 404}:
                 raise CheckStopped('blocked', 'calendar_unavailable_or_revoked') from None
             if exc.status == 410:
@@ -125,6 +146,19 @@ class CalendarAdapter:
     def capabilities(self, context):
         self._authorize(context)
         return ('search', 'read', 'changes')
+
+    def list_summary(self, context):
+        """Read one bounded page of agenda details from one exact calendar."""
+        self._limits(context)
+        if len(context.grant.resources) != 1 or context.calendar_window is None:
+            raise PermissionError('calendar_summary_scope_denied')
+        start, end = context.calendar_window
+        self._query({'text': '', 'time_min': start, 'time_max': end})
+        resource = _id(context.grant.resources[0])
+        params = dict(timeMin=start, timeMax=end, maxResults=min(250, context.limits.items),
+                      singleEvents='true', showDeleted='false', orderBy='startTime',
+                      fields='accessRole,timeZone,nextPageToken,items(summary,start,end,status,endTimeUnspecified)')
+        return self._get(context, f'calendars/{resource}/events', params, [context.limits.bytes])
 
     def discover(self, context, *, cursor=None):
         """Explicit setup only; its independent list grant never authorizes events."""

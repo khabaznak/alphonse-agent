@@ -30,6 +30,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { daemonRequest, ensureDaemon, playAlertSound, showInFinder, stopDaemon } from "./api";
 import { TrustedLocalBashSettings } from "./TrustedLocalBashSettings";
+import { ModelSettingsSection } from "./ModelSettingsSection";
 import { legacyNotificationReviewMessage, FailedReferenceUnavailableError, OwnerConversation, OwnerRequestFailed, ownerAcceptedAt, ownerBusyFor, ownerUnavailableMessage, type OwnerCapability } from "./ownerConversation";
 import { abandonOwnerRequest, listOwnerRecovery, type OwnerRecoveryItem } from "./ownerRecovery";
 import { focusConversationRequest, focusOwnerRecovery, OwnerRecovery } from "./OwnerRecoveryPanel";
@@ -48,9 +49,10 @@ import { OwnerQuestionSelector } from "./OwnerQuestionSelector";
 import { listOwnerQuestions, type OwnerQuestion } from "./ownerQuestions";
 import { SKILL_NAME_MAX_LENGTH, SKILL_DESCRIPTION_MAX_LENGTH, skillTextLength, limitSkillText } from "./skillFormat";
 import { DESKTOP_COMMANDS, matchingCommands } from "./commands";
-import { mergeFreshConversationHistory } from "./conversationHistory";
+import { desktopHistoryMessages, mergeFreshConversationHistory, type HistoryResponse } from "./conversationHistory";
 import { projectTaskProgress } from "./taskProgress";
 import { buildConversationTimeline } from "./conversationTimeline";
+import { useConversationScroll } from "./useConversationScroll";
 import { A2uiSurfaceView, DESKTOP_CATALOG_ID, type A2uiSurface } from "./a2ui";
 import { followDesktopStyle, readDesktopStyle, saveDesktopStyle, type DesktopStyle } from "./desktopStyle";
 import { desktopDiagnosticBehavior, type DesktopDiagnosticMode } from "./diagnosticMode";
@@ -59,7 +61,7 @@ import { readDismissedScheduledSurfaces, rememberDismissedScheduledSurface, with
 import { avatarState, avatarStateLabel, capdActivityLabel, canOpenSettingsSection, isCurrentDesktopAdmin, type Workspace, SETTINGS_SECTIONS } from "./layoutState";
 import { pollForKnownUser, reconcileQuestionSurfaces, reuseQuestions, withoutTaskProgressSurfaces } from "./pollState";
 import { appendQueueSample, type QueueSample } from "./queueHistory";
-import type { ActivityEvent, AgentDocument, ChatMessage, CodeModeSettings, InferenceSettings, MediaToolsSettings, MemorySettings, Project, Question, SystemOneSettings, WebToolsSettings } from "./types";
+import type { ActivityEvent, AgentDocument, ChatMessage, CodeModeSettings, MediaToolsSettings, MemorySettings, Project, Question, SystemOneSettings, WebToolsSettings } from "./types";
 
 type Modal = "onboarding" | null;
 type SettingsTab = (typeof SETTINGS_SECTIONS)[number][0];
@@ -78,16 +80,6 @@ type PollResponse = {
   conversation_has_unseen_messages?: boolean;
   legacy_notification_review?: { owner_scoped: number; ambiguous: number; unassigned: number } | null;
   status: { active_work: Record<string, string>; activity: { state?: string }; queue?: { ready?: number; processing?: number; retry_wait?: number } };
-};
-type HistoryResponse = { messages: ChatMessage[] };
-type Provider = {
-  provider_key: string;
-  display_name: string;
-  models: Array<{ model_id: string; display_name: string }>;
-  catalog_cli_version?: string;
-  cli_version?: string;
-  cli_path?: string;
-  catalog_cli_matches_runtime?: boolean | null;
 };
 const SETTINGS_ICONS = { general: Settings, appearance: Palette, tools: Wrench, integrations: Plug, notifications: Bell, automations: CalendarClock, model: Brain, "system-one": Gauge, "agent-config": FileText, skills: Sparkles, members: UsersRound };
 const localDay = (timezone: string) => {
@@ -110,13 +102,11 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const uiSequence = useRef(0);
   const daemonId = useRef("");
   const delivered = useRef(new Set<string>());
-  const autoScrolledProgressTaskIdsRef = useRef(new Set<string>());
   const conversationHistoryRequestRef = useRef(0);
   const conversationHistoryLoadingRef = useRef(0);
   const activeHistoryRefreshRef = useRef(false);
+  const messagesDuringHistoryRefresh = useRef<ChatMessage[] | null>(null);
   const messagesDuringConversationReloadRef = useRef(new Map<number, ChatMessage[]>());
-  const timelineRef = useRef<HTMLDivElement | null>(null);
-  const followTimelineRef = useRef(true);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const surfacesRef = useRef<Record<string, A2uiSurface>>({});
   const dismissedScheduledSurfacesRef = useRef(readDismissedScheduledSurfaces(window.localStorage));
@@ -139,6 +129,8 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const [conversationDay, setConversationDay] = useState(() => localDay("UTC"));
   const conversationDayRef = useRef(conversationDay);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("appearance");
+  const [outlookSettingsRequested, setOutlookSettingsRequested] = useState(false);
+  const onOutlookOpened = useCallback(() => setOutlookSettingsRequested(false), []);
   const [workspace, setWorkspace] = useState<Workspace>("conversation");
   // Mount once per visit history so navigation preserves local forms and scroll.
   const [visited, setVisited] = useState<Set<Workspace>>(() => new Set(["conversation"]));
@@ -146,18 +138,26 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const [projectForView, setProjectForView] = useState({ id: "", request: 0 });
   const [memberName, setMemberName] = useState("");
   const [isAdmin, setIsAdmin] = useState(false);
-  const workspaceRef = useRef(workspace);
-  workspaceRef.current = workspace;
   const workspaceHostRef = useRef<HTMLDivElement>(null);
   const drawerToggleRef = useRef<HTMLButtonElement>(null);
-  const navigate = (next: Workspace) => {
+  const navigationFocus = useRef<"composer" | "outlook-settings" | undefined>(undefined);
+  const navigate = (next: Workspace, focus?: "composer" | "outlook-settings") => {
     if (workspaceRequired && next !== "settings") return;
+    navigationFocus.current = focus;
     if (next === "settings" && workspace !== "settings") setReturnWorkspace(workspace);
     setVisited((current) => new Set([...current, next]));
     setWorkspace(next);
   };
   useEffect(() => {
-    workspaceHostRef.current?.querySelector<HTMLElement>(".workspace-panel:not([hidden])")?.focus({ preventScroll: true });
+    const panel = workspaceHostRef.current?.querySelector<HTMLElement>(".workspace-panel:not([hidden])");
+    const focus = navigationFocus.current;
+    navigationFocus.current = undefined;
+    const target = focus === "composer" && workspace === "conversation"
+      ? textareaRef.current
+      : focus === "outlook-settings" && workspace === "settings"
+        ? panel?.querySelector<HTMLElement>("[data-outlook-settings-heading]")
+        : null;
+    (target ?? panel)?.focus({ preventScroll: true });
   }, [workspace, settingsTab]);
   const [scheduledTaskForView, setScheduledTaskForView] = useState("");
   const [scheduleViewRequest, setScheduleViewRequest] = useState(0);
@@ -323,12 +323,6 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
     }
   };
   useEffect(() => { setComposerProject(null); }, [user]);
-  const followActiveLog = useCallback(() => {
-    window.requestAnimationFrame(() => {
-      const element = timelineRef.current;
-      if (element && workspaceRef.current === "conversation" && followTimelineRef.current) element.scrollTop = element.scrollHeight;
-    });
-  }, []);
   const { state: drawer, act: changeDrawer, saveFailed: drawerSaveFailed, reconcile: reconcileWidgets } = useAtHand(user);
   const [widgetContext, setWidgetContext] = useState<WidgetContext>();
   const [widgetItem, setWidgetItem] = useState<{ member: string; artifactId: string; itemId: string; family: CoordinationData["family"] }>();
@@ -354,6 +348,13 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const archivedProgressRef = useRef<Record<string, A2uiSurface>>({});
   const [archivedProgress, setArchivedProgress] = useState<Record<string, A2uiSurface>>({});
   const [progressTaskIds, setProgressTaskIds] = useState<string[]>([]);
+  const { timelineRef, rememberPosition, followActivity: followActiveLog } = useConversationScroll({
+    scope: JSON.stringify([user, conversationDay, timezone]),
+    visible: workspace === "conversation",
+    messages,
+    working: ownerConversationWorking,
+    progressIds: progressTaskIds,
+  });
   const [enterToSend, setEnterToSend] = useState(() => window.localStorage.getItem("alphonse.desktop.enterToSend") !== "false");
   const [desktopStyle, setDesktopStyle] = useState<DesktopStyle>("system");
   const [widgetCatalogOpen, setWidgetCatalogOpen] = useState(false);
@@ -379,6 +380,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const appendMessage = useCallback((message: ChatMessage) => {
     const messageDay = messageLocalDay(message.created_at, timezoneRef.current);
     if (messageDay && messageDay !== conversationDayRef.current) return;
+    messagesDuringHistoryRefresh.current?.push(message);
     const loadingRequest = conversationHistoryLoadingRef.current;
     if (loadingRequest) {
       const pending = messagesDuringConversationReloadRef.current.get(loadingRequest) || [];
@@ -387,7 +389,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
     setMessages((current) => {
       // Polls repeat pending questions. Preserve identity (and reading position)
       // when that message is already present instead of triggering auto-scroll.
-      if (current.some((existing) => existing.id === message.id)) return current;
+      if (!message.private_reply_owner && current.some((existing) => existing.id === message.id)) return current;
       const next = mergeFreshConversationHistory(current, [message]);
       return next;
     });
@@ -430,7 +432,6 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       if (stale) return;
       if (!diagnosticBehavior.commitsPollResponses) return;
       if (daemonChanged) {
-        autoScrolledProgressTaskIdsRef.current.clear();
         archivedProgressRef.current = {};
         setArchivedProgress({});
         setProgressTaskIds([]);
@@ -553,12 +554,17 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
             // Preserve the last list and continue pickup/acknowledgement of existing work.
           }
           let sawQuestion = false;
-          const acknowledgementRecovered = await ownerConversation.poll((messageId, answer, kind, committedEffect) => {
+          const acknowledgementRecovered = await ownerConversation.poll((messageId, answer, kind, committedEffect, privateReply, privateSurface, outlookInbox) => {
+            if (ownerConversationRef.current !== ownerConversation) return;
             appendMessage({
               // Match the daemon's durable outbound:owner:<message_id> source
               // identity so a later history refresh does not duplicate it.
               id: `owner:${messageId}`, role: "assistant", content: answer,
               created_at: new Date().toISOString(), project_id: "", committed_effect: committedEffect,
+              private_reply_owner: privateReply ? user : undefined,
+              private_reply_plain_text: privateReply === "gmail" || privateReply === "outlook" || undefined,
+              private_reply_surface: privateSurface,
+              private_outlook_inbox: outlookInbox,
             });
             sawQuestion = kind === "question";
             setOwnerClarificationNotice(kind === "question"
@@ -569,10 +575,11 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
           setOwnerConversationBusy(ownerConversation.hasPending());
           if (acknowledgementRecovered) { ownerConversationNotice.current = ""; setError(""); }
         } catch (cause) {
+          if (ownerConversationRef.current !== ownerConversation) return;
           setOwnerConversationBusy(ownerConversation.hasPending());
           if (cause instanceof OwnerRequestFailed) {
             updateOwnerFailures((current) => [...current.filter((item) => item.messageId !== cause.messageId),
-              { messageId: cause.messageId, failureCode: cause.failureCode || "", dismissed: false }]);
+              { messageId: cause.messageId, failureCode: cause.failureCode || "", dismissed: false, recovery: cause.recovery }]);
             ownerConversationNotice.current = "";
             setError("");
           } else {
@@ -704,53 +711,47 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
     conversationHistoryLoadingRef.current = request;
     messagesDuringConversationReloadRef.current.set(request, []);
     setMessages([]);
-    void daemonRequest<HistoryResponse>("desktop_conversation_history", { user, local_date: conversationDay, limit: 500 })
+    void daemonRequest<HistoryResponse>("desktop_conversation_history", { user, local_date: conversationDay, limit: 500, include_private_cards: isAdmin })
       .then(async (history) => {
         if (conversationHistoryRequestRef.current !== request) return;
         const pending = messagesDuringConversationReloadRef.current.get(request) || [];
-        const refreshed = mergeFreshConversationHistory(history.messages, pending);
+        const refreshed = mergeFreshConversationHistory(desktopHistoryMessages(history, isAdmin ? user : ""), pending);
         setMessages(refreshed);
         conversationHistoryLoadingRef.current = 0;
         messagesDuringConversationReloadRef.current.delete(request);
         await daemonRequest("desktop_mark_conversation_seen", { user, local_date: conversationDay });
-        setConversationHasUnseenMessages(false);
+        if (conversationHistoryRequestRef.current === request) setConversationHasUnseenMessages(false);
       })
       .catch((cause: unknown) => { if (conversationHistoryRequestRef.current === request) setError(cause instanceof Error ? cause.message : "Conversation history could not be loaded"); })
       .finally(() => { if (conversationHistoryRequestRef.current === request) { conversationHistoryLoadingRef.current = 0; messagesDuringConversationReloadRef.current.delete(request); } });
-  }, [conversationDay, user, timezone]);
+  }, [conversationDay, user, isAdmin]);
 
   useEffect(() => {
     if (!user || !conversationHasUnseenMessages || activeHistoryRefreshRef.current || conversationHistoryLoadingRef.current) return;
+    const request = conversationHistoryRequestRef.current;
+    const pending: ChatMessage[] = [];
+    messagesDuringHistoryRefresh.current = pending;
     activeHistoryRefreshRef.current = true;
-    void daemonRequest<HistoryResponse>("desktop_conversation_history", { user, local_date: conversationDay, limit: 500 })
+    void daemonRequest<HistoryResponse>("desktop_conversation_history", { user, local_date: conversationDay, limit: 500, include_private_cards: isAdmin })
       .then(async (history) => {
+        if (conversationHistoryRequestRef.current !== request) return;
         setMessages((current) => {
-          const refreshed = mergeFreshConversationHistory(history.messages, current);
-          return refreshed;
+          const messages = desktopHistoryMessages(history, isAdmin ? user : "");
+          // A checked history is authoritative for earlier private cards. Retain
+          // reply pickups raced by this refresh and local non-card timeline entries.
+          return mergeFreshConversationHistory(messages, history.private_cards_checked === true
+            ? [...current.filter((message) => !message.private_reply_surface), ...pending]
+            : current);
         });
         await daemonRequest("desktop_mark_conversation_seen", { user, local_date: conversationDay });
-        setConversationHasUnseenMessages(false);
+        if (conversationHistoryRequestRef.current === request) setConversationHasUnseenMessages(false);
       })
-      .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "Conversation history could not be refreshed"))
-      .finally(() => { activeHistoryRefreshRef.current = false; });
-  }, [conversationDay, conversationHasUnseenMessages, user]);
-
-  useEffect(() => {
-    const element = timelineRef.current;
-    if (!element || workspaceRef.current !== "conversation") return;
-    element.scrollTop = element.scrollHeight;
-  }, [messages, ownerConversationWorking]);
-
-  useEffect(() => {
-    const unseen = progressTaskIds.filter((taskId) => !autoScrolledProgressTaskIdsRef.current.has(taskId));
-    if (!unseen.length || workspaceRef.current !== "conversation") return;
-    unseen.forEach((taskId) => autoScrolledProgressTaskIdsRef.current.add(taskId));
-    const frame = window.requestAnimationFrame(() => {
-      const element = timelineRef.current;
-      element?.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [progressTaskIds]);
+      .catch((cause: unknown) => { if (conversationHistoryRequestRef.current === request) setError(cause instanceof Error ? cause.message : "Conversation history could not be refreshed"); })
+      .finally(() => {
+        if (messagesDuringHistoryRefresh.current === pending) messagesDuringHistoryRefresh.current = null;
+        activeHistoryRefreshRef.current = false;
+      });
+  }, [conversationDay, conversationHasUnseenMessages, user, isAdmin]);
 
   useEffect(() => {
     const element = textareaRef.current;
@@ -910,7 +911,8 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const timelineRenderVersion = diagnosticBehavior.memoizesTimeline ? 0 : diagnosticRenderTick;
   const questionTaskIds = new Set(questions.map((question) => question.task_id));
   const timelineNodes: ReactNode[] = useMemo(() => buildConversationTimeline(
-      messages,
+      messages.filter((message) => !message.private_reply_owner || (isAdmin
+        && message.private_reply_owner === user && messageLocalDay(message.created_at, timezone) === conversationDay)),
       progressTaskIds,
       {},
       {},
@@ -921,12 +923,12 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       })),
     ).map((item) => {
       if (item.kind === "message") {
-        return <ConversationTimelineEntry key={item.key} message={item.message} questions={questions} user={user} timezone={timezone} onDone={poll} projectName={contextProjects.find((projectItem) => projectItem.project_id === item.message.project_id)?.name || ""} memoize={diagnosticBehavior.memoizesMessages} renderMarkdown={!diagnosticBehavior.plainTextMessages} failures={ownerFailures} workLogRequest={isAdmin && connected ? daemonRequest : undefined} onActiveLogUpdate={followActiveLog} active={ownerConversationWorking && item.message.id === activeConversationMessageId} onDraftQuestion={isAdmin ? (id, content, createdAt) => { setOwnerReplyTarget(""); setFailedReferenceError(""); setFailedReference({ owner: user, id, quote: quotedRequestText(content), createdAt }); setPrompt((current) => draftQuestionAboutRequest(current, content)); window.requestAnimationFrame(() => textareaRef.current?.focus()); } : undefined} onReviewRecovery={isAdmin && ownerRecoveryItems.some((entry) => entry.message_id === item.message.id) ? (id) => { recoveryReturnMessageId.current = id; setOwnerRecoveryItems([]); setOwnerRecoveryNotice("Checking request status…"); setOwnerRecoveryFocus(id); navigate("attention"); void refreshOwnerRecovery(); } : undefined} onOpenModelSettings={isAdmin ? () => { setSettingsTab("model"); navigate("settings"); } : undefined} onFailureDismissedChange={(messageId, dismissed) => updateOwnerFailures((current) => current.map((entry) => entry.messageId === messageId ? { ...entry, dismissed } : entry))} />;
+        return <ConversationTimelineEntry key={item.key} message={item.message} questions={questions} user={user} timezone={timezone} onDone={poll} projectName={contextProjects.find((projectItem) => projectItem.project_id === item.message.project_id)?.name || ""} memoize={diagnosticBehavior.memoizesMessages} renderMarkdown={!diagnosticBehavior.plainTextMessages} failures={ownerFailures} showFailureRecovery={isAdmin} workLogRequest={isAdmin && connected ? daemonRequest : undefined} onActiveLogUpdate={followActiveLog} active={ownerConversationWorking && item.message.id === activeConversationMessageId} onDraftQuestion={isAdmin ? (id, content, createdAt) => { setOwnerReplyTarget(""); setFailedReferenceError(""); setFailedReference({ owner: user, id, quote: quotedRequestText(content), createdAt }); setPrompt((current) => draftQuestionAboutRequest(current, content)); window.requestAnimationFrame(() => textareaRef.current?.focus()); } : undefined} onReviewRecovery={isAdmin && ownerRecoveryItems.some((entry) => entry.message_id === item.message.id) ? (id) => { recoveryReturnMessageId.current = id; setOwnerRecoveryItems([]); setOwnerRecoveryNotice("Checking request status…"); setOwnerRecoveryFocus(id); navigate("attention"); void refreshOwnerRecovery(); } : undefined} onOpenModelSettings={isAdmin ? () => { setSettingsTab("model"); navigate("settings"); } : undefined} onOpenOutlookSettings={isAdmin ? () => { setOutlookSettingsRequested(true); setSettingsTab("integrations"); navigate("settings", "outlook-settings"); } : undefined} onFailureDismissedChange={(messageId, dismissed) => updateOwnerFailures((current) => current.map((entry) => entry.messageId === messageId ? { ...entry, dismissed } : entry))} />;
       }
       const archivedSurface = archivedProgress[item.taskId];
       const surface = archivedSurface || surfaces[`task-progress:${item.taskId}`];
       return surface ? <TaskProgressBubble key={item.key} surface={surface} archived={Boolean(archivedSurface)} connected={connected} timezone={timezone} /> : null;
-    }), [archivedProgress, clientId, connected, contextProjects, diagnosticBehavior.memoizesMessages, diagnosticBehavior.plainTextMessages, messages, ownerConversation, ownerFailures, ownerRecoveryItems, ownerConversationWorking, activeConversationMessageId, isAdmin, poll, refreshOwnerRecovery, followActiveLog, progressTaskIds, questionTaskIds, questions, surfaces, timelineRenderVersion, timezone, user]);
+    }), [archivedProgress, clientId, connected, contextProjects, conversationDay, diagnosticBehavior.memoizesMessages, diagnosticBehavior.plainTextMessages, messages, ownerConversation, ownerFailures, ownerRecoveryItems, ownerConversationWorking, activeConversationMessageId, isAdmin, poll, refreshOwnerRecovery, followActiveLog, progressTaskIds, questionTaskIds, questions, surfaces, timelineRenderVersion, timezone, user]);
 
   useEffect(() => {
     if (workspace !== "attention" || !ownerRecoveryFocus) return;
@@ -995,12 +997,13 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
           </div>
         </header>
         {error && <div className="error" role="alert">{error}</div>}
-        <div id="conversation-timeline" className="timeline" ref={timelineRef} tabIndex={-1} aria-live="polite" onScroll={(event) => { const element = event.currentTarget; followTimelineRef.current = element.scrollHeight - element.scrollTop - element.clientHeight <= 24; }}>
+        <div id="conversation-timeline" className="timeline" ref={timelineRef} tabIndex={-1} aria-live="polite" onScroll={rememberPosition}>
           {timelineNodes}
           {ownerConversationWorking && conversationDay === localDay(timezone) && <ConversationActivity />}
           <OwnerContinuation key={user} request={daemonRequest} active={isAdmin && connected && ownerContinuationAvailable && conversationDay === localDay(timezone)} />
         </div>
         <section className="input-dock">
+          <div className="composer-support" tabIndex={0} aria-label="Request context">
           {activeSurface && (
             <A2uiSurfaceView surface={activeSurface} clientId={clientId} user={user} onDone={poll} onDismiss={dismissScheduledSurface} onAction={(result) => { if (result.action === "view_scheduled_task" && typeof result.scheduled_task_id === "string") { dismissScheduledSurface(activeSurface.surfaceId); setScheduledTaskForView(result.scheduled_task_id); navigate("agenda"); } }} />
           )}
@@ -1009,13 +1012,14 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
           <OwnerSteering items={ownerSteering.user === user ? ownerSteering.items : []} onRemove={(id) => { void daemonRequest("experimental_owner_steer_remove", {id}).then(() => poll()).catch(() => setError("Steering could not be cleared; the request or a dependent follow-up may still need it.")); }} />
           <OwnerFollowups items={ownerFollowups} onRemove={(id) => { void daemonRequest("experimental_owner_followup_remove", { id }).then(() => poll()).catch(() => setError("The follow-up could not be removed; refresh its status.")); }} />
           {selectedFailure && <FailedReferenceNotice id={selectedFailure.id} createdAt={selectedFailure.createdAt} timezone={timezone} unavailable={failedReferenceError === selectedFailure.id} removeRef={failedReferenceRemoveRef} onRemove={() => { setFailedReference(null); setFailedReferenceError(""); textareaRef.current?.focus(); }} />}
+          </div>
           <ConversationComposer prompt={prompt} task={activeConversationMessageId} mode={conversationSendMode} enterToSend={enterToSend} reviewDraft={reviewDraft} textareaRef={textareaRef} commandMenuRef={commandMenuRef} suggestions={suggestions} commands={DESKTOP_COMMANDS} context={composerProject ? <>Project: {composerProject.name} <button type="button" onClick={() => setComposerProject(null)} aria-label="Remove project from next message">×</button></> : "Everyday assistant"} suggestion={<ConversationSuggestion request={daemonRequest} task={workspace === "conversation" && connected && !reviewDraft ? activeConversationMessageId : undefined} prompt={prompt} user={user} defaultMode={conversationSendMode} onSend={(mode, task) => void submitPrompt(mode, task)} />} onChange={(value) => { if (!prompt.trim() && value.trim()) setDraftTask(activeConversationMessageId ?? null); setPrompt(value); }} onSend={(mode, task) => void submitPrompt(mode, task)} onReview={() => { const current = ownerConversation?.isWorking() ? ownerConversation.activeMessageId() : undefined; setDraftTask(current ?? null); setDraftNeedsReview(false); textareaRef.current?.focus(); }} />
-          <p className="composer-hint">Your conversation with Alphonse · {enterToSend ? "Enter to send · Shift+Enter for a new line" : "Use Send to send your message"}</p>
+          <div className="composer-support" tabIndex={0} aria-label="Conversation notices">
           {ownerConversationBusy && ownerConversation && <OwnerConversationRecoveryNotice state={ownerConversation.blockingState()} retrying={ownerAcknowledgementRetrying} onRetry={() => void retryOwnerAcknowledgement()} />}
           {isAdmin && !ownerWorkerReady && <p className="composer-hint" role="status">{ownerUnavailableMessage(ownerBlockingReason)}</p>}
-          {isAdmin && ownerQuestionScope === user && ownerQuestions.length > 0 && <p className="composer-hint">Choose a question below to include it as context for a reply.</p>}
           {isAdmin && ownerQuestionScope === user && <OwnerQuestionSelector questions={ownerQuestions} selectedId={ownerReplyTarget} disabled={ownerConversationBusy} onSelect={(id) => { setOwnerReplyTarget(id); if (id) setFailedReference(null); }} />}
           {isAdmin && ownerClarificationNotice && <p className="composer-hint" role="status">{ownerClarificationNotice}</p>}
+          </div>
         </section>
         </section></section>
         {visited.has("projects") && <section className="workspace-panel" tabIndex={-1} aria-label="Projects and tasks workspace" hidden={workspace !== "projects"}><ProjectsWorkspace active={workspace === "projects"} user={user} initialTaskId={workTaskForView} initialProjectId={projectForView.id} selectionRequest={projectForView.request} onAgenda={(id) => { setScheduledTaskForView(id); navigate("agenda"); }} onConversation={(day) => { if (day) setConversationDay(day); navigate("conversation"); }} onDelegate={(project) => { setComposerProject({ id: project.project_id, name: project.name }); setConversationDay(localDay(timezone)); navigate("conversation"); window.setTimeout(() => textareaRef.current?.focus(), 0); }} onQuestions={() => navigate("attention")} onClose={() => navigate("conversation")} /></section>}
@@ -1032,7 +1036,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
             <div ref={setReminderRecoveryTarget} />
           </section>}
         </section>}
-      {visited.has("settings") && <section className="workspace-panel" tabIndex={-1} aria-label="Settings workspace" hidden={workspace !== "settings"}><SettingsWorkspace isAdmin={isAdmin} user={user} initialTab={settingsTab} workspaceRequired={workspaceRequired} enterToSend={enterToSend} conversationSendMode={conversationSendMode} onConversationSendModeChange={changeConversationSendMode} desktopStyle={desktopStyle} desktopNotifications={desktopNotifications} onDesktopStyleChange={changeDesktopStyle} onDesktopNotificationsChange={setDesktopNotifications} onEnterToSendChange={setEnterToSend} onTimezoneChange={setTimezone} onWorkspaceConfigured={() => setWorkspaceRequired(false)} onTestDesktopNotification={() => void desktopNotifierRef.current.notify({ id: `test:${Date.now()}`, title: "Alphonse test alert", body: "Desktop notifications are ready." }, { ...desktopNotifications, onlyWhenUnfocused: false })} mascotMotion={mascotMotion} onMascotMotionChange={setMascotMotion} onNavigate={setSettingsTab} onWidgets={() => setWidgetCatalogOpen(true)} onClose={() => { navigate(returnWorkspace); }} /></section>}
+      {visited.has("settings") && <section className="workspace-panel" tabIndex={-1} aria-label="Settings workspace" hidden={workspace !== "settings"}><SettingsWorkspace isAdmin={isAdmin} user={user} initialTab={settingsTab} workspaceRequired={workspaceRequired} enterToSend={enterToSend} conversationSendMode={conversationSendMode} onConversationSendModeChange={changeConversationSendMode} desktopStyle={desktopStyle} desktopNotifications={desktopNotifications} onDesktopStyleChange={changeDesktopStyle} onDesktopNotificationsChange={setDesktopNotifications} onEnterToSendChange={setEnterToSend} onTimezoneChange={setTimezone} onWorkspaceConfigured={() => setWorkspaceRequired(false)} onTestDesktopNotification={() => void desktopNotifierRef.current.notify({ id: `test:${Date.now()}`, title: "Alphonse test alert", body: "Desktop notifications are ready." }, { ...desktopNotifications, onlyWhenUnfocused: false })} mascotMotion={mascotMotion} onMascotMotionChange={setMascotMotion} onNavigate={setSettingsTab} onWidgets={() => setWidgetCatalogOpen(true)} outlookRequested={outlookSettingsRequested} onOutlookOpened={onOutlookOpened} onConversation={() => navigate("conversation", "composer")} onClose={() => { navigate(returnWorkspace); }} /></section>}
       </div>
       {widgetCatalogOpen && <WidgetCatalogDialog state={drawer} act={changeDrawer} member={user} onClose={() => setWidgetCatalogOpen(false)} />}
       <AtHandDrawer activityMember={activityMember} queueSamples={queueHistory} state={{ ...drawer, open: atHandOpen }} act={changeDrawer} member={user} connected={connected} questionCount={questions.length} questionsMember={questionsMember} onAttention={() => navigate("attention")} onAgenda={(id) => { setScheduleViewRequest((value) => value + 1); setScheduledTaskForView(id || ""); navigate("agenda"); }} toggleRef={drawerToggleRef} saveFailed={drawerSaveFailed} widgetContext={widgetContext} timezone={timezone} onItem={(artifactId, itemId, family) => { setWidgetItem({ member: user, artifactId, itemId, family }); navigate(["appointments", "reminders"].includes(family) ? "agenda" : "projects"); }} onWork={(id, taskId) => { setWorkTaskForView(taskId || ""); setProjectForView((current) => ({ id: taskId ? "" : id, request: current.request + 1 })); navigate("projects"); }} onRequest={(draft) => { setPrompt((current) => appendWidgetDraft(current, draft)); setConversationDay(localDay(timezone)); navigate("conversation"); window.requestAnimationFrame(() => textareaRef.current?.focus()); }} />
@@ -1053,7 +1057,7 @@ function OnboardingModal({ onComplete }: { onComplete: (userId: string) => void 
   return <ModalFrame title="Set up Alphonse" onClose={() => undefined}><p>Create the local administrator and choose Alphonse’s Workspace directory. This is the root for users, projects, skills, and agent configuration.</p><label>Workspace directory</label><div className="workspace-picker"><input aria-label="Selected Workspace directory" readOnly value={root} placeholder="Choose a folder in Finder" /><button type="button" onClick={() => void chooseRoot()}>Choose folder…</button></div><label>Your name<input value={name} onChange={(event) => setName(event.target.value)} placeholder="Your name" /></label><button disabled={!name.trim() || !root.trim()} onClick={() => void save()}>Create administrator</button><p>{error}</p></ModalFrame>;
 }
 
-function SettingsWorkspace({ isAdmin, user, initialTab, workspaceRequired, enterToSend, conversationSendMode, onConversationSendModeChange, desktopStyle, desktopNotifications, onDesktopStyleChange, onDesktopNotificationsChange, onEnterToSendChange, onTimezoneChange, onWorkspaceConfigured, onTestDesktopNotification, onNavigate, onWidgets, mascotMotion, onMascotMotionChange, onClose }: { isAdmin: boolean; user: string; initialTab: SettingsTab; workspaceRequired: boolean; enterToSend: boolean; conversationSendMode: ConversationSendMode; onConversationSendModeChange: (mode: ConversationSendMode) => void; desktopStyle: DesktopStyle; desktopNotifications: DesktopNotificationPreferences; onDesktopStyleChange: (value: DesktopStyle) => void; onDesktopNotificationsChange: (value: DesktopNotificationPreferences) => void; onEnterToSendChange: (value: boolean) => void; onTimezoneChange: (value: string) => void; onWorkspaceConfigured: () => void; onTestDesktopNotification: () => void; onNavigate: (tab: SettingsTab) => void; onWidgets: () => void; mascotMotion: boolean; onMascotMotionChange: (enabled: boolean) => void; onClose: () => void }) {
+function SettingsWorkspace({ isAdmin, user, initialTab, workspaceRequired, enterToSend, conversationSendMode, onConversationSendModeChange, desktopStyle, desktopNotifications, onDesktopStyleChange, onDesktopNotificationsChange, onEnterToSendChange, onTimezoneChange, onWorkspaceConfigured, onTestDesktopNotification, onNavigate, onWidgets, mascotMotion, onMascotMotionChange, outlookRequested, onOutlookOpened, onConversation, onClose }: { isAdmin: boolean; user: string; initialTab: SettingsTab; workspaceRequired: boolean; enterToSend: boolean; conversationSendMode: ConversationSendMode; onConversationSendModeChange: (mode: ConversationSendMode) => void; desktopStyle: DesktopStyle; desktopNotifications: DesktopNotificationPreferences; onDesktopStyleChange: (value: DesktopStyle) => void; onDesktopNotificationsChange: (value: DesktopNotificationPreferences) => void; onEnterToSendChange: (value: boolean) => void; onTimezoneChange: (value: string) => void; onWorkspaceConfigured: () => void; onTestDesktopNotification: () => void; onNavigate: (tab: SettingsTab) => void; onWidgets: () => void; mascotMotion: boolean; onMascotMotionChange: (enabled: boolean) => void; outlookRequested: boolean; onOutlookOpened: () => void; onConversation: () => void; onClose: () => void }) {
   const [root, setRoot] = useState(""); const [timezone, setTimezone] = useState("UTC"); const [mirrorAutomationMessages, setMirrorAutomationMessages] = useState(false); const [notice, setNotice] = useState(""); const [workspaceNotice, setWorkspaceNotice] = useState(""); const [savingWorkspace, setSavingWorkspace] = useState(false); const tab = workspaceRequired ? "general" : initialTab;
   const [overviewRevision, setSettingsOverviewRevision] = useState(0);
   const [skillsEditor, setSkillsEditor] = useState<string | null>(null);
@@ -1085,11 +1089,26 @@ function SettingsWorkspace({ isAdmin, user, initialTab, workspaceRequired, enter
     });
     if (typeof selected === "string") onDesktopNotificationsChange({ ...desktopNotifications, soundFile: selected });
   };
-  const verify = async (kind: "search" | "fetch") => { try { const current = await daemonRequest<{ user: { user_id: string } | null }>("current_user"); if (!current.user) return; const result = await daemonRequest<{ result: { exception?: { message?: string } } }>("verify_web_tools", { actor_user_id: current.user.user_id, kind }); setWebNotice(result.result.exception?.message || `${kind === "search" ? "SearXNG search" : "Public fetch"} verified.`); } catch (cause) { setWebNotice(cause instanceof Error ? cause.message : "Verification failed"); } };
+  const verify = async (kind: "search" | "fetch") => {
+    try {
+      const current = await daemonRequest<{ user: { user_id: string } | null }>("current_user");
+      if (!current.user) return;
+      const { result } = await daemonRequest<{ result: { exception?: { message?: string }; result_count?: number; partial?: boolean } }>(
+        "verify_web_tools", { actor_user_id: current.user.user_id, kind },
+      );
+      if (result.exception?.message) setWebNotice(result.exception.message);
+      else if (kind === "fetch") setWebNotice("Public fetch verified.");
+      else if (result.partial) setWebNotice("SearXNG returned partial results. Some upstream search engines failed.");
+      else if ((result.result_count ?? 0) > 0) setWebNotice("SearXNG search verified.");
+      else setWebNotice("SearXNG responded, but the verification query returned no results.");
+    } catch (cause) {
+      setWebNotice(cause instanceof Error ? cause.message : "Verification failed");
+    }
+  };
   const saveMemory = async () => { if (!memory) return; try { const current = await daemonRequest<{ user: { user_id: string } | null }>("current_user"); if (!current.user) return; const result = await daemonRequest<{ settings: MemorySettings }>("save_memory_settings", { actor_user_id: current.user.user_id, values: memory }); setMemory(result.settings); setMemoryNotice("Saved. New tasks use these limits."); } catch (cause) { setMemoryNotice(cause instanceof Error ? cause.message : "Memory settings could not be saved"); } };
   const allowed = canOpenSettingsSection(tab, isAdmin);
   return <section className="settings-workspace">
-    <header className="settings-workspace-header"><div>{tab === "members" && selectedMember ? <><nav className="settings-breadcrumb" aria-label="Breadcrumb"><span>Settings</span><ChevronRight aria-hidden="true" /><button onClick={returnToMembers}>Household members</button><ChevronRight aria-hidden="true" /><span aria-current="page">{selectedMember.name}</span></nav><h1 ref={headingRef} tabIndex={-1}>{selectedMember.name}</h1><p>Manage this member’s details and communication preferences.</p></> : <><p className="eyebrow">Settings / {SETTINGS_SECTIONS.find(([id]) => id === tab)?.[1]}</p><h1 ref={headingRef} tabIndex={-1}>{workspaceRequired ? "Set up Alphonse Workspace" : tab === "appearance" ? "Make yourself at home." : SETTINGS_SECTIONS.find(([id]) => id === tab)?.[1]}</h1><p>{tab === "appearance" ? "A familiar Alphonse, with a quieter canvas." : tab === "integrations" ? "Connect the services you use with Alphonse and manage access in one place." : "Manage Alphonse from a dedicated workspace."}</p></>}</div></header>
+    <header className={`settings-workspace-header${tab === "model" ? " model-settings-header" : ""}`}><div>{tab === "members" && selectedMember ? <><nav className="settings-breadcrumb" aria-label="Breadcrumb"><span>Settings</span><ChevronRight aria-hidden="true" /><button onClick={returnToMembers}>Household members</button><ChevronRight aria-hidden="true" /><span aria-current="page">{selectedMember.name}</span></nav><h1 ref={headingRef} tabIndex={-1}>{selectedMember.name}</h1><p>Manage this member’s details and communication preferences.</p></> : <><p className="eyebrow">Settings / {SETTINGS_SECTIONS.find(([id]) => id === tab)?.[1]}</p><h1 ref={headingRef} tabIndex={-1}>{workspaceRequired ? "Set up Alphonse Workspace" : tab === "appearance" ? "Make yourself at home." : SETTINGS_SECTIONS.find(([id]) => id === tab)?.[1]}</h1><p>{tab === "appearance" ? "A familiar Alphonse, with a quieter canvas." : tab === "integrations" ? "Connect the services you use with Alphonse and manage access in one place." : tab === "model" ? "Choose the model Alphonse uses for new tasks." : "Manage Alphonse from a dedicated workspace."}</p></>}</div></header>
     {!allowed && <p role="alert">This section requires an administrator.</p>}
     {workspaceRequired && <p className="settings-setup-notice" role="alert">{isAdmin ? "Choose and save a Workspace directory to continue." : "Ask the administrator to configure the Workspace directory."}</p>}
     {visitedSections.has("general") && <div hidden={tab !== "general"} className="general-settings">
@@ -1157,7 +1176,7 @@ function SettingsWorkspace({ isAdmin, user, initialTab, workspaceRequired, enter
       </section>
       <div className="setting-group"><MediaToolsSettingsSection /></div>
     </div>}
-    {visitedSections.has("integrations") && <div hidden={tab !== "integrations"} className="mockup-settings-content"><IntegrationsWorkspace key={user} user={user} isAdmin={isAdmin} /></div>}
+    {visitedSections.has("integrations") && <div hidden={tab !== "integrations"} className="mockup-settings-content"><IntegrationsWorkspace key={user} user={user} isAdmin={isAdmin} outlookRequested={outlookRequested} onOutlookOpened={onOutlookOpened} onConversation={onConversation} /></div>}
     {visitedSections.has("automations") && isAdmin && <div hidden={tab !== "automations"}><AutomationsSettingsSection user={user} /></div>}
     {visitedSections.has("model") && isAdmin && <div hidden={tab !== "model"}><ModelSettingsSection /></div>}
     {visitedSections.has("system-one") && isAdmin && <div hidden={tab !== "system-one"}><SystemOneSettingsSection user={user} /></div>}
@@ -1648,15 +1667,16 @@ function ProjectEditorPanel({ user, project, onBack, onUpdated, onClose }: { use
   </div>;
 }
 
-function IntegrationsWorkspace({ user, isAdmin }: { user: string; isAdmin: boolean }) {
+function IntegrationsWorkspace({ user, isAdmin, outlookRequested, onOutlookOpened, onConversation }: { user: string; isAdmin: boolean; outlookRequested: boolean; onOutlookOpened: () => void; onConversation: () => void }) {
   const [selected, setSelected] = useState<"telegram" | "discord" | null>(null);
   const [statuses, setStatuses] = useState<Record<string, boolean> | null>(null);
   const [statusError, setStatusError] = useState(false);
   const refresh = useCallback(() => { void daemonRequest<{ integrations: Array<{ provider_key: string; integration: Record<string, unknown> | null }> }>("integrations").then(result => { setStatuses(Object.fromEntries(result.integrations.map(item => [item.provider_key, Boolean(item.integration?.enabled)]))); setStatusError(false); }).catch(() => { setStatuses(null); setStatusError(true); }); }, []);
   useEffect(() => { refresh(); }, [refresh]);
+  useEffect(() => { if (outlookRequested) setSelected(null); }, [outlookRequested]);
   if (selected) return <section className="integration-detail"><button className="integration-back" onClick={() => { setSelected(null); refresh(); }}>← All integrations</button>{selected === "telegram" ? <IntegrationsSettingsSection user={user} /> : <DiscordIntegrationSettingsSection user={user} />}</section>;
   const messaging = <section className="integration-messaging"><h3>Household messaging</h3><p>Messaging channels are managed for the household.</p><div className="integration-service-grid">{(["telegram", "discord"] as const).map(id => <article className="mockup-settings-card integration-service-card" key={id}><div className="integration-card-heading"><IntegrationIcon service={id} /><div><h3>{id === "telegram" ? "Telegram" : "Discord"}</h3><p>Message Alphonse from an authorized {id === "telegram" ? "Telegram chat" : "Discord channel"}.</p></div></div><small className="integration-card-status">{statuses ? statuses[id] ? "Enabled" : "Not enabled" : statusError ? "Status unavailable" : "Checking status…"}</small><div className="integration-card-footer"><span>Household</span>{isAdmin ? <button onClick={() => setSelected(id)}>Manage {id === "telegram" ? "Telegram" : "Discord"} →</button> : <span>Administrator manages</span>}</div></article>)}</div></section>;
-  return <OptionalAccounts identity={user} messaging={messaging} />;
+  return <OptionalAccounts identity={user} messaging={messaging} outlookRequested={outlookRequested} onOutlookOpened={onOutlookOpened} onConversation={onConversation} />;
 }
 
 function IntegrationsSettingsSection({ user }: { user: string }) {
@@ -1756,16 +1776,6 @@ function AutomationsSettingsSection({ user }: { user: string }) {
   </section>;
 }
 
-function ModelSettingsSection() {
-  const [providers, setProviders] = useState<Provider[]>([]); const [settings, setSettings] = useState<InferenceSettings | null>(null); const [provider, setProvider] = useState(""); const [model, setModel] = useState(""); const [notice, setNotice] = useState("");
-  useEffect(() => { void Promise.all([daemonRequest<{ providers: Provider[] }>("inference_providers"), daemonRequest<{ settings: InferenceSettings }>("inference_settings")]).then(([catalog, current]) => { const selectedProvider = catalog.providers.find((item) => item.provider_key === current.settings.provider_key) || catalog.providers[0]; setProviders(catalog.providers); setSettings(current.settings); setProvider(selectedProvider?.provider_key || ""); setModel(current.settings.model_id || selectedProvider?.models[0]?.model_id || ""); }); }, []);
-  const selected = providers.find((item) => item.provider_key === provider);
-  const savedStatus = settings?.validation_error?.startsWith("openai_codex_model_access_rejected") || settings?.validation_error?.startsWith("openai_codex_model_unavailable")
-    ? "Codex temporarily rejected this model. Alphonse will keep the last successful validation and retry new tasks."
-    : settings?.validation_error || (settings?.validated_at ? `Validated ${new Date(settings.validated_at).toLocaleString()}.` : (!settings?.model_id ? "Choose and save a model before starting a task." : "Validation required."));
-  return <section className="settings-panel"><h3>Agent model</h3><p>Models in this list are advertised by the Codex catalog. Validate &amp; save makes a live request to verify current access before Alphonse uses the selection for new tasks.</p><select value={provider} onChange={(event) => { const nextProvider = providers.find((item) => item.provider_key === event.target.value); setProvider(event.target.value); setModel(nextProvider?.models[0]?.model_id || ""); }}>{providers.map((item) => <option value={item.provider_key} key={item.provider_key}>{item.display_name}</option>)}</select><select value={model} onChange={(event) => setModel(event.target.value)} disabled={!selected?.models.length}>{selected?.models.map((item) => <option value={item.model_id} key={item.model_id}>{item.display_name}</option>)}</select><button disabled={!provider || !model} onClick={() => void daemonRequest<{ settings: InferenceSettings }>("set_inference_settings", { provider_key: provider, model_id: model }).then((result) => { setSettings(result.settings); setNotice("Validated and saved for new tasks."); }).catch((cause: unknown) => setNotice(inferenceValidationNotice(cause)))}>Validate &amp; save</button><p>{notice || savedStatus}</p>{selected?.catalog_cli_matches_runtime === false && <p>Catalog source {selected.catalog_cli_version || "unknown"}; runtime {selected.cli_version || "unknown"} at <code>{selected.cli_path || "codex"}</code>. Update or configure the runtime CLI so both use the same Codex version.</p>}</section>;
-}
-
 function SystemOneSettingsSection({ user }: { user: string }) {
   const [settings, setSettings] = useState<SystemOneSettings | null>(null);
   const [apiKey, setApiKey] = useState("");
@@ -1815,13 +1825,6 @@ function SystemOneSettingsSection({ user }: { user: string }) {
     </>}
     {!settings && notice && <p role="status">{notice}</p>}
   </section>;
-}
-
-function inferenceValidationNotice(cause: unknown): string {
-  const message = errorNotice(cause, "Validation failed");
-  return message.startsWith("openai_codex_model_access_rejected") || message.startsWith("openai_codex_model_unavailable")
-    ? "Codex temporarily rejected this advertised model. Your saved model and its last successful validation were not changed."
-    : message;
 }
 
 function errorNotice(cause: unknown, fallback: string): string {

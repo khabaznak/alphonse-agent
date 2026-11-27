@@ -13,12 +13,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from alphonse.agent_v2.core.inference import InferencePurpose
-from alphonse.agent_v2.core.inference import InferenceRequest
 from alphonse.agent_v2.core.inference import InferenceRouter
 from alphonse.agent_v2.core.inference import ModelProfile
 from alphonse.agent_v2.core.inference import OpenAICodexProvider
 from alphonse.agent_v2.core.inference import OpenAICodexProviderConfig
+from alphonse.agent_v2.core.inference.openai_codex import _resolve_cli
 from alphonse.agent_v2.database import connect_database, default_database_path
 
 OPENAI_CODEX_PROVIDER = "openai_codex"
@@ -61,10 +60,12 @@ class InferenceProviderDescriptor:
     display_name: str
     description: str
 
-    def list_models(self) -> tuple[ModelOption, ...]:
+    def list_models(self, *, catalog: dict[str, Any] | None = None) -> tuple[ModelOption, ...]:
         if self.provider_key != OPENAI_CODEX_PROVIDER:
             return ()
-        return tuple(_codex_model_options())
+        if catalog is None:
+            catalog = _read_codex_cache_metadata(_codex_cache_path())
+        return tuple(_codex_model_options(catalog))
 
     def build_router(self, model_id: str) -> InferenceRouter:
         if self.provider_key != OPENAI_CODEX_PROVIDER:
@@ -95,18 +96,10 @@ class InferenceProviderDescriptor:
             OpenAICodexProviderConfig(
                 cli_bin=_codex_cli_bin(),
                 timeout_seconds=60.0,
-                ephemeral=True,
                 require_explicit_model=True,
             )
         )
-        profile = ModelProfile(provider=OPENAI_CODEX_PROVIDER, model=model, profile_id="validation")
-        provider.generate_markdown(
-            InferenceRequest(
-                prompt="Reply with OK.",
-                purpose=InferencePurpose.ACCEPTANCE_CRITERIA,
-                model_profile=profile,
-            )
-        )
+        provider.validate_model(model)
         return _codex_cli_version(), _now_iso()
 
 
@@ -154,6 +147,18 @@ class SQLiteInferenceSettingsStore:
                 (provider, model, record.validated_at, record.cli_version, record.validation_error, _now_iso()),
             )
         return self.get()
+
+    def update_validation_error(self, current: InferenceSettingsRecord, error: str) -> None:
+        """Attach diagnostics only to the selection observed by the caller."""
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE v2_inference_settings
+                SET validation_error = ?, updated_at = ?
+                WHERE settings_id = 1 AND updated_at = ?
+                """,
+                (error, _now_iso(), current.updated_at),
+            )
 
     def _connect(self) -> sqlite3.Connection | "_ConnectionProxy":
         if self._memory_connection is not None:
@@ -256,7 +261,7 @@ def provider_status(provider_key: str) -> dict[str, Any]:
         "provider_key": descriptor.provider_key,
         "display_name": descriptor.display_name,
         "description": descriptor.description,
-        "models": [option.to_dict() for option in descriptor.list_models()],
+        "models": [option.to_dict() for option in descriptor.list_models(catalog=metadata)],
         "catalog_path": str(cache_path),
         "catalog_fetched_at": str(metadata.get("fetched_at") or ""),
         "catalog_cli_version": catalog_cli_version,
@@ -270,8 +275,7 @@ def provider_status(provider_key: str) -> dict[str, Any]:
     }
 
 
-def _codex_model_options() -> list[ModelOption]:
-    metadata = _read_codex_cache_metadata(_codex_cache_path())
+def _codex_model_options(metadata: dict[str, Any]) -> list[ModelOption]:
     entries = metadata.get("models")
     if not isinstance(entries, list):
         return []
@@ -301,12 +305,15 @@ def _read_codex_cache_metadata(path: Path) -> dict[str, Any]:
 
 
 def _codex_cache_path() -> Path:
-    return Path(os.getenv("ALPHONSE_V2_CODEX_MODELS_CACHE_PATH") or Path.home() / ".codex" / "models_cache.json")
+    configured = os.getenv("ALPHONSE_V2_CODEX_MODELS_CACHE_PATH")
+    if configured:
+        return Path(configured).expanduser()
+    codex_home = os.getenv("CODEX_HOME")
+    return (Path(codex_home).expanduser() if codex_home else Path.home() / ".codex") / "models_cache.json"
 
 
 def _codex_cli_version() -> str:
     try:
-        from alphonse.agent_v2.core.inference.openai_codex import _resolve_cli
         cli_bin, fallback_path = _resolve_cli(_codex_cli_bin())
         env = None
         if fallback_path:
@@ -320,7 +327,17 @@ def _codex_cli_version() -> str:
 
 def _codex_cli_bin() -> str:
     configured = str(os.getenv("ALPHONSE_V2_CODEX_CLI_BIN") or "").strip()
-    return configured or str(shutil.which("codex") or "codex")
+    binary = configured or "codex"
+    located = shutil.which(binary)
+    if located:
+        return os.path.abspath(located)
+    if configured:
+        return configured
+    try:
+        path, _ = _resolve_cli(binary)
+    except ValueError:
+        return binary
+    return path
 
 
 def _version_number(value: str) -> str:

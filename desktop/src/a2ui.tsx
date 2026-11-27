@@ -1,12 +1,19 @@
-import { type ReactNode, useEffect, useState } from "react";
+import { Fragment, type ReactNode, useEffect, useId, useRef, useState } from "react";
+import { CalendarDays, Mail } from "lucide-react";
+import ReactMarkdown from "react-markdown";
 import { daemonRequest } from "./api";
 
 export const DESKTOP_CATALOG_ID = "alphonse.desktop.catalog.v2";
-const COMPONENTS = ["Card", "Row", "Column", "List", "Text", "Button", "TextInput", "Status", "Divider", "Icon", "CheckBox", "ChoicePicker", "DateTimeInput", "Table"] as const;
+const COMPONENTS = ["Card", "Row", "Column", "List", "Text", "Button", "TextInput", "Status", "Divider", "Icon", "CheckBox", "ChoicePicker", "DateTimeInput", "Table", "Disclosure", "Markdown", "EmailCitation"] as const;
 const ICONS: Record<string, string> = { check: "✓", info: "ⓘ", warning: "⚠", error: "✕", calendar: "◫", clock: "◷", list: "☷", progress: "◌" };
+const PRIVATE_TEXT_VARIANTS = ["heading", "subheading", "strong", "due", "quote"] as const;
+const MAIL_MARKDOWN = ["p", "h1", "h2", "h3", "h4", "h5", "h6", "em", "strong", "ol", "ul", "li", "blockquote", "code", "pre", "br", "hr", "a"];
+const SOURCE_ID = /^source_([1-9]|1\d|20)$/;
 
 export type A2uiComponent = {
   id: string; component: typeof COMPONENTS[number]; children?: string[]; text?: string; label?: string;
+  variant?: typeof PRIVATE_TEXT_VARIANTS[number];
+  sourceNumber?: number;
   action?: { name: string; context: Record<string, unknown> }; value?: { path: string };
   justify?: "start" | "center" | "end" | "spaceBetween"; align?: "start" | "center" | "end" | "stretch";
   direction?: "vertical" | "horizontal"; axis?: "horizontal" | "vertical"; name?: keyof typeof ICONS;
@@ -37,6 +44,58 @@ export function applyA2uiEvent(surfaces: Record<string, A2uiSurface>, event: AgU
   return surfaces;
 }
 
+export function decodePrivateProviderSurface(value: unknown, messageId: string, provider: "gmail" | "calendar"): A2uiSurface | undefined {
+  if (!Array.isArray(value) || value.length !== 2) return;
+  const surfaceId = `private-${provider}:${messageId}`;
+  const [create, update]: unknown[] = value;
+  if (!isRecord(create) || !isRecord(update)
+      || create.version !== "v0.9.1" || update.version !== "v0.9.1"
+      || !isRecord(create.createSurface) || !isRecord(update.updateComponents)
+      || create.createSurface.catalogId !== DESKTOP_CATALOG_ID || create.createSurface.sendDataModel !== false
+      || create.createSurface.surfaceId !== surfaceId || update.updateComponents.surfaceId !== surfaceId
+      || Object.keys(create).length !== 2 || Object.keys(update).length !== 2) return;
+  const components: unknown = update.updateComponents.components;
+  if (!Array.isArray(components) || components.length > 360) return;
+  const byId = new Map<string, A2uiComponent>();
+  for (const item of components) {
+    if (!isRecord(item) || typeof item.id !== "string" || !/^[a-z0-9_]{1,48}$/.test(item.id)
+        || byId.has(item.id)) return;
+    const { component } = item;
+    let keys: string[];
+    if (component === "Text" || component === "Status" || component === "Markdown") {
+      if (typeof item.text !== "string" || item.text.length > 4000
+          || (component === "Markdown" && provider !== "gmail")
+          || (item.variant !== undefined && (component !== "Text" || !PRIVATE_TEXT_VARIANTS.includes(item.variant)))) return;
+      keys = ["id", "component", "text", "variant"];
+    } else if (component === "EmailCitation") {
+      if (provider !== "gmail" || !Number.isInteger(item.sourceNumber) || item.sourceNumber < 1 || item.sourceNumber > 20) return;
+      keys = ["id", "component", "sourceNumber"];
+    } else if (component === "Card" || component === "Row" || component === "Column" || component === "List" || component === "Disclosure") {
+      if (!Array.isArray(item.children) || item.children.some((id: unknown) => typeof id !== "string")) return;
+      if (component === "Disclosure" && (typeof item.label !== "string" || !item.label.trim() || item.label.length > 80)) return;
+      keys = component === "Disclosure" ? ["id", "component", "children", "label"] : ["id", "component", "children"];
+    } else return;
+    if (Object.keys(item).some((key) => !keys.includes(key))) return;
+    byId.set(item.id, item as A2uiComponent);
+  }
+  if (byId.get("root")?.component !== "Card") return;
+  const visited = new Set<string>();
+  function visit(id: string, depth: number): boolean {
+    const item = byId.get(id);
+    if (!item || depth > 5 || visited.has(id)) return false;
+    visited.add(id);
+    return (item.children ?? []).every((child) => visit(child, depth + 1));
+  }
+  if (!visit("root", 0) || visited.size !== byId.size) return;
+  for (const component of byId.values()) {
+    if (component.component === "EmailCitation" && !emailSource(byId, component.sourceNumber!)) return;
+  }
+  const surfaces = value.reduce((prev, envelope) => applyA2uiEvent(prev, {
+    type: "CUSTOM", name: "a2ui.envelope", value: envelope,
+  }), {} as Record<string, A2uiSurface>);
+  return surfaces[surfaceId];
+}
+
 export function A2uiSurfaceHost({ surfaces, clientId, user, onDone, onDismiss }: { surfaces: Record<string, A2uiSurface>; clientId: string; user: string; onDone: () => Promise<void>; onDismiss?: (surfaceId: string) => void }) {
   return <>{Object.values(surfaces).map((surface) => <A2uiSurfaceView key={surface.surfaceId} surface={surface} clientId={clientId} user={user} onDone={onDone} onDismiss={onDismiss} />)}</>;
 }
@@ -53,12 +112,165 @@ export function A2uiSurfaceView({ surface, clientId, user, onDone, onAction, onD
   return <A2uiComponentTree surface={surface} dataModel={dataModel} setDataModel={setDataModel} onAction={act} />;
 }
 
-export function A2uiComponentTree({ surface, dataModel, setDataModel, onAction }: { surface: A2uiSurface; dataModel: Record<string, unknown>; setDataModel: (value: Record<string, unknown>) => void; onAction?: (item: A2uiComponent) => void }) {
+function emailSource(components: Map<string, A2uiComponent>, number: number) {
+  const id = `source_${number}`;
+  return components.get("sources")?.component === "Disclosure"
+    && components.get("sources")?.children?.includes("source_list")
+    && components.get("source_list")?.component === "List"
+    && components.get("source_list")?.children?.includes(id)
+    && components.get(id)?.component === "Column";
+}
+
+type PrivatePresentation = {
+  hasSource: (number: number) => boolean;
+  openSource: (number: number) => void;
+  selectedSource: number | null;
+  disclosureId: string;
+};
+
+function Citation({ number, presentation }: { number: number; presentation: PrivatePresentation }) {
+  return <button type="button" className="provider-citation" aria-label={`Read email source ${number}`}
+    aria-controls={presentation.disclosureId} onClick={() => presentation.openSource(number)}>{`[${number}]`}</button>;
+}
+
+function PrivateMarkdown({ text, presentation }: { text: string; presentation: PrivatePresentation }) {
+  const withCitations = (children: ReactNode): ReactNode => {
+    if (Array.isArray(children)) return children.map((child, index) => <Fragment key={index}>{withCitations(child)}</Fragment>);
+    if (typeof children !== "string") return children;
+    return children.split(/(\[(?:[1-9]|1\d|20)\])/).map((part, index) => {
+      const number = index % 2 === 1 ? Number(part.slice(1, -1)) : 0;
+      return number && presentation.hasSource(number) ? <Citation key={index} number={number} presentation={presentation} /> : part;
+    });
+  };
+  const heading = ({ children }: { children?: ReactNode }) => <h4>{withCitations(children)}</h4>;
+  return <ReactMarkdown skipHtml allowedElements={MAIL_MARKDOWN} unwrapDisallowed
+    urlTransform={(url) => /^#source-(?:[1-9]|1\d|20)$/.test(url) ? url : ""}
+    components={{
+      h1: heading, h2: heading, h3: heading, h4: heading, h5: heading, h6: heading,
+      p: ({ children }) => <p>{withCitations(children)}</p>,
+      li: ({ children }) => <li>{withCitations(children)}</li>,
+      strong: ({ children }) => <strong>{withCitations(children)}</strong>,
+      em: ({ children }) => <em>{withCitations(children)}</em>,
+      a: ({ href, children }) => {
+        const number = Number(href?.slice("#source-".length));
+        return presentation.hasSource(number) && children === String(number)
+          ? <Citation number={number} presentation={presentation} /> : <>{children}</>;
+      },
+    }}>{text}</ReactMarkdown>;
+}
+
+export function PrivateProviderResult({ surface }: { surface: A2uiSurface }) {
+  const root = useRef<HTMLDivElement>(null);
+  const disclosureId = useId();
+  const [selectedSource, selectSource] = useState<number | null>(null);
+  const components = new Map(Object.entries(surface.components));
+  const hasSource = (number: number) => surface.surfaceId.startsWith("private-gmail:")
+    && emailSource(components, number) === true;
+  const openSource = (number: number) => {
+    if (!hasSource(number)) return;
+    const row = root.current?.querySelector<HTMLElement>(`[data-email-source="${number}"]`);
+    if (!row) return;
+    selectSource(number);
+    row.focus({ preventScroll: true });
+    row.scrollIntoView?.({ block: "nearest" });
+  };
+  return <div ref={root} className="provider-result-frame">
+    <A2uiComponentTree surface={surface} dataModel={surface.dataModel} setDataModel={() => {}}
+      privatePresentation={{ hasSource, openSource, selectedSource, disclosureId }} />
+  </div>;
+}
+
+export function A2uiComponentTree({ surface, dataModel, setDataModel, onAction, privatePresentation }: { surface: A2uiSurface; dataModel: Record<string, unknown>; setDataModel: (value: Record<string, unknown>) => void; onAction?: (item: A2uiComponent) => void; privatePresentation?: PrivatePresentation }) {
   const node = (id: string): ReactNode => {
     const item = surface.components[id]; if (!item) return null;
-    const children = <>{(item.children || []).map(node)}</>; const cls = `a2ui-${cssIdentifier(id)}`;
+    const cls = `a2ui-${cssIdentifier(id)}`;
+    if (item.component === "List" && privatePresentation) {
+      const List = id === "source_list" ? "ol" : "ul";
+      return <List key={id} className={`provider-list ${cls}`} role="list">
+        {(item.children ?? []).map((child) => <li key={child}>{node(child)}</li>)}
+      </List>;
+    }
+    const children = <>{(item.children || []).map(node)}</>;
+    if (item.component === "Card" && privatePresentation) {
+      const componentIds = item.children ?? [];
+      const header = componentIds.filter((child) => ["source", "result_head", "title", "scope"].includes(child));
+      const titleId = `${privatePresentation.disclosureId}-title`;
+      let contents = children;
+      if (id === "root" && componentIds.includes("sources")) {
+        contents = <>{header.map(node)}<div className="provider-evidence-pane">
+          <div>{componentIds.filter((child) => child !== "sources" && !header.includes(child)).map(node)}</div>
+          {node("sources")}
+        </div></>;
+      }
+      const groups = componentIds.filter((child) => /^day_\d+$/.test(child));
+      if (id === "root" && surface.surfaceId.startsWith("private-calendar:") && groups.length) {
+        contents = <>{componentIds.filter((child) => !groups.includes(child)).map(node)}
+          <table className="provider-agenda" aria-labelledby={titleId} aria-describedby={`${privatePresentation.disclosureId}-scope`}>
+            <thead><tr><th scope="col">Day</th><th scope="col">Time</th><th scope="col">Event</th></tr></thead>
+            <tbody>{groups.flatMap((group) => (surface.components[`${group}_events`]?.children ?? []).map((event) => {
+              const detail = surface.components[`${event}_meta`]?.text;
+              return <tr key={event}>
+                <td>{surface.components[`${group}_heading`]?.text}</td>
+                <td className="provider-agenda-time">{surface.components[`${event}_time`]?.text}</td>
+                <td>{surface.components[`${event}_title`]?.text}{detail && <><br /><small>{detail}</small></>}</td>
+              </tr>;
+            }))}</tbody>
+          </table>
+        </>;
+      }
+      return <article key={id} className="provider-result-card"
+        aria-labelledby={surface.components.title ? titleId : undefined}>{contents}</article>;
+    }
     if (item.component === "Card") return <section key={id} className={`question-card a2ui-card ${cls}${surface.surfaceId.startsWith("scheduled-task:") ? " scheduled-task-card" : ""}`}>{children}</section>;
-    if (item.component === "Row" || item.component === "Column" || item.component === "List") return <div key={id} className={`a2ui-${item.component.toLowerCase()} ${cls}`} data-justify={item.justify} data-align={item.align}>{children}</div>;
+    if (item.component === "Row" || item.component === "Column" || item.component === "List") {
+      const number = Number(SOURCE_ID.exec(id)?.[1]);
+      const isSource = item.component === "Column" && privatePresentation?.hasSource(number);
+      return <div key={id} className={`a2ui-${item.component.toLowerCase()} ${cls}`} data-justify={item.justify} data-align={item.align}
+        data-email-source={isSource ? number : undefined} data-selected-source={isSource && privatePresentation?.selectedSource === number || undefined}
+        tabIndex={isSource ? -1 : undefined} role={isSource ? "group" : undefined}
+        aria-label={isSource ? `Email source ${number}` : undefined}
+        aria-describedby={isSource && surface.components[`source_${number}_excerpt`] ? `${privatePresentation?.disclosureId}-quote-${number}` : undefined}>{children}</div>;
+    }
+    if (item.component === "Disclosure" && id === "sources" && privatePresentation)
+      return <section key={id} id={privatePresentation.disclosureId} aria-labelledby={`${privatePresentation.disclosureId}-sources`}>
+        <h4 id={`${privatePresentation.disclosureId}-sources`} aria-label={item.label} title={surface.components.qualifier?.text}>
+          {item.label?.replace(/ \(\d+(?: of \d+ reviewed)?\)$/, "")}
+        </h4>{children}
+      </section>;
+    if (item.component === "Disclosure") return <details key={id} className={`a2ui-disclosure ${cls}`}><summary>{item.label}</summary>{children}</details>;
+    if (item.component === "EmailCitation" && privatePresentation?.hasSource(item.sourceNumber!))
+      return <Citation key={id} number={item.sourceNumber!} presentation={privatePresentation} />;
+    if (item.component === "Markdown" && privatePresentation)
+      return <div key={id} className={`provider-markdown ${cls}`}><PrivateMarkdown text={item.text ?? ""} presentation={privatePresentation} />
+        {/^action_\d+_detail$/.test(id) && " "}</div>;
+    if (item.component === "Status" && privatePresentation && id === "coverage")
+      return <span key={id} className={cls} title={surface.components.coverage_note?.text}
+        aria-description={surface.components.coverage_note?.text}>{item.text}</span>;
+    if (item.component === "Text" && privatePresentation) {
+      if (id === "coverage_note" || id === "qualifier") return null;
+      if (id === "scope") return <p key={id} className={cls} id={`${privatePresentation.disclosureId}-scope`}>{item.text}</p>;
+      if (id === "source") {
+        const Icon = surface.surfaceId.startsWith("private-gmail:") ? Mail : CalendarDays;
+        return <div key={id} className={cls}><Icon size={16} aria-hidden="true" /><span>{item.text}</span></div>;
+      }
+      if (item.variant === "heading") return <h3 key={id} className={cls} id={id === "title" ? `${privatePresentation.disclosureId}-title` : undefined}>{item.text}</h3>;
+      if (item.variant === "subheading") return <h4 key={id} className={cls}>{item.text}</h4>;
+      if (item.variant === "strong") return <strong key={id} className={cls}>{item.text}</strong>;
+      if (item.variant === "due") {
+        const [date, ...time] = (item.text ?? "").split("\n");
+        return <div key={id} className={cls}><span className="provider-due">{date}</span>
+          {time.length > 0 && <><br />{time.join("\n")}</>}</div>;
+      }
+      if (id.endsWith("_when")) return <div key={id} className={cls}>{item.text}</div>;
+      if (id.endsWith("_time")) return <span key={id} className={cls}>{item.text}</span>;
+      if (/^day_\d+_event_\d+_meta$/.test(id)) return <small key={id} className={cls}>{item.text}</small>;
+      if (item.variant === "quote") {
+        const number = /^source_(\d+)_excerpt$/.exec(id)?.[1];
+        const Component = number ? "q" : "blockquote";
+        return <Component key={id} className={cls} id={number ? `${privatePresentation.disclosureId}-quote-${number}` : undefined}>{item.text}</Component>;
+      }
+    }
+    if (item.component === "Text" && item.variant === "heading") return <h4 key={id} className={cls}>{item.text}</h4>;
     if (item.component === "Text" || item.component === "Status") return <p key={id} className={`${cls}${item.component === "Status" ? " a2ui-status" : ""}`}>{item.text}</p>;
     if (item.component === "Divider") return <hr key={id} className={`${cls} a2ui-divider`} aria-orientation={item.axis || "horizontal"} />;
     if (item.component === "Icon") return item.name && ICONS[item.name] ? <span key={id} className={`${cls} a2ui-icon`} role="img" aria-label={item.name}>{ICONS[item.name]}</span> : null;

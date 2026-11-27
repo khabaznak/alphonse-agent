@@ -17,6 +17,7 @@ from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry
 from alphonse.agent_v2.core.tools.registry.native.memory import build_search_memory_tool_definition, build_read_memory_source_tool_definition
 from alphonse.agent_v2.conversations import SQLiteConversationStore
 from alphonse.agent_v2.daemon import V2Daemon
+from alphonse.agent_v2.integrations.gmail import GmailHTTPError
 from alphonse.agent_v2.runtime import build_runtime_host
 from test_gmail_adapter import Wire
 from test_gmail_unread import grant
@@ -259,8 +260,43 @@ def test_expired_token_does_not_call_provider(f, tmp_path, monkeypatch):
     wire = Wire({'id': 'INBOX', 'messagesUnread': 4})
     daemon, message_id, status, _ = start_worker(f, tmp_path, monkeypatch, wire)
     try:
-        assert status != 'ready'
+        assert status == 'ready'
+        draft = daemon.take_owner_desktop_draft(message_id)
+        assert 'reconnect' in draft['message'].lower()
         assert not wire.calls and f.service.clients['google'].refresh_count == 0
+    finally:
+        daemon.stop()
+
+
+def test_connected_account_needs_an_inbox_grant(f, tmp_path, monkeypatch):
+    connect(f)
+    wire = Wire({'id': 'INBOX', 'messagesUnread': 4})
+    daemon, message_id, status, _ = start_worker(f, tmp_path, monkeypatch, wire)
+    try:
+        assert status == 'ready'
+        draft = daemon.take_owner_desktop_draft(message_id)
+        assert 'inbox access' in draft['message'].lower()
+        daemon.acknowledge_owner_desktop_draft(message_id, draft['acknowledgement_token'])
+        assert daemon.owner_message_status(message_id) == 'client_acknowledged'
+        assert not wire.calls
+    finally:
+        daemon.stop()
+
+
+@pytest.mark.parametrize('response, message', [
+    (GmailHTTPError(401), 'reconnect'),
+    (GmailHTTPError(429), 'couldn’t verify'),
+    ({'id': 'INBOX'}, 'couldn’t verify'),
+])
+def test_gmail_read_failure_is_a_reply_without_a_count(f, tmp_path, monkeypatch, response, message):
+    connect(f); grant(f, 'one', 'grant')
+    wire = Wire(response)
+    daemon, message_id, status, _ = start_worker(f, tmp_path, monkeypatch, wire)
+    try:
+        assert status == 'ready'
+        draft = daemon.take_owner_desktop_draft(message_id)
+        assert message in draft['message'].lower()
+        assert '99' not in draft['message'] and len(wire.calls) == 1
     finally:
         daemon.stop()
 
@@ -271,10 +307,10 @@ def test_ambiguous_accounts_do_not_call_provider(f, tmp_path, monkeypatch):
     wire = Wire({'id': 'INBOX', 'messagesUnread': 4})
     daemon, message_id, status, _ = start_worker(f, tmp_path, monkeypatch, wire)
     try:
-        assert status != 'ready'
+        assert status == 'ready'
         assert not wire.calls
-        with pytest.raises((OwnerRecoveryUnavailable, ValueError, RuntimeError)):
-            daemon.take_owner_desktop_draft(message_id)
+        draft = daemon.take_owner_desktop_draft(message_id)
+        assert 'multiple gmail accounts' in draft['message'].lower()
     finally:
         daemon.stop()
 

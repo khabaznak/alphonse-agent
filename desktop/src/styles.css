@@ -562,6 +562,117 @@ a { color: var(--accent); }
 .question-card button.question-cancel:hover { background: var(--warning-soft); }
 .a2ui-status { color: var(--warning); }
 
+/* Evidence review shares the mock's canvas and card palette. */
+.conversation:has(.provider-result-frame), .provider-review-panel {
+  background: light-dark(#f2f3eb, #151a18);
+}
+.message.assistant.conversation-message:has(> .provider-result-frame) {
+  width: min(100%, calc(738px - 2 * clamp(10px, 2vw, 18px)));
+}
+.provider-result-card {
+  --digest-paper: light-dark(#fffefb, #202622);
+  --digest-ink: light-dark(#252e28, #eaf0e9);
+  --digest-quiet: light-dark(#56635b, #acbaaf);
+  --digest-line: light-dark(#dce2d8, #3a463e);
+  --digest-moss: light-dark(#245445, #acd6bb);
+  --digest-moss-fill: light-dark(#e9f1e9, #2b3b32);
+  --digest-amber: light-dark(#804b21, #f3c28a);
+  --digest-amber-fill: light-dark(#f8ecd8, #493a2a);
+  min-width: 0;
+  max-width: 100%;
+  padding: clamp(12px, 2.4vw, 19px);
+  background: var(--digest-paper);
+  color: var(--digest-ink);
+  border: 1px solid var(--digest-line);
+  border-radius: 13px;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Avenir Next", sans-serif;
+}
+.provider-result-card :is(h3, h4, p, blockquote, pre) { margin: 0; }
+.provider-result-card :is(h3, h4) { font-family: inherit; letter-spacing: normal; }
+.provider-result-card .a2ui-source {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-block-end: 5px;
+  color: var(--digest-moss);
+  font-size: 12px;
+  font-weight: 620;
+}
+.provider-result-card .a2ui-source svg { width: 16px; height: 16px; flex: 0 0 16px; }
+.provider-result-card .a2ui-result_head { gap: 6px 12px; align-items: center; justify-content: space-between; }
+.provider-result-card .a2ui-title { font-size: 19px; line-height: 1.3; font-weight: 680; letter-spacing: -.015em; }
+.provider-result-card :is(.a2ui-scope, [class$="_meta"]) { color: var(--digest-quiet); font-size: 12px; }
+.provider-result-card .a2ui-coverage {
+  color: var(--digest-amber);
+  background: var(--digest-amber-fill);
+  padding: 2px 7px;
+  border-radius: 5px;
+  font-size: 12px;
+}
+.provider-result-card .provider-list { list-style: none; margin: 11px 0; padding: 0; }
+.provider-result-card .provider-list > li { min-width: 0; }
+.provider-result-card .a2ui-actions > li > .a2ui-row {
+  display: grid;
+  grid-template-columns: minmax(94px, 112px) minmax(0, 1fr);
+  align-items: baseline;
+  column-gap: 12px;
+  padding-block: 13px;
+  border-top: 1px solid var(--digest-line);
+}
+.provider-result-card [class$="_body"] { display: block; }
+.provider-result-card :is([class$="_when"], .provider-agenda-time) {
+  font-size: 12px;
+  line-height: 1.45;
+  font-variant-numeric: tabular-nums;
+  color: var(--digest-quiet);
+}
+.provider-result-card .provider-due { color: var(--digest-amber); font-weight: 680; }
+.provider-result-card .a2ui-row[class$="_meta"] { display: block; margin-block-start: 2px; }
+.provider-result-card .a2ui-row[class$="_meta"] :is(.provider-markdown, .provider-markdown > p:only-of-type) { display: inline; }
+.provider-result-card .provider-citation {
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--digest-moss);
+  background: var(--digest-moss-fill);
+  border: 1px solid transparent;
+  border-radius: 5px;
+  padding: 1px 5px;
+  margin-inline-start: 3px;
+  transition: none;
+}
+.provider-result-card .provider-citation:hover { border-color: var(--digest-moss); }
+.provider-result-card .a2ui-empty { margin: 11px 0; }
+.provider-result-card .provider-markdown :is(ol, ul) { margin: 8px 0 0; padding-inline-start: 18px; }
+.provider-result-card .provider-markdown li { padding-block: 4px; }
+.provider-result-card .provider-markdown pre { white-space: pre-wrap; }
+.provider-result-card .provider-markdown p + p { margin-block-start: 6px; }
+.provider-evidence-pane { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 16px; margin-top: 13px; }
+.provider-result-card .a2ui-source_list { margin: 8px 0 0; }
+.provider-result-card [data-email-source] { display: block; padding: 8px 0; border-top: 1px solid var(--digest-line); }
+.provider-result-card [data-selected-source="true"] { background: var(--digest-moss-fill); }
+.provider-result-card [data-email-source]:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.provider-result-card q { display: block; margin-top: 3px; color: var(--digest-quiet); font-size: 12px; white-space: pre-wrap; }
+.provider-result-card h4 { font-size: 13px; font-weight: 680; }
+.provider-agenda { border-collapse: collapse; width: 100%; margin-top: 8px; table-layout: fixed; }
+.provider-agenda :is(td, th) { text-align: start; vertical-align: top; padding: 8px 5px; border-bottom: 1px solid var(--digest-line); }
+.provider-agenda :is(th, small) { color: var(--digest-quiet); font-size: 12px; }
+.provider-agenda th:first-child { width: 21%; }
+.provider-agenda th:nth-child(2) { width: 30%; }
+.provider-result-frame { container-type: inline-size; }
+@container (max-width: 500px) {
+  .provider-evidence-pane { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .provider-result-card .a2ui-actions > li > .a2ui-row {
+    grid-template-columns: minmax(74px, 90px) minmax(0, 1fr);
+    column-gap: 8px;
+  }
+}
+@media (pointer: coarse) {
+  .provider-result-card .provider-citation { min-width: 44px; min-height: 44px; }
+}
+
 .scheduled-task-card {
   display: grid;
   gap: 14px;
@@ -1320,13 +1431,19 @@ a { color: var(--accent); }
 .agenda-today-list { overflow: hidden; border: 1px solid var(--border); border-radius: 10px; }
 .agenda-today-event { display: grid; grid-template-columns: 76px minmax(0, 1fr); align-items: start; width: 100%; min-height: 76px; padding: 18px; border-radius: 0; background: transparent; text-align: left; }
 .agenda-today-event + .agenda-today-event { border-top: 1px solid var(--border); }
-.agenda-today-event:hover { background: var(--surface-subtle); }
+button.agenda-today-event:hover { background: var(--surface-subtle); }
 .agenda-today-event > time { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
 .agenda-today-details { display: grid; gap: 4px; min-height: 39px; padding-left: 10px; border-left: 2px solid var(--accent); }
 .agenda-today-details strong { font-size: 13px; font-weight: 600; }
 .agenda-today-details small { color: var(--muted); font-size: 11px; text-transform: none; }
 .agenda-today-empty { margin: 0; padding: 24px 18px; color: var(--muted); font-size: 13px; }
 .agenda-source-note, .agenda-empty { font-size: 12px; color: var(--muted); }
+.agenda-google-event { overflow-wrap: anywhere; }
+.agenda-google-event.agenda-occurrence { background: var(--surface-subtle); color: var(--text); border-inline-start: 2px solid var(--muted); }
+.agenda-google-event.agenda-occurrence:hover { filter: none; }
+.agenda-google-event.agenda-occurrence small { display: block; margin-top: 2px; color: var(--muted); font-size: 9px; }
+.agenda-google-event.agenda-today-event > .agenda-today-details { border-left-color: var(--muted); }
+.agenda-continuing-event { color: var(--muted); font-size: 11px; }
 .agenda-workspace footer { display: flex; gap: 16px; margin-top: 23px; padding-top: 11px; border-top: 1px solid var(--border); }
 .agenda-workspace footer button { display: inline-flex; align-items: center; gap: 8px; padding: 0; background: transparent; color: var(--accent); font-size: 11px; }
 .agenda-workspace footer svg { width: 14px; height: 14px; }
@@ -1351,6 +1468,8 @@ a { color: var(--accent); }
 .at-hand-drawer .agenda-preview-event { display: flex; align-items: start; gap: 10px; width: 100%; padding: 0; margin: 0 0 14px; color: var(--text); background: transparent; text-align: left; }
 .agenda-preview-event > time { flex: 0 0 48px; font-size: 10px; padding-top: 2px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .agenda-preview-event > span { border-left: 2px solid var(--accent); padding-left: 10px; }
+.agenda-preview-event.agenda-google-event > span { border-left-color: var(--muted); }
+.agenda-preview-event.agenda-google-event > .agenda-continuing-event { flex: 0 0 48px; border-left: 0; padding: 2px 0 0; }
 .agenda-preview-event strong { font-size: 11px; font-weight: 500; }
 .agenda-preview-event small { display: block; margin-top: 3px; font-size: 10px; color: var(--muted); }
 .agenda-mini-month { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 3px; text-align: center; margin-bottom: 12px; }
@@ -1664,6 +1783,28 @@ button.mockup-member-card:not(:disabled):hover { border-color: var(--accent); }
 .optional-management .integration-connect-form fieldset { margin-bottom: 0; }
 .optional-management .dialog-actions { gap: 8px; }
 .optional-management .dialog-actions button { margin: 0; }
+.outlook-inbox-settings > h4, .outlook-connect-form h5, .outlook-account-row h5 { margin: 0; }
+.outlook-inbox-settings h5 { overflow-wrap: anywhere; }
+.outlook-inbox-settings .outlook-status:empty { margin: 0; }
+.outlook-account-row > div { min-width: 0; }
+.outlook-account-actions { text-align: right; }
+.outlook-account-actions .dialog-actions { justify-content: flex-end; margin-top: 8px; }
+.outlook-connect-form { display: grid; justify-items: start; gap: 10px; }
+.outlook-connect-form .form-field, .outlook-grant-form .form-field { width: 100%; max-width: 320px; }
+.outlook-connect-form .form-field, .outlook-connect-form p { margin: 0; }
+.outlook-connect-form input { width: 100%; }
+.outlook-grant-form { display: grid; gap: 12px; }
+.outlook-conversation-settings { align-self: flex-start; }
+.outlook-inbox-result { display: grid; gap: 7px; }
+.outlook-inbox-result :is(p, dl, dd) { margin: 0; }
+.outlook-inbox-result p { color: var(--muted); font-size: 12px; }
+.outlook-inbox-result .outlook-inbox-source { color: var(--text); font-weight: 650; }
+.outlook-inbox-result dl { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; }
+.outlook-inbox-result dd { font-size: 20px; font-weight: 680; font-variant-numeric: tabular-nums; }
+@media (max-width: 650px) {
+  .outlook-account-actions { text-align: left; }
+  .outlook-account-actions .dialog-actions { justify-content: flex-start; }
+}
 
 .skills-overview-heading { display: flex; justify-content: space-between; align-items: center; gap: 20px; margin-bottom: 20px; }
 .skills-overview-heading h2 { margin: 0; font-size: 16px; }
@@ -1743,6 +1884,17 @@ button.mockup-skill-card > p { flex: 1; }
 .conversation-failure p { margin: 5px 0 10px; }
 .conversation-failure-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .conversation-failure button { cursor: pointer; }
+.message.assistant.conversation-failure-recovery { padding-block-end: 0; }
+.conversation-failure-speaker { margin: 0 0 6px; color: var(--muted); font-size: 12px; font-weight: 700; }
+.conversation-failure-recovery .message-markdown :is(ol, ul) { padding: 0; padding-inline-start: 24px; }
+.conversation-failure-activity { width: fit-content; max-width: 100%; margin-block-start: 14px; color: var(--muted); font-size: 12px; white-space: normal; }
+.conversation-failure-activity summary { width: fit-content; min-height: 34px; padding-block: 8px; padding-inline-end: 4px; border-radius: 3px; cursor: pointer; font-weight: 650; }
+.conversation-failure-activity summary:hover { color: var(--accent); }
+.conversation-failure-activity summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.conversation-failure-activity ul { margin: 0 0 4px; padding-inline-start: 24px; }
+@media (max-width: 540px) {
+  .conversation-failure-activity summary { min-height: 44px; padding-block: 12px; }
+}
 
 /* Conversation send choices while an owner request is active. */
 .conversation-active-task { margin: 8px 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
@@ -1761,9 +1913,22 @@ button.mockup-skill-card > p { flex: 1; }
 .conversation-suggestion button { padding: 6px 11px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-raised); color: var(--text); font-weight: 600; }
 .conversation-draft-review { margin: 8px 0; padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-subtle); font-size: 12px; }
 .conversation-draft-review button { margin-left: 4px; }
-.conversation-work-log { align-self: flex-start; max-width: min(42rem, 90%); margin: .25rem 0 .75rem; color: var(--text-muted, #64716a); font-size: .85rem; }
+.conversation-work-log { align-self: flex-start; max-width: min(42rem, 90%); margin: .25rem 0 .75rem; color: var(--text-muted, #64716a); font-size: .85rem; overflow-wrap: anywhere; }
 .conversation-work-log summary { cursor: pointer; font-weight: 600; }
 .conversation-work-log ol { padding-left: 1.4rem; margin: .5rem 0; }
 .conversation-work-log li { margin: .25rem 0; }
 .conversation-work-log small { display: block; }
 .conversation-work-log summary:focus-visible, .conversation-failure button:focus-visible, .owner-recovery button:focus-visible, .owner-recovery li:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }
+
+/* Keep the conversation and At hand independently visible at compact widths. */
+@media (max-width: 1199px) {
+  .desktop-shell.at-hand-open { grid-template-columns: var(--nav-width) minmax(0, 1fr) min(280px, 35vw); }
+  .at-hand-drawer { position: static; width: auto; box-shadow: none; }
+}
+/* Long recovery/context stacks scroll independently; the editor stays reachable. */
+.composer-support { max-height: min(16vh, 120px); overflow-y: auto; overscroll-behavior: contain; }
+.composer-support:empty { display: none; }
+.composer-support:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+/* Keep widget titles legible when their controls need a second row. */
+.widget-heading { flex-wrap: wrap; }
+.at-hand-drawer .widget-heading h3 { flex: 1 0 90px; overflow-wrap: normal; word-break: normal; }

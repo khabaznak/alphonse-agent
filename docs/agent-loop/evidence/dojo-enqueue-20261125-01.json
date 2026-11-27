@@ -1,0 +1,88 @@
+{
+  "scenario": "enqueue",
+  "provider": "scripted",
+  "model": "scripted",
+  "elapsed_seconds": 0.884,
+  "observation": {
+    "observation": "followup_execution",
+    "initial_ready": true,
+    "first_ready": true,
+    "second_ready": true,
+    "accepted_statuses": [
+      "queued",
+      "queued",
+      "queued"
+    ],
+    "listed_ids": [
+      "11111111111111111111111111111111",
+      "22222222222222222222222222222222",
+      "33333333333333333333333333333333"
+    ],
+    "remove_status": "removed",
+    "before_ack": [
+      [
+        "11111111111111111111111111111111",
+        "queued"
+      ],
+      [
+        "33333333333333333333333333333333",
+        "queued"
+      ]
+    ],
+    "before_first_ack": [
+      [
+        "11111111111111111111111111111111",
+        "released"
+      ],
+      [
+        "33333333333333333333333333333333",
+        "queued"
+      ]
+    ],
+    "after": [
+      [
+        "11111111111111111111111111111111",
+        "completed"
+      ],
+      [
+        "33333333333333333333333333333333",
+        "completed"
+      ]
+    ],
+    "inbound_count": 0,
+    "model_calls": 3,
+    "reported_usage": [
+      {
+        "input_tokens": 100,
+        "output_tokens": 20
+      },
+      {
+        "input_tokens": 100,
+        "output_tokens": 20
+      },
+      {
+        "input_tokens": 100,
+        "output_tokens": 20
+      }
+    ],
+    "answers": [
+      "The list is ready.",
+      "The list is ready.",
+      "The list is ready."
+    ],
+    "model": "scripted",
+    "provider_failure": null,
+    "context_visible": [
+      false,
+      false,
+      true
+    ],
+    "passed": null,
+    "semantic_execution_assessed": false,
+    "synthetic_effect_review": true,
+    "limitations": [
+      "Scripted model; semantic behavior is not evaluated.",
+      "Steering, restart, and uncertain delivery are not assessed in this case."
+    ]
+  }
+}

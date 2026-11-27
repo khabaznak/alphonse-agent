@@ -7,11 +7,18 @@ import re
 import sqlite3
 from datetime import datetime, timezone
 
+from alphonse.agent_v2.accounts import exact_gmail_label_id, valid_gmail_label_name
+from alphonse.agent_v2.core.inference.models import RESPONSE_PARSE_STAGES
 from alphonse.agent_v2.core.messages.sqlite_queue import finalized_owner_history_matches
 from alphonse.agent_v2.core.messages.claim_fence import ClaimReceipt
 from alphonse.agent_v2.core.messages.experimental_claim_checkpoint import _claim_digest
 from .owner_atomic_checkpoint import observation_digest, _decision_digest
 from .owner_failure_diagnostics import public_failure_code
+from .owner_gmail import OWNER_GMAIL_TOOL_ID, owner_gmail_failure_message
+from .owner_outlook import OWNER_OUTLOOK_TOOL_ID, owner_outlook_failure_message
+from .owner_gmail_search import OWNER_GMAIL_SEARCH_TOOL_ID
+from .owner_disposable_handoff import OWNER_DISPOSABLE_HANDOFF_TOOL_ID
+from .owner_reminder_create import OWNER_REMINDER_CREATE_TOOL_ID, REMINDER_REJECTION
 from .owner_web import is_web_failure_observation
 from .candidate_decision_policy import ACTIVITY_INTENTS
 
@@ -24,8 +31,12 @@ _LABELS = {
     'native.owner_clock': 'Checked the clock',
     'native.owner_schedules': 'Checked schedules',
     'native.owner_gmail_unread': 'Checked unread mail',
+    OWNER_OUTLOOK_TOOL_ID: 'Checked Outlook Inbox',
+    OWNER_GMAIL_SEARCH_TOOL_ID: 'Searched Gmail',
     'native.skill_catalog': 'Checked available skills',
     'native.owner_named_skill': 'Checked a named skill',
+    OWNER_REMINDER_CREATE_TOOL_ID: 'Checked the reminder request',
+    OWNER_DISPOSABLE_HANDOFF_TOOL_ID: 'Requested a Codex handoff',
 }
 
 # These describe the recorded tool, not the assistant's purpose or its effect.
@@ -38,14 +49,41 @@ _TOOL_KINDS = {
     'native.owner_clock': 'clock',
     'native.owner_schedules': 'schedules',
     'native.owner_gmail_unread': 'mail',
+    OWNER_OUTLOOK_TOOL_ID: 'mail',
+    OWNER_GMAIL_SEARCH_TOOL_ID: 'mail_search',
     'native.skill_catalog': 'skills',
     'native.owner_named_skill': 'named_skill',
+    OWNER_REMINDER_CREATE_TOOL_ID: 'reminder',
+    OWNER_DISPOSABLE_HANDOFF_TOOL_ID: 'worker_handoff',
 }
+
+_HANDOFF_OUTCOMES = {
+    'accepted': 'Worker accepted; result pending',
+    'completed': 'Worker result verified',
+    'failed': 'Worker reported a failure',
+    'blocked': 'Handoff blocked',
+    'unknown': 'Handoff unconfirmed',
+}
+
+
+def _handoff_status(item: dict) -> str:
+    observation = item.get('handoff_observation')
+    if (isinstance(observation, dict) and isinstance(observation.get('status'), str)
+            and observation['status'] in _HANDOFF_OUTCOMES
+            and item.get('observation_sha256') == observation_digest(observation)):
+        return observation['status']
+    return 'unknown'
+
+
+def _reminder_rejected(item: dict) -> bool:
+    return (item.get('arguments') == {} and item.get('reminder_rejection') == REMINDER_REJECTION
+            and item.get('observation_sha256') == observation_digest(REMINDER_REJECTION))
 
 _WEB_FAILURE_DETAILS = {
     'searxng_timeout': 'timeout',
     'searxng_http_error': 'http_error',
     'searxng_invalid_json': 'invalid_response',
+    'searxng_upstream_unavailable': 'upstream_search_failed',
     'web_fetch_timeout': 'timeout',
     'web_fetch_http_error': 'http_error',
     'web_fetch_unresolvable_host': 'unresolvable_host',
@@ -112,6 +150,24 @@ def _live_claim(conn, task_id: str, actor: str, marker: object) -> bool:
         return False
 
 
+def _gmail_scope(item: dict) -> dict[str, str]:
+    """Use only the recorded provider scope for an observed search."""
+    mail = item.get('gmail_search_observation')
+    if (not isinstance(mail, dict) or mail.get('status') not in ('complete', 'partial')
+            or item.get('observation_sha256') != observation_digest(mail)):
+        return {}
+    authority = mail.get('authority')
+    if not isinstance(authority, dict) or not authority.get('grant_id'):
+        return {}
+    resource = authority.get('resource', 'INBOX')
+    name = authority.get('label_name')
+    if resource == 'INBOX' and name is None:
+        return {'gmail_label': 'Inbox'}
+    if resource != 'INBOX' and exact_gmail_label_id(resource) and valid_gmail_label_name(name):
+        return {'gmail_label': name}
+    return {}
+
+
 def _activity(actor: str, refs: list, observations: dict, pending: object, *,
               task_id: str = '', state: dict | None = None, intent_marker: object = None) -> dict:
     """Summarize retained observations without interpreting arguments or output.
@@ -144,10 +200,26 @@ def _activity(actor: str, refs: list, observations: dict, pending: object, *,
             web = item.get('web_observation')
             if isinstance(web, dict) and web.get('status') == 'failed':
                 outcome = 'source_failed'
+            elif tool == 'native.web_search' and isinstance(web, dict) and web.get('partial') is True:
+                outcome = 'partial'
             elif (tool == 'native.web_search' and isinstance(web, dict)
-                  and type(web.get('result_count')) is int and web['result_count'] == 0):
+                  and type(web.get('result_count')) is int and web['result_count'] == 0 and not web.get('answers')):
                 outcome = 'no_results'
+        elif tool == OWNER_GMAIL_TOOL_ID and owner_gmail_failure_message(item.get('gmail_observation')):
+            outcome = 'source_failed'
+        elif tool == OWNER_OUTLOOK_TOOL_ID and owner_outlook_failure_message(item.get('outlook_observation')):
+            outcome = 'source_failed'
+        elif tool == OWNER_GMAIL_SEARCH_TOOL_ID:
+            mail = item.get('gmail_search_observation')
+            if isinstance(mail, dict) and mail.get('status') == 'unavailable':
+                outcome = 'source_failed'
+        elif tool == OWNER_REMINDER_CREATE_TOOL_ID and _reminder_rejected(item):
+            outcome = 'blocked'
+        elif tool == OWNER_DISPOSABLE_HANDOFF_TOOL_ID:
+            outcome = _handoff_status(item)
         latest = {'tool_kind': kind, 'outcome': outcome, 'effects': effects}
+        if tool == OWNER_GMAIL_SEARCH_TOOL_ID:
+            latest.update(_gmail_scope(item))
         key = (kind, outcome)
         outcome_counts[key] = outcome_counts.get(key, 0) + 1
         # Only expose a bounded reason explicitly reported by a native web
@@ -190,10 +262,28 @@ def _events(actor: str, refs: list, observations: dict, pending: object) -> list
         elif tool in {'native.web_search', 'native.web_fetch'}:
             web = item.get('web_observation')
             if isinstance(web, dict) and web.get('status') == 'failed':
-                outcome = 'The source could not be read'
-            elif tool == 'native.web_search' and isinstance(web, dict) and web.get('result_count') == 0:
+                outcome = ('Upstream search engines failed'
+                           if is_web_failure_observation(tool, web) and web['error_code'] == 'searxng_upstream_unavailable'
+                           else 'The source could not be read')
+            elif tool == 'native.web_search' and isinstance(web, dict) and web.get('partial') is True:
+                outcome = 'Partial results returned because some search engines failed'
+            elif (tool == 'native.web_search' and isinstance(web, dict)
+                  and web.get('result_count') == 0 and not web.get('answers')):
                 outcome = 'No results returned'
-        events.append({'label': _LABELS[tool], 'outcome': outcome})
+        elif tool == OWNER_GMAIL_TOOL_ID and owner_gmail_failure_message(item.get('gmail_observation')):
+            events.append({'label': 'Attempted an unread mail check', 'outcome': 'The Inbox count could not be verified'})
+            continue
+        elif tool == OWNER_OUTLOOK_TOOL_ID and owner_outlook_failure_message(item.get('outlook_observation')):
+            events.append({'label': 'Attempted an Outlook Inbox check', 'outcome': 'The unread count could not be verified'})
+            continue
+        elif tool == OWNER_REMINDER_CREATE_TOOL_ID and _reminder_rejected(item):
+            outcome = 'Request blocked; no reminder created'
+        elif tool == OWNER_DISPOSABLE_HANDOFF_TOOL_ID:
+            outcome = _HANDOFF_OUTCOMES[_handoff_status(item)]
+        event = {'label': _LABELS[tool], 'outcome': outcome}
+        if tool == OWNER_GMAIL_SEARCH_TOOL_ID:
+            event.update(_gmail_scope(item))
+        events.append(event)
     if isinstance(pending, dict) and pending.get('kind') == 'tool':
         events.append({'label': 'Tool action', 'outcome': 'Reserved; execution or effects are unconfirmed'})
     return events
@@ -223,7 +313,8 @@ def owner_work_log(queue, message_id: str) -> dict:
                     or raw.get('user') != actor or not finalized_owner_history_matches(conn, message_id, actor, raw)):
                 raise ValueError('owner_work_log_unavailable')
             metadata = raw['metadata']
-            state = metadata['single_loop_checkpoint']['state']
+            checkpoint = metadata['single_loop_checkpoint']
+            state = checkpoint['state']
             observations = metadata['owner_read_observations']
             refs = state['evidence_sources']
             if (state.get('task_id') != message_id or state.get('actor') != actor
@@ -241,7 +332,13 @@ def owner_work_log(queue, message_id: str) -> dict:
             if status not in {'running', 'blocked', 'completed', 'waiting_user', 'cancelled'}:
                 raise ValueError('owner_work_log_unavailable')
             failure = public_failure_code(state.get('blocker')) if status == 'blocked' else None
+            reservations = checkpoint.get('budget', {}).get('reservations', {})
+            parse_stages = sorted({stage for row in reservations.values()
+                                   if isinstance(row, dict) and row.get('kind') == 'model'
+                                   and row.get('status') == 'settled' and row.get('outcome') == 'failure'
+                                   and type(stage := row.get('parse_stage')) is str and stage in RESPONSE_PARSE_STAGES})
             return {'status': status, 'failure_code': failure, 'events': events, 'activity': activity,
+                    **({'model_parse_stages': parse_stages} if parse_stages else {}),
                     'notice': 'This log shows recorded tool observations; it may not include every activity.'}
         except (KeyError, TypeError, ValueError, AttributeError):
             raise ValueError('owner_work_log_unavailable') from None

@@ -1,0 +1,544 @@
+{
+  "limit_usd": "0.03",
+  "budget_charge_usd": "0.000148428",
+  "price_per_million_input_tokens_usd": "0.042",
+  "unknown_attempt_reservation_usd": "0.003",
+  "calls": [
+    {
+      "case_id": "missed_recap",
+      "request": {
+        "model": "jev-1.14.0",
+        "state": {
+          "earlier_owner": "We chose the striped umbrella for the imaginary picnic.",
+          "later_owner": "That earlier choice still stands.",
+          "assistant_recap": "We have not chosen an umbrella.",
+          "proposed_answer": "You chose the striped umbrella, but a later note says the choice is open.",
+          "source_complete": true
+        },
+        "questions": {
+          "recap_conflicts": {
+            "type": "noul",
+            "instructions": "Does the assistant recap conflict with what the earlier owner statement says had been decided?"
+          },
+          "answer_acknowledges": {
+            "type": "noul",
+            "instructions": "Does the proposed answer acknowledge that the assistant recap overlooked the earlier owner statement?"
+          },
+          "answer_attributes": {
+            "type": "noul",
+            "instructions": "Does the proposed answer identify the assistant as the speaker of the recap?"
+          },
+          "answer_own_statement": {
+            "type": "noul",
+            "instructions": "Does the proposed answer refer to the recap as the assistant\u2019s own earlier statement?"
+          },
+          "owner_changed": {
+            "type": "noul",
+            "instructions": "Does the later owner statement report changing the earlier decision?"
+          }
+        }
+      },
+      "budget_charge_usd": "0.000018732",
+      "status": "success",
+      "response": {
+        "model": "jev-1.14.0",
+        "answers": {
+          "recap_conflicts": {
+            "type": "noul",
+            "noul": 0.95
+          },
+          "answer_acknowledges": {
+            "type": "noul",
+            "noul": 0.62
+          },
+          "answer_attributes": {
+            "type": "noul",
+            "noul": 0.19
+          },
+          "answer_own_statement": {
+            "type": "noul",
+            "noul": 0.43
+          },
+          "owner_changed": {
+            "type": "noul",
+            "noul": 0.04
+          }
+        },
+        "usage": {
+          "input_tokens": 446,
+          "output_tokens": 96
+        }
+      },
+      "seconds": 0.2465310420084279
+    },
+    {
+      "case_id": "acknowledged_recap",
+      "request": {
+        "model": "jev-1.14.0",
+        "state": {
+          "earlier_owner": "We chose the striped umbrella for the imaginary picnic.",
+          "later_owner": "That earlier choice still stands.",
+          "assistant_recap": "We have not chosen an umbrella.",
+          "proposed_answer": "You chose the striped umbrella. My earlier recap overlooked that choice.",
+          "source_complete": true
+        },
+        "questions": {
+          "recap_conflicts": {
+            "type": "noul",
+            "instructions": "Does the assistant recap conflict with what the earlier owner statement says had been decided?"
+          },
+          "answer_acknowledges": {
+            "type": "noul",
+            "instructions": "Does the proposed answer acknowledge that the assistant recap overlooked the earlier owner statement?"
+          },
+          "answer_attributes": {
+            "type": "noul",
+            "instructions": "Does the proposed answer identify the assistant as the speaker of the recap?"
+          },
+          "answer_own_statement": {
+            "type": "noul",
+            "instructions": "Does the proposed answer refer to the recap as the assistant\u2019s own earlier statement?"
+          },
+          "owner_changed": {
+            "type": "noul",
+            "instructions": "Does the later owner statement report changing the earlier decision?"
+          }
+        }
+      },
+      "budget_charge_usd": "0.000018606",
+      "status": "success",
+      "response": {
+        "model": "jev-1.14.0",
+        "answers": {
+          "recap_conflicts": {
+            "type": "noul",
+            "noul": 0.97
+          },
+          "answer_acknowledges": {
+            "type": "noul",
+            "noul": 0.97
+          },
+          "answer_attributes": {
+            "type": "noul",
+            "noul": 0.61
+          },
+          "answer_own_statement": {
+            "type": "noul",
+            "noul": 0.89
+          },
+          "owner_changed": {
+            "type": "noul",
+            "noul": 0.04
+          }
+        },
+        "usage": {
+          "input_tokens": 443,
+          "output_tokens": 96
+        }
+      },
+      "seconds": 0.20343291701283306
+    },
+    {
+      "case_id": "genuine_owner_change",
+      "request": {
+        "model": "jev-1.14.0",
+        "state": {
+          "earlier_owner": "We chose a red kite for the imaginary festival.",
+          "later_owner": "I changed our choice to a yellow kite.",
+          "assistant_recap": "We chose a yellow kite.",
+          "proposed_answer": "You initially chose red, then changed it to yellow.",
+          "source_complete": true
+        },
+        "questions": {
+          "recap_conflicts": {
+            "type": "noul",
+            "instructions": "Does the assistant recap conflict with what the earlier owner statement says had been decided?"
+          },
+          "answer_acknowledges": {
+            "type": "noul",
+            "instructions": "Does the proposed answer acknowledge that the assistant recap overlooked the earlier owner statement?"
+          },
+          "answer_attributes": {
+            "type": "noul",
+            "instructions": "Does the proposed answer identify the assistant as the speaker of the recap?"
+          },
+          "answer_own_statement": {
+            "type": "noul",
+            "instructions": "Does the proposed answer refer to the recap as the assistant\u2019s own earlier statement?"
+          },
+          "owner_changed": {
+            "type": "noul",
+            "instructions": "Does the later owner statement report changing the earlier decision?"
+          }
+        }
+      },
+      "budget_charge_usd": "0.000018606",
+      "status": "success",
+      "response": {
+        "model": "jev-1.14.0",
+        "answers": {
+          "recap_conflicts": {
+            "type": "noul",
+            "noul": 0.38
+          },
+          "answer_acknowledges": {
+            "type": "noul",
+            "noul": 0.62
+          },
+          "answer_attributes": {
+            "type": "noul",
+            "noul": 0.16
+          },
+          "answer_own_statement": {
+            "type": "noul",
+            "noul": 0.19
+          },
+          "owner_changed": {
+            "type": "noul",
+            "noul": 0.98
+          }
+        },
+        "usage": {
+          "input_tokens": 443,
+          "output_tokens": 96
+        }
+      },
+      "seconds": 0.20282791700446978
+    },
+    {
+      "case_id": "no_conflict",
+      "request": {
+        "model": "jev-1.14.0",
+        "state": {
+          "earlier_owner": "The fictional club meets on Tuesday.",
+          "later_owner": "The Tuesday meeting is still planned.",
+          "assistant_recap": "The club meets on Tuesday.",
+          "proposed_answer": "The club meets Tuesday.",
+          "source_complete": true
+        },
+        "questions": {
+          "recap_conflicts": {
+            "type": "noul",
+            "instructions": "Does the assistant recap conflict with what the earlier owner statement says had been decided?"
+          },
+          "answer_acknowledges": {
+            "type": "noul",
+            "instructions": "Does the proposed answer acknowledge that the assistant recap overlooked the earlier owner statement?"
+          },
+          "answer_attributes": {
+            "type": "noul",
+            "instructions": "Does the proposed answer identify the assistant as the speaker of the recap?"
+          },
+          "answer_own_statement": {
+            "type": "noul",
+            "instructions": "Does the proposed answer refer to the recap as the assistant\u2019s own earlier statement?"
+          },
+          "owner_changed": {
+            "type": "noul",
+            "instructions": "Does the later owner statement report changing the earlier decision?"
+          }
+        }
+      },
+      "budget_charge_usd": "0.000018144",
+      "status": "success",
+      "response": {
+        "model": "jev-1.14.0",
+        "answers": {
+          "recap_conflicts": {
+            "type": "noul",
+            "noul": 0.03
+          },
+          "answer_acknowledges": {
+            "type": "noul",
+            "noul": 0.06
+          },
+          "answer_attributes": {
+            "type": "noul",
+            "noul": 0.05
+          },
+          "answer_own_statement": {
+            "type": "noul",
+            "noul": 0.28
+          },
+          "owner_changed": {
+            "type": "noul",
+            "noul": 0.03
+          }
+        },
+        "usage": {
+          "input_tokens": 432,
+          "output_tokens": 96
+        }
+      },
+      "seconds": 0.24749241702375002
+    },
+    {
+      "case_id": "incomplete_earlier",
+      "request": {
+        "model": "jev-1.14.0",
+        "state": {
+          "earlier_owner": "[unavailable]",
+          "later_owner": "That earlier choice still stands.",
+          "assistant_recap": "We have not made a choice.",
+          "proposed_answer": "I cannot inspect the earlier choice.",
+          "source_complete": false
+        },
+        "questions": {
+          "recap_conflicts": {
+            "type": "noul",
+            "instructions": "Does the assistant recap conflict with what the earlier owner statement says had been decided?"
+          },
+          "answer_acknowledges": {
+            "type": "noul",
+            "instructions": "Does the proposed answer acknowledge that the assistant recap overlooked the earlier owner statement?"
+          },
+          "answer_attributes": {
+            "type": "noul",
+            "instructions": "Does the proposed answer identify the assistant as the speaker of the recap?"
+          },
+          "answer_own_statement": {
+            "type": "noul",
+            "instructions": "Does the proposed answer refer to the recap as the assistant\u2019s own earlier statement?"
+          },
+          "owner_changed": {
+            "type": "noul",
+            "instructions": "Does the later owner statement report changing the earlier decision?"
+          }
+        }
+      },
+      "budget_charge_usd": "0.000018186",
+      "status": "success",
+      "response": {
+        "model": "jev-1.14.0",
+        "answers": {
+          "recap_conflicts": {
+            "type": "noul",
+            "noul": 0.58
+          },
+          "answer_acknowledges": {
+            "type": "noul",
+            "noul": 0.23
+          },
+          "answer_attributes": {
+            "type": "noul",
+            "noul": 0.49
+          },
+          "answer_own_statement": {
+            "type": "noul",
+            "noul": 0.36
+          },
+          "owner_changed": {
+            "type": "noul",
+            "noul": 0.05
+          }
+        },
+        "usage": {
+          "input_tokens": 433,
+          "output_tokens": 96
+        }
+      },
+      "seconds": 0.19537895900430158
+    },
+    {
+      "case_id": "spanish_contradiction",
+      "request": {
+        "model": "jev-1.14.0",
+        "state": {
+          "earlier_owner": "Elegimos la mesa verde para el escenario ficticio.",
+          "later_owner": "La elecci\u00f3n anterior sigue vigente.",
+          "assistant_recap": "Todav\u00eda no hemos elegido una mesa.",
+          "proposed_answer": "S\u00ed, elegiste la mesa verde; mi respuesta anterior lo pas\u00f3 por alto.",
+          "source_complete": true
+        },
+        "questions": {
+          "recap_conflicts": {
+            "type": "noul",
+            "instructions": "Does the assistant recap conflict with what the earlier owner statement says had been decided?"
+          },
+          "answer_acknowledges": {
+            "type": "noul",
+            "instructions": "Does the proposed answer acknowledge that the assistant recap overlooked the earlier owner statement?"
+          },
+          "answer_attributes": {
+            "type": "noul",
+            "instructions": "Does the proposed answer identify the assistant as the speaker of the recap?"
+          },
+          "answer_own_statement": {
+            "type": "noul",
+            "instructions": "Does the proposed answer refer to the recap as the assistant\u2019s own earlier statement?"
+          },
+          "owner_changed": {
+            "type": "noul",
+            "instructions": "Does the later owner statement report changing the earlier decision?"
+          }
+        }
+      },
+      "budget_charge_usd": "0.000018858",
+      "status": "success",
+      "response": {
+        "model": "jev-1.14.0",
+        "answers": {
+          "recap_conflicts": {
+            "type": "noul",
+            "noul": 0.97
+          },
+          "answer_acknowledges": {
+            "type": "noul",
+            "noul": 0.95
+          },
+          "answer_attributes": {
+            "type": "noul",
+            "noul": 0.56
+          },
+          "answer_own_statement": {
+            "type": "noul",
+            "noul": 0.74
+          },
+          "owner_changed": {
+            "type": "noul",
+            "noul": 0.03
+          }
+        },
+        "usage": {
+          "input_tokens": 449,
+          "output_tokens": 96
+        }
+      },
+      "seconds": 0.1886984170123469
+    },
+    {
+      "case_id": "explicit_assistant_attribution",
+      "request": {
+        "model": "jev-1.14.0",
+        "state": {
+          "earlier_owner": "The fictional train leaves at ten.",
+          "later_owner": "That plan has not changed.",
+          "assistant_recap": "We have not set a departure time.",
+          "proposed_answer": "The assistant previously said no time was set, overlooking your ten o\u2019clock decision.",
+          "source_complete": true
+        },
+        "questions": {
+          "recap_conflicts": {
+            "type": "noul",
+            "instructions": "Does the assistant recap conflict with what the earlier owner statement says had been decided?"
+          },
+          "answer_acknowledges": {
+            "type": "noul",
+            "instructions": "Does the proposed answer acknowledge that the assistant recap overlooked the earlier owner statement?"
+          },
+          "answer_attributes": {
+            "type": "noul",
+            "instructions": "Does the proposed answer identify the assistant as the speaker of the recap?"
+          },
+          "answer_own_statement": {
+            "type": "noul",
+            "instructions": "Does the proposed answer refer to the recap as the assistant\u2019s own earlier statement?"
+          },
+          "owner_changed": {
+            "type": "noul",
+            "instructions": "Does the later owner statement report changing the earlier decision?"
+          }
+        }
+      },
+      "budget_charge_usd": "0.000018732",
+      "status": "success",
+      "response": {
+        "model": "jev-1.14.0",
+        "answers": {
+          "recap_conflicts": {
+            "type": "noul",
+            "noul": 0.95
+          },
+          "answer_acknowledges": {
+            "type": "noul",
+            "noul": 0.93
+          },
+          "answer_attributes": {
+            "type": "noul",
+            "noul": 0.83
+          },
+          "answer_own_statement": {
+            "type": "noul",
+            "noul": 0.91
+          },
+          "owner_changed": {
+            "type": "noul",
+            "noul": 0.04
+          }
+        },
+        "usage": {
+          "input_tokens": 446,
+          "output_tokens": 96
+        }
+      },
+      "seconds": 0.193454833002761
+    },
+    {
+      "case_id": "wrong_attribution",
+      "request": {
+        "model": "jev-1.14.0",
+        "state": {
+          "earlier_owner": "The fictional train leaves at ten.",
+          "later_owner": "That plan has not changed.",
+          "assistant_recap": "We have not set a departure time.",
+          "proposed_answer": "You later said no time was set, although you originally chose ten.",
+          "source_complete": true
+        },
+        "questions": {
+          "recap_conflicts": {
+            "type": "noul",
+            "instructions": "Does the assistant recap conflict with what the earlier owner statement says had been decided?"
+          },
+          "answer_acknowledges": {
+            "type": "noul",
+            "instructions": "Does the proposed answer acknowledge that the assistant recap overlooked the earlier owner statement?"
+          },
+          "answer_attributes": {
+            "type": "noul",
+            "instructions": "Does the proposed answer identify the assistant as the speaker of the recap?"
+          },
+          "answer_own_statement": {
+            "type": "noul",
+            "instructions": "Does the proposed answer refer to the recap as the assistant\u2019s own earlier statement?"
+          },
+          "owner_changed": {
+            "type": "noul",
+            "instructions": "Does the later owner statement report changing the earlier decision?"
+          }
+        }
+      },
+      "budget_charge_usd": "0.000018564",
+      "status": "success",
+      "response": {
+        "model": "jev-1.14.0",
+        "answers": {
+          "recap_conflicts": {
+            "type": "noul",
+            "noul": 0.93
+          },
+          "answer_acknowledges": {
+            "type": "noul",
+            "noul": 0.8
+          },
+          "answer_attributes": {
+            "type": "noul",
+            "noul": 0.5
+          },
+          "answer_own_statement": {
+            "type": "noul",
+            "noul": 0.59
+          },
+          "owner_changed": {
+            "type": "noul",
+            "noul": 0.05
+          }
+        },
+        "usage": {
+          "input_tokens": 442,
+          "output_tokens": 96
+        }
+      },
+      "seconds": 0.19725066600949503
+    }
+  ]
+}

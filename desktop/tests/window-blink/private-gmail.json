@@ -1,0 +1,157 @@
+[
+  {
+    "version": "v0.9.1",
+    "createSurface": {
+      "surfaceId": "private-gmail:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "catalogId": "alphonse.desktop.catalog.v2",
+      "sendDataModel": false
+    }
+  },
+  {
+    "version": "v0.9.1",
+    "updateComponents": {
+      "surfaceId": "private-gmail:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "components": [
+        {
+          "id": "root",
+          "component": "Card",
+          "children": [
+            "source",
+            "result_head",
+            "scope",
+            "actions",
+            "findings",
+            "sources"
+          ]
+        },
+        {
+          "id": "scope",
+          "component": "Text",
+          "text": "1 message reviewed \u00b7 Past 365 days"
+        },
+        {
+          "id": "source",
+          "component": "Text",
+          "text": "Gmail Inbox"
+        },
+        {
+          "id": "title",
+          "component": "Text",
+          "text": "Synthetic Inbox follow-up",
+          "variant": "heading"
+        },
+        {
+          "id": "result_head",
+          "component": "Row",
+          "children": [
+            "title"
+          ]
+        },
+        {
+          "id": "actions",
+          "component": "List",
+          "children": [
+            "action_1"
+          ]
+        },
+        {
+          "id": "action_1",
+          "component": "Row",
+          "children": [
+            "action_1_when",
+            "action_1_body"
+          ]
+        },
+        {
+          "id": "action_1_when",
+          "component": "Text",
+          "text": "No date given"
+        },
+        {
+          "id": "action_1_body",
+          "component": "Column",
+          "children": [
+            "action_1_title",
+            "action_1_meta"
+          ]
+        },
+        {
+          "id": "action_1_title",
+          "component": "Text",
+          "text": "Review the workshop checklist",
+          "variant": "strong"
+        },
+        {
+          "id": "action_1_meta",
+          "component": "Row",
+          "children": [
+            "action_1_detail",
+            "action_1_cite_1"
+          ]
+        },
+        {
+          "id": "action_1_detail",
+          "component": "Markdown",
+          "text": "Confirm which revision is already in use and identify changes that the workshop maintainer should propose."
+        },
+        {
+          "id": "action_1_cite_1",
+          "component": "EmailCitation",
+          "sourceNumber": 1
+        },
+        {
+          "id": "findings",
+          "component": "Markdown",
+          "text": "The notice describes workshop maintenance. Alphonse reviewed this synthetic notice. The workshop checklist's state is awaiting verification. [1]"
+        },
+        {
+          "id": "source_1",
+          "component": "Column",
+          "children": [
+            "source_1_title",
+            "source_1_meta",
+            "source_1_excerpt"
+          ]
+        },
+        {
+          "id": "source_1_title",
+          "component": "Text",
+          "text": "[1] Synthetic workshop maintenance notice",
+          "variant": "strong"
+        },
+        {
+          "id": "source_1_meta",
+          "component": "Text",
+          "text": "Fixture Workshop \u00b7 Nov 27"
+        },
+        {
+          "id": "source_1_excerpt",
+          "component": "Text",
+          "text": "Paragraph 1. The workshop checklist needs a review before the next open house. Keep the existing notes and record which revision you reviewed.\n\nParagraph 2. The workshop checklist needs a review before the next open house. Keep the existing notes and record which revision you reviewed.\n\nParagraph 3. The workshop checklist needs a review before the next open house. Keep the existing notes and record which revision you reviewed.\n\nParagraph 4. The workshop checklist needs a review before the next open house. Keep the existing notes and record which revision you reviewed.\n\nParagraph 5. The workshop checklist needs a review before the next open house. Keep the existing notes and record which revision you reviewed.\n\nParagraph 6. The workshop checklist needs a review before the next open house. Keep the existing notes and record which revision you reviewed.\n\nParagraph 7. The workshop checklist needs a review before the next open house. Keep the existing notes and record which revision you reviewed.\n\nParagraph 8. The workshop checklist needs a review before the next open house. Keep the existing notes and record which revision you reviewed.",
+          "variant": "quote"
+        },
+        {
+          "id": "sources",
+          "component": "Disclosure",
+          "label": "Cited emails (1 of 1 reviewed)",
+          "children": [
+            "source_list",
+            "qualifier"
+          ]
+        },
+        {
+          "id": "source_list",
+          "component": "List",
+          "children": [
+            "source_1"
+          ]
+        },
+        {
+          "id": "qualifier",
+          "component": "Text",
+          "text": "Based on message excerpts. Attachments were omitted."
+        }
+      ]
+    }
+  }
+]

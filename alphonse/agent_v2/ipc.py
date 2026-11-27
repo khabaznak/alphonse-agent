@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import socket
@@ -18,6 +19,9 @@ from uuid import uuid4
 
 
 PROTOCOL_VERSION = 1
+_MAX_IPC_HANDLERS = 32
+_IPC_SOCKET_TIMEOUT_SECONDS = 5
+logger = logging.getLogger(__name__)
 
 
 def default_socket_path() -> Path:
@@ -210,15 +214,17 @@ class V2DaemonClient:
         return self.request("inference_settings")
 
     def inference_providers(self) -> dict[str, Any]:
-        return self.request("inference_providers")
+        client = V2DaemonClient(self.socket_path, timeout_sec=max(self.timeout_sec, 6.0))
+        return client.request("inference_providers")
 
     def inference_models(self, provider_key: str) -> dict[str, Any]:
-        return self.request("inference_models", provider_key=provider_key)
+        client = V2DaemonClient(self.socket_path, timeout_sec=max(self.timeout_sec, 6.0))
+        return client.request("inference_models", provider_key=provider_key)
 
     def set_inference_settings(self, *, provider_key: str, model_id: str) -> dict[str, Any]:
-        # Model validation performs one bounded provider request. It needs a
-        # longer timeout than routine daemon health and queue operations.
-        client = V2DaemonClient(self.socket_path, timeout_sec=max(self.timeout_sec, 35.0))
+        # Allow the login check, model turn, version lookup and settings write
+        # to finish before the caller times out on a validation that may save.
+        client = V2DaemonClient(self.socket_path, timeout_sec=max(self.timeout_sec, 85.0))
         return client.request("set_inference_settings", provider_key=provider_key, model_id=model_id)
 
     def system_one_settings(self, *, actor_user_id: str) -> dict[str, Any]:
@@ -403,18 +409,19 @@ class V2DaemonServer:
                 except OSError:
                     break
                 with self._quiescence:
-                    if not self._accepting_handlers:
+                    if not self._accepting_handlers or len(self._handlers) >= _MAX_IPC_HANDLERS:
                         connection.close()
                         continue
+                    connection.settimeout(_IPC_SOCKET_TIMEOUT_SECONDS)
                     thread = threading.Thread(target=self._handle_tracked, args=(connection,), daemon=True)
                     self._handlers.add(thread)
                     try:
                         thread.start()
-                    except Exception:
+                    except RuntimeError:
                         self._handlers.remove(thread)
                         connection.close()
                         self._quiescence.notify_all()
-                        raise
+                        logger.warning('Could not start an IPC request handler')
         finally:
             with self._quiescence:
                 self._listener_running = False
@@ -423,6 +430,9 @@ class V2DaemonServer:
     def _handle_tracked(self, connection: socket.socket) -> None:
         try:
             self._handle(connection)
+        except OSError:
+            # A client may close the socket before receiving its reply.
+            pass
         finally:
             with self._quiescence:
                 self._handlers.discard(threading.current_thread())
@@ -479,6 +489,18 @@ class V2DaemonServer:
                     result = self._owner_scheduled_delivery(connection, request)
                 elif isinstance(request, dict) and request.get('method') in {'legacy_notification_list', 'legacy_notification_archive'}:
                     result = self._legacy_notification_review(connection, request)
+                elif isinstance(request, dict) and request.get('method') == 'agenda':
+                    self._local_peer_uid(connection)
+                    result = self._dispatch(request, agenda_peer_verified=True)
+                elif (self.experimental_owner_ingress and getattr(self.daemon, 'experimental_owner_only', False) is True
+                      and isinstance(request, dict) and request.get('method') == 'desktop_conversation_history'
+                      and isinstance(request.get('params'), dict)
+                      and request['params'].get('include_private_cards') is True):
+                    self._local_peer_uid(connection)
+                    actor = self.daemon.runtime.user_store.admin_user()
+                    if actor is None or actor.user_id != request['params'].get('user'):
+                        raise PermissionError('desktop_private_history_unavailable')
+                    result = self._dispatch(request, desktop_private_verified=True)
                 else:
                     result = self._dispatch(request)
                 response = {"version": PROTOCOL_VERSION, "request_id": _request_id(request), "ok": True, "result": result}
@@ -947,7 +969,9 @@ class V2DaemonServer:
         return uid
 
     def _optional_management(self, connection, request):
-        from alphonse.agent_v2.accounts import AccountSession
+        from alphonse.agent_v2.accounts import (
+            AccountSession, GMAIL_CONTENT_OPERATION, OUTLOOK_INBOX_OPERATION, OUTLOOK_INBOX_RESOURCE, exact_gmail_label_id,
+        )
         self._local_peer_uid(connection)
         params = request.get('params', {})
         if not isinstance(params, dict) or set(params) - {'action', 'values'}:
@@ -973,36 +997,71 @@ class V2DaemonServer:
         values = params.get('values', {})
         if not isinstance(values, dict):
             raise ValueError('management_values_invalid')
+        operations = values.get('operations')
+        outlook_grant = operations == [OUTLOOK_INBOX_OPERATION]
+        outlook_begin = (values.get('provider') == 'microsoft'
+                         and values.get('capabilities') == [OUTLOOK_INBOX_OPERATION])
+        attempt_action = action in {'oauth_attempt_status', 'cancel_oauth_attempt'}
         if owner_only:
-            if action not in {'catalog', 'begin', 'save_grant', 'revoke_grant', 'pause', 'disconnect', 'retry_deletion'}:
+            if action not in {'catalog', 'begin', 'save_grant', 'revoke_grant', 'pause', 'disconnect',
+                              'retry_deletion', 'refresh_gmail_access', 'refresh_outlook_inbox_access', 'list_gmail_labels',
+                              'oauth_attempt_status', 'cancel_oauth_attempt'}:
                 raise PermissionError('owner_only_account_action_unavailable')
             if action == 'catalog' and values:
                 raise ValueError('management_values_invalid')
-            if action == 'begin' and (values.get('provider') != 'google' or values.get('capabilities') != ['mail_read']):
+            google_begin = (values.get('provider') == 'google'
+                            and values.get('capabilities') in (['mail_read'], ['calendar_read']))
+            if action == 'begin' and not (google_begin or outlook_begin):
                 raise PermissionError('owner_only_account_scope_unavailable')
-            if action == 'save_grant' and (values.get('beneficiary_user_id') != owner.user_id
-                    or values.get('operations') != ['mail_read'] or values.get('resources') != ['INBOX']
-                    or values.get('recipient_user_ids') != [owner.user_id] or values.get('project_id') is not None):
-                raise PermissionError('owner_only_account_scope_unavailable')
+            if action == 'save_grant':
+                from .core.intelligence.simple_loop.owner_calendar import exact_calendar_id
+                resources = values.get('resources')
+                inbox = operations == ['mail_read'] and resources == ['INBOX']
+                gmail_content = (operations == [GMAIL_CONTENT_OPERATION] and isinstance(resources, list)
+                                 and len(resources) == 1 and exact_gmail_label_id(resources[0]))
+                calendar = (operations == ['calendar_read'] and isinstance(resources, list)
+                            and len(resources) == 1 and exact_calendar_id(resources[0]))
+                outlook = outlook_grant and resources == [OUTLOOK_INBOX_RESOURCE]
+                if (not (inbox or gmail_content or calendar or outlook) or values.get('beneficiary_user_id') != owner.user_id
+                        or values.get('recipient_user_ids') != [owner.user_id] or values.get('project_id') is not None):
+                    raise PermissionError('owner_only_account_scope_unavailable')
             if action == 'revoke_grant':
                 grant_id = values.get('grant_id')
                 with self.daemon.runtime.integration_store._connect() as db:
                     row = db.execute('SELECT connection_id FROM v2_account_grants WHERE grant_id=?', (grant_id,)).fetchone()
                 grant_record = self.daemon.runtime.integration_store.get(row['connection_id']) if row is not None else None
-                if (grant_record is None or grant_record.provider_key != 'google'
+                if (grant_record is None or not (grant_record.provider_key == 'google'
+                        or (grant_record.provider_key == 'microsoft'
+                            and grant_record.connection.get('capabilities') == [OUTLOOK_INBOX_OPERATION]))
                         or grant_record.connection.get('owner_user_id') != owner.user_id):
                     raise PermissionError('owner_only_account_scope_unavailable')
-            if action in {'begin', 'save_grant', 'pause', 'disconnect', 'retry_deletion'}:
+            if action in {'begin', 'save_grant', 'pause', 'disconnect', 'retry_deletion', 'list_gmail_labels'}:
                 connection_id = values.get('connection_id')
                 record = self.daemon.runtime.integration_store.get(connection_id) if isinstance(connection_id, str) else None
-                if record is not None and (record.provider_key != 'google'
-                        or record.connection.get('owner_user_id') != owner.user_id):
-                    raise PermissionError('owner_only_account_scope_unavailable')
-                if (action == 'begin' and record is not None
-                        and set(record.connection.get('capabilities', ())) - {'mail_read'}):
+                if record is not None:
+                    connection = record.connection
+                    outlook_record = record.provider_key == 'microsoft' and (
+                        connection.get('capabilities') == [OUTLOOK_INBOX_OPERATION]
+                        or (connection.get('provider_subject', '').startswith('pending:')
+                            and connection.get('capabilities') == []))
+                    if (connection.get('owner_user_id') != owner.user_id
+                            or (action == 'save_grant' and outlook_grant != outlook_record)
+                            or (action == 'begin' and outlook_begin != outlook_record)
+                            or (record.provider_key != 'google' and (not outlook_record or action == 'list_gmail_labels'))):
+                        raise PermissionError('owner_only_account_scope_unavailable')
+                if (action == 'begin' and record is not None and record.connection.get('capabilities')
+                        and record.connection['capabilities'] != values.get('capabilities')):
                     # A narrow reconnect would silently replace broader consent.
                     raise PermissionError('owner_only_combined_account_reconnect_unavailable')
         oauth = self.daemon.optional_accounts(session)
+        if attempt_action:
+            if not owner_only or set(values) != {'provider', 'attempt_id'}:
+                raise PermissionError('owner_only_account_scope_unavailable')
+            return getattr(oauth, action)(session, **values)
+        if owner_only and action == 'refresh_gmail_access':
+            return oauth.refresh_gmail_access(session, **values)
+        if owner_only and action == 'refresh_outlook_inbox_access':
+            return oauth.refresh_outlook_inbox_access(session, **values)
         management = self.daemon.runtime.integration_management
         management.oauth = oauth
         if action == 'begin':
@@ -1018,18 +1077,34 @@ class V2DaemonServer:
         # Callback exchange is accepted only by the loopback listener, never raw IPC.
         if action == 'complete':
             raise PermissionError('oauth_callback_transport_required')
+        if owner_only and (action == 'list_gmail_labels' or action == 'begin' and outlook_begin
+                or (action == 'save_grant' and (operations == [GMAIL_CONTENT_OPERATION] or outlook_grant))):
+            return management.request(session, action, values, channel='owner_desktop')
         result = management.request(session, action, values)
         if owner_only and action == 'catalog':
             result['owner_gmail_setup_only'] = True
-            result['providers'] = [dict(provider='google', capabilities=['mail_read'])
-                                   for provider in result['providers'] if provider['provider'] == 'google'
-                                   and 'mail_read' in provider['capabilities']]
-            result['connections'] = [item for item in result['connections'] if item['provider'] == 'google']
+            result['owner_google_setup_only'] = True
+            result['owner_gmail_content_setup'] = True
+            result['owner_gmail_label_setup'] = True
+            result['owner_outlook_inbox_setup'] = True
+            supported = {'google': ('mail_read', 'calendar_read'), 'microsoft': (OUTLOOK_INBOX_OPERATION,)}
+            result['providers'] = [
+                dict(provider=provider['provider'], capabilities=[
+                    capability for capability in supported[provider['provider']] if capability in provider['capabilities']])
+                for provider in result['providers']
+                if set(supported.get(provider['provider'], ())).intersection(provider['capabilities'])
+            ]
+            result['connections'] = [
+                item for item in result['connections']
+                if item['provider'] == 'google' or (item['provider'] == 'microsoft'
+                    and item.get('capabilities') in ([], [OUTLOOK_INBOX_OPERATION]))
+            ]
             connection_ids = {item['connection_id'] for item in result['connections']}
             result['grants'] = [grant for grant in result['grants'] if grant['connection_id'] in connection_ids]
         return result
 
-    def _dispatch(self, request: Any) -> dict[str, Any]:
+    def _dispatch(self, request: Any, *, agenda_peer_verified: bool = False,
+                  desktop_private_verified: bool = False) -> dict[str, Any]:
         if not isinstance(request, dict):
             raise ValueError("daemon_request_object_required")
         version = request.get("version")
@@ -1141,7 +1216,9 @@ class V2DaemonServer:
                     project_id=str(params.get("project_id") or ""),
                     local_date=str(params.get("local_date") or ""),
                     limit=int(params.get("limit") or 100),
-                )
+                    **({'include_verified_private_cards': True} if desktop_private_verified else {}),
+                ),
+                **({'private_cards_checked': True} if desktop_private_verified else {}),
             }
         if method == "desktop_mark_project_seen":
             through = params.get("through_sequence")
@@ -1537,7 +1614,10 @@ class V2DaemonServer:
         if method == "agenda":
             from alphonse.agent_v2.agenda import agenda
             return agenda(self.daemon.runtime, actor=str(params.get("actor_user_id") or ""),
-                          start_day=str(params.get("start_day") or ""), end_day=str(params.get("end_day") or ""))
+                          start_day=str(params.get("start_day") or ""), end_day=str(params.get("end_day") or ""),
+                          include_owner_calendar=agenda_peer_verified is True
+                          and getattr(self.daemon, "experimental_owner_only", False) is True,
+                          include_calendar_events=params.get("include_calendar_events") is True)
         if method == "scheduled_tasks":
             status = str(params.get("status") or "").strip() or None
             return {"tasks": self.daemon.scheduled_tasks(

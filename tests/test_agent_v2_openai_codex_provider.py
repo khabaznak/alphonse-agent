@@ -366,12 +366,16 @@ def test_codex_provider_reports_when_cli_upgrade_is_required(monkeypatch: pytest
         )
 
 
-def test_codex_provider_reports_ambiguous_model_access_rejection(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("diagnostic", [
+    "ERROR: The model `gpt-5.5` does not exist or you do not have access to it.",
+    "ERROR: The 'gpt-5.5' model is not supported when using Codex with a ChatGPT account.",
+])
+def test_codex_provider_reports_ambiguous_model_access_rejection(monkeypatch: pytest.MonkeyPatch, diagnostic: str) -> None:
     def fake_run(command, **kwargs):
         return SimpleNamespace(
             returncode=1,
             stdout="",
-            stderr="ERROR: The model `gpt-5.5` does not exist or you do not have access to it.",
+            stderr=diagnostic,
         )
 
     monkeypatch.setattr("alphonse.agent_v2.core.inference.openai_codex.shutil.which", lambda _bin: "/bin/codex")

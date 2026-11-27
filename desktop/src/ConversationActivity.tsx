@@ -13,7 +13,7 @@ export function ConversationActivity() {
     <div className="conversation-activity-body">
       <div className="conversation-activity-heading"><span className="conversation-activity-pulse" aria-hidden="true" />
         <strong>Alphonse is working</strong>
-
+        <span className="conversation-activity-grid" aria-hidden="true">{Array.from({ length: 9 }, (_, index) => <i key={index} />)}</span>
         <span className="conversation-activity-time" aria-hidden="true">{Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, "0")}</span>
       </div>
     </div>

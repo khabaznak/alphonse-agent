@@ -166,7 +166,7 @@ def test_model_settings_request_uses_validation_timeout(monkeypatch) -> None:
 
     client.set_inference_settings(provider_key="openai_codex", model_id="gpt-5.5")
 
-    assert captured == {"timeout": 35.0, "method": "set_inference_settings"}
+    assert captured == {"timeout": 85.0, "method": "set_inference_settings"}
 
 
 def test_daemon_ipc_system_one_settings_are_admin_only_and_mask_secrets(tmp_path) -> None:
@@ -1187,6 +1187,34 @@ def test_ipc_stop_preserves_replacement_socket():
         finally:
             server.stop()
             replacement.close()
+
+
+def test_ipc_listener_survives_temporary_request_thread_failure(monkeypatch):
+    import socket
+    import tempfile
+    import threading
+    from pathlib import Path
+    from alphonse.agent_v2.ipc import V2DaemonClient, V2DaemonServer
+
+    with tempfile.TemporaryDirectory(dir='/tmp', prefix='alp-ipc-') as directory:
+        path = Path(directory) / 'daemon.sock'
+        server = V2DaemonServer(SimpleNamespace(), path)
+        server.start()
+        try:
+            def thread_unavailable(_):
+                raise RuntimeError("can't start new thread")
+
+            with monkeypatch.context() as patch:
+                patch.setattr(threading.Thread, 'start', thread_unavailable)
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+                    connection.settimeout(2)
+                    connection.connect(str(path))
+                    assert connection.recv(1) == b''
+            assert server.is_serving()
+            assert V2DaemonClient(path).ping()['status'] == 'ready'
+        finally:
+            server.stop()
+            assert server.wait_quiescent(timeout=2)
 
 
 def test_daemon_exits_when_ipc_listener_dies():

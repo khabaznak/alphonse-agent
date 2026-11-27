@@ -32,3 +32,52 @@ it("offers a recovery route only when one was supplied for this request", () => 
   expect(renderToStaticMarkup(<ConversationTimelineEntry {...common} />)).not.toContain("Review request status");
   expect(renderToStaticMarkup(<ConversationTimelineEntry {...common} onReviewRecovery={() => {}} />)).toContain("Review request status");
 });
+
+it("only offers Outlook settings from a live recovery result for its owner", () => {
+  const message: ChatMessage = { id: "owner:hot", role: "assistant", content: "Refresh Microsoft access.",
+    private_reply_owner: "owner", private_outlook_inbox: { status: "refresh_required" } };
+  const common = { message, questions: [], user: "owner", timezone: "UTC", onDone: async () => {},
+    projectName: "", memoize: false, renderMarkdown: false, failures: [], onFailureDismissedChange: () => {},
+    onOpenOutlookSettings: () => {} };
+  expect(renderToStaticMarkup(<ConversationTimelineEntry {...common} />)).toContain("Open Outlook / Hotmail settings");
+  expect(renderToStaticMarkup(<ConversationTimelineEntry {...common} user="other" />)).not.toContain("Open Outlook / Hotmail settings");
+  expect(renderToStaticMarkup(<ConversationTimelineEntry {...common} message={{ ...message, private_outlook_inbox: {
+    status: "complete", result: { count: 0, observed_at: "2026-11-26T17:00:00Z", timezone: "UTC" },
+  } }} />))
+    .not.toContain("Open Outlook / Hotmail settings");
+});
+
+it("keeps contextual recovery owner-scoped, and drops unsupported actions in model prose", () => {
+  const id = "c".repeat(32);
+  const message: ChatMessage = {
+    id, role: "user", source: "desktop", content: "Fixture request",
+    failure_recovery: {
+      reply: "**Je ne peux pas confirmer le résultat.** [Consultez le journal](https://example.com)",
+      language: "fr-CA", activity: { label: "<b>Voir l’activité</b>", detail: "Vérification enregistrée." },
+    },
+  };
+  const common = { message, questions: [], user: "owner", timezone: "UTC", onDone: async () => {},
+    projectName: "", memoize: false, renderMarkdown: true,
+    failures: [{ messageId: id, failureCode: "source_unavailable", dismissed: false }], onFailureDismissedChange: () => {} };
+  const ownerHtml = renderToStaticMarkup(<ConversationTimelineEntry {...common} showFailureRecovery />);
+  expect(ownerHtml).toContain('lang="fr-CA"');
+  expect(ownerHtml).toContain("&lt;b&gt;Voir l’activité&lt;/b&gt;");
+  expect(ownerHtml).toContain("Consultez le journal");
+  expect(ownerHtml).not.toContain("href=");
+  expect(renderToStaticMarkup(<ConversationTimelineEntry {...common} />)).not.toContain("Je ne peux pas");
+  const malformed = { ...message, failure_recovery: { reply: "", language: "fr-CA" } };
+  expect(renderToStaticMarkup(<ConversationTimelineEntry {...common} message={malformed} showFailureRecovery />)).toContain("Alphonse could not complete this request");
+});
+
+it("keeps the work log available beside a report from the final reserved call", () => {
+  const message: ChatMessage = {
+    id: "d".repeat(32), role: "user", source: "desktop", content: "Fixture request",
+    failure_code: "action_limit", failure_recovery: { reply: "I found the catalog entry.", language: "en" },
+  };
+  const html = renderToStaticMarkup(<ConversationTimelineEntry message={message} questions={[]} user="owner"
+    timezone="UTC" onDone={async () => {}} projectName="" memoize={false} renderMarkdown
+    failures={[]} onFailureDismissedChange={() => {}} showFailureRecovery
+    workLogRequest={async () => { throw new Error("static render"); }} />);
+  expect(html).toContain("I found the catalog entry.");
+  expect(html).toContain("Work log");
+});

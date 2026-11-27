@@ -31,6 +31,12 @@ def ensure_telegram_origin_schema(conn):
     ) STRICT''')
 
 
+def ensure_telegram_receipt_schema(conn):
+    conn.execute("CREATE TABLE IF NOT EXISTS v2_owner_telegram_receipts (message_id TEXT PRIMARY KEY, status TEXT NOT NULL DEFAULT 'attempted') STRICT")
+    if 'status' not in {row['name'] for row in conn.execute('PRAGMA table_info(v2_owner_telegram_receipts)')}:
+        conn.execute("ALTER TABLE v2_owner_telegram_receipts ADD COLUMN status TEXT NOT NULL DEFAULT 'attempted'")
+
+
 def _digest(values):
     return hashlib.sha256(json.dumps(values, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
 
@@ -93,6 +99,7 @@ def enqueue_telegram_owner(queue: SQLiteMessageQueue, *, integration_id: str, up
         if _claim_mode_conflict(conn, fenced=True):
             raise RuntimeError('owner_worker_claim_mode_conflict')
         ensure_telegram_origin_schema(conn)
+        ensure_telegram_receipt_schema(conn)
         owner = _allowed(conn, integration_id, provider_user_id, chat_id)
         if owner is None:
             raise PermissionError('telegram_owner_identity_denied')
@@ -127,6 +134,7 @@ def enqueue_telegram_owner(queue: SQLiteMessageQueue, *, integration_id: str, up
             (message_id, owner['user_id'], integration_id, provider_user_id, chat_id, provider_message_id,
              update_id, owner['address_id'], owner['address_updated_at'], owner['integration_updated_at'],
              owner['credential_generation'], event_id, digest, update_digest))
+        conn.execute("INSERT INTO v2_owner_telegram_receipts (message_id,status) VALUES (?,'pending')", (message_id,))
         return message_id
 
 

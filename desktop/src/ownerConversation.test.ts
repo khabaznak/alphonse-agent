@@ -196,6 +196,61 @@ describe("explicit owner conversation transport", () => {
     expect(seen).toHaveBeenCalledExactlyOnceWith(id, "Listo.", "answer", effect);
   });
 
+  it.each([undefined, { bad: "surface" }])("acknowledges the private Gmail fallback when A2UI is absent or invalid", async (surface) => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "experimental_owner_status") return { owner_only: true, processing_ready: true, status: "ready" };
+      if (method === "experimental_owner_ingress") return { message_id: id };
+      if (method === "experimental_owner_take_draft") return {
+        message_id: id, message: "Private fallback", kind: "answer", private_gmail: true, private_a2ui: surface,
+        acknowledgement_token: token, delivery_status: "started_unconfirmed",
+      };
+      return { status: "client_acknowledged" };
+    });
+    const conversation = new OwnerConversation(request as OwnerRequest);
+    await conversation.send("Find the workshop message");
+    const shown = vi.fn();
+    await conversation.poll(shown);
+    expect(shown).toHaveBeenCalledWith(id, "Private fallback", "answer", undefined, "gmail", undefined);
+    expect(request).toHaveBeenLastCalledWith("experimental_owner_ack_draft", { message_id: id, acknowledgement_token: token });
+  });
+
+  it.each(["complete", "refresh_required"])("acknowledges the owner-only Outlook result with its %s status", async (outlookStatus) => {
+    const result = { count: 0, observed_at: "2026-11-26T17:00:00Z", timezone: "America/Mexico_City", locale: "es-MX" };
+    const request = vi.fn(async (method: string) => {
+      if (method === "experimental_owner_status") return { processing_ready: true, status: "ready" };
+      if (method === "experimental_owner_ingress") return { message_id: id };
+      if (method === "experimental_owner_take_draft") return {
+        message_id: id, message: "Hotmail Inbox result", kind: "answer", outlook_inbox_status: outlookStatus,
+        ...(outlookStatus === "complete" ? { outlook_inbox_result: result } : {}),
+        acknowledgement_token: token, delivery_status: "started_unconfirmed",
+      };
+      return { status: "client_acknowledged" };
+    });
+    const conversation = new OwnerConversation(request as OwnerRequest);
+    await conversation.send("Check my Hotmail Inbox");
+    const shown = vi.fn();
+    await conversation.poll(shown);
+    expect(shown).toHaveBeenCalledExactlyOnceWith(id, "Hotmail Inbox result", "answer", undefined, "outlook", undefined,
+      outlookStatus === "complete" ? { status: outlookStatus, result } : { status: outlookStatus });
+    expect(request).toHaveBeenLastCalledWith("experimental_owner_ack_draft", { message_id: id, acknowledgement_token: token });
+  });
+
+  it("rejects a malformed Outlook count receipt instead of displaying unverified fallback prose", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "experimental_owner_status") return { processing_ready: true, status: "ready" };
+      if (method === "experimental_owner_ingress") return { message_id: id };
+      return { message_id: id, message: "999 unread", kind: "answer", outlook_inbox_status: "complete",
+        outlook_inbox_result: { count: -1, observed_at: "2026-11-26T17:00:00Z", timezone: "UTC" },
+        acknowledgement_token: token, delivery_status: "started_unconfirmed" };
+    });
+    const conversation = new OwnerConversation(request as OwnerRequest);
+    await conversation.send("Check my Hotmail Inbox");
+    const shown = vi.fn();
+    await expect(conversation.poll(shown)).rejects.toThrow("The answer could not be confirmed.");
+    expect(shown).not.toHaveBeenCalled();
+    expect(request.mock.calls.map(([method]) => method)).not.toContain("experimental_owner_ack_draft");
+  });
+
   it("does not display or acknowledge an unknown pickup kind", async () => {
     const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
       if (method === "experimental_owner_status") return params?.message_id ? { status: "ready" } : { processing_ready: true };

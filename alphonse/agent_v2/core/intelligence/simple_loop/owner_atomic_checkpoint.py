@@ -109,47 +109,59 @@ def verify_finalized_owner_ack(queue: SQLiteMessageQueue, message_id: str, token
     try:
         with queue._connect() as conn:
             conn.execute('BEGIN')
-            row = conn.execute("""SELECT o.owner_id,o.peer_uid,o.payload_sha256,o.created_at,
-                    o.history_version,o.history_event_id,c.task_state_json,c.owner_id AS checkpoint_owner
-                FROM v2_trusted_owner_ingress o
-                JOIN v2_user_settings s ON s.key='admin_user_id' AND s.value=o.owner_id
-                JOIN v2_users u ON u.user_id=o.owner_id AND u.role IN ('admin','owner') AND u.is_active=1
-                JOIN v2_task_checkpoints c ON c.task_id=o.message_id AND c.owner_id=o.owner_id
-                WHERE o.message_id=? AND NOT EXISTS
-                    (SELECT 1 FROM v2_inbound_messages q WHERE q.message_id=o.message_id)""", (message_id,)).fetchone()
-            if row is None or row['peer_uid'] != os.getuid():
-                return False
-            raw = json.loads(row['task_state_json'])
-            metadata = raw['metadata']
-            marker = metadata['owner_read_desktop_pickup_started']
-            selected = metadata['owner_read_selected_draft']
-            state = CandidateState.restore(metadata[STATE_KEY]['state'])
             supplied = hashlib.sha256(token.encode('ascii')).hexdigest()
-            if (raw.get('task_id') != message_id or raw.get('message_id') != message_id
-                    or raw.get('user') != row['owner_id'] or raw.get('intelligence_engine') != 'single_loop_experimental'
-                    or state.task_id != message_id or state.actor != row['owner_id']
-                    or state.status not in {'completed', 'waiting_user'}
-                    or selected.get('kind') != ('answer' if state.status == 'completed' else 'question')
-                    or state.inflight or marker.get('status') != 'client_acknowledged'
-                    or not isinstance(marker.get('acknowledgement_sha256'), str)
-                    or not hmac.compare_digest(marker['acknowledgement_sha256'], supplied)
-                    or marker.get('answer_sha256') != selected.get('answer_sha256')
-                    or marker.get('answer_sha256') != hashlib.sha256(state.response.encode('utf-8')).hexdigest()):
-                return False
-            rows = conn.execute("""SELECT * FROM v2_conversation_events
-                WHERE source_message_id IN (?,?)""", (f'inbound:{message_id}', f'outbound:owner:{message_id}')).fetchall()
-            entries = {item['source_message_id']: (item['role'], item['content'], item['owner_user_id']) for item in rows}
-            observations = metadata['owner_read_observations']
-            if not isinstance(observations, dict) or selected.get('evidence_bindings_sha256') != _decision_digest(observations):
-                return False
-            from alphonse.agent_v2.core.messages.sqlite_queue import finalized_owner_history_matches
-            if not finalized_owner_history_matches(conn, message_id, row['owner_id'], raw):
-                return False
-            from .owner_clock import display_response
-            return entries == {f'inbound:{message_id}': ('user', raw['goal'], row['owner_id']),
-                               f'outbound:owner:{message_id}': ('assistant', display_response(state.response, observations), row['owner_id'])}
+            return _finalized_owner_reply(conn, message_id, supplied=supplied) is not None
     except Exception:
         return False
+
+
+def _finalized_owner_reply(conn, message_id: str, *, supplied=None, owner=None):
+    """Read the bound finalized reply. Caller authenticates the local owner."""
+    if supplied is None and not owner:
+        return None
+    row = conn.execute("""SELECT o.owner_id,o.peer_uid,o.payload_sha256,o.created_at,
+            o.history_version,o.history_event_id,c.task_state_json,c.owner_id AS checkpoint_owner
+        FROM v2_trusted_owner_ingress o
+        JOIN v2_user_settings s ON s.key='admin_user_id' AND s.value=o.owner_id
+        JOIN v2_users u ON u.user_id=o.owner_id AND u.role IN ('admin','owner') AND u.is_active=1
+        JOIN v2_task_checkpoints c ON c.task_id=o.message_id AND c.owner_id=o.owner_id
+        WHERE o.message_id=? AND NOT EXISTS
+            (SELECT 1 FROM v2_inbound_messages q WHERE q.message_id=o.message_id)""", (message_id,)).fetchone()
+    if row is None or row['peer_uid'] != os.getuid() or (owner is not None and row['owner_id'] != owner):
+        return None
+    raw = json.loads(row['task_state_json'])
+    metadata = raw['metadata']
+    marker = metadata['owner_read_desktop_pickup_started']
+    selected = metadata['owner_read_selected_draft']
+    state = CandidateState.restore(metadata[STATE_KEY]['state'])
+    if (raw.get('task_id') != message_id or raw.get('message_id') != message_id
+            or raw.get('user') != row['owner_id'] or raw.get('intelligence_engine') != 'single_loop_experimental'
+            or state.task_id != message_id or state.actor != row['owner_id']
+            or state.status not in {'completed', 'waiting_user'}
+            or selected.get('kind') != ('answer' if state.status == 'completed' else 'question')
+            or state.inflight or marker.get('status') != 'client_acknowledged'
+            or marker.get('channel') != 'desktop'
+            or (owner is not None and marker.get('claim_digest') != selected.get('claim_digest'))
+            or not isinstance(marker.get('acknowledgement_sha256'), str)
+            or re.fullmatch(r'[0-9a-f]{64}', marker['acknowledgement_sha256']) is None
+            or (supplied is not None and not hmac.compare_digest(marker['acknowledgement_sha256'], supplied))
+            or marker.get('answer_sha256') != selected.get('answer_sha256')
+            or marker.get('answer_sha256') != hashlib.sha256(state.response.encode('utf-8')).hexdigest()):
+        return None
+    rows = conn.execute("""SELECT * FROM v2_conversation_events
+        WHERE source_message_id IN (?,?)""", (f'inbound:{message_id}', f'outbound:owner:{message_id}')).fetchall()
+    entries = {item['source_message_id']: (item['role'], item['content'], item['owner_user_id']) for item in rows}
+    observations = metadata['owner_read_observations']
+    if not isinstance(observations, dict) or selected.get('evidence_bindings_sha256') != _decision_digest(observations):
+        return None
+    from alphonse.agent_v2.core.messages.sqlite_queue import finalized_owner_history_matches
+    if not finalized_owner_history_matches(conn, message_id, row['owner_id'], raw):
+        return None
+    from .owner_clock import display_response
+    if entries != {f'inbound:{message_id}': ('user', raw['goal'], row['owner_id']),
+                       f'outbound:owner:{message_id}': ('assistant', display_response(state.response, observations), row['owner_id'])}:
+        return None
+    return state, observations
 
 
 class OwnerAtomicCheckpoint:
@@ -205,6 +217,13 @@ class OwnerAtomicCheckpoint:
         try:
             with self._transaction() as conn:
                 _, raw, state, budget = self._load(conn, self.version)
+                if (tool_id == 'native.owner_disposable_handoff' and conn.execute(
+                        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_owner_steering'").fetchone()
+                        and conn.execute('SELECT 1 FROM v2_owner_steering WHERE message_id=? AND owner_id=?',
+                                         (self.task.message_id, state.actor)).fetchone()):
+                    # Fixture scope is pre-bound to the original authenticated
+                    # request; any steering requires a new fixture scope.
+                    return False
                 pending = budget.to_dict()['reservations'].get(reservation_id)
                 return (state.status == 'running' and state.inflight == reservation_id
                         and isinstance(pending, dict) and pending['status'] == 'reserved' and pending['kind'] == kind
@@ -411,7 +430,13 @@ class OwnerAtomicCheckpoint:
                     or selected.get('evidence_bindings_sha256') != _decision_digest(observations)):
                 raise CheckpointConflict('owner_desktop_pickup_unavailable')
             from .owner_gmail import OWNER_GMAIL_TOOL_ID, valid_owner_gmail_locked
-            from .owner_reminder_create import OWNER_REMINDER_CREATE_TOOL_ID, valid_reminder_locked
+            from .owner_outlook import OWNER_OUTLOOK_TOOL_ID, outlook_inbox_result, valid_owner_outlook_locked
+            from .owner_calendar import OWNER_CALENDAR_TOOL_ID, valid_owner_calendar_locked
+            from .owner_gmail_search import (
+                OWNER_GMAIL_SEARCH_TOOL_ID, valid_owner_gmail_search_locked,
+            )
+            from .owner_private_history import render_private_card
+            from .owner_reminder_create import OWNER_REMINDER_CREATE_TOOL_ID, REMINDER_REJECTION, valid_reminder_locked
             from .owner_schedule_create import SCHEDULED_TASK_TOOL_ID, valid_schedule_locked
             from .owner_schedule_cancel import valid_cancel_locked
             from .owner_knowledge_snapshot import OWNER_KNOWLEDGE_TOOL_ID, matches_owner_knowledge_locked
@@ -423,12 +448,31 @@ class OwnerAtomicCheckpoint:
                     raise CheckpointConflict('owner_knowledge_binding_unavailable')
                 if (binding.get('tool_id') == OWNER_GMAIL_TOOL_ID
                         and (state.status != 'completed' or not valid_owner_gmail_locked(conn, self.task.user,
-                                binding.get('gmail_observation'), context=context))):
+                                binding.get('gmail_observation'), context=context,
+                                desktop_pickup=not self.scheduled_origin))):
                     raise CheckpointConflict('owner_gmail_authority_unavailable')
-                if (binding.get('tool_id') == OWNER_REMINDER_CREATE_TOOL_ID
-                        and not valid_reminder_locked(conn, self.task.user, binding.get('arguments'),
-                                                      binding.get('reminder_observation'), task=self.task)):
-                    raise CheckpointConflict('owner_reminder_unavailable')
+                if (binding.get('tool_id') == OWNER_OUTLOOK_TOOL_ID
+                        and (self.scheduled_origin or state.status != 'completed' or not valid_owner_outlook_locked(
+                            conn, self.task.user, binding.get('arguments'), binding.get('outlook_observation'),
+                            context=context))):
+                    raise CheckpointConflict('owner_outlook_authority_unavailable')
+                if (binding.get('tool_id') == OWNER_CALENDAR_TOOL_ID
+                        and (state.status != 'completed' or not valid_owner_calendar_locked(
+                            conn, self.task.user, binding.get('arguments'), binding.get('calendar_observation'),
+                            context=context))):
+                    raise CheckpointConflict('owner_calendar_authority_unavailable')
+                if (binding.get('tool_id') == OWNER_GMAIL_SEARCH_TOOL_ID
+                        and (state.status != 'completed' or not valid_owner_gmail_search_locked(
+                            conn, self.task.user, binding.get('arguments'), binding.get('gmail_search_observation'),
+                            context=context))):
+                    raise CheckpointConflict('owner_gmail_search_authority_unavailable')
+                if binding.get('tool_id') == OWNER_REMINDER_CREATE_TOOL_ID:
+                    if (binding.get('arguments') == {} and binding.get('reminder_rejection') == REMINDER_REJECTION
+                            and binding.get('observation_sha256') == observation_digest(REMINDER_REJECTION)):
+                        pass
+                    elif not valid_reminder_locked(conn, self.task.user, binding.get('arguments'),
+                                                   binding.get('reminder_observation'), task=self.task):
+                        raise CheckpointConflict('owner_reminder_unavailable')
                 if (binding.get('tool_id') == SCHEDULED_TASK_TOOL_ID
                         and not (valid_cancel_locked if binding.get('arguments', {}).get('operation') == 'cancel'
                                  else valid_schedule_locked)(conn, self.task.user, binding.get('arguments'),
@@ -443,10 +487,28 @@ class OwnerAtomicCheckpoint:
             metadata.pop('owner_read_ready_handoff', None)
             result = self.store._write(conn, row, raw, state, budget)
             from .owner_clock import display_response
-            response = {'message_id': self.task.message_id, 'message': display_response(state.response, observations),
+            timezone_provider = context.user_timezone_provider
+            timezone_name = (timezone_provider(self.task.user)
+                if callable(timezone_provider) and any(binding.get('tool_id') in {
+                    OWNER_OUTLOOK_TOOL_ID, OWNER_GMAIL_SEARCH_TOOL_ID, OWNER_CALENDAR_TOOL_ID,
+                } for binding in observations.values()) else None)
+            response = {'message_id': self.task.message_id,
+                        'message': display_response(state.response, observations, private_desktop=True,
+                                                    timezone_name=timezone_name),
                         'kind': selected['kind'],
                         'delivery_status': 'started_unconfirmed', 'acknowledgement_token': acknowledgement_token}
+            card = render_private_card(self.task.message_id, state.response, observations, timezone_name)
+            if card is not None:
+                provider, envelopes = card
+                response['private_' + provider] = True
+                response['private_a2ui'] = envelopes
             for binding in observations.values():
+                if binding.get('tool_id') == OWNER_OUTLOOK_TOOL_ID:
+                    outlook = binding['outlook_observation']
+                    response['outlook_inbox_status'] = outlook.get('reason', outlook['status'])
+                    if outlook['status'] == 'complete':
+                        response['outlook_inbox_result'] = outlook_inbox_result(outlook,
+                            locale_hint=state.response, timezone_name=timezone_name)
                 if (binding.get('tool_id') == SCHEDULED_TASK_TOOL_ID
                         and binding.get('arguments', {}).get('operation') == 'cancel'):
                     effect = binding['schedule_observation']
@@ -637,9 +699,12 @@ class OwnerAtomicCheckpoint:
         CandidateState.restore(state.snapshot())
         with self._transaction() as conn:
             row, raw, previous, budget = self._load(conn, self.version)
+            # A failed or cancelled run can retain an unresolved reservation.
+            # Recording the blocker must neither settle the action nor permit replay.
             if (previous.status != 'running' or state.task_id != previous.task_id or state.actor != previous.actor
                     or state.goal_source != previous.goal_source or state.evidence_sources != previous.evidence_sources
-                    or state.inflight != previous.inflight or (state.status != 'running' and state.inflight)):
+                    or state.inflight != previous.inflight
+                    or (state.inflight and (state.status in {'completed', 'waiting_user'} or state.response))):
                 raise CheckpointConflict('owner_atomic_state_transition_invalid')
             marker = raw['metadata'].get('owner_read_pending_decision')
             if state.status in {'completed', 'waiting_user'}:
@@ -815,7 +880,7 @@ class OwnerAtomicCheckpoint:
 
     def settle_model(self, *, expected_version: int, reservation_id: str, outcome: str,
                      input_tokens: int | None, output_tokens: int | None, decision: Any = None,
-                     projection_fingerprint: str = '') -> Checkpoint:
+                     projection_fingerprint: str = '', parse_stage: str | None = None) -> Checkpoint:
         if outcome not in {'success', 'failure', 'timeout'}:
             raise ValueError('owner_atomic_outcome_invalid')
         decision_digest = _decision_digest(decision)
@@ -826,9 +891,11 @@ class OwnerAtomicCheckpoint:
             row, raw, state, budget = self._load(conn, expected_version)
             expected = {'reservation_id': reservation_id, 'kind': 'model', 'tool_id': '', 'arguments': None,
                         'claim_digest': _claim_digest(self.receipt)}
-            if state.inflight != reservation_id or raw['metadata'].get('owner_read_pending_action') != expected:
+            if (state.status != 'running' or state.inflight != reservation_id
+                    or raw['metadata'].get('owner_read_pending_action') != expected):
                 raise CheckpointConflict('owner_atomic_reservation_mismatch')
-            budget.settle(reservation_id, outcome=outcome, input_tokens=input_tokens, output_tokens=output_tokens)
+            budget.settle(reservation_id, outcome=outcome, input_tokens=input_tokens, output_tokens=output_tokens,
+                          parse_stage=parse_stage)
             state.inflight = ''
             del raw['metadata']['owner_read_pending_action']
             raw['metadata'].pop('owner_activity_intent', None)
@@ -858,7 +925,8 @@ class OwnerAtomicCheckpoint:
                         or projection_marker['steering_ids'] != [item['id'] for item in steering if item['reservation_id'] != reservation_id]
                         or projection_marker['steering_sha256'] != _decision_digest([[item['id'], item['content_digest']] for item in included])):
                     raise CheckpointConflict('owner_steering_projection_unavailable')
-            if not stale:
+            retry_parse = parse_stage is not None and state.request_parse_repair(budget)
+            if not stale and not retry_parse:
                 raw['metadata']['owner_read_pending_decision'] = {
                     'reservation_id': reservation_id, 'claim_digest': _claim_digest(self.receipt),
                     'decision_sha256': decision_digest, 'projection_sha256': projection_fingerprint,
@@ -895,7 +963,8 @@ class OwnerAtomicCheckpoint:
             expected = {'reservation_id': reservation_id, 'kind': 'tool', 'tool_id': tool_id, 'arguments': arguments,
                         'claim_digest': _claim_digest(self.receipt)}
             observations = raw['metadata'].get('owner_read_observations')
-            if (state.inflight != reservation_id or json.dumps(raw['metadata'].get('owner_read_pending_action'), sort_keys=True) != json.dumps(expected, sort_keys=True)
+            if (state.status != 'running' or state.inflight != reservation_id
+                    or json.dumps(raw['metadata'].get('owner_read_pending_action'), sort_keys=True) != json.dumps(expected, sort_keys=True)
                     or not isinstance(observations, dict) or evidence_ref == state.goal_source
                     or evidence_ref in observations or evidence_ref in state.evidence_sources):
                 raise CheckpointConflict('owner_atomic_observation_binding_mismatch')
@@ -928,6 +997,15 @@ class OwnerAtomicCheckpoint:
             from .owner_gmail import OWNER_GMAIL_TOOL_ID
             if tool_id == OWNER_GMAIL_TOOL_ID:
                 observations[evidence_ref]['gmail_observation'] = deepcopy(observation)
+            from .owner_outlook import OWNER_OUTLOOK_TOOL_ID
+            if tool_id == OWNER_OUTLOOK_TOOL_ID:
+                observations[evidence_ref]['outlook_observation'] = deepcopy(observation)
+            from .owner_calendar import OWNER_CALENDAR_TOOL_ID
+            if tool_id == OWNER_CALENDAR_TOOL_ID:
+                observations[evidence_ref]['calendar_observation'] = deepcopy(observation)
+            from .owner_gmail_search import OWNER_GMAIL_SEARCH_TOOL_ID
+            if tool_id == OWNER_GMAIL_SEARCH_TOOL_ID:
+                observations[evidence_ref]['gmail_search_observation'] = deepcopy(observation)
             if tool_id in WEB_TOOL_IDS:
                 observations[evidence_ref]['web_observation'] = deepcopy(observation)
             state.evidence_sources.append(evidence_ref)
@@ -937,6 +1015,41 @@ class OwnerAtomicCheckpoint:
             result = self.store._write(conn, row, raw, state, budget)
         self.version = result.version
         return result
+
+    def settle_disposable_handoff(self, *, reservation_id, arguments, observation, context):
+        """Settle an independently recorded fixture handoff without claiming a change."""
+        from .owner_disposable_handoff import DisposableHandoffService, OWNER_DISPOSABLE_HANDOFF_TOOL_ID
+
+        service = getattr(context, '_dojo_handoff_service', None)
+        if (type(service) is not DisposableHandoffService or context.messages is not self.queue
+                or context.claim_receipt is not self.receipt or context.is_cancelled() is not False
+                or not service.valid_observation(actor=self.task.user, parent_id=self.task.task_id,
+                                                 observation=observation)):
+            raise CheckpointConflict('owner_disposable_handoff_unavailable')
+        with self._transaction() as conn:
+            row, raw, state, budget = self._load(conn, self.version)
+            expected = {'reservation_id': reservation_id, 'kind': 'tool', 'tool_id': OWNER_DISPOSABLE_HANDOFF_TOOL_ID,
+                        'arguments': arguments, 'claim_digest': _claim_digest(self.receipt)}
+            observations = raw['metadata'].get('owner_read_observations')
+            if (state.status != 'running' or state.inflight != reservation_id or context.is_cancelled() is not False
+                    or raw['metadata'].get('owner_read_pending_action') != expected
+                    or not isinstance(observations, dict) or set(observations) != set(state.evidence_sources)
+                    or any(item.get('tool_id') == OWNER_DISPOSABLE_HANDOFF_TOOL_ID for item in observations.values())
+                    or observation['effect_status'] != 'not_requested'
+                    or any(observation.get(key) != arguments[key] for key in ('worker', 'target', 'operation'))):
+                raise CheckpointConflict('owner_disposable_handoff_unavailable')
+            budget.settle(reservation_id, outcome='success' if observation['status'] in {'accepted', 'completed'} else 'failure')
+            ref = 'owner-handoff:' + reservation_id.removeprefix('tool-')
+            observations[ref] = {'actor': state.actor, 'tool_id': OWNER_DISPOSABLE_HANDOFF_TOOL_ID,
+                'arguments': deepcopy(arguments), 'observation_sha256': observation_digest(observation),
+                'handoff_observation': deepcopy(observation)}
+            state.evidence_sources.append(ref)
+            state.inflight = ''
+            del raw['metadata']['owner_read_pending_action']
+            raw['metadata'].pop('owner_activity_intent', None)
+            result = self.store._write(conn, row, raw, state, budget)
+        self.version = result.version
+        return state, ref
 
     def settle_dojo_bash(self, *, expected_version: int, reservation_id: str,
                          arguments: dict, evidence_ref: str, observation: dict,
@@ -957,7 +1070,8 @@ class OwnerAtomicCheckpoint:
             expected = {'reservation_id': reservation_id, 'kind': 'tool', 'tool_id': 'native.bash',
                         'arguments': arguments, 'claim_digest': _claim_digest(self.receipt)}
             observations = raw['metadata'].get('owner_read_observations')
-            if (state.inflight != reservation_id or raw['metadata'].get('owner_read_pending_action') != expected
+            if (state.status != 'running' or state.inflight != reservation_id
+                    or raw['metadata'].get('owner_read_pending_action') != expected
                     or not isinstance(observations, dict) or evidence_ref == state.goal_source
                     or evidence_ref in observations or evidence_ref in state.evidence_sources):
                 raise CheckpointConflict('owner_atomic_dojo_bash_unavailable')
@@ -1196,7 +1310,8 @@ class OwnerAtomicCheckpoint:
         self.version = result.version
         return result
 
-    def commit_owner_reminder(self, *, context, decision, projection_fingerprint, now_ms):
+    def commit_owner_reminder(self, *, context, decision, projection_fingerprint, now_ms,
+                              continue_on_rejection=False):
         """Atomically create one local reminder and select its truthful confirmation.
 
         The caller must serialize this entire operation with owner cancellation.
@@ -1206,7 +1321,7 @@ class OwnerAtomicCheckpoint:
         from datetime import datetime, timezone
         from zoneinfo import ZoneInfo
         from .owner_clock import OWNER_CLOCK_TOOL_ID, valid_clock_observation
-        from .owner_reminder_create import OWNER_REMINDER_CREATE_TOOL_ID, validate_reminder_request
+        from .owner_reminder_create import OWNER_REMINDER_CREATE_TOOL_ID, REMINDER_REJECTION, validate_reminder_request
         from .prerequisite import MissingPrerequisite
         from alphonse.agent_v2.owner_desktop_reminders import OwnerDesktopReminders
 
@@ -1226,6 +1341,8 @@ class OwnerAtomicCheckpoint:
                     or not _matches_decision(marker, self.receipt, decision, projection_fingerprint)
                     or not isinstance(observations, dict) or set(observations) != set(state.evidence_sources)):
                 raise CheckpointConflict('owner_reminder_unavailable')
+            if any(item.get('tool_id') == OWNER_REMINDER_CREATE_TOOL_ID for item in observations.values()):
+                raise CheckpointConflict('owner_reminder_request_already_handled')
             clock_bindings = [item for item in observations.values() if item.get('tool_id') == OWNER_CLOCK_TOOL_ID]
             execution = context.tool_execution_context(self.task)
             if not clock_bindings:
@@ -1247,54 +1364,72 @@ class OwnerAtomicCheckpoint:
                 # reminder: the existing validator remains in force.
                 from .owner_clarification import load_bound_owner_exchange
                 load_bound_owner_exchange(conn, self.task)
-            canonical = validate_reminder_request(self.task, args, zone,
-                observed_at=clock_bindings[-1]['clock_observation']['observed_at_utc'])
-            now = datetime.now(timezone.utc)
-            due = datetime.fromisoformat(canonical['due_at'])
-            # Time spent interpreting the request counts against a relative
-            # duration. Never save an already-expired reminder, but do not
-            # reject a future one merely because less than a minute remains.
-            if due <= now:
-                raise ValueError('owner_reminder_time_expired')
-            reservation = 'reminder-' + secrets.token_hex(16)
-            budget.reserve(reservation, kind='tool', amounts={'actions': 1, 'model_calls': 0,
-                'input_tokens': 0, 'output_tokens': 0}, now_ms=now_ms)
-            OwnerDesktopReminders.ensure_table(conn)
-            existing = conn.execute('SELECT 1 FROM owner_desktop_reminders WHERE owner_id=? AND request_id=?',
-                                    (self.task.user, self.task.message_id)).fetchone()
-            if existing is not None:
-                raise CheckpointConflict('owner_reminder_request_already_exists')
-            effect = OwnerDesktopReminders.create_locked(conn, self.task.user, canonical['message'],
-                canonical['due_at'], self.task.message_id, now=now)
-            if effect['state'] != 'pending' or context.is_cancelled() is not False:
-                raise CheckpointConflict('owner_reminder_unavailable')
-            observation = {'id': effect['id'], 'message': canonical['message'],
-                           'due_at': effect['due_at'], 'state': effect['state']}
-            ref = 'owner-reminder:' + effect['id']
-            observations[ref] = {'actor': state.actor, 'tool_id': OWNER_REMINDER_CREATE_TOOL_ID,
-                'arguments': deepcopy(args), 'observation_sha256': observation_digest(observation),
-                'reminder_observation': deepcopy(observation)}
-            state.evidence_sources.append(ref)
-            local_due = due.astimezone(ZoneInfo(zone)).isoformat()
-            state.status = 'completed'
-            state.response = (f"Reminder saved: {canonical['message']} — {local_due} ({zone}). "
-                              'Reminders appear when Desktop is open.')
-            budget.settle(reservation, outcome='success')
-            del raw['metadata']['owner_read_pending_decision']
-            raw['metadata']['owner_read_selected_draft'] = {
-                'schema_version': 1, 'kind': 'answer', 'decision_sha256': marker['decision_sha256'],
-                'answer_sha256': hashlib.sha256(state.response.encode('utf-8')).hexdigest(),
-                'projection_sha256': marker['projection_sha256'], 'model_reservation_id': marker['reservation_id'],
-                'claim_digest': marker['claim_digest'], 'evidence_refs': list(state.evidence_sources),
-                'evidence_bindings_sha256': _decision_digest(observations),
-            }
-            # The effect and its recoverable confirmation become durable together.
-            # This transaction runs under the cancellation handoff lock.
-            raw['metadata']['owner_read_ready_handoff'] = {
-                'schema_version': 1, 'claim_digest': _claim_digest(self.receipt),
-                'selected_sha256': _decision_digest(raw['metadata']['owner_read_selected_draft']),
-            }
-            result = self.store._write(conn, row, raw, state, budget)
+            try:
+                canonical = validate_reminder_request(self.task, args, zone,
+                    observed_at=clock_bindings[-1]['clock_observation']['observed_at_utc'])
+            except ValueError as exc:
+                if (continue_on_rejection is not True
+                        or exc.args not in (('owner_reminder_request_invalid',), ('owner_reminder_time_invalid',))):
+                    raise
+                reservation = 'reminder-' + secrets.token_hex(16)
+                budget.reserve(reservation, kind='tool',
+                    amounts={'actions': 1, 'model_calls': 0, 'input_tokens': 0, 'output_tokens': 0}, now_ms=now_ms)
+                budget.settle(reservation, outcome='failure')
+                ref = 'owner-reminder-rejected:' + reservation.removeprefix('reminder-')
+                observations[ref] = {'actor': state.actor, 'tool_id': OWNER_REMINDER_CREATE_TOOL_ID,
+                    'arguments': {}, 'observation_sha256': observation_digest(REMINDER_REJECTION),
+                    'reminder_rejection': deepcopy(REMINDER_REJECTION)}
+                state.evidence_sources.append(ref)
+                del raw['metadata']['owner_read_pending_decision']
+                raw['metadata'].pop('owner_steering_pending_projection', None)
+                result = self.store._write(conn, row, raw, state, budget)
+            else:
+                now = datetime.now(timezone.utc)
+                due = datetime.fromisoformat(canonical['due_at'])
+                # Time spent interpreting the request counts against a relative
+                # duration. Never save an already-expired reminder, but do not
+                # reject a future one merely because less than a minute remains.
+                if due <= now:
+                    raise ValueError('owner_reminder_time_expired')
+                reservation = 'reminder-' + secrets.token_hex(16)
+                budget.reserve(reservation, kind='tool', amounts={'actions': 1, 'model_calls': 0,
+                    'input_tokens': 0, 'output_tokens': 0}, now_ms=now_ms)
+                OwnerDesktopReminders.ensure_table(conn)
+                existing = conn.execute('SELECT 1 FROM owner_desktop_reminders WHERE owner_id=? AND request_id=?',
+                                        (self.task.user, self.task.message_id)).fetchone()
+                if existing is not None:
+                    raise CheckpointConflict('owner_reminder_request_already_exists')
+                effect = OwnerDesktopReminders.create_locked(conn, self.task.user, canonical['message'],
+                    canonical['due_at'], self.task.message_id, now=now)
+                if effect['state'] != 'pending' or context.is_cancelled() is not False:
+                    raise CheckpointConflict('owner_reminder_unavailable')
+                observation = {'id': effect['id'], 'message': canonical['message'],
+                               'due_at': effect['due_at'], 'state': effect['state']}
+                ref = 'owner-reminder:' + effect['id']
+                observations[ref] = {'actor': state.actor, 'tool_id': OWNER_REMINDER_CREATE_TOOL_ID,
+                    'arguments': deepcopy(args), 'observation_sha256': observation_digest(observation),
+                    'reminder_observation': deepcopy(observation)}
+                state.evidence_sources.append(ref)
+                local_due = due.astimezone(ZoneInfo(zone)).isoformat()
+                state.status = 'completed'
+                state.response = (f"Reminder saved: {canonical['message']} — {local_due} ({zone}). "
+                                  'Reminders appear when Desktop is open.')
+                budget.settle(reservation, outcome='success')
+                del raw['metadata']['owner_read_pending_decision']
+                raw['metadata']['owner_read_selected_draft'] = {
+                    'schema_version': 1, 'kind': 'answer', 'decision_sha256': marker['decision_sha256'],
+                    'answer_sha256': hashlib.sha256(state.response.encode('utf-8')).hexdigest(),
+                    'projection_sha256': marker['projection_sha256'], 'model_reservation_id': marker['reservation_id'],
+                    'claim_digest': marker['claim_digest'], 'evidence_refs': list(state.evidence_sources),
+                    'evidence_bindings_sha256': _decision_digest(observations),
+                }
+                # The effect and its recoverable confirmation become durable together.
+                # This transaction runs under the cancellation handoff lock.
+                raw['metadata']['owner_read_ready_handoff'] = {
+                    'schema_version': 1, 'claim_digest': _claim_digest(self.receipt),
+                    'selected_sha256': _decision_digest(raw['metadata']['owner_read_selected_draft']),
+                }
+                result = self.store._write(conn, row, raw, state, budget)
         self.version = result.version
         return state
 

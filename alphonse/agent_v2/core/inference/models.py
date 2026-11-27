@@ -9,6 +9,23 @@ from typing import Any, Callable
 from alphonse.agent_v2.core.core import ToolDescriptor
 
 
+RESPONSE_PARSE_STAGES = frozenset({
+    'outer_object', 'arguments_not_string', 'arguments_invalid_json', 'arguments_not_object',
+})
+
+
+class ModelResponseParseError(ValueError):
+    """A rejected response with only allowlisted diagnostics and reported usage."""
+
+    def __init__(self, stage: str, usage: dict[str, int]) -> None:
+        if type(stage) is not str or stage not in RESPONSE_PARSE_STAGES:
+            raise ValueError('model_response_parse_stage_invalid')
+        super().__init__('openai_codex_invalid_json')
+        self.response_stage = stage
+        self.usage = {key: usage[key] for key in ('input_tokens', 'output_tokens')
+                      if key in usage and type(usage[key]) is int and usage[key] >= 0}
+
+
 class InferencePurpose(str, Enum):
     """Reason a CAPD node is asking for inference."""
 

@@ -1,14 +1,82 @@
-"""Read-only, bounded schedule occurrence projection. Definitions are never mutated."""
+"""Bounded Agenda projection for scheduled work and the owner's Google Calendar."""
+import os
 import re
+import sqlite3
 from itertools import islice
 from dateutil.rrule import rrulestr
 from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from alphonse.agent_v2.core.scheduled_tasks import compute_next_run_at, _parse_datetime
+from alphonse.agent_v2.integrations.oauth import SCOPES
+from alphonse.agent_v2.services.project_check_worker import CheckStopped
 
 
-def agenda(runtime, *, actor, start_day, end_day):
+def _calendar_owner(runtime, actor):
+    owner = runtime.user_store.admin_user()
+    return owner is not None and owner.user_id == actor and owner.is_active and owner.role in ('owner', 'admin')
+
+
+def _calendar_source_status(runtime, actor):
+    """Report local owner configuration without fetching tokens or events."""
+    if not _calendar_owner(runtime, actor):
+        return None
+    service = getattr(runtime, "owner_calendar_service", None)
+    if service is None:
+        return "unavailable"
+    try:
+        binding, failure = service.binding(actor)
+        if binding is not None:
+            return "connected"
+        if failure == "calendar_choice_required":
+            return "selection_required"
+        reconnect_required = False
+        for record in service.accounts.integrations.list(provider_key="google"):
+            connection = record.connection
+            if connection.get("owner_user_id") == actor and "calendar_read" in connection.get("capabilities", ()):
+                if (record.enabled and connection.get("status") == "connected"
+                        and connection.get("health_code") == "healthy" and record.credential_ref
+                        and SCOPES["google"]["calendar_read"] in connection.get("granted_scopes", ())
+                        and not record.revocation_pending and not record.credential_deletion_pending):
+                    return "grant_required"
+                if connection.get("status") != "disconnected":
+                    reconnect_required = True
+        return "reconnect_required" if reconnect_required else "not_connected"
+    except (sqlite3.Error, OSError, KeyError, ValueError, TypeError):
+        return "unavailable"
+
+
+def _calendar_events(runtime, actor, first, end, zone):
+    service = runtime.owner_calendar_service
+
+    def guard():
+        if not _calendar_owner(runtime, actor):
+            raise CheckStopped('blocked', 'agenda_calendar_owner_changed')
+
+    try:
+        if (not os.path.samefile(runtime.user_store.db_path, service.accounts.integrations.db_path)
+                or not os.path.samefile(runtime.user_store.db_path, service.accounts.users.db_path)):
+            return {'calendar_source_status': 'unavailable', 'calendar_event_status': 'unavailable'}
+        observation = service.observe_agenda(actor, first, end, zone=zone, guard=guard)
+        guard()
+        if observation['status'] in ('complete', 'partial') and observation['authority'] == service.binding(actor)[0]:
+            events = [{'id': f'google-calendar:{index}', 'title': event['title'], 'start': event['start'],
+                       'end': event['end'], 'all_day': event['all_day'], 'end_unspecified': event['end_unspecified']}
+                      for index, event in enumerate(observation['events'])]
+            return {'calendar_source_status': 'connected', 'calendar_event_status': observation['status'],
+                    'calendar_events': events}
+        reason = observation.get('reason')
+        if reason == 'reconnect_required':
+            return {'calendar_source_status': 'reconnect_required', 'calendar_event_status': 'unavailable'}
+        if reason == 'api_disabled':
+            return {'calendar_source_status': 'connected', 'calendar_event_status': 'api_disabled'}
+    except (CheckStopped, sqlite3.Error, OSError, ValueError, TypeError, KeyError):
+        pass
+    status = _calendar_source_status(runtime, actor)
+    return {'calendar_source_status': status, 'calendar_event_status': 'unavailable'} if status is not None else {}
+
+
+def agenda(runtime, *, actor, start_day, end_day, include_owner_calendar=False, include_calendar_events=False):
     member = runtime.user_store.get_user(actor)
     if member is None or not member.is_active:
         raise PermissionError("agenda_actor_required")
@@ -95,6 +163,13 @@ def agenda(runtime, *, actor, start_day, end_day):
                 break
         if len(items) >= 500:
             break
-    return {"items": sorted(items, key=lambda item: (item["at"], item["id"])), "timezone": str(zone),
-            "start_day": start_day, "end_day": end_day, "truncated": truncated or len(tasks) == 1000,
-            "unavailable_sources": ["Appointments and household calendar feeds are not connected."]}
+    result = {"items": sorted(items, key=lambda item: (item["at"], item["id"])), "timezone": str(zone),
+              "start_day": start_day, "end_day": end_day, "truncated": truncated or len(tasks) == 1000,
+              "unavailable_sources": []}
+    if include_owner_calendar:
+        status = _calendar_source_status(runtime, actor)
+        if status == 'connected' and include_calendar_events:
+            result.update(_calendar_events(runtime, actor, first, end, zone))
+        elif status is not None:
+            result["calendar_source_status"] = status
+    return result

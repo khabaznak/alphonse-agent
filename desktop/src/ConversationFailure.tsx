@@ -1,3 +1,20 @@
+import ReactMarkdown from "react-markdown";
+import type { FailureRecovery } from "./conversationFailures";
+
+/** A blocked request can still provide a conversational next step. */
+export function ConversationFailureRecovery({ recovery }: { recovery: FailureRecovery }) {
+  return <article className="message assistant conversation-message conversation-failure-recovery" aria-label="Alphonse" lang={recovery.language}>
+    <div className="conversation-failure-speaker" aria-hidden="true">Alphonse</div>
+    <div className="message-markdown" dir="auto">
+      <ReactMarkdown allowedElements={["p", "ol", "ul", "li", "strong", "em", "br"]} unwrapDisallowed skipHtml>{recovery.reply}</ReactMarkdown>
+    </div>
+    {recovery.activity && <details className="conversation-failure-activity" dir="auto">
+      <summary>{recovery.activity.label}</summary>
+      <ul><li>{recovery.activity.detail}</li></ul>
+    </details>}
+  </article>;
+}
+
 /** Dismissal collapses the notice without changing the request or recovery state. */
 export function ConversationFailure({ message, dismissed, onDismissedChange, onReviewRecovery, onOpenModelSettings, onDraftQuestion, onViewWorkLog, recoveryTriggerId, hasWorkLog = false }: {
   message: string; dismissed: boolean; onDismissedChange: (dismissed: boolean) => void;

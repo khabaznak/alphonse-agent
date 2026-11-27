@@ -1,13 +1,38 @@
 /** Opt-in owner-conversation transport; the daemon remains the authority. */
-import type { CommittedEffect } from "./types";
+import type { CommittedEffect, OutlookInboxOutcome, OutlookInboxResult, OutlookInboxStatus } from "./types";
+import { decodePrivateProviderSurface, type A2uiSurface } from "./a2ui";
+import { decodeFailureRecovery, type FailureRecovery } from "./conversationFailures";
 export type OwnerRequest = <T>(method: string, params?: Record<string, unknown>) => Promise<T>;
 
 type Pending = { messageId: string; pickupStarted: boolean; paused?: boolean; acknowledgementToken?: string; acknowledgementInFlight?: boolean; acknowledgementRetryAttempted?: boolean };
 type Status = "pending" | "continuation_paused" | "continuation_accepted" | "continuation_declined" | "ready" | "started_unconfirmed" | "client_acknowledged" | "failed" | "unavailable";
 export type OwnerCapability = { owner_only?: boolean; processing_ready?: boolean; continuation_available?: boolean; blocking_reason?: string | null; paused_legacy_requests?: number };
-type StatusReply = OwnerCapability & { status?: Status; failure_code?: string };
-type Pickup = { message_id: string; message: string; acknowledgement_token: string; delivery_status: string; kind?: "answer" | "question"; committed_effect?: CommittedEffect };
+type StatusReply = OwnerCapability & { status?: Status; failure_code?: string; failure_recovery?: unknown };
+type Pickup = { message_id: string; message: string; acknowledgement_token: string; delivery_status: string; kind?: "answer" | "question"; committed_effect?: CommittedEffect; private_calendar?: true; private_gmail?: true; private_a2ui?: unknown; outlook_inbox_status?: OutlookInboxStatus; outlook_inbox_result?: unknown };
 type OwnerIngressReply = { message_id: string; accepted_at?: string };
+const OUTLOOK_INBOX_STATUSES: ReadonlySet<OutlookInboxStatus> = new Set([
+  "complete", "inbox_access_required", "account_ambiguous", "paused", "refresh_required",
+  "reconnect_required", "provider_denied", "provider_busy", "read_unavailable",
+]);
+
+function decodeOutlookInboxResult(value: unknown): OutlookInboxResult | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const { count, observed_at, timezone, locale } = value as Record<string, unknown>;
+  if (typeof count !== "number" || !Number.isSafeInteger(count) || count < 0
+      || typeof observed_at !== "string" || observed_at.length > 40
+      || !/^\d{4}-\d{2}-\d{2}T.*(?:Z|[+-]\d{2}:\d{2})$/.test(observed_at) || !Number.isFinite(Date.parse(observed_at))
+      || typeof timezone !== "string" || !timezone || timezone.length > 64) return undefined;
+  try {
+    new Intl.DateTimeFormat(undefined, { timeZone: timezone });
+  } catch {
+    return undefined;
+  }
+  let canonicalLocale: string | undefined;
+  if (typeof locale === "string" && locale.length <= 64) {
+    try { [canonicalLocale] = Intl.getCanonicalLocales(locale); } catch { /* Use the Desktop locale. */ }
+  }
+  return { count, observed_at, timezone, ...(canonicalLocale ? { locale: canonicalLocale } : {}) };
+}
 
 /** Prefer the daemon's durable ingress instant; older daemons may omit it. */
 export function ownerAcceptedAt(value: unknown, fallback: string): string {
@@ -77,7 +102,7 @@ export class FailedReferenceUnavailableError extends Error {
 
 /** A confirmed failed request can be displayed beside its own message. */
 export class OwnerRequestFailed extends Error {
-  constructor(readonly messageId: string, readonly failureCode?: string) {
+  constructor(readonly messageId: string, readonly failureCode?: string, readonly recovery?: FailureRecovery) {
     super(ownerFailureMessage(failureCode));
     this.name = "OwnerRequestFailed";
   }
@@ -187,7 +212,7 @@ export class OwnerConversation {
     }
   }
 
-  async poll(onAnswer: (messageId: string, answer: string, kind: "answer" | "question", effect?: CommittedEffect) => void): Promise<boolean> {
+  async poll(onAnswer: (messageId: string, answer: string, kind: "answer" | "question", effect?: CommittedEffect, privateReply?: "calendar" | "gmail" | "outlook", privateSurface?: A2uiSurface, outlookInbox?: OutlookInboxOutcome) => void): Promise<boolean> {
     let acknowledgementRecovered = false;
     for (const pending of this.pending.values()) {
       if (pending.pickupStarted) {
@@ -232,7 +257,7 @@ export class OwnerConversation {
       if (state.status !== "ready") {
         if (state.status === "failed") this.pending.delete(pending.messageId);
         pending.pickupStarted = true;
-        if (state.status === "failed") throw new OwnerRequestFailed(pending.messageId, state.failure_code);
+        if (state.status === "failed") throw new OwnerRequestFailed(pending.messageId, state.failure_code, decodeFailureRecovery(state.failure_recovery));
         throw new Error(state.status === "started_unconfirmed"
           ? "The answer could not be confirmed. It will not be fetched again automatically."
           : "This conversation needs attention; its result may be unavailable or unconfirmed.");
@@ -246,9 +271,20 @@ export class OwnerConversation {
       } catch {
         throw new Error("The answer could not be confirmed. It will not be fetched again automatically.");
       }
+      const outlookStatus = pickup?.outlook_inbox_status;
+      const outlookResult = decodeOutlookInboxResult(pickup?.outlook_inbox_result);
+      const outlookInbox: OutlookInboxOutcome | undefined = outlookStatus === "complete"
+        ? outlookResult && { status: outlookStatus, result: outlookResult }
+        : outlookStatus && { status: outlookStatus };
       if (!pickup || pickup.message_id !== pending.messageId || typeof pickup.message !== "string"
           || typeof pickup.acknowledgement_token !== "string" || pickup.delivery_status !== "started_unconfirmed"
           || (pickup.kind !== undefined && pickup.kind !== "answer" && pickup.kind !== "question")
+          || (pickup.private_calendar !== undefined && (pickup.private_calendar !== true || pickup.kind !== "answer"))
+          || (pickup.private_gmail !== undefined && (pickup.private_gmail !== true || pickup.kind !== "answer"))
+          || (outlookStatus !== undefined && (pickup.kind !== "answer" || pickup.private_calendar !== undefined
+            || pickup.private_gmail !== undefined || pickup.committed_effect !== undefined
+            || !OUTLOOK_INBOX_STATUSES.has(outlookStatus)))
+          || (outlookStatus === "complete" ? !outlookResult : pickup.outlook_inbox_result !== undefined)
           || (pickup.committed_effect !== undefined && (!pickup.committed_effect
             || pickup.committed_effect.kind !== "scheduled_task_cancelled"
             || typeof pickup.committed_effect.name !== "string"
@@ -256,7 +292,15 @@ export class OwnerConversation {
             || typeof pickup.committed_effect.execution_may_have_started !== "boolean"))) {
         throw new Error("The answer could not be confirmed. It will not be fetched again automatically.");
       }
-      if (pickup.committed_effect) onAnswer(pending.messageId, pickup.message, pickup.kind ?? "answer", pickup.committed_effect);
+      const provider = pickup.private_gmail ? "gmail" : pickup.private_calendar ? "calendar" : undefined;
+      if (provider) {
+        const surface = decodePrivateProviderSurface(pickup.private_a2ui, pending.messageId, provider);
+        onAnswer(pending.messageId, pickup.message, "answer", pickup.committed_effect, provider, surface);
+      }
+      else if (outlookInbox) {
+        onAnswer(pending.messageId, pickup.message, "answer", undefined, "outlook", undefined, outlookInbox);
+      }
+      else if (pickup.committed_effect) onAnswer(pending.messageId, pickup.message, pickup.kind ?? "answer", pickup.committed_effect);
       else onAnswer(pending.messageId, pickup.message, pickup.kind ?? "answer");
       pending.acknowledgementToken = pickup.acknowledgement_token;
       await this.acknowledge(pending);

@@ -15,9 +15,12 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Callable
 from uuid import uuid4
 
+from alphonse.agent_v2.core.inference.models import ModelResponseParseError
+from alphonse.agent_v2.core.intelligence.context_projection import ContextBudgetExceeded
 from .evidence_projection import EvidenceAccessError, EvidenceSource, project_evidence
 from .task_budget import BudgetExhausted, SQLiteTaskBudgetStore, SyntheticEvaluationBudgetStore
 from .prerequisite import FEEDBACK, MissingPrerequisite
+from .owner_disposable_handoff import OWNER_DISPOSABLE_HANDOFF_TOOL_ID
 from alphonse.agent_v2.core.tools.invocation import ToolInvocationService
 
 
@@ -66,9 +69,21 @@ class CandidateState:
     prerequisite_feedback: str = ''
     prerequisite_retries: int = 0
     retry_feedback_pending: bool = False
+    parse_repair_pending: bool = False
+    progress_reviewed_count: int = 0
+    progress_assessment: str = 'unknown'
+    reused_web_fetch_ref: str = ''
+
+    def request_parse_repair(self, budget) -> bool:
+        if self.invalid_decision_retries or budget.usage()['unknown_usage'] or not budget.within_work_limits():
+            return False
+        self.invalid_decision_retries = 1
+        self.decision_format_pending = True
+        self.parse_repair_pending = True
+        return True
 
     def snapshot(self) -> dict[str, Any]:
-        return {'schema_version': 6, **deepcopy(asdict(self))}
+        return {'schema_version': 9, **deepcopy(asdict(self))}
 
     @classmethod
     def restore(cls, snapshot: dict[str, Any]) -> 'CandidateState':
@@ -76,7 +91,7 @@ class CandidateState:
             raise ValueError('candidate_checkpoint_invalid')
         version = snapshot.get('schema_version')
         base = {'schema_version', 'task_id', 'actor', 'goal_source', 'evidence_sources', 'status', 'response', 'blocker', 'inflight'}
-        if type(version) is not int or version not in (1, 2, 3, 4, 5, 6):
+        if type(version) is not int or version not in (1, 2, 3, 4, 5, 6, 7, 8, 9):
             raise ValueError('candidate_checkpoint_version_unsupported')
         expected = base if version == 1 else base | {'unsupported_retries', 'recovery_pending'}
         if version >= 3:
@@ -87,6 +102,12 @@ class CandidateState:
             expected |= {'prerequisite_feedback', 'prerequisite_retries'}
         if version >= 6:
             expected |= {'retry_feedback_pending'}
+        if version >= 7:
+            expected |= {'parse_repair_pending'}
+        if version >= 8:
+            expected |= {'progress_reviewed_count', 'progress_assessment'}
+        if version >= 9:
+            expected |= {'reused_web_fetch_ref'}
         if set(snapshot) != expected:
             raise ValueError('candidate_checkpoint_invalid')
         state = cls(**{key: deepcopy(value) for key, value in snapshot.items() if key != 'schema_version'})
@@ -95,6 +116,9 @@ class CandidateState:
                 or not isinstance(state.evidence_sources, list)
                 or any(not isinstance(x, str) or not x.strip() for x in state.evidence_sources)
                 or len(set(state.evidence_sources)) != len(state.evidence_sources)
+                or type(state.progress_reviewed_count) is not int
+                or not 0 <= state.progress_reviewed_count <= len(state.evidence_sources)
+                or state.progress_assessment not in ('progress', 'no_progress', 'unknown')
                 or any(not isinstance(x, str) for x in (state.response, state.blocker, state.inflight))
                 or type(state.unsupported_retries) is not int or not 0 <= state.unsupported_retries <= 2
                 or type(state.recovery_pending) is not bool
@@ -102,13 +126,17 @@ class CandidateState:
                 or type(state.invalid_decision_retries) is not int or not 0 <= state.invalid_decision_retries <= 1
                 or type(state.decision_format_pending) is not bool
                 or (state.decision_format_pending and state.invalid_decision_retries == 0)
+                or type(state.parse_repair_pending) is not bool
+                or (state.parse_repair_pending and not state.decision_format_pending)
                 or not isinstance(state.answer_review_state, str)
                 or state.answer_review_state not in {'not_started', 'pending', 'used'}):
             raise ValueError('candidate_checkpoint_invalid')
         if (state.prerequisite_feedback not in {'', *FEEDBACK}
                 or type(state.prerequisite_retries) is not int or not 0 <= state.prerequisite_retries <= 2
                 or (state.prerequisite_feedback and not state.prerequisite_retries)
-                or type(state.retry_feedback_pending) is not bool):
+                or type(state.retry_feedback_pending) is not bool
+                or not isinstance(state.reused_web_fetch_ref, str)
+                or (state.reused_web_fetch_ref and state.reused_web_fetch_ref not in state.evidence_sources)):
             raise ValueError('candidate_checkpoint_invalid')
         return state
 
@@ -160,6 +188,7 @@ class CandidateHost:
     # effect, budget and terminal checkpoint; it never dispatches generic tools.
     commit_owner_reminder: Callable[[Any, dict, str], Any] | None = None
     commit_owner_schedule: Callable[[Any, dict, str], Any] | None = None
+    commit_disposable_handoff: Callable[[Any, dict, str], Any] | None = None
     allow_question: Callable[[str], bool] | None = None
     # Trusted owner host only. Neither callback is supplied by the model.
     read_private_knowledge: Callable[[], Any] | None = None
@@ -178,9 +207,13 @@ class CandidateHost:
     authorize_host_bash: Callable[[str, str, dict[str, Any]], bool] | None = None
     execute_host_bash: Callable[[str, dict[str, Any], str], dict[str, Any]] | None = None
     defer_identical_failed_read: Callable[[str, str, dict[str, Any], tuple[str, ...]], bool] | None = None
+    covered_web_fetch: Callable[[str, str, dict[str, Any], tuple[str, ...]], str | None] | None = None
     # The host may durably pause at a quiescent boundary. It must persist and
     # fence the pause before returning True; this callback grants no authority.
     checkpoint_pause: Callable[[CandidateState], bool] | None = None
+    prepare_choice: Callable[[str, int], Callable[[], dict]] | None = None
+    compact_source: Callable[[str, str, int], str] | None = None
+    review_progress_checkpoint: Callable[[CandidateState], str] | None = None
 
 
 def _save(host: CandidateHost, state: CandidateState, *, consume_decision: bool = False,
@@ -230,23 +263,32 @@ def _mark_steering_included(host: CandidateHost, decision: dict, fingerprint: st
         return False
 
 
-def _project(host: CandidateHost, state: CandidateState):
+def _project(host: CandidateHost, state: CandidateState, compact_limit: int = 0):
     sources = [EvidenceSource(state.goal_source, 'goal')]
     sources.extend(EvidenceSource(ref, 'observation', required=True) for ref in state.evidence_sources)
+    def compact(ref, content):
+        # Preserve the requested page when other observations can be shortened
+        # enough. The smallest tier remains available for large pages.
+        if ref == state.reused_web_fetch_ref and compact_limit > 512:
+            return content
+        return host.compact_source(ref, content, compact_limit)
     return project_evidence(sources, actor=state.actor, budget=host.projection_budget,
-                            authorize=host.authorize_source, load=host.load_source)
+                            authorize=host.authorize_source, load=host.load_source,
+                            compact=compact if compact_limit else None)
 
 
 def _projection_fingerprint(projection) -> str:
     # Include actual visible bytes and coverage metadata, not just source IDs:
     # authorized sources may change without changing their stable identities.
     payload = {'text': projection.text, 'coverage': projection.manifest.get('coverage')}
+    if 'compacted_source_digests' in projection.manifest:
+        payload['compacted_source_digests'] = projection.manifest['compacted_source_digests']
     return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode('utf-8')).hexdigest()
 
 
-def _is_fresh(host: CandidateHost, state: CandidateState, expected: str) -> bool:
+def _is_fresh(host: CandidateHost, state: CandidateState, expected: str, compact_limit: int = 0) -> bool:
     try:
-        return _projection_fingerprint(_project(host, state)) == expected
+        return _projection_fingerprint(_project(host, state, compact_limit)) == expected
     except Exception:
         return False
 
@@ -288,20 +330,35 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
                 raise ValueError('candidate_pause_result_invalid')
             if paused:
                 return state
+        repairing_parse = state.parse_repair_pending
+        repair_failure = 'candidate_model_response_invalid' if repairing_parse else ''
+        if repairing_parse and _deadline_elapsed(host):
+            return _terminal(host, state, 'blocked', repair_failure)
+        if (host.review_progress_checkpoint is not None and not repairing_parse
+                and len(state.evidence_sources) - state.progress_reviewed_count >= 3):
+            assessment = host.review_progress_checkpoint(state)
+            state.progress_assessment = assessment if assessment in ('progress', 'no_progress') else 'unknown'
+            state.progress_reviewed_count = len(state.evidence_sources)
+            _save(host, state)
+            if _cancelled(host):
+                return _terminal(host, state, 'cancelled', 'cancelled')
         try:
-            projection = _project(host, state)
-            fingerprint = _projection_fingerprint(projection)
             # A chooser that adds framing must declare a full-input cap no
             # larger than the durable input reservation. This is only a local
             # accounting check; external transport enforcement is separate.
             chooser_cap = getattr(host.choose, 'max_input_tokens', None)
             if chooser_cap is not None and (type(chooser_cap) is not int or chooser_cap <= 0
                                             or chooser_cap > host.input_reservation):
-                return _terminal(host, state, 'blocked', 'candidate_chooser_input_cap_exceeds_reservation')
+                return _terminal(host, state, 'blocked', repair_failure or 'candidate_chooser_input_cap_exceeds_reservation')
             # The projection length is only part of the input. A chooser may
             # add framing, tool schemas or other material; its complete cap and
             # the output cap must be enforced by the external transport.
-            decision_input = projection.text
+            decision_input = ''
+            if (not repairing_parse and state.progress_assessment == 'no_progress'
+                    and state.progress_reviewed_count == len(state.evidence_sources)):
+                decision_input += ('\nA checkpoint review found no clear progress. Reassess the approach '
+                                   'using the evidence so far. Choose a materially different authorized route if '
+                                   'one can resolve an open question, or explain what prevents progress.')
             if state.recovery_pending:
                 decision_input += ('\nA previous answer was not verified. Consider whether the available evidence '
                                    'supports every part of the request; inspect relevant authorized sources before '
@@ -311,7 +368,15 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
             if state.retry_feedback_pending:
                 decision_input += ('\nThe previous identical read failed, so its immediate repeat was not dispatched. '
                                    'Consider another available route or explain what remains unavailable.')
-            if state.decision_format_pending:
+            if state.reused_web_fetch_ref:
+                decision_input += (f'\nA requested page is already recorded at {state.reused_web_fetch_ref}. '
+                                   'Use the recorded text. If it leaves a material gap, choose a different source '
+                                   'or explain what remains uncertain. Repeating the same fetch cannot add evidence.')
+            if repairing_parse:
+                decision_input += ('\nThe previous model response could not be decoded. Return one valid answer or '
+                                   'question using the recorded observations. Explain any limits of the evidence. '
+                                   'Do not request a tool or repeat a command.')
+            elif state.decision_format_pending:
                 decision_input += ('\nThe previous decision had an invalid format and was not executed. '
                                    'Return one valid action: an answer or question with text, '
                                    'or a tool action with tool_id and arguments.')
@@ -323,8 +388,34 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
                                    'source if needed, ask if essential information remains unavailable, or '
                                    'give a supported answer. Do not read unrelated sources just to exhaust '
                                    'the catalog.')
-            if len(decision_input.encode('utf-8')) > host.input_reservation:
-                return _terminal(host, state, 'blocked', 'candidate_input_reservation_too_small')
+            prepared = None
+            limits = (0, 4096, 1536, 512) if host.compact_source else (0,)
+            for compact_limit in limits:
+                try:
+                    projection = _project(host, state, compact_limit)
+                except ContextBudgetExceeded:
+                    if host.compact_source is None:
+                        raise
+                    continue
+                prompt = projection.text + decision_input
+                if len(prompt.encode('utf-8')) > host.input_reservation:
+                    continue
+                try:
+                    prepared = (host.prepare_choice(prompt, host.output_reservation)
+                                if host.prepare_choice else lambda: host.choose(prompt, host.output_reservation))
+                except ValueError as exc:
+                    category = _chooser_failure_category(exc)
+                    if category == 'input_exceeds_reservation':
+                        continue
+                    if category == 'cancelled' and _cancelled(host):
+                        return _terminal(host, state, 'cancelled', 'cancelled')
+                    raise
+                break
+            if prepared is None:
+                return _terminal(host, state, 'blocked', repair_failure or 'candidate_input_reservation_too_small')
+            fingerprint = _projection_fingerprint(projection)
+            if host.prepare_choice is not None and not _is_fresh(host, state, fingerprint, compact_limit):
+                return _terminal(host, state, 'blocked', 'candidate_evidence_changed_or_revoked')
             call_id = 'model-' + uuid4().hex
             amounts = {'actions': 0, 'model_calls': 1, 'input_tokens': host.input_reservation,
                        'output_tokens': host.output_reservation}
@@ -345,7 +436,7 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
                 state.answer_review_state = 'used'
             _save(host, state)
         except (BudgetExhausted, EvidenceAccessError, ValueError, KeyError) as exc:
-            return _terminal(host, state, 'blocked', type(exc).__name__ + ':' + str(exc))
+            return _terminal(host, state, 'blocked', repair_failure or type(exc).__name__ + ':' + str(exc))
         if _cancelled(host):
             # Proven undispatched here; retain the reservation conservatively.
             return _terminal(host, state, 'cancelled', 'cancelled')
@@ -354,28 +445,43 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
         if host.atomic_checkpoint is not None and not host.atomic_checkpoint.check_claim(call_id, 'model'):
             return _terminal(host, state, 'blocked', 'candidate_claim_unavailable')
         chooser_failure = ''
+        parse_error = None
         try:
-            decision = host.choose(decision_input, host.output_reservation)
+            decision = prepared()
+        except ModelResponseParseError as exc:
+            parse_error = exc
+            decision = None
         except Exception as exc:
             chooser_failure = _chooser_failure_category(exc)
             logger.warning('simple_loop_decision_failed category=%s', chooser_failure)
             decision = None
         usage = decision.get('usage', {}) if isinstance(decision, dict) else {}
+        if parse_error is not None:
+            usage = parse_error.usage
+        parse_stage = parse_error.response_stage if parse_error is not None else None
         if not isinstance(usage, dict):
             usage = {}
         try:
             outcome = 'success' if isinstance(decision, dict) else 'failure'
+            retry_parse = False
             if host.atomic_checkpoint is None:
                 budget = host.budgets.load(state.task_id)
                 revision = budget.revision
                 budget.settle(call_id, outcome=outcome, input_tokens=usage.get('input_tokens'),
-                              output_tokens=usage.get('output_tokens'))
+                              output_tokens=usage.get('output_tokens'), parse_stage=parse_stage)
                 host.budgets.save(state.task_id, budget, expected_revision=revision)
+                if parse_error is not None:
+                    retry_parse = state.request_parse_repair(budget)
             else:
                 settled = host.atomic_checkpoint.settle_model(expected_version=host.atomic_checkpoint.version,
                     reservation_id=call_id, outcome=outcome, input_tokens=usage.get('input_tokens'),
-                    output_tokens=usage.get('output_tokens'), decision=decision, projection_fingerprint=fingerprint)
+                    output_tokens=usage.get('output_tokens'), decision=decision, projection_fingerprint=fingerprint,
+                    parse_stage=parse_stage)
                 budget = settled.budget
+                if parse_error is not None:
+                    # Settlement and the one retry grant share a transaction.
+                    state = settled.state
+                    retry_parse = not repairing_parse and state.parse_repair_pending
         except (ValueError, KeyError):
             return _terminal(host, state, 'blocked', 'candidate_model_settlement_unavailable')
         state.inflight = ''
@@ -383,7 +489,13 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
             _save(host, state)
         if _cancelled(host):
             return _terminal(host, state, 'cancelled', 'cancelled')
+        if parse_error is not None:
+            if retry_parse:
+                continue
+            return _terminal(host, state, 'blocked', 'candidate_model_response_invalid')
         if not isinstance(decision, dict):
+            if repairing_parse:
+                return _terminal(host, state, 'blocked', repair_failure)
             reasons = {
                 'input_exceeds_reservation': 'candidate_input_reservation_too_small',
                 'output_exceeds_reservation': 'candidate_output_reservation_too_small',
@@ -401,18 +513,22 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
         if any((value is not None and (type(value) is not int or value < 0))
                or (value is None and not host.synthetic_allow_unreported_usage)
                for value in (usage.get('input_tokens'), usage.get('output_tokens'))):
-            return _terminal(host, state, 'blocked', 'candidate_model_usage_unknown_or_overrun')
+            return _terminal(host, state, 'blocked', repair_failure or 'candidate_model_usage_unknown_or_overrun')
         if not budget.within_work_limits():
-            return _terminal(host, state, 'blocked', 'candidate_model_usage_overrun')
+            return _terminal(host, state, 'blocked', repair_failure or 'candidate_model_usage_overrun')
         if host.atomic_checkpoint is not None and getattr(host.atomic_checkpoint, 'steering_decision_stale', False):
             # Usage was settled, but a user correction arrived during the
             # model call. The atomic checkpoint intentionally kept no selected
             # decision; re-project the current goal before any action.
+            if repairing_parse:
+                return _terminal(host, state, 'blocked', repair_failure)
             continue
         # A still-authorized source may nevertheless have changed during inference.
-        if not _is_fresh(host, state, fingerprint):
+        if not _is_fresh(host, state, fingerprint, compact_limit):
             return _terminal(host, state, 'blocked', 'candidate_evidence_changed_or_revoked')
         kind = decision.get('kind')
+        if repairing_parse and (not isinstance(kind, str) or kind not in {'answer', 'question'}):
+            return _terminal(host, state, 'blocked', repair_failure)
         valid_shape = (isinstance(kind, str) and (kind in {'answer', 'question'} or
                        (kind == 'tool' and isinstance(decision.get('tool_id'), str)
                         and isinstance(decision.get('arguments'), dict))))
@@ -428,11 +544,12 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
             return _terminal(host, state, 'blocked', 'candidate_decision_invalid')
         if state.decision_format_pending:
             state.decision_format_pending = False
+            state.parse_repair_pending = False
             _save(host, state)
         if kind in {'answer', 'question'}:
             text = decision.get('text')
             if not isinstance(text, str) or not text.strip():
-                return _terminal(host, state, 'blocked', 'candidate_empty_communication')
+                return _terminal(host, state, 'blocked', repair_failure or 'candidate_empty_communication')
             if kind == 'question':
                 if host.allow_question is not None:
                     try:
@@ -447,7 +564,7 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
                     return _terminal(host, state, 'blocked', 'candidate_steering_unavailable')
                 return _terminal(host, state, 'waiting_user', 'question_delivery_not_integrated', text,
                                  selected_decision=decision, projection_fingerprint=fingerprint)
-            if host.synthetic_preanswer_review and state.answer_review_state == 'not_started':
+            if not repairing_parse and host.synthetic_preanswer_review and state.answer_review_state == 'not_started':
                 # Hold the proposal; do not persist, return, or pass its text as
                 # evidence. The next budgeted decision sees only the current
                 # authorized projection and the neutral review request.
@@ -461,13 +578,15 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
                 return _terminal(host, state, 'blocked', 'candidate_verification_unavailable')
             if _cancelled(host):
                 return _terminal(host, state, 'cancelled', 'cancelled')
-            if not _is_fresh(host, state, fingerprint):
+            if not _is_fresh(host, state, fingerprint, compact_limit):
                 return _terminal(host, state, 'blocked', 'candidate_evidence_changed_or_revoked')
             if _cancelled(host):
                 return _terminal(host, state, 'cancelled', 'cancelled')
             if _deadline_elapsed(host):
                 return _terminal(host, state, 'blocked', 'candidate_deadline_exceeded')
             if not grounded:
+                if repairing_parse:
+                    return _terminal(host, state, 'blocked', repair_failure)
                 missing = False
                 if host.remaining_advertised_evidence is not None and state.unsupported_retries < 2:
                     try:
@@ -487,6 +606,17 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
         if kind != 'tool' or not isinstance(decision.get('tool_id'), str) or not isinstance(decision.get('arguments'), dict):
             return _terminal(host, state, 'blocked', 'candidate_decision_invalid')
         tool_id, args = decision['tool_id'], deepcopy(decision['arguments'])
+        if host.covered_web_fetch is not None and tool_id == 'native.web_fetch':
+            try:
+                covered = host.covered_web_fetch(state.actor, tool_id, deepcopy(args), tuple(state.evidence_sources))
+                if covered is not None and (not isinstance(covered, str) or covered not in state.evidence_sources):
+                    raise ValueError('covered_web_fetch_invalid')
+            except Exception:
+                return _terminal(host, state, 'blocked', 'candidate_retry_policy_unavailable')
+            if covered is not None:
+                state.reused_web_fetch_ref = covered
+                _save(host, state, consume_decision=True)
+                continue
         if host.defer_identical_failed_read is not None:
             try:
                 defer = host.defer_identical_failed_read(state.actor, tool_id, deepcopy(args), tuple(state.evidence_sources))
@@ -514,11 +644,13 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
         mutation = {
             'native.owner_reminder_create': (host.commit_owner_reminder, 'owner_reminder_unavailable'),
             'native.scheduled_task': (host.commit_owner_schedule, 'owner_schedule_unavailable'),
+            OWNER_DISPOSABLE_HANDOFF_TOOL_ID: (host.commit_disposable_handoff, 'owner_disposable_handoff_unavailable'),
         }.get(tool_id)
         if mutation is not None:
             commit, unavailable = mutation
             if (host.atomic_checkpoint is None or not callable(commit)
-                    or descriptor is None or descriptor.read_only is not False
+                    or (tool_id != OWNER_DISPOSABLE_HANDOFF_TOOL_ID
+                        and (descriptor is None or descriptor.read_only is not False))
                     or _cancelled(host) or _deadline_elapsed(host)
                     or not _is_fresh(host, state, fingerprint)):
                 return _terminal(host, state, 'blocked', unavailable)
@@ -526,8 +658,7 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
                 if not _mark_steering_included(host, decision, fingerprint):
                     return _terminal(host, state, 'blocked', 'candidate_steering_unavailable')
                 committed = commit(state, decision, fingerprint)
-                if (tool_id == 'native.scheduled_task' and args.get('operation') == 'cancel'
-                        and isinstance(committed, CandidateState) and committed.status == 'running'):
+                if isinstance(committed, CandidateState) and committed.status == 'running':
                     state = committed
                     continue
                 return committed
@@ -593,7 +724,7 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
             permitted = False
         if not permitted:
             return _terminal(host, state, 'blocked', 'candidate_read_denied')
-        if not _is_fresh(host, state, fingerprint):
+        if not _is_fresh(host, state, fingerprint, compact_limit):
             return _terminal(host, state, 'blocked', 'candidate_evidence_changed_or_revoked')
         if _cancelled(host):
             return _terminal(host, state, 'cancelled', 'cancelled')
@@ -603,6 +734,9 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
                 action_id, 'tool', tool_id=tool_id, arguments=args):
             return _terminal(host, state, 'blocked', 'candidate_claim_unavailable')
         private_digest = None
+        from .owner_calendar import OWNER_CALENDAR_TOOL_ID
+        from .owner_gmail_search import OWNER_GMAIL_SEARCH_TOOL_ID
+        from .owner_outlook import OWNER_OUTLOOK_TOOL_ID
         if tool_id == OWNER_KNOWLEDGE_TOOL_ID:
             from .owner_private_knowledge_read import PrivateKnowledgeRead
             try:
@@ -615,6 +749,17 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
                 result = {'status': 'success', 'result': deepcopy(private.observation)}
             except Exception:
                 result = {'status': 'failed', 'result': None}
+        elif tool_id in {OWNER_CALENDAR_TOOL_ID, OWNER_GMAIL_SEARCH_TOOL_ID, OWNER_OUTLOOK_TOOL_ID}:
+            # Keep provider details outside generic result events, memory and telemetry.
+            if host.atomic_checkpoint is None or descriptor.metadata.get('sensitive_content') is not True:
+                return _terminal(host, state, 'blocked', 'candidate_private_read_unavailable')
+            try:
+                payload = ToolInvocationService(context=host.context, task=host.task).execute_or_raise(tool_id, args)
+            except Exception:
+                if _cancelled(host):
+                    return _terminal(host, state, 'cancelled', 'cancelled')
+                return _terminal(host, state, 'blocked', 'candidate_private_read_unavailable')
+            result = {'status': 'success', 'result': payload}
         elif disposable:
             try:
                 result = host.execute_disposable_tool(state.actor, tool_id, deepcopy(args))
@@ -650,7 +795,7 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
             permitted = False
         if not permitted:
             return _terminal(host, state, 'blocked', 'candidate_read_revoked')
-        if not _is_fresh(host, state, fingerprint):
+        if not _is_fresh(host, state, fingerprint, compact_limit):
             return _terminal(host, state, 'blocked', 'candidate_evidence_changed_or_revoked')
         if result.get('status') != 'success':
             # Explicit, completed read-tool failures are useful observations.
@@ -685,7 +830,7 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
             permitted = False
         if not permitted:
             return _terminal(host, state, 'blocked', 'candidate_read_revoked')
-        if not _is_fresh(host, state, fingerprint):
+        if not _is_fresh(host, state, fingerprint, compact_limit):
             return _terminal(host, state, 'blocked', 'candidate_evidence_changed_or_revoked')
         try:
             ref = (host.record_private_knowledge(state.actor, tool_id, deepcopy(args), deepcopy(result), private_digest)

@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Evidence review matched visual comparison</title>
+    <style>
+      body { min-width: 0 !important; overflow: auto !important; margin: 0; }
+      #root { height: auto; }
+      .parity-host { display: grid; gap: 12px; box-sizing: content-box; padding: clamp(10px, 2vw, 18px); }
+      .parity-host .conversation-message { width: 100% !important; padding: 0 !important; }
+      iframe { position: fixed; inset: 0; width: 100%; height: 100%; border: none; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./parity.tsx"></script>
+  </body>
+</html>

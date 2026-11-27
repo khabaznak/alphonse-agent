@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 import json
 import tempfile
 import time
@@ -23,6 +24,133 @@ from alphonse.agent_v2.inference_settings import InferenceSettingsRecord, build_
 from alphonse.agent_v2.ipc import V2DaemonClient, V2DaemonServer
 from alphonse.agent_v2.runtime import build_runtime_host
 from alphonse.agent_v2.users import V2UserStore
+
+
+# A deliberately different domain from the incident. The latest recap is
+# misleading; the older owner statement is the independent fixture evidence.
+HISTORY = (
+    ('user', 'The dining room paint we chose is Harbor Blue, finish eggshell.'),
+    ('assistant', 'Noted: Harbor Blue in an eggshell finish for the dining room.'),
+    *tuple(turn for topic in ('garden', 'books', 'bicycles', 'pantry', 'curtains',
+                               'lighting', 'plants', 'storage', 'hallway')
+           for turn in (('user', f'We can discuss the {topic} later.'),
+                        ('assistant', f'Understood, we can revisit the {topic}.'))),
+    ('assistant', 'We still need to choose the dining room paint color.'),
+)
+HISTORY_GOAL = 'Had we already chosen the dining room paint?'
+CHANGED_HISTORY = (*HISTORY[:-1],
+    ('user', 'We changed the dining room choice to Moss Green in a satin finish.'),
+    ('assistant', 'We still need to choose the dining room paint color.'))
+
+# Separate scenario for evaluation after development on the paint fixture.
+# The recent owner confirmation doesn't repeat the earlier decision's content.
+HELDOUT_HISTORY = (
+    ('user', 'Para la donación a la biblioteca ya decidimos entregar cuatro cajas de cuentos infantiles.'),
+    ('assistant', 'Entendido, cuatro cajas de cuentos infantiles para la biblioteca.'),
+    *tuple(turn for topic in ('las plantas', 'las ventanas', 'el jardín', 'la mesa',
+                               'las bicicletas', 'el pasillo', 'las lámparas', 'las cortinas', 'los estantes')
+           for turn in (('user', f'Hablemos de {topic} después.'),
+                        ('assistant', f'De acuerdo, podemos retomar lo de {topic}.'))),
+    ('user', 'Confirmo que lo que acordamos para la donación a la biblioteca sigue siendo nuestra decisión.'),
+    ('assistant', 'Todavía no hemos decidido qué donar a la biblioteca.'),
+)
+HELDOUT_GOAL = '¿Ya habíamos decidido qué donar a la biblioteca?'
+
+
+def run_historical_correction(router: InferenceRouter, *, timeout: float = 90,
+                              owner_changed_choice: bool = False, heldout: bool = False) -> dict:
+    """Observe recovery of an older fact after an erroneous recent recap.
+
+    Markers are diagnostics only. A human must assess the entire answer and
+    whether it corrects the recap without overstating what the fixture proves.
+    """
+    started = time.monotonic()
+    decisions = []
+    original_generate = router.generate_json
+    if heldout and owner_changed_choice:
+        raise ValueError('historical_case_conflict')
+    history = HELDOUT_HISTORY if heldout else CHANGED_HISTORY if owner_changed_choice else HISTORY
+    expected_fact = 'cuatro cajas' if heldout else 'Moss Green' if owner_changed_choice else 'Harbor Blue'
+    case = 'historical-heldout' if heldout else 'historical-owner-change' if owner_changed_choice else 'historical-correction'
+    goal = HELDOUT_GOAL if heldout else HISTORY_GOAL
+
+    def inspect_request(request):
+        try:
+            result = original_generate(request)
+        except Exception:
+            decisions.append({'status': 'provider_error'})
+            raise
+        value = result.json_value if isinstance(result.json_value, dict) else {}
+        recap = history[-1][1]
+        recap_at = request.prompt.find(recap)
+        decisions.append({'status': 'returned', 'kind': value.get('kind'),
+                          'tool_id': value.get('tool_id'), 'arguments': value.get('arguments'),
+                          'historical_fact_visible_in_prompt': expected_fact in request.prompt,
+                          'recap_prompt_context': (request.prompt[max(0, recap_at - 160):recap_at + len(recap) + 80]
+                                                   if recap_at >= 0 else None),
+                          'usage': dict(result.usage or {})})
+        return result
+
+    router.generate_json = inspect_request
+    try:
+        with tempfile.TemporaryDirectory(prefix='dojo-history-', dir='/tmp') as directory:
+            root = Path(directory)
+            path = root / 'owner.sqlite'
+            users = V2UserStore(path)
+            owner = users.onboard(display_name='Synthetic owner', users_root=root / 'users')
+            queue = SQLiteMessageQueue(path, experimental_claim_fencing=True)
+            conversation = SQLiteConversationStore(path)
+            now = datetime.now(timezone.utc)
+            for n, (role, content) in enumerate(history):
+                age = timedelta(days=8 if n < 2 else 1, minutes=len(history) - n)
+                conversation.record(owner_user_id=owner.user_id, role=role, content=content,
+                                    source='desktop', source_message_id=f'dojo-history:{n}',
+                                    created_at=(now - age).isoformat())
+            runtime = build_runtime_host(user_store=users, messages=queue,
+                question_store=SQLiteQuestionStore(path), conversation_store=conversation,
+                outbox=SQLiteOutboundStore(path), inference=router,
+                experimental_owner_read=True, owner_selected_draft_sink=lambda *_: None)
+            daemon = V2Daemon(runtime, daemon_id='dojo-history', experimental_owner_only=True)
+            daemon.ipc = V2DaemonServer(daemon, socket_path=root / 'owner.sock', experimental_owner_ingress=True)
+            daemon._acquire_single_instance_lock = lambda: None
+            daemon._release_single_instance_lock = lambda: None
+            daemon.start()
+            try:
+                client = V2DaemonClient(root / 'owner.sock')
+                message = client.request('experimental_owner_ingress', prompt=goal)['message_id']
+                deadline = time.monotonic() + timeout
+                while time.monotonic() < deadline:
+                    status = client.request('experimental_owner_status', message_id=message)
+                    if status['status'] not in {'pending', 'processing'}:
+                        break
+                    time.sleep(.05)
+                else:
+                    status = {'status': 'timeout'}
+                report = {'case': case, 'status': status['status'],
+                          'failure_code': status.get('failure_code'), 'answer': None,
+                          'acknowledgement': None, 'expected_fact_mentioned': None,
+                          'response_semantics': 'requires_manual_review', 'passed': None,
+                          'source_completeness': 'not independently observed',
+                          'decisions': decisions,
+                          'limitations': ['Synthetic owner and historical turns; not the installed Desktop UI.',
+                              'Literal mentions do not establish correction, grounding, or semantic accuracy.',
+                              'Source completeness is not independently assessed; provider activity outside the host is not observed.',
+                              'Client acknowledgement is not proof of human receipt.',
+                              'One attempt is not a reliability estimate.']}
+                if status['status'] == 'ready':
+                    draft = client.request('experimental_owner_take_draft', message_id=message)
+                    report['answer'] = draft['message']
+                    report['answer_kind'] = draft.get('kind')
+                    report['expected_fact_mentioned'] = expected_fact.casefold() in draft['message'].casefold()
+                    ack = client.request('experimental_owner_ack_draft', message_id=message,
+                                         acknowledgement_token=draft['acknowledgement_token'])
+                    report['acknowledgement'] = ack.get('status')
+                report['elapsed_seconds'] = round(time.monotonic() - started, 3)
+                return report
+            finally:
+                daemon.stop()
+    finally:
+        router.generate_json = original_generate
 
 
 def run(router: InferenceRouter, *, timeout: float = 90) -> dict:
@@ -90,11 +218,23 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('journal', type=Path)
     parser.add_argument('--model', required=True)
+    parser.add_argument('--case', choices=('context', 'historical-correction', 'historical-owner-change',
+                                           'historical-heldout'), default='context')
     args = parser.parse_args()
     router = build_inference_router_from_settings(InferenceSettingsRecord(model_id=args.model))
     router.provider.config = replace(router.provider.config, timeout_seconds=40.0)
     with args.journal.open('x', encoding='utf-8') as journal:
-        json.dump(run(router), journal, ensure_ascii=False, sort_keys=True)
+        try:
+            result = (run(router) if args.case == 'context' else
+                      run_historical_correction(router, owner_changed_choice=args.case == 'historical-owner-change',
+                                                heldout=args.case == 'historical-heldout'))
+        except Exception as exc:
+            json.dump({'case': args.case, 'status': 'infrastructure_error',
+                       'error_type': type(exc).__name__, 'passed': None}, journal)
+            journal.write('\n')
+            journal.flush()
+            raise
+        json.dump(result, journal, ensure_ascii=False, sort_keys=True)
         journal.write('\n')
 
 

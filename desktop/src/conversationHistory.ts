@@ -1,17 +1,35 @@
 import type { ChatMessage } from "./types";
+import { decodePrivateProviderSurface } from "./a2ui";
+
+type HistoryMessage = ChatMessage & { private_card?: { provider?: unknown; envelopes?: unknown } };
+export type HistoryResponse = { messages: HistoryMessage[]; private_cards_checked?: boolean };
+
+export function desktopHistoryMessages(history: HistoryResponse, owner: string): ChatMessage[] {
+  return history.messages.map(({ private_card: card, ...message }) => {
+    if (history.private_cards_checked !== true || !owner || message.role !== "assistant" || message.source !== "desktop"
+      || !/^owner:[0-9a-f]{32}$/.test(message.id) || (card?.provider !== "gmail" && card?.provider !== "calendar")) return message;
+    const surface = decodePrivateProviderSurface(card.envelopes, message.id.slice(6), card.provider);
+    return surface ? { ...message, private_reply_owner: owner, private_reply_surface: surface } : message;
+  });
+}
 
 export function mergeFreshConversationHistory(
   history: ChatMessage[],
   messagesReceivedDuringReload: ChatMessage[],
 ): ChatMessage[] {
-  const merged = [...history];
-  const knownIds = new Set(merged.map((message) => message.id));
+  const merged = new Map(history.map((message) => [message.id, message]));
   for (const message of messagesReceivedDuringReload) {
-    if (knownIds.has(message.id)) continue;
-    knownIds.add(message.id);
-    merged.push(message);
+    const previous = merged.get(message.id);
+    if (!previous) merged.set(message.id, message);
+    else if (message.private_reply_owner && previous.role === "assistant") {
+      // A live, owner-scoped provider pickup can include private details. History stores the receipt.
+      merged.set(message.id, { ...previous, content: message.content, private_reply_owner: message.private_reply_owner,
+        ...(message.private_reply_plain_text ? { private_reply_plain_text: true } : {}),
+        ...(message.private_reply_surface ? { private_reply_surface: message.private_reply_surface } : {}),
+        ...(message.private_outlook_inbox ? { private_outlook_inbox: message.private_outlook_inbox } : {}) });
+    }
   }
-  return orderConversationMessages(merged);
+  return orderConversationMessages([...merged.values()]);
 }
 
 export function orderConversationMessages(messages: ChatMessage[]): ChatMessage[] {

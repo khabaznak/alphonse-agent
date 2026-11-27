@@ -38,7 +38,7 @@ def build_web_search_tool_definition(settings: WebToolsSettings) -> ToolDefiniti
 
 
 def build_web_fetch_tool_definition(settings: WebToolsSettings) -> ToolDefinition:
-    return ToolDefinition(ToolDescriptor(WEB_FETCH_TOOL_ID, WEB_FETCH_TOOL_NAME, ToolKind.NATIVE, "Fetch readable text from a public web page after search.", dict(WEB_FETCH_ARGUMENT_SCHEMA), ("web", "fetch"), ("native", "web"), read_only=True), lambda arguments: execute_web_fetch(arguments, settings=settings), dict(WEB_FETCH_ARGUMENT_SCHEMA), enabled=settings.available)
+    return ToolDefinition(ToolDescriptor(WEB_FETCH_TOOL_ID, WEB_FETCH_TOOL_NAME, ToolKind.NATIVE, "Fetch readable text from a public web page. Use recorded page text when it already covers the request.", dict(WEB_FETCH_ARGUMENT_SCHEMA), ("web", "fetch"), ("native", "web"), metadata={"fetch_max_chars": settings.fetch_max_chars}, read_only=True), lambda arguments: execute_web_fetch(arguments, settings=settings), dict(WEB_FETCH_ARGUMENT_SCHEMA), enabled=settings.available)
 
 
 def execute_web_search(arguments: dict[str, Any], *, settings: WebToolsSettings) -> dict[str, Any]:
@@ -57,11 +57,22 @@ def execute_web_search(arguments: dict[str, Any], *, settings: WebToolsSettings)
     if response.status_code >= 400: return _failed("searxng_http_error", f"SearXNG returned status {response.status_code}.", retryable=response.status_code >= 500, status_code=response.status_code)
     try: payload = response.json()
     except (ValueError, json.JSONDecodeError): return _failed("searxng_invalid_json", "SearXNG did not return valid JSON.")
-    if not isinstance(payload, dict): return _failed("searxng_invalid_json", "SearXNG JSON response was not an object.")
+    if not isinstance(payload, dict) or not isinstance(payload.get("results"), list):
+        return _failed("searxng_invalid_json", "SearXNG did not return a valid results list.")
+    unresponsive_engines = payload.get("unresponsive_engines", [])
+    if not isinstance(unresponsive_engines, list):
+        return _failed("searxng_invalid_json", "SearXNG did not return valid engine status.")
     limit = _limit(arguments.get("limit"), 20)
-    results = [_result(item) for item in payload.get("results", []) if isinstance(item, dict)]
+    results = [_result(item) for item in payload["results"] if isinstance(item, dict)]
     results = [item for item in results if item["url"] or item["title"]][:limit]
-    return {"query": query, "provider": "searxng", "result_count": len(results), "results": results, "answers": _values(payload.get("answers")), "suggestions": _values(payload.get("suggestions"))}
+    answers = _values(payload.get("answers"))
+    if unresponsive_engines and not (results or answers):
+        return _failed("searxng_upstream_unavailable", "Upstream search engines failed and returned no usable results.", retryable=True)
+    result = {"query": query, "provider": "searxng", "result_count": len(results), "results": results,
+              "answers": answers, "suggestions": _values(payload.get("suggestions"))}
+    if unresponsive_engines:
+        result["partial"] = True
+    return result
 
 
 def execute_web_fetch(arguments: dict[str, Any], *, settings: WebToolsSettings) -> dict[str, Any]:
@@ -80,7 +91,7 @@ def execute_web_fetch(arguments: dict[str, Any], *, settings: WebToolsSettings) 
     parser = _TextParser() if "html" in content_type.lower() or "<html" in text[:500].lower() else None
     if parser: parser.feed(text); title, text = parser.title, parser.text()
     else: title, text = "", _compact(text)
-    max_chars = min(_limit(arguments.get("max_chars"), settings.fetch_max_chars), settings.fetch_max_chars)
+    max_chars = effective_web_fetch_max_chars(arguments.get("max_chars"), settings.fetch_max_chars)
     result = {"url": url, "final_url": str(response.url or url), "status_code": response.status_code, "content_type": content_type, "title": title, "text": text[:max_chars].rstrip(), "truncated": len(text) > max_chars}
     return _bounded_fetch_result(result)
 
@@ -140,6 +151,12 @@ def _validate_public_url(url: str) -> None:
 def _result(item: dict[str, Any]) -> dict[str, Any]:
     return {"title": str(item.get("title") or ""), "url": str(item.get("url") or ""), "snippet": str(item.get("content") or ""), "engines": _values(item.get("engines")), "category": str(item.get("category") or ""), "published_date": str(item.get("publishedDate") or "")}
 def _values(value: Any) -> list[Any]: return list(value) if isinstance(value, list) else []
+
+
+def effective_web_fetch_max_chars(requested: int | None, configured: int) -> int:
+    return min(_limit(requested, configured), configured)
+
+
 def _limit(value: Any, default: int) -> int:
     try: return max(1, min(int(value if value is not None else default), 20 if default == 20 else default))
     except (TypeError, ValueError): return default

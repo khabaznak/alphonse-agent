@@ -1,8 +1,11 @@
 """Observe held follow-ups during a real owner-loop request with disposable data.
 
-This scripted plumbing observation does not evaluate model understanding or
-queue execution: execution is observed using scripted responses. It never reports
-the issue's semantic multi-turn capability as passed.
+The default scripted provider observes queue and steering plumbing, but cannot
+evaluate model understanding or semantic task outcomes. Neither path reports a
+semantic multi-turn capability as passed.
+
+Run the named exercises with ``python -m alphonse.agent_v2.evaluation.dojo_held_followups``;
+see docs/agent-loop/dojo-enqueue-and-steer.md for setup and independent review.
 """
 from __future__ import annotations
 
@@ -35,6 +38,7 @@ class PausedProvider:
         self.calls = 0
         self.prompts = []
         self.provider_failure = None
+        self.reported_usage = []
 
     def generate_json(self, request):
         self.calls += 1
@@ -46,18 +50,24 @@ class PausedProvider:
             raise RuntimeError('synthetic provider failure')
         if self.delegate:
             try:
-                return self.delegate(request)
+                result = self.delegate(request)
+                self.reported_usage.append(dict(result.usage or {}))
+                return result
             except Exception as exc:
                 from alphonse.agent_v2.evaluation.owner_gym_smoke import provider_failure_category
                 self.provider_failure = {'category': provider_failure_category(exc), 'type': type(exc).__name__}
                 raise
         decision = {'kind': 'answer', 'tool_id': None, 'arguments': None, 'text': 'The list is ready.'}
-        return InferenceResult(json_value=decision, raw_response=json.dumps(decision),
-                               usage={'input_tokens': 100, 'output_tokens': 20})
+        usage = {'input_tokens': 100, 'output_tokens': 20}
+        self.reported_usage.append(usage)
+        return InferenceResult(json_value=decision, raw_response=json.dumps(decision), usage=usage)
 
 
 def run(*, timeout=10, scenario="normal", model=None):
     """Return observations, with unimplemented execution explicitly unassessed."""
+    if scenario not in {'normal', 'enqueue', 'steer', 'cancel', 'failure', 'uncertain',
+                        'draft_restart', 'draft_fence', 'draft_race', 'hypothetical'}:
+        raise ValueError('unknown_dojo_scenario')
     with tempfile.TemporaryDirectory(prefix='dojo-held-followups-') as directory:
         root = Path(directory)
         path = root / 'owner.sqlite'
@@ -137,7 +147,7 @@ def run(*, timeout=10, scenario="normal", model=None):
                 return {'observation': 'steer', 'submission': submitted['status'], 'initial_status': status,
                         'steering_status': listed[0]['status'] if listed else None,
                         'context_visible': ["Use green apples." in prompt for prompt in provider.prompts],
-                        'late_status': late['status'], 'model_calls': provider.calls, 'answer': answer, 'model': model or 'scripted', 'provider_failure': provider.provider_failure, 'synthetic_effect_review': model is None, 'passed': None,
+                        'late_status': late['status'], 'model_calls': provider.calls, 'reported_usage': provider.reported_usage, 'answer': answer, 'model': model or 'scripted', 'provider_failure': provider.provider_failure, 'synthetic_effect_review': model is None, 'passed': None,
                         'limitations': [
                             'Semantic task outcome requires independent manual review.' if model else 'Scripted model; semantic task outcome is not evaluated.',
                             'Restart and cancellation while steering are not assessed.' ]}
@@ -261,6 +271,8 @@ def run(*, timeout=10, scenario="normal", model=None):
                         'model_calls': provider.calls, 'passed': None,
                         'limitations': ['Scripted model; semantic behavior not assessed.',
                                         'No cancellation or failure scenario assessed.']}
+            # Inspect after the answer is ready but before the client acknowledges it.
+            before_initial_ack = client.request('experimental_owner_followup_list')['items']
             initial_answer = acknowledge(active) if initial_ready else None
             first_ready = wait_ready(first)
             before_first_ack = client.request('experimental_owner_followup_list')['items']
@@ -276,9 +288,10 @@ def run(*, timeout=10, scenario="normal", model=None):
                     'listed_ids': [item['id'] for item in listed],
                     'remove_status': removed['status'],
                     'before_ack': [(item['id'], item['status']) for item in before_ack],
+                    'before_initial_ack': [(item['id'], item['status']) for item in before_initial_ack],
                     'before_first_ack': [(item['id'], item['status']) for item in before_first_ack],
                     'after': [(item['id'], item['status']) for item in after],
-                    'inbound_count': ingress_count, 'model_calls': provider.calls,
+                    'inbound_count': ingress_count, 'model_calls': provider.calls, 'reported_usage': provider.reported_usage,
                     'answers': [initial_answer, first_answer, second_answer], 'model': model or 'scripted',
                     'provider_failure': provider.provider_failure,
                     'context_visible': [all(text in prompt for text in (first_prompt, second_prompt))
@@ -290,3 +303,37 @@ def run(*, timeout=10, scenario="normal", model=None):
         finally:
             provider.release.set()
             daemon.stop()
+
+
+def main(argv=None):
+    """Write a fresh, reviewable receipt; never turn observation into a pass."""
+    import argparse
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--scenario', choices=('enqueue', 'steer'), required=True)
+    parser.add_argument('--journal', type=Path, required=True, help='New receipt path; never overwrites.')
+    parser.add_argument('--model', help='Configured System Two model; omit to use the scripted provider.')
+    parser.add_argument('--timeout', type=float, default=10)
+    args = parser.parse_args(argv)
+    if args.timeout <= 0:
+        parser.error('--timeout must be positive')
+    start = time.monotonic()
+    with args.journal.open('x', encoding='utf-8') as journal:
+        try:
+            observation = run(timeout=args.timeout, scenario=args.scenario, model=args.model)
+        except Exception as exc:
+            observation = {'observation': 'exercise_error', 'error_type': type(exc).__name__,
+                           'passed': None, 'limitations': ['Exercise did not complete; outcome is unknown.']}
+            failed = True
+        else:
+            failed = False
+        receipt = {'scenario': args.scenario, 'provider': 'configured_model' if args.model else 'scripted',
+                   'model': args.model or 'scripted', 'elapsed_seconds': round(time.monotonic() - start, 3),
+                   'observation': observation}
+        json.dump(receipt, journal, ensure_ascii=False, indent=2)
+        journal.write('\n')
+    if failed:
+        raise SystemExit(1)
+
+
+if __name__ == '__main__':
+    main()

@@ -1,0 +1,37 @@
+{
+  "scenario": "steer",
+  "provider": "scripted",
+  "model": "scripted",
+  "elapsed_seconds": 0.691,
+  "observation": {
+    "observation": "steer",
+    "submission": "accepted",
+    "initial_status": "ready",
+    "steering_status": "included_in_planning",
+    "context_visible": [
+      false,
+      true
+    ],
+    "late_status": "not_accepted",
+    "model_calls": 2,
+    "reported_usage": [
+      {
+        "input_tokens": 100,
+        "output_tokens": 20
+      },
+      {
+        "input_tokens": 100,
+        "output_tokens": 20
+      }
+    ],
+    "answer": "The list is ready.",
+    "model": "scripted",
+    "provider_failure": null,
+    "synthetic_effect_review": true,
+    "passed": null,
+    "limitations": [
+      "Scripted model; semantic task outcome is not evaluated.",
+      "Restart and cancellation while steering are not assessed."
+    ]
+  }
+}

@@ -11,6 +11,8 @@ from typing import Any, Callable, Protocol
 from alphonse.agent_v2.core.inference.models import InferenceRequest
 from alphonse.agent_v2.core.inference.models import InferenceResult
 from alphonse.agent_v2.core.inference.models import ModelProfile
+from alphonse.agent_v2.core.inference.models import ModelResponseParseError
+from alphonse.agent_v2.core.inference.models import RESPONSE_PARSE_STAGES
 from alphonse.agent_v2.core.telemetry import InferenceTelemetryEvent, approximate_tokens, json_chars, safe_telemetry_value
 
 
@@ -32,6 +34,8 @@ _CODEX_FAILURES = {
 
 
 def _simple_loop_failure_category(exc: Exception) -> str:
+    if type(exc) is ModelResponseParseError:
+        return 'invalid_response'
     if type(exc) is ValueError and len(exc.args) == 1 and type(exc.args[0]) is str:
         return _CODEX_FAILURES.get(exc.args[0], 'provider_error')
     return 'provider_error'
@@ -39,11 +43,8 @@ def _simple_loop_failure_category(exc: Exception) -> str:
 
 def _simple_loop_failure_detail(exc: Exception) -> str | None:
     """Report only a fixed parse stage, never provider text or arbitrary attrs."""
-    if _simple_loop_failure_category(exc) != 'invalid_response':
-        return None
-    stage = getattr(exc, 'response_stage', None)
-    allowed = {'outer_object', 'arguments_not_string', 'arguments_invalid_json', 'arguments_not_object'}
-    return stage if type(stage) is str and stage in allowed else None
+    stage = getattr(exc, 'response_stage', None) if type(exc) is ModelResponseParseError else None
+    return stage if type(stage) is str and stage in RESPONSE_PARSE_STAGES else None
 
 
 class InferenceProvider(Protocol):

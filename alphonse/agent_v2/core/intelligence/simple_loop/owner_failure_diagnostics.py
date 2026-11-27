@@ -206,6 +206,10 @@ def recent_owner_failures(queue, events, *, actor: str, project_id: str, current
                           'observed_at': getattr(event, 'observed_at', None) or None,
                           'description': _DESCRIPTIONS[code],
                           'effects': 'not established by this diagnostic'}
+            from .owner_failure_recovery import checkpoint_failure_recovery
+            recovery = checkpoint_failure_recovery(task)
+            if recovery is not None:
+                diagnostic['suggested_followup'] = recovery['reply']
             try:
                 # Reuse the same sanitized, actor-bound activity available to
                 # Desktop. Never copy raw arguments, outputs or provider text.

@@ -1,0 +1,38 @@
+{
+  "receipt": "completed",
+  "verified": true,
+  "worker": {
+    "worker_model": "gpt-6-luna",
+    "cli_starts": [
+      {
+        "prompt_sha256": "d0463fa0bf16ef0cb9a73195dbcbb299f295a3fb925fbc4b2b198747862f0141",
+        "snapshot_sha256": {
+          "preview.py": "e4c9b08662abbb4fa6fd1916c2fdd16d5ccd1c2c498dd8b12aa55bcd06d21c4b",
+          "check_preview.py": "149df3be29be55f9f053564f131085e6051ee235f3d9c9a67d4334d512bf0785"
+        },
+        "elapsed_seconds": 5.33,
+        "tool_item_types": [],
+        "usage": {
+          "input_tokens": 11177,
+          "output_tokens": 76
+        },
+        "pid": 73405,
+        "execution_boundary": "macOS executable allowlist, home and Git fixture access restrictions",
+        "exit_code": 0,
+        "thread_started": 1,
+        "turn_completed": 1
+      }
+    ],
+    "verifications": [
+      {
+        "operation_id": "dojo-handoff:preflight",
+        "safe_single_file_proposal": true,
+        "proposal_diff": "--- a/preview.py\n+++ b/preview.py\n@@ -1,2 +1,2 @@\n def render_subtitle(text):\n-    return text[:16]\n+    return text\n",
+        "baseline_test_exit": 1,
+        "baseline_assertion_failed": true,
+        "candidate_test_exit": 0,
+        "pinned_original_unchanged": true
+      }
+    ]
+  }
+}

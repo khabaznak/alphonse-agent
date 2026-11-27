@@ -33,8 +33,10 @@ integrations, users, scheduled tasks, and settings there.
 The current daemon runs the owner-only simpler conversation loop. It does not
 start the legacy scheduler, event workers, integration listeners, or ordinary
 outbox dispatcher. Existing scheduled and queued work is preserved but is not
-automatically resumed. One-time Desktop reminders and limited owner Gmail reads
-have separate, narrower support. See the [transition inventory](docs/agent-loop/retirement-transition-2026-11-15.md)
+automatically resumed. The owner can use one-time Desktop reminders, Gmail Inbox
+counts and [content search](docs/gmail-readonly.md#desktop-inbox-search-and-summaries),
+and a private [Google Calendar agenda](docs/family-calendar.md#owner-desktop-agenda)
+from an authorized calendar. See the [transition inventory](docs/agent-loop/retirement-transition-2026-11-15.md)
 before upgrading or recovering older work.
 
 ## Repository layout

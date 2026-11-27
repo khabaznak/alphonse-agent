@@ -45,6 +45,25 @@ def test_search_normalizes_results(monkeypatch: pytest.MonkeyPatch) -> None:
     assert result["results"][0]["snippet"] == "Snippet"
 
 
+@pytest.mark.parametrize("hits,upstream_failed", [(False, False), (False, True), (True, True)])
+def test_search_distinguishes_upstream_failure_from_empty_or_partial_results(monkeypatch, hits, upstream_failed):
+    response = _Response()
+    payload = response.json() if hits else {"results": []}
+    payload["unresponsive_engines"] = [["synthetic engine", "untrusted error text"]] if upstream_failed else []
+    response.json = lambda: payload
+    monkeypatch.setattr(web.requests, "get", lambda *args, **kwargs: response)
+    result = web.execute_web_search({"query": "synthetic report"}, settings=WebToolsSettings(
+        enabled=True, searxng_base_url="https://example.test"))
+
+    assert "untrusted error text" not in json.dumps(result)
+    if upstream_failed and not hits:
+        assert result["exception"]["code"] == "searxng_upstream_unavailable"
+        assert "result_count" not in result
+    else:
+        assert result["result_count"] == int(hits)
+        assert result.get("partial", False) is upstream_failed
+
+
 def test_fetch_blocks_private_destinations() -> None:
     result = web.execute_web_fetch({"url": "http://127.0.0.1:8080"}, settings=WebToolsSettings(enabled=True, searxng_base_url="http://127.0.0.1:8080"))
     assert result["exception"]["code"] == "web_fetch_private_destination"

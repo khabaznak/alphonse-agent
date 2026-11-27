@@ -17,18 +17,14 @@ from typing import Any
 from alphonse.agent_v2.core.inference.images import IMAGE_SUFFIXES
 
 from alphonse.agent_v2.core.core import ToolDescriptor
+from alphonse.agent_v2.core.inference.models import InferencePurpose
 from alphonse.agent_v2.core.inference.models import InferenceRequest
 from alphonse.agent_v2.core.inference.models import InferenceResult
+from alphonse.agent_v2.core.inference.models import ModelProfile
+from alphonse.agent_v2.core.inference.models import ModelResponseParseError
 
 
 _MACOS_HOMEBREW_CODEX = ('/opt/homebrew/bin/codex', '/usr/local/bin/codex')
-
-
-def _invalid_json(stage: str) -> ValueError:
-    """Keep the public error stable while exposing only a fixed parse stage."""
-    error = ValueError('openai_codex_invalid_json')
-    error.response_stage = stage
-    return error
 
 
 def _resolve_cli(cli_bin: str) -> tuple[str, str | None]:
@@ -67,6 +63,15 @@ class OpenAICodexProvider:
 
     def __init__(self, config: OpenAICodexProviderConfig | None = None) -> None:
         self.config = config or OpenAICodexProviderConfig()
+
+    def validate_model(self, model: str) -> None:
+        """Check access through the same ChatGPT transport as simple-loop work."""
+        request = InferenceRequest(
+            prompt="Reply with OK.",
+            purpose=InferencePurpose.ACCEPTANCE_CRITERIA,
+            model_profile=ModelProfile(provider="openai_codex", model=model, profile_id="validation"),
+        )
+        self._run_codex_with_usage(request.prompt, request)
 
     def generate_markdown(self, request: InferenceRequest) -> InferenceResult:
         output = self._run_codex(_markdown_envelope(request), request)
@@ -110,16 +115,16 @@ class OpenAICodexProvider:
         else:
             parsed = _try_parse_json_object(output)
             if parsed is None:
-                raise _invalid_json('outer_object')
+                raise ModelResponseParseError('outer_object', usage)
             if encoded_arguments and parsed.get('arguments') is not None:
                 if not isinstance(parsed['arguments'], str):
-                    raise _invalid_json('arguments_not_string')
+                    raise ModelResponseParseError('arguments_not_string', usage)
                 try:
                     arguments = json.loads(parsed['arguments'])
                 except (TypeError, ValueError):
-                    raise _invalid_json('arguments_invalid_json') from None
+                    raise ModelResponseParseError('arguments_invalid_json', usage) from None
                 if not isinstance(arguments, dict):
-                    raise _invalid_json('arguments_not_object')
+                    raise ModelResponseParseError('arguments_not_object', usage)
                 parsed['arguments'] = arguments
         return InferenceResult(json_value=parsed, model_profile=request.model_profile,
                                raw_response=None if tactical else output, usage=usage)
@@ -245,7 +250,10 @@ class OpenAICodexProvider:
             text = f"{stdout}\n{stderr}".lower()
             if "requires a newer version of codex" in text:
                 raise ValueError("openai_codex_cli_upgrade_required")
-            if "does not exist or you do not have access to it" in text and "model" in text:
+            if "model" in text and any(marker in text for marker in (
+                "does not exist or you do not have access to it",
+                "not supported when using codex with a chatgpt account",
+            )):
                 # The subscription backend uses one ambiguous response for an
                 # unknown slug, account access, and transient rollout routing.
                 raise ValueError(f"openai_codex_model_access_rejected: {model or 'selected model'}")

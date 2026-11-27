@@ -39,6 +39,41 @@ it("supports older work logs without inventing effects or pending work", async (
   await act(async () => { root.unmount(); });
 });
 
+it("shows each Gmail label in search order while technical details are closed", async () => {
+  const container = document.createElement("div"); const root = createRoot(container);
+  const request = vi.fn(async () => ({ status: "completed", failure_code: null, notice: "May be incomplete.",
+    activity: { recorded_action_count: 3, unconfirmed_effect_count: 0, pending_tool: false,
+      latest: { tool_kind: "mail_search", outcome: "recorded", effects: "not_reported", gmail_label: "Family/School" } },
+    events: ["Inbox", "Family/School", "Family/School"].map((gmail_label) => ({
+      label: "Searched Gmail", outcome: "Observation recorded", gmail_label,
+    })),
+  })) as unknown as OwnerRequest;
+  await act(async () => root.render(<ConversationWorkLog request={request} messageId={"a".repeat(32)} active />));
+  expect(Array.from(container.querySelectorAll(".conversation-work-log > p"), (item) => item.textContent)).toEqual([
+    "3 tool observations recorded.",
+    "Gmail search · Inbox → Family/School → Family/School",
+  ]);
+  expect(container.querySelector<HTMLDetailsElement>(".conversation-work-log-details")!.open).toBe(false);
+  expect(Array.from(container.querySelectorAll("li"), (item) => item.textContent)).toEqual([
+    "Searched Gmail · Inbox · Observation recorded",
+    "Searched Gmail · Family/School · Observation recorded (2 times)",
+  ]);
+  expect(container.textContent).not.toContain("Gmail Inbox search");
+  await act(async () => root.unmount());
+});
+
+it("does not infer a Gmail label on a work log without a recorded scope", async () => {
+  const container = document.createElement("div"); const root = createRoot(container);
+  const request = vi.fn(async () => ({ status: "completed", failure_code: null, notice: "May be incomplete.", events: [],
+    activity: { recorded_action_count: 1, unconfirmed_effect_count: 0, pending_tool: false,
+      latest: { tool_kind: "mail_search", outcome: "source_failed", effects: "not_reported" } },
+  })) as unknown as OwnerRequest;
+  await act(async () => root.render(<ConversationWorkLog request={request} messageId={"a".repeat(32)} active />));
+  expect(container.textContent).toContain("Gmail search: could not be completed.");
+  expect(container.textContent).not.toContain("Inbox");
+  await act(async () => root.unmount());
+});
+
 it("opens when an existing request becomes active without closing when work ends", async () => {
   const container = document.createElement("div"); const root = createRoot(container);
   const request = vi.fn(async () => ({ status: "running", failure_code: null, notice: "May be incomplete.", events: [] })) as unknown as OwnerRequest;
@@ -64,6 +99,32 @@ it("offers only explicitly available recovery controls", () => {
   act(() => root.unmount());
 });
 
+it("opens recorded evidence when a model format failure is restored", async () => {
+  const { ConversationTimelineEntry } = await import("./ConversationTimelineEntry");
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  const id = "f".repeat(32);
+  const request = vi.fn(async () => ({ status: "blocked", failure_code: "model_response_invalid", notice: "May be incomplete.",
+    model_parse_stages: ["arguments_invalid_json"],
+    events: [{ label: "Local command", outcome: "Command timed out; effects are unconfirmed" }],
+    activity: { recorded_action_count: 1, unconfirmed_effect_count: 1, pending_tool: false,
+      outcome_counts: [{ tool_kind: "local_command", outcome: "timed_out", count: 1 }] },
+  })) as unknown as OwnerRequest;
+  await act(async () => root.render(<ConversationTimelineEntry message={{ id, role: "user", content: "Check the fixture" }}
+    questions={[]} user="fixture" timezone="UTC" onDone={async () => {}} projectName="" memoize={false} renderMarkdown={false}
+    failures={[{ messageId: id, failureCode: "model_response_invalid", dismissed: false }]}
+    onFailureDismissedChange={() => {}} workLogRequest={request} />));
+  const workLog = container.querySelector<HTMLDetailsElement>(".conversation-work-log")!;
+  expect(workLog.open).toBe(true);
+  expect(workLog.textContent).toContain("1 timed out");
+  expect(workLog.textContent).toContain("cannot confirm whether the recorded local commands changed anything");
+  const technical = container.querySelector<HTMLDetailsElement>(".conversation-work-log-details")!;
+  expect(technical.open).toBe(false);
+  expect(technical.textContent).toContain("Tool arguments could not be decoded as JSON");
+  expect(request).toHaveBeenCalledWith("experimental_owner_work_log", { message_id: id });
+  await act(async () => root.unmount());
+});
+
 it("sends the failed request ID to recovery and matches the recovery destination", async () => {
   const { ConversationTimelineEntry } = await import("./ConversationTimelineEntry");
   const { OwnerRecovery, focusConversationRequest, focusOwnerRecovery } = await import("./OwnerRecoveryPanel");
@@ -82,12 +143,16 @@ it("sends the failed request ID to recovery and matches the recovery destination
   await act(async () => root.unmount()); container.remove();
 });
 
-it("reports bounded source failures without saying the source was read", async () => {
+it.each([
+  ["web_source", "source_failed", "timeout", "Web source: could not be completed. The request timed out."],
+  ["web_search", "source_failed", "upstream_search_failed", "Web search: could not be completed. Upstream search engines failed."],
+  ["web_search", "partial", undefined, "Web search: returned partial results because some search engines failed."],
+])("reports a %s observation with outcome %s", async (tool_kind, outcome, detail, expected) => {
   const container = document.createElement("div"); const root = createRoot(container);
   const request = vi.fn(async () => ({ status: "blocked", failure_code: "source_unavailable", notice: "May be incomplete.", events: [],
-    activity: { recorded_action_count: 1, unconfirmed_effect_count: 0, pending_tool: false, latest: { tool_kind: "web_source", outcome: "source_failed", effects: "not_reported", detail: "timeout" } } })) as unknown as OwnerRequest;
+    activity: { recorded_action_count: 1, unconfirmed_effect_count: 0, pending_tool: false, latest: { tool_kind, outcome, effects: "not_reported", detail } } })) as unknown as OwnerRequest;
   await act(async () => root.render(<ConversationWorkLog request={request} messageId={"c".repeat(32)} active />));
-  expect(container.textContent).toContain("Web source: could not be completed. The request timed out.");
+  expect(container.textContent).toContain(expected);
   expect(container.textContent).not.toContain("Read a web source");
   expect(container.textContent).not.toContain("changed anything");
   await act(async () => root.unmount());

@@ -1,12 +1,22 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+import json
+import os
 from types import SimpleNamespace
 
 import pytest
 
 from alphonse.agent_v2.agenda import agenda
+from alphonse.agent_v2.accounts import AccountService, AccountSession
+from alphonse.agent_v2.core.intelligence.simple_loop.owner_calendar import OwnerCalendarService, SCOPE
 from alphonse.agent_v2.core.projects import ProjectStore
 from alphonse.agent_v2.core.scheduled_tasks import ScheduledTaskStore
+from alphonse.agent_v2.integrations.credentials import CredentialVault
+from alphonse.agent_v2.integrations.google_calendar import CalendarHTTPError
+from alphonse.agent_v2.integrations.store import SQLiteIntegrationStore
 from alphonse.agent_v2.users import V2UserStore
+from test_oauth_lifecycle import MemoryBackend, expire
+from test_owner_calendar import PAGE, TITLE, Wire, connect_calendar
+from test_owner_gmail import f
 
 
 @pytest.fixture
@@ -113,9 +123,131 @@ def test_ipc_validates_actor_and_range(home):
         server._dispatch({"method": "agenda", "params": {"start_day": "2026-11-01", "end_day": "2026-11-02"}})
 
 
+def test_owner_agenda_tracks_calendar_setup_and_revocation_without_provider_reads(home):
+    from alphonse.agent_v2.ipc import V2DaemonServer
+
+    runtime, _, _, root = home
+    path = root / "calendar.sqlite"
+    users = runtime.user_store = V2UserStore(path)
+    owner = users.onboard(display_name="Owner", users_root=root / "calendar-users")
+    actor = owner.user_id
+    member = users.create_user(display_name="Other").user_id
+    store = SQLiteIntegrationStore(path, credential_vault=CredentialVault(MemoryBackend()))
+    accounts = AccountService(store, users)
+
+    def unexpected_provider(_):
+        pytest.fail("Agenda source status must never initialize the Google provider")
+
+    runtime.owner_calendar_service = OwnerCalendarService(accounts, unexpected_provider)
+    server = V2DaemonServer(SimpleNamespace(runtime=runtime, experimental_owner_only=True))
+
+    def snapshot(user=actor, verified=True):
+        return server._dispatch({"method": "agenda", "params": {"actor_user_id": user,
+            "start_day": "2026-11-01", "end_day": "2026-11-02"}}, agenda_peer_verified=verified)
+
+    def wire_snapshot(uid):
+        request = {"version": 1, "method": "agenda", "params": {"actor_user_id": actor,
+                   "start_day": "2026-11-01", "end_day": "2026-11-02"}}
+
+        class Peer:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                pass
+
+            def recv(self, _):
+                return (json.dumps(request) + "\n").encode()
+
+            def getpeereid(self):
+                return uid, 0
+
+            def sendall(self, data):
+                self.response = json.loads(data)
+
+        peer = Peer()
+        server._handle(peer)
+        return peer.response
+
+    assert snapshot()["calendar_source_status"] == "not_connected"
+    session = AccountSession(actor)
+    accounts.create_connection(session, connection_id="private-connection", provider_key="google",
+                               provider_subject="private-subject", display_name="Private Calendar Name")
+    store.install_credentials("private-connection", {"access_token": "private-token"}, expected_generation=0)
+    accounts.save_connection(session, connection_id="private-connection", expected_revision=1,
+                              provider_subject="private-subject", capabilities=["calendar_read"], granted_scopes=[SCOPE])
+    assert snapshot()["calendar_source_status"] == "grant_required"
+
+    def grant(grant_id, calendar_id):
+        return accounts.save_grant(session, grant_id=grant_id, connection_id="private-connection", expected_revision=0,
+            beneficiary_user_id=actor, operations=["calendar_read"], resources=[calendar_id],
+            recipient_user_ids=[actor], expires_at=(datetime.now(timezone.utc) + timedelta(hours=1)).isoformat())
+
+    grant("private-grant", "private@calendar.test")
+    result = snapshot()
+    assert result["calendar_source_status"] == "connected"
+    assert result["items"] == [] and "private" not in str(result).lower()
+    assert "calendar_source_status" not in snapshot(member)
+    assert "calendar_source_status" not in snapshot(verified=False)
+    assert wire_snapshot(os.getuid())["result"]["calendar_source_status"] == "connected"
+    assert wire_snapshot(os.getuid() + 1)["ok"] is False
+
+    grant("secondary-grant", "second@calendar.test")
+    assert snapshot()["calendar_source_status"] == "selection_required"
+    accounts.revoke_grant(session, grant_id="secondary-grant", expected_revision=1)
+    assert snapshot()["calendar_source_status"] == "connected"
+    accounts.revoke_grant(session, grant_id="private-grant", expected_revision=1)
+    assert snapshot()["calendar_source_status"] == "grant_required"
+
+
 def test_spring_forward_is_a_23_hour_day(home):
     create(home, name="Before start", schedule_kind="once", run_at="2026-03-08T04:59:59Z")
     create(home, name="At start", schedule_kind="once", run_at="2026-03-08T05:00:00Z")
     create(home, name="Before end", schedule_kind="once", run_at="2026-03-09T03:59:59Z")
     create(home, name="At end", schedule_kind="once", run_at="2026-03-09T04:00:00Z")
     assert {r["name"] for r in read(home, "2026-03-08", "2026-03-09")["items"]} == {"At start", "Before end"}
+
+
+@pytest.mark.parametrize('case', ['complete', 'partial', 'renewed', 'api_disabled', 'revoked_during_read'])
+def test_verified_agenda_reads_one_bounded_calendar_page_without_projecting_credentials(f, case):
+    from alphonse.agent_v2.ipc import V2DaemonServer
+
+    connect_calendar(f)
+    f.accounts.users.set_timezone('America/Mexico_City', f.owner.actor_user_id)
+    if case == 'renewed':
+        expire(f)
+    page = {**PAGE, 'nextPageToken': 'PRIVATE_PAGE_CURSOR'} if case == 'partial' else PAGE
+    wire = Wire(CalendarHTTPError(403, api_disabled=True) if case == 'api_disabled' else page)
+    if case == 'revoked_during_read':
+        wire.after = lambda: f.accounts.revoke_grant(f.owner, grant_id='grant', expected_revision=1)
+    service = OwnerCalendarService(f.accounts, lambda _: f.service, transport=wire)
+    runtime = SimpleNamespace(user_store=f.accounts.users, project_store=ProjectStore(':memory:'),
+                              schedule_store=ScheduledTaskStore(':memory:'), owner_calendar_service=service)
+    server = V2DaemonServer(SimpleNamespace(runtime=runtime, experimental_owner_only=True))
+    params = dict(actor_user_id=f.owner.actor_user_id, start_day='2026-11-02', end_day='2026-12-14',
+                  include_calendar_events=True)
+    request = dict(method='agenda', params=params)
+    assert 'calendar_events' not in server._dispatch(request)
+    assert 'calendar_source_status' not in server._dispatch(
+        dict(method='agenda', params={**params, 'actor_user_id': f.other.actor_user_id}), agenda_peer_verified=True)
+    assert not wire.calls
+
+    result = server._dispatch(request, agenda_peer_verified=True)
+    assert len(wire.calls) == 1
+    assert wire.calls[0][1]['params']['timeMin'] == '2026-11-02T06:00:00+00:00'
+    assert wire.calls[0][1]['params']['timeMax'] == '2026-12-14T06:00:00+00:00'
+    assert wire.calls[0][1]['params']['maxResults'] == 200
+    assert f.service.clients['google'].refresh_count == (1 if case == 'renewed' else 0)
+    if case == 'api_disabled':
+        assert result['calendar_event_status'] == 'api_disabled' and 'calendar_events' not in result
+    elif case == 'revoked_during_read':
+        assert result['calendar_source_status'] == 'grant_required'
+        assert result['calendar_event_status'] == 'unavailable' and 'calendar_events' not in result
+    else:
+        assert result['calendar_source_status'] == 'connected'
+        assert result['calendar_event_status'] == ('partial' if case == 'partial' else 'complete')
+        assert result['calendar_events'][0] == {'id': 'google-calendar:0', 'title': TITLE,
+            'start': '2026-12-01T09:15:00-06:00', 'end': '2026-12-01T10:15:00-06:00',
+            'all_day': False, 'end_unspecified': False}
+        assert result['calendar_events'][1]['end'] == '2026-12-03' and result['calendar_events'][1]['all_day']
+    assert 'PRIVATE_' not in json.dumps(result) and 'calendar.google.com' not in json.dumps(result)

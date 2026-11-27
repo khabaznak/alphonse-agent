@@ -1,0 +1,129 @@
+{
+  "before" : {
+    "boot" : 1,
+    "cards" : [
+      1,
+      2
+    ],
+    "errorText" : null,
+    "pickups" : [
+      {
+        "boot" : 1,
+        "id" : "11111111111111111111111111111111"
+      },
+      {
+        "boot" : 1,
+        "id" : "22222222222222222222222222222222"
+      }
+    ],
+    "receiptOnlyRows" : 0,
+    "sidebar" : true,
+    "submissions" : 3,
+    "tasks" : [
+      {
+        "index" : 0,
+        "status" : "client_acknowledged"
+      },
+      {
+        "index" : 1,
+        "status" : "client_acknowledged"
+      },
+      {
+        "index" : 2,
+        "status" : "pending"
+      }
+    ],
+    "working" : true
+  },
+  "content_terminations" : 0,
+  "events" : [
+    {
+      "event" : "window_opened",
+      "ms" : 142,
+      "pid" : 12209,
+      "window" : 5477
+    },
+    {
+      "event" : "native_navigation_start",
+      "ms" : 278
+    },
+    {
+      "event" : "native_navigation_commit",
+      "ms" : 284
+    },
+    {
+      "event" : "document_start",
+      "ms" : 284,
+      "sidebar" : false
+    },
+    {
+      "event" : "native_navigation_finish",
+      "ms" : 297
+    },
+    {
+      "event" : "first_frame_without_shell",
+      "ms" : 324,
+      "sidebar" : false
+    },
+    {
+      "event" : "first_shell_frame",
+      "ms" : 425,
+      "sidebar" : true
+    },
+    {
+      "event" : "busy_before_injection",
+      "ms" : 996,
+      "renderer_pid" : 12211
+    }
+  ],
+  "host_pid" : 12209,
+  "mode" : "control",
+  "navigation_finishes" : 1,
+  "navigation_starts" : 1,
+  "renderer_after" : 12211,
+  "renderer_before" : 12211,
+  "result" : {
+    "after" : {
+      "boot" : 1,
+      "cards" : [
+        1,
+        2,
+        3
+      ],
+      "errorText" : null,
+      "pickups" : [
+        {
+          "boot" : 1,
+          "id" : "11111111111111111111111111111111"
+        },
+        {
+          "boot" : 1,
+          "id" : "22222222222222222222222222222222"
+        },
+        {
+          "boot" : 1,
+          "id" : "33333333333333333333333333333333"
+        }
+      ],
+      "receiptOnlyRows" : 0,
+      "sidebar" : true,
+      "submissions" : 3,
+      "tasks" : [
+        {
+          "index" : 0,
+          "status" : "client_acknowledged"
+        },
+        {
+          "index" : 1,
+          "status" : "client_acknowledged"
+        },
+        {
+          "index" : 2,
+          "status" : "client_acknowledged"
+        }
+      ],
+      "working" : false
+    }
+  },
+  "window" : 5477
+}

@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en" data-alphonse-theme="dark">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Evidence review Critic fixture</title>
+    <style>
+      #root { height: auto; }
+      .fixture { display: grid; gap: 8px; justify-items: start; margin: 0 auto; padding: 16px max(12px, 4vw); max-width: 890px; }
+      .fixture-controls { display: flex; gap: 8px; flex-wrap: wrap; }
+      .fixture-thread { min-width: 0; width: min(100%, 725px); }
+      .fixture-thread.compact { width: min(100%, 360px); }
+      .fixture-thread .conversation-message { width: 100%; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./fixture.tsx"></script>
+  </body>
+</html>

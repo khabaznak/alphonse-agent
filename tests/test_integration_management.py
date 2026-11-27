@@ -8,7 +8,9 @@ import pytest
 
 from test_account_grants import f, expiry, revise_connection
 from test_project_checks import checks
-from alphonse.agent_v2.accounts import AccountSession
+from alphonse.agent_v2.accounts import (
+    AccountSession, GMAIL_CONTENT_OPERATION, GMAIL_READ_SCOPE, OUTLOOK_INBOX_OPERATION, OUTLOOK_INBOX_RESOURCE,
+)
 from alphonse.agent_v2.integration_management import IntegrationManagement
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.tools.registry.native.integration_manage import build_integration_manage_tool_definition
@@ -147,7 +149,7 @@ def test_peer_identity_not_payload(management, monkeypatch):
         server._optional_management(SimpleNamespace(getpeereid=lambda: (os.getuid()+1, 0)), request)
 
 
-def test_owner_gmail_setup_uses_canonical_owner_and_limits_actions(management, monkeypatch):
+def test_owner_google_setup_uses_canonical_owner_and_limits_actions(management, monkeypatch):
     import os
     f = management
     f.runtime.user = 'child'  # Stale runtime identity must never choose the actor.
@@ -170,7 +172,10 @@ def test_owner_gmail_setup_uses_canonical_owner_and_limits_actions(management, m
     result = server._optional_management(peer, req('catalog'))
     assert captured[-1][0] == 'parent'
     assert result['owner_gmail_setup_only'] is True
-    assert result['providers'] == [{'provider': 'google', 'capabilities': ['mail_read']}]
+    assert result['owner_google_setup_only'] is True
+    assert result['owner_gmail_content_setup'] is True
+    assert result['owner_gmail_label_setup'] is True
+    assert result['providers'] == [{'provider': 'google', 'capabilities': ['mail_read', 'calendar_read']}]
     assert result['connections'] == [{'provider': 'google', 'connection_id': 'g'}]
     started = []
     server._oauth_loopback = SimpleNamespace(start=started.append)
@@ -180,13 +185,17 @@ def test_owner_gmail_setup_uses_canonical_owner_and_limits_actions(management, m
     server._optional_management(peer, req('begin', values))
     assert captured[-1] == ('parent', 'begin', values)
     assert started == ['google']
+    calendar = {**values, 'capabilities': ['calendar_read']}
+    server._optional_management(peer, req('begin', calendar))
+    assert captured[-1] == ('parent', 'begin', calendar)
     server._accepting_handlers = False
     with pytest.raises(RuntimeError, match='daemon_stopping'):
         server._optional_management(peer, req('begin', values))
-    assert started == ['google']
+    assert started == ['google', 'google']
     for action, values in [
         ('review', {}), ('set_status', {}), ('complete', {}),
-        ('begin', {'provider': 'google', 'capabilities': ['calendar_read']}),
+        ('begin', {'provider': 'google', 'capabilities': ['mail_read', 'calendar_read']}),
+        ('begin', {'provider': 'google', 'capabilities': ['calendar_discover']}),
         ('begin', {'provider': 'microsoft', 'capabilities': ['mail_read']}),
         ('save_grant', {'beneficiary_user_id': 'child', 'operations': ['mail_read'],
                         'resources': ['INBOX'], 'recipient_user_ids': ['parent'], 'project_id': None}),
@@ -199,6 +208,55 @@ def test_owner_gmail_setup_uses_canonical_owner_and_limits_actions(management, m
         server._optional_management(peer, {'version': PROTOCOL_VERSION, 'params': {'action': 'catalog', 'user': 'child'}})
     with pytest.raises(PermissionError, match='peer_denied'):
         server._optional_management(SimpleNamespace(getpeereid=lambda: (os.getuid()+1, 0)), req('catalog'))
+
+
+def test_owner_outlook_ipc_only_exposes_and_grants_personal_inbox_count(management, monkeypatch):
+    import os
+    from urllib.parse import urlencode
+    from alphonse.agent_v2.integrations.oauth import ClientConfig, OAuthService
+    from test_oauth_lifecycle import FakeProvider
+
+    f = management
+    f.runtime.integration_store = f.store
+    with f.store._connect() as db:
+        db.execute("UPDATE v2_integrations SET provider_key='google' WHERE integration_id='one'")
+    monkeypatch.setattr(os.path, 'samefile', lambda *_: True)
+    redirect = 'http://127.0.0.1:54321/callback'
+    oauth = OAuthService(f.service, [ClientConfig('microsoft', 'disposable', redirect)], client_factory=FakeProvider)
+    daemon = SimpleNamespace(runtime=f.runtime, experimental_owner_only=True, optional_accounts=lambda session: oauth)
+    server = V2DaemonServer(daemon)
+    server._accepting_handlers = True
+    server._oauth_loopback = SimpleNamespace(start=lambda provider: None)
+    peer = SimpleNamespace(getpeereid=lambda: (os.getuid(), 0))
+
+    def request(action, **values):
+        return server._optional_management(peer, {'version': PROTOCOL_VERSION, 'params': {'action': action, 'values': values}})
+
+    catalog = request('catalog')
+    assert catalog['owner_outlook_inbox_setup']
+    assert catalog['providers'] == [{'provider': 'microsoft', 'capabilities': [OUTLOOK_INBOX_OPERATION]}]
+    attempt = request('begin', connection_id='outlook', provider='microsoft', display_name='Test Hotmail',
+                      capabilities=[OUTLOOK_INBOX_OPERATION], expected_revision=0)
+    assert request('oauth_attempt_status', provider='microsoft', attempt_id=attempt['attempt_id']) == {'status': 'pending'}
+    callback = redirect + '?' + urlencode({'state': oauth.clients['microsoft'].state, 'code': 'disposable-code'})
+    oauth.complete(AccountSession('parent'), callback)
+    assert request('oauth_attempt_status', provider='microsoft', attempt_id=attempt['attempt_id']) == {'status': 'connected'}
+    account, = [item for item in request('catalog')['connections'] if item['provider'] == 'microsoft']
+    assert account['display_name'] == 'Test Hotmail'
+    grant = dict(grant_id='outlook-grant', connection_id='outlook', expected_revision=0,
+                 expected_connection_revision=account['revision'], beneficiary_user_id='parent',
+                 operations=[OUTLOOK_INBOX_OPERATION], resources=[OUTLOOK_INBOX_RESOURCE],
+                 recipient_user_ids=['parent'], expires_at=expiry())
+    for bad in ({'resources': ['all-mail']}, {'recipient_user_ids': ['child']}, {'project_id': 'project'},
+                {'operations': ['mail_read'], 'resources': ['INBOX']}):
+        with pytest.raises(PermissionError, match='owner_only_account_scope_unavailable'):
+            request('save_grant', **(grant | bad))
+    with pytest.raises(ValueError, match='oauth_revision_conflict'):
+        request('save_grant', **(grant | {'expected_connection_revision': account['revision'] - 1}))
+    with pytest.raises(PermissionError, match='outlook_inbox_grant_requires_desktop'):
+        f.management.request(AccountSession('parent'), 'save_grant', grant)
+    assert request('save_grant', **grant)['resources'] == [OUTLOOK_INBOX_RESOURCE]
+    assert request('revoke_grant', grant_id='outlook-grant', expected_revision=1) == {'revoked': True}
 
 
 def test_owner_gmail_setup_accepts_only_narrow_self_grant(management, monkeypatch):
@@ -223,6 +281,161 @@ def test_owner_gmail_setup_accepts_only_narrow_self_grant(management, monkeypatc
     assert result['grantor_user_id'] == result['beneficiary_user_id'] == 'parent'
     with pytest.raises(PermissionError, match='scope_unavailable'):
         server._optional_management(peer, req({**values, 'resources': ['INBOX', 'OTHER']}))
+
+
+def test_gmail_content_requires_separate_owner_desktop_grant(management, monkeypatch):
+    import os
+    f = management
+    owner = AccountSession('parent')
+    f.runtime.integration_store = f.store
+    monkeypatch.setattr(os.path, 'samefile', lambda *_: True)
+    f.service.create_connection(owner, connection_id='gmail', provider_key='google',
+                                provider_subject='fixture', display_name='Fixture')
+    f.store.install_credentials('gmail', {'token': 'fixture'}, expected_generation=0)
+    f.service.save_connection(owner, connection_id='gmail', expected_revision=1,
+                              provider_subject='fixture', capabilities=['mail_read'], granted_scopes=[GMAIL_READ_SCOPE])
+    daemon = SimpleNamespace(runtime=f.runtime, experimental_owner_only=True,
+                             optional_accounts=lambda session: SimpleNamespace())
+    server = V2DaemonServer(daemon)
+    peer = SimpleNamespace(getpeereid=lambda: (os.getuid(), 0))
+    content = dict(grant_id='content', connection_id='gmail', expected_revision=0,
+                   beneficiary_user_id='parent', operations=[GMAIL_CONTENT_OPERATION], resources=['INBOX'],
+                   recipient_user_ids=['parent'], expires_at=expiry(), project_id=None)
+
+    def request(action, values):
+        return server._optional_management(peer, {'version': PROTOCOL_VERSION,
+            'params': {'action': action, 'values': values}})
+
+    with pytest.raises(PermissionError, match='requires_desktop'):
+        f.management.request(owner, 'save_grant', content, channel='task:fixture')
+    for changes in [{'resources': ['gmail:all']}, {'project_id': 'fixture'},
+                    {'recipient_user_ids': ['parent', 'child']}, {'beneficiary_user_id': 'child'},
+                    {'operations': ['mail_read', GMAIL_CONTENT_OPERATION]}]:
+        with pytest.raises(PermissionError, match='scope_unavailable'):
+            request('save_grant', {**content, **changes})
+    count = request('save_grant', {**content, 'grant_id': 'count', 'operations': ['mail_read']})
+    with pytest.raises(ValueError, match='identity_immutable'):
+        request('save_grant', {**content, 'grant_id': count['grant_id'], 'expected_revision': 1})
+    grant = request('save_grant', content)
+    assert grant['operations'] == [GMAIL_CONTENT_OPERATION]
+    assert f.store.get('gmail').connection['capabilities'] == ['mail_read']
+    auth = dict(connection_id='gmail', grant_id='content', operation=GMAIL_CONTENT_OPERATION, resources=['INBOX'],
+                recipient_user_ids=['parent'], required_scopes=[GMAIL_READ_SCOPE], expected_grant_revision=1)
+    with pytest.raises(PermissionError, match='grant_denied'):
+        f.service.authorize(owner, **auth)
+    for changes in [{'recipient_user_ids': []}, {'grant_id': 'count'}, {'required_scopes': []}, {'resources': ['gmail:all']}]:
+        with pytest.raises(PermissionError, match='grant_denied'):
+            f.service.authorize(owner, **{**auth, **changes}, owner_gmail_content=True)
+    assert f.service.authorize(owner, **auth, owner_gmail_content=True)[1] == grant
+    revised = request('save_grant', {**content, 'expected_revision': 1})
+    assert revised['revision'] == 2
+    with pytest.raises(PermissionError, match='grant_denied'):
+        f.service.authorize(owner, **auth, owner_gmail_content=True)
+    assert request('revoke_grant', {'grant_id': 'content', 'expected_revision': 2}) == {'revoked': True}
+    with pytest.raises(PermissionError, match='grant_denied'):
+        f.service.authorize(owner, **{**auth, 'expected_grant_revision': 3}, owner_gmail_content=True)
+
+
+def test_owner_gmail_label_list_and_grant_are_bound_to_exact_account_and_label(management, monkeypatch):
+    import os
+
+    f = management
+    owner = AccountSession('parent')
+    f.runtime.integration_store = f.store
+    monkeypatch.setattr(os.path, 'samefile', lambda *_: True)
+    f.service.create_connection(owner, connection_id='gmail', provider_key='google',
+                                provider_subject='fixture', display_name='Fixture')
+    f.store.install_credentials('gmail', {'token': 'fixture'}, expected_generation=0)
+    f.service.save_connection(owner, connection_id='gmail', expected_revision=1,
+                              provider_subject='fixture', capabilities=['mail_read'], granted_scopes=[GMAIL_READ_SCOPE])
+    label = {'id': 'Label_17', 'name': 'Projects/Planning'}
+    list_values = {'connection_id': 'gmail', 'expected_revision': 2}
+    calls = []
+
+    def list_labels(session, **values):
+        calls.append((session, values))
+        return {'labels': [dict(label), {'id': 'SENT', 'name': 'SENT'}]}
+
+    daemon = SimpleNamespace(runtime=f.runtime, experimental_owner_only=True,
+                             optional_accounts=lambda session: SimpleNamespace(list_gmail_labels=list_labels))
+    server = V2DaemonServer(daemon)
+    peer = SimpleNamespace(getpeereid=lambda: (os.getuid(), 0))
+
+    def request(action, values, *, request_peer=peer):
+        return server._optional_management(request_peer, {'version': PROTOCOL_VERSION,
+            'params': {'action': action, 'values': values}})
+
+    with pytest.raises(PermissionError, match='requires_desktop'):
+        f.management.request(owner, 'list_gmail_labels', list_values, channel='task:fixture')
+    with pytest.raises(PermissionError, match='peer_denied'):
+        request('list_gmail_labels', list_values,
+                request_peer=SimpleNamespace(getpeereid=lambda: (os.getuid() + 1, 0)))
+    with pytest.raises(ValueError, match='gmail_label_list_request_invalid'):
+        request('list_gmail_labels', {**list_values, 'actor_user_id': 'child'})
+    assert calls == []
+    assert request('list_gmail_labels', list_values)['labels'][0] == label
+    assert calls == [(owner, list_values)]
+
+    content = dict(grant_id='label-content', connection_id='gmail', expected_revision=0,
+                   beneficiary_user_id='parent', operations=[GMAIL_CONTENT_OPERATION], resources=[label['id']],
+                   recipient_user_ids=['parent'], expires_at=None, gmail_label_name=label['name'])
+    for changes in [{'resources': [label['id'], label['id']]}, {'resources': ['Label_*']},
+                    {'operations': ['mail_read']}, {'recipient_user_ids': ['parent', 'child']}]:
+        with pytest.raises(PermissionError, match='scope_unavailable'):
+            request('save_grant', {**content, **changes})
+    for changes in [{'gmail_label_name': 'Renamed'}, {'resources': ['Label_18']}, {'gmail_label_name': None}]:
+        with pytest.raises(ValueError, match='gmail_label_selection_stale'):
+            request('save_grant', {**content, **changes})
+
+    grant = request('save_grant', content)
+    assert grant['gmail_label_name'] == label['name'] and grant['expires_at'] is None
+    with pytest.raises(ValueError, match='gmail_label_grant_exists'):
+        request('save_grant', {**content, 'grant_id': 'another-label-content'})
+    auth = dict(connection_id='gmail', grant_id=grant['grant_id'], operation=GMAIL_CONTENT_OPERATION,
+                resources=[label['id']], recipient_user_ids=['parent'], required_scopes=[GMAIL_READ_SCOPE],
+                owner_gmail_content=True)
+    assert f.service.authorize(owner, **auth)[1] == grant
+    for resources in (['INBOX'], [label['id'], label['id']], ['gmail:all']):
+        with pytest.raises(PermissionError, match='account_grant_denied'):
+            f.service.authorize(owner, **{**auth, 'resources': resources})
+    with pytest.raises(ValueError, match='identity_immutable'):
+        request('save_grant', {**content, 'expected_revision': 1,
+                               'resources': ['SENT'], 'gmail_label_name': 'SENT'})
+    with pytest.raises(ValueError, match='account_grant_invalid'):
+        request('save_grant', {**content, 'grant_id': 'count', 'operations': ['mail_read'],
+                               'resources': ['INBOX'], 'gmail_label_name': None})
+    assert request('revoke_grant', {'grant_id': grant['grant_id'], 'expected_revision': 1}) == {'revoked': True}
+    with pytest.raises(PermissionError, match='account_grant_denied'):
+        f.service.authorize(owner, **auth)
+
+
+def test_owner_calendar_setup_accepts_only_one_exact_calendar_for_the_owner(management, monkeypatch):
+    import os
+    f = management
+    f.runtime.integration_store = f.store
+    monkeypatch.setattr(os.path, 'samefile', lambda *_: True)
+    owner = AccountSession('parent')
+    f.service.create_connection(owner, connection_id='calendar', provider_key='google',
+                                provider_subject='fixture', display_name='Fixture')
+    f.store.install_credentials('calendar', {'token': 'fixture'}, expected_generation=0)
+    f.service.save_connection(owner, connection_id='calendar', expected_revision=1,
+                              provider_subject='fixture', capabilities=['calendar_read'], granted_scopes=['fixture'])
+    daemon = SimpleNamespace(runtime=f.runtime, experimental_owner_only=True,
+                             optional_accounts=lambda session: SimpleNamespace())
+    server = V2DaemonServer(daemon)
+    peer = SimpleNamespace(getpeereid=lambda: (os.getuid(), 0))
+    values = dict(grant_id='calendar-owner', connection_id='calendar', expected_revision=0,
+                  beneficiary_user_id='parent', operations=['calendar_read'], resources=['fixture@calendar.example'],
+                  recipient_user_ids=['parent'], expires_at=expiry(), project_id=None)
+    def save(changes):
+        return server._optional_management(peer, {'version': PROTOCOL_VERSION,
+            'params': {'action': 'save_grant', 'values': {**values, **changes}}})
+    for changes in [{'resources': ['primary']}, {'resources': ['*']}, {'resources': ['one', 'two']},
+                    {'recipient_user_ids': ['parent', 'child']}, {'project_id': 'other'}]:
+        with pytest.raises(PermissionError, match='scope_unavailable'):
+            save(changes)
+    grant = save({})
+    assert grant['resources'] == values['resources'] and grant['recipient_user_ids'] == ['parent']
 
 
 def test_owner_gmail_setup_rejects_split_owner_database(management):

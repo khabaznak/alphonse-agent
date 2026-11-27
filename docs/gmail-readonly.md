@@ -6,6 +6,44 @@ loads no provider SDK, credentials or network connections. Connecting an account
 alone installs no checks and starts no monitoring. There are no send, modify,
 watch, delete, or mailbox configuration operations.
 
+## Desktop search and summaries
+
+In **Settings → Integrations → Gmail**, connect the account and grant content
+access to Inbox or to a label you select from Gmail. Choose an optional end date
+or leave access active until you revoke it. Each grant covers one exact Gmail
+label. Inbox content access also covers the unread-count check in the owner's
+Desktop conversation. The count-only grant is available on its own. Label
+selection and Gmail content searches can renew Google credentials with the
+existing connection. Reconnect if Google withdraws or expires its authorization.
+
+When asked in the owner’s Desktop Conversation, Alphonse searches one granted
+label per attempt and can summarize excerpts from up to 20 matching messages.
+Use the full Gmail name for a nested label, such as `Family/School`. A message may be
+archived or outside Inbox and still match the selected label. A request that
+omits a label defaults to Inbox. The search planner sees up to 32 unambiguous
+label names with live content grants. When a search completes with zero
+matches, the planner may make up to two different authorized Gmail searches.
+It sees the empty searches' query and scope during refinement. The search
+normally covers 90 days and may extend to 365 days. The reply identifies its scope, sources and any incomplete
+coverage. When asked, the summary draws out deadlines and action items with
+numbered references to the reviewed messages. [Gmail search semantics](https://developers.google.com/workspace/gmail/api/guides/filtering)
+
+The configured inference model receives the bounded matching excerpts in a
+summary step with no Alphonse tools. Email text remains untrusted evidence.
+The private result is rendered as a read-only A2UI card. Action reviews put
+dated rows before undated tasks and keep search coverage visible. Numbered
+citations open and focus the exact email excerpt within the card. Headings,
+lists and emphasis are formatted in Alphonse's synthesis. Provider fields
+and excerpts are literal text. Older Desktop versions can display the
+plain-text reply. The task checkpoint
+holds bounded excerpts and the draft for verified pickup. Ordinary conversation
+history records a receipt without message content. Google access, the local
+grant, and the owner claim are rechecked before pickup.
+
+Authenticated owner Desktop history can reconstruct an acknowledged card from
+its retained snapshot. The daemon rechecks the same account and label grant.
+When the snapshot or grant is unavailable, Desktop shows the receipt.
+
 ## Clean install and authorization
 
 Follow [managed OAuth setup](oauth-accounts.md) and install the optional
