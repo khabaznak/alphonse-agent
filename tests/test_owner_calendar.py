@@ -21,10 +21,10 @@ from alphonse.agent_v2.core.questions import SQLiteQuestionStore
 from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry
 from alphonse.agent_v2.core.tools.registry.native.memory import build_read_memory_source_tool_definition, build_search_memory_tool_definition
 from alphonse.agent_v2.daemon import V2Daemon
-from alphonse.agent_v2.integrations.google_calendar import CalendarHTTPError
+from alphonse.agent_v2.integrations.google_mcp import GoogleMcpError
 from alphonse.agent_v2.ipc import V2DaemonClient, V2DaemonServer
 from alphonse.agent_v2.runtime import build_runtime_host
-from test_gmail_adapter import Wire
+from test_calendar_acquisition import Wire
 from test_oauth_lifecycle import expire
 from test_owner_gmail import f
 
@@ -32,11 +32,12 @@ WINDOW = {'time_min': '2026-12-01T00:00:00-06:00', 'time_max': '2026-12-02T00:00
 GOAL = '¿Qué tengo en mi calendario de Google el 1 de diciembre de 2026? Usa la hora de Ciudad de México.'
 CALENDAR_ID = 'family@group.calendar.google.com'
 TITLE = 'Synthetic pottery handoff'
-PAGE = {'accessRole': 'owner', 'timeZone': 'America/Mexico_City', 'items': [
+PAGE = {'accessRole': 'owner', 'timeZone': 'America/Mexico_City', 'events': [
     {'summary': TITLE, 'start': {'dateTime': '2026-12-01T09:15:00-06:00'},
      'end': {'dateTime': '2026-12-01T10:15:00-06:00'}, 'description': 'PRIVATE_DESCRIPTION_MARKER'},
     {'summary': 'Synthetic multi-day item', 'start': {'date': '2026-12-01'}, 'end': {'date': '2026-12-03'}},
-    {'summary': 'CANCELLED_EVENT_MARKER', 'status': 'cancelled'},
+    {'id': 'cancelled-fixture', 'summary': 'CANCELLED_EVENT_MARKER', 'status': 'cancelled',
+     'start': {'date': '2026-12-01'}, 'end': {'date': '2026-12-02'}},
 ]}
 
 
@@ -142,9 +143,9 @@ def test_calendar_titles_are_private_to_verified_desktop_pickup(f, tmp_path):
         assert reply['private_card'] == {'provider': 'calendar', 'envelopes': answer['private_a2ui']}
         f.accounts.revoke_grant(f.owner, grant_id='grant', expected_revision=1)
         assert TITLE not in repr(daemon.desktop_conversation_history(user='owner', include_verified_private_cards=True))
-        assert len(wire.calls) == 1 and wire.calls[0][0] == 'calendars/family%40group.calendar.google.com/events'
-        assert wire.calls[0][1]['params']['timeMin'] == WINDOW['time_min']
-        assert 'description' not in wire.calls[0][1]['params']['fields']
+        assert len(wire.calls) == 1 and wire.calls[0][0] == 'list_events'
+        assert wire.calls[0][1]['params']['startTime'] == WINDOW['time_min']
+        assert wire.calls[0][1]['params']['calendarId'] == CALENDAR_ID
         assert f.service.clients['google'].refresh_count == 0
 
 
@@ -152,9 +153,10 @@ def test_calendar_titles_are_private_to_verified_desktop_pickup(f, tmp_path):
     ('no_grant', 'grant access to the exact calendar'),
     ('expired', 'Reconnect Google Calendar'),
     ('ambiguous', 'More than one Google calendar'),
-    ('partial', 'first page of results'),
+    ('partial', 'returned limited results'),
     ('empty', 'No events were returned'),
-    ('api_disabled', 'enable Google Calendar API in the project configured for Alphonse'),
+    ('approval_required', 'requires an additional approval'),
+    ('api_disabled', 'enable Calendar MCP in the project configured for Alphonse'),
 ])
 def test_calendar_observation_distinguishes_blockers_and_coverage(f, tmp_path, case, expected):
     connect_calendar(f, grant=case != 'no_grant')
@@ -162,14 +164,16 @@ def test_calendar_observation_distinguishes_blockers_and_coverage(f, tmp_path, c
         expire(f)
     if case == 'ambiguous':
         grant_calendar(f, 'other@group.calendar.google.com', 'second-grant')
-    page = {**PAGE, 'nextPageToken': 'private-cursor'} if case == 'partial' else {**PAGE, 'items': []}
-    wire = Wire(CalendarHTTPError(403, api_disabled=True) if case == 'api_disabled' else page)
+    page = {**PAGE, 'nextPageToken': 'private-cursor'} if case == 'partial' else {**PAGE, 'events': []}
+    provider_response = {'api_disabled': GoogleMcpError(403, 'service_disabled'),
+                         'approval_required': GoogleMcpError(409, 'approval_required')}.get(case, page)
+    wire = Wire(provider_response)
     with calendar_worker(f, tmp_path, wire, ScriptedProvider()) as (daemon, queue, _, _):
         message = queue.enqueue_trusted_local_owner(prompt=GOAL, peer_uid=os.getuid())
         assert worker_status(lambda: daemon.owner_message_status(message)) == 'ready'
         answer = daemon.take_owner_desktop_draft(message)
         assert expected in answer['message'] and 'private-cursor' not in answer['message']
-        assert len(wire.calls) == (1 if case in {'partial', 'empty', 'api_disabled'} else 0)
+        assert len(wire.calls) == (1 if case in {'partial', 'empty', 'api_disabled', 'approval_required'} else 0)
 
 
 def test_relative_calendar_days_use_owner_zone_and_local_midnights():
@@ -190,15 +194,15 @@ def test_owner_worker_resolves_relative_calendar_window(f, tmp_path):
     zone = ZoneInfo('America/Mexico_City')
     f.accounts.users.set_timezone(zone.key, f.owner.actor_user_id)
     local_day = datetime.now(zone).date()
-    wire = Wire({**PAGE, 'items': []})
+    wire = Wire({**PAGE, 'events': []})
     with calendar_worker(f, tmp_path, wire, ScriptedProvider(arguments={'day_offset': 1})) as (daemon, queue, _, _):
         message = queue.enqueue_trusted_local_owner(prompt='What is on my Google Calendar tomorrow?', peer_uid=os.getuid())
         assert worker_status(lambda: daemon.owner_message_status(message)) == 'ready'
         answer = daemon.take_owner_desktop_draft(message)
         assert answer['private_calendar'] is True and 'No events were returned' in answer['message']
         params = wire.calls[0][1]['params']
-        assert params['timeMin'] == datetime.combine(local_day + timedelta(days=1), datetime.min.time(), zone).isoformat()
-        assert params['timeMax'] == datetime.combine(local_day + timedelta(days=2), datetime.min.time(), zone).isoformat()
+        assert params['startTime'] == datetime.combine(local_day + timedelta(days=1), datetime.min.time(), zone).isoformat()
+        assert params['endTime'] == datetime.combine(local_day + timedelta(days=2), datetime.min.time(), zone).isoformat()
 
 
 @pytest.mark.parametrize('timing', ['during_read', 'before_pickup', 'during_pickup'])

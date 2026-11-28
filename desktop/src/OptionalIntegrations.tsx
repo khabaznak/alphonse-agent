@@ -3,7 +3,7 @@ import { openAccountConsent, optionalManagement } from "./api";
 import { IntegrationIcon } from "./IntegrationIcon";
 import { AccountServiceDetail } from "./AccountServiceDetail";
 import { OutlookInboxSettings } from "./OutlookInboxSettings";
-import { Catalog, Connection, Definition, GmailLabel, Grant, Member, OUTLOOK_INBOX_UNREAD, Policy, ProjectChecks, ResponseFence, days, defaultDefinition, editableDefinition, friendly, isGrantCurrent, isOwnerReadGrant, labels, sourceDefinition, validateDefinition } from "./integrationManagement";
+import { Catalog, Connection, Definition, GmailLabel, Grant, Member, OUTLOOK_INBOX_UNREAD, Policy, ProjectChecks, ResponseFence, days, defaultDefinition, editableDefinition, friendly, isGrantCurrent, isOwnerCalendarEditGrant, isOwnerReadGrant, labels, sourceDefinition, validateDefinition } from "./integrationManagement";
 
 function useManaged<T>(action: string, values: Record<string, unknown>, identity: string) {
   const [data, setData] = useState<T | null>(null);
@@ -34,24 +34,27 @@ type AccountService = { name: string; provider: string; capability: string; desc
 const ACCOUNT_SERVICES: AccountService[] = [
   { name: "Gmail", icon: "gmail", provider: "google", capability: "mail_read", description: "Read mail from an authorized Google account." },
   { name: "Google Calendar", icon: "calendar", provider: "google", capability: "calendar_read", description: "Read events from an authorized Google calendar." },
+  { name: "Google Calendar editing", icon: "calendar", provider: "google", capability: "calendar_write", description: "Review and apply changes to events in one authorized calendar." },
   { name: "Outlook / Hotmail", icon: "outlook", provider: "microsoft", capability: "mail_read", description: "Read mail from an authorized Microsoft account." },
 ];
 
 export function AccountServiceCards({ catalog, unavailable = false, onChoose }: { catalog: Catalog | null; unavailable?: boolean; onChoose: (provider: string, capability: string) => void }) {
-  return <div className="integration-service-grid">{ACCOUNT_SERVICES.map(base => {
+  return <div className="integration-service-grid">{ACCOUNT_SERVICES.filter(service => service.capability !== "calendar_write"
+    || catalog?.owner_google_setup_only && catalog.providers.some(item => item.provider === "google" && item.capabilities.includes("calendar_write"))).map(base => {
     const outlookInbox = catalog?.owner_outlook_inbox_setup && base.provider === "microsoft";
     const service = outlookInbox ? { ...base, capability: OUTLOOK_INBOX_UNREAD, description: "Check the unread count in your Outlook or Hotmail Inbox." } : base;
     const provider = catalog?.providers.find(item => item.provider === service.provider);
     const configured = Boolean(provider?.capabilities.includes(service.capability));
     const ownerSetup = catalog?.owner_gmail_setup_only || catalog?.owner_google_setup_only;
+    const needsCurrentToken = ownerSetup && service.capability !== "calendar_write";
     const unsupported = Boolean(ownerSetup && !outlookInbox && service.name !== "Gmail"
-      && !(catalog?.owner_google_setup_only && service.name === "Google Calendar"));
+      && !(catalog?.owner_google_setup_only && service.icon === "calendar"));
     const connections = (catalog?.connections || []).filter(item => item.provider === service.provider
       && (item.capabilities.includes(service.capability) || outlookInbox && !item.capabilities.length));
     const usable = connections.filter(item => item.status === "connected"
       && item.credential_health !== "absent" && item.credential_health !== "credential_backend_unavailable"
       && item.access_token_status !== "unavailable"
-      && !(ownerSetup && item.access_token_status === "refresh_required")
+      && !(needsCurrentToken && item.access_token_status === "refresh_required")
       && (!outlookInbox || (item.capabilities.includes(service.capability) && !item.credential_deletion_pending && !item.revocation_pending)));
     const connected = usable.length;
     const existing = connections.some(account => !outlookInbox || account.status !== "disconnected"
@@ -71,8 +74,8 @@ export function AccountServiceCards({ catalog, unavailable = false, onChoose }: 
       <div className="integration-card-heading"><IntegrationIcon service={service.icon} /><div><h3>{service.name}</h3><p>{service.description}</p></div></div>
       <small className="integration-card-status">{status}</small>
       <div className="integration-card-footer">
-        <span>{service.capability === "calendar_read" ? "Calendar" : "Email"}</span>
-        <button type="button" data-outlook-inbox-card={outlookInbox || undefined} disabled={!catalog || unsupported}
+        <span>{service.icon === "calendar" ? "Calendar" : "Email"}</span>
+        <button type="button" data-outlook-inbox-card={outlookInbox || undefined} data-calendar-edit-card={service.capability === "calendar_write" || undefined} disabled={!catalog || unsupported}
           aria-label={`${action}${action === "View setup" ? " for" : ""} ${service.name}`}
           onClick={() => onChoose(service.provider, service.capability)}>{action}{!unsupported && " →"}</button>
       </div>
@@ -105,14 +108,16 @@ export function OptionalAccounts({ identity, messaging, onConversation, outlookR
     onOutlookOpened?.();
   }, [outlookRequested, data?.owner_outlook_inbox_setup, onOutlookOpened]);
   const outlookService = serviceCapability === OUTLOOK_INBOX_UNREAD;
+  const calendarEditService = serviceCapability === "calendar_write";
   useEffect(() => {
-    if (view !== "service" || !outlookService) return;
+    if (view !== "service" || !(outlookService || calendarEditService)) return;
     heading.current?.focus();
-  }, [outlookService, view]);
+  }, [outlookService, calendarEditService, view]);
   const returnToOverview = () => {
     setView("overview"); setGrantFor(null); setDisconnectFor(null);
-    if (outlookService) window.requestAnimationFrame(() => {
-      const control = heading.current?.parentElement?.querySelector<HTMLButtonElement>('button[data-outlook-inbox-card]:not(:disabled)');
+    if (outlookService || calendarEditService) window.requestAnimationFrame(() => {
+      const selector = outlookService ? "[data-outlook-inbox-card]" : "[data-calendar-edit-card]";
+      const control = heading.current?.parentElement?.querySelector<HTMLButtonElement>(`button${selector}:not(:disabled)`);
       (control || heading.current)?.focus();
     });
   };
@@ -140,7 +145,7 @@ export function OptionalAccounts({ identity, messaging, onConversation, outlookR
   const manageGrant = (account: Connection, operation: string) => {
     if (!data) return;
     const existing = data.grants.find(grant => grant.connection_id === account.connection_id
-      && isOwnerReadGrant(data, grant, operation)
+      && (operation === 'calendar_write' ? isOwnerCalendarEditGrant(data, grant) : isOwnerReadGrant(data, grant, operation))
       && (operation !== 'mail_content_read' || grant.resources[0] === 'INBOX'));
     selectGrant(account, operation, existing);
   };
@@ -196,6 +201,7 @@ function GrantCard({ grant: g, catalog, busy, run, onEdit }: { grant: Grant; cat
   const [skill, setSkill] = useState("");
   const isGmailContent = g.operations.length === 1 && g.operations[0] === 'mail_content_read';
   const isOutlookInbox = g.operations.length === 1 && g.operations[0] === OUTLOOK_INBOX_UNREAD;
+  const isCalendarEdit = isOwnerCalendarEditGrant(catalog, g);
   const resource = isOutlookInbox ? "Outlook / Hotmail Inbox" : isGmailContent && g.gmail_label_name ? g.gmail_label_name : g.resources.join(', ');
   const accountName = catalog.connections.find(account => account.connection_id === g.connection_id)?.display_name || g.connection_id;
   const status = g.revoked_at ? 'Revoked' : isGrantCurrent(g) ? 'Granted' : 'Expired';
@@ -204,14 +210,14 @@ function GrantCard({ grant: g, catalog, busy, run, onEdit }: { grant: Grant; cat
     <p>{g.operations.map(o => labels[o] || friendly(o)).join(', ')} in {resource} · {g.expires_at
       ? `Expires ${new Date(g.expires_at).toLocaleString()}`
       : isGmailContent ? 'Until revoked' : 'No expiry available'} · {status}</p>
-    {(isGmailContent || isOutlookInbox) && isOwnerReadGrant(catalog, g) ? <p>Private Desktop conversation</p>
+    {isCalendarEdit || (isGmailContent || isOutlookInbox) && isOwnerReadGrant(catalog, g) ? <p>Private Desktop conversation</p>
       : <p>Recipients: {g.recipient_user_ids.map(id => catalog.members.find(m => m.user_id === id)?.display_name || id).join(', ')} · Project: {catalog.projects.find(p => p.project_id === g.project_id)?.name || (g.project_id ? 'Restricted project' : 'Any permitted project')}</p>}
     {g.grantor_user_id === catalog.actor_user_id && !g.revoked_at && <>
-      {(!(catalog.owner_gmail_setup_only || catalog.owner_google_setup_only) || isOwnerReadGrant(catalog, g)) &&
+      {(!(catalog.owner_gmail_setup_only || catalog.owner_google_setup_only) || isOwnerReadGrant(catalog, g) || isCalendarEdit) &&
         <button disabled={busy} onClick={onEdit} aria-label={isGmailContent ? `Revise access to ${resource}` : undefined}>Revise access grant</button>}
       <button disabled={busy} aria-label={isGmailContent ? `Revoke access to ${resource}` : undefined}
         onClick={() => void run('revoke_grant', { grant_id: g.grant_id, expected_revision: g.revision })}>Revoke grant</button>
-      {!catalog.owner_gmail_setup_only && <><label>Associate with skill<select value={skill} onChange={e => setSkill(e.target.value)}><option value="">Choose skill</option>{catalog.skills.map(s => <option key={s.skill_id} value={s.skill_id}>{s.name}</option>)}</select></label><button disabled={busy || !skill} onClick={() => void run('bind_grant', { grant_id: g.grant_id, skill_id: skill })}>Create skill binding</button></>}
+      {!catalog.owner_gmail_setup_only && !isCalendarEdit && <><label>Associate with skill<select value={skill} onChange={e => setSkill(e.target.value)}><option value="">Choose skill</option>{catalog.skills.map(s => <option key={s.skill_id} value={s.skill_id}>{s.name}</option>)}</select></label><button disabled={busy || !skill} onClick={() => void run('bind_grant', { grant_id: g.grant_id, skill_id: skill })}>Create skill binding</button></>}
     </>}
   </article>;
 }
@@ -358,25 +364,28 @@ function GrantEditor({ account, catalog, grant, operation, onDone }: { account: 
   return <GeneralGrantEditor account={account} catalog={catalog} grant={grant} onDone={onDone} />;
 }
 function OwnerReadGrant({ account, catalog, grant, operation, onDone }: { account: Connection; catalog: Catalog; grant?: Grant; operation: string; onDone: () => void }) {
-  const calendar = operation === 'calendar_read';
+  const calendarEdit = operation === 'calendar_write';
+  const calendar = operation === 'calendar_read' || calendarEdit;
   const gmailContent = operation === 'mail_content_read';
   const [resource, setResource] = useState(calendar ? grant?.resources[0] || '' : 'INBOX');
   const expiry = useOwnerGrantExpiry(grant, gmailContent && catalog.owner_gmail_label_setup === true);
   const [busy, setBusy] = useState(false); const [notice, setNotice] = useState("");
+  const heading = useRef<HTMLHeadingElement>(null);
+  useEffect(() => { if (calendarEdit) heading.current?.focus(); }, [calendarEdit]);
   const save = async () => { setBusy(true); setNotice(""); try {
     await optionalManagement('save_grant', { grant_id: grant?.grant_id || `grant_${crypto.randomUUID()}`, connection_id: account.connection_id, expected_revision: grant?.revision || 0, beneficiary_user_id: catalog.actor_user_id, operations: [operation], resources: [resource.trim()], recipient_user_ids: [catalog.actor_user_id], expires_at: expiry.untilRevoked ? null : expiry.expiry.toISOString(), project_id: null });
     onDone();
   } catch (cause) { setNotice(cause instanceof Error ? cause.message : String(cause)); setBusy(false); } };
   return <section className="project-detail">
-    <h4>{calendar ? 'Allow access to one Google calendar' : gmailContent ? 'Allow access to Gmail Inbox content' : 'Allow access to your Gmail INBOX'}</h4>
+    <h4 ref={heading} tabIndex={calendarEdit ? -1 : undefined}>{calendarEdit ? 'Allow approved edits to one Google calendar' : calendar ? 'Allow access to one Google calendar' : gmailContent ? 'Allow access to Gmail Inbox content' : 'Allow access to your Gmail INBOX'}</h4>
     {gmailContent ? <p>This lets Alphonse count unread Inbox mail and find matching messages in your private Desktop conversation. For summaries, matching excerpts go to your configured AI model.</p>
-      : <p>{calendar ? 'This lets you ask for event titles and times in your private Desktop conversation until the grant expires.' : 'This lets you ask for the unread INBOX count until the grant expires.'}</p>}
+      : <p>{calendarEdit ? 'Each event edit requires your approval in the private Desktop conversation.' : calendar ? 'This lets you ask for event titles and times in your private Desktop conversation until the grant expires.' : 'This lets you ask for the unread INBOX count until the grant expires.'}</p>}
     <StatusText>{notice}</StatusText>
-    <form onSubmit={e => { e.preventDefault(); if (expiry.valid && resource.trim() && !busy) void save(); }}>
-      {calendar && <><label htmlFor="owner-calendar-id">Exact calendar ID</label><input id="owner-calendar-id" type="text" required maxLength={512} value={resource} onChange={e => setResource(e.target.value)} />
-        <small>Copy the calendar ID from Google Calendar’s settings for that calendar, under Integrate calendar.</small></>}
+    <form className={calendarEdit ? "calendar-write-grant" : undefined} onSubmit={e => { e.preventDefault(); if (expiry.valid && resource.trim() && !busy) void save(); }}>
+      {calendar && <><label htmlFor="owner-calendar-id">Exact calendar ID</label><input id="owner-calendar-id" aria-describedby="owner-calendar-id-help" type="text" required readOnly={calendarEdit && Boolean(grant)} maxLength={512} value={resource} onChange={e => setResource(e.target.value)} />
+        <small id="owner-calendar-id-help">Copy the calendar ID from Google Calendar’s settings for that calendar, under Integrate calendar.</small></>}
       <OwnerGrantExpiry expiry={expiry} />
-      <button disabled={busy || !expiry.valid || !resource.trim()}>{calendar ? 'Authorize calendar access' : gmailContent ? 'Authorize Inbox content access' : 'Authorize INBOX access'}</button>
+      <button disabled={busy || !expiry.valid || !resource.trim()}>{calendarEdit ? 'Authorize calendar edits' : calendar ? 'Authorize calendar access' : gmailContent ? 'Authorize Inbox content access' : 'Authorize INBOX access'}</button>
     </form><button disabled={busy} onClick={onDone}>Cancel</button>
   </section>;
 }

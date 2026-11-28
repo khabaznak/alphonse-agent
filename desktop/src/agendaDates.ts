@@ -2,7 +2,7 @@ export type AgendaView = "Month" | "Week" | "Today";
 export type AgendaItem = { id: string; scheduled_task_id: string; project_id: string; name: string; at: string; day: string; schedule_status: string; timezone: string; execution_status: string | null; run_id: string | null; kind: string };
 export const CALENDAR_CONFIGURATION_CHANGED = "alphonse:calendar-configuration-changed";
 export type CalendarSourceStatus = "connected" | "not_connected" | "grant_required" | "selection_required" | "reconnect_required" | "unavailable";
-export type CalendarEventStatus = "complete" | "partial" | "unavailable" | "api_disabled";
+export type CalendarEventStatus = "complete" | "partial" | "unavailable" | "api_disabled" | "approval_required" | "credential_busy";
 export type GoogleCalendarEvent = { id: string; title: string; start: string; end: string; all_day: boolean; end_unspecified: boolean };
 export type AgendaResult = {
   items: AgendaItem[]; timezone: string; truncated: boolean; unavailable_sources: string[];

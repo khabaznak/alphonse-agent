@@ -68,8 +68,8 @@ def _calendar_events(runtime, actor, first, end, zone):
         reason = observation.get('reason')
         if reason == 'reconnect_required':
             return {'calendar_source_status': 'reconnect_required', 'calendar_event_status': 'unavailable'}
-        if reason == 'api_disabled':
-            return {'calendar_source_status': 'connected', 'calendar_event_status': 'api_disabled'}
+        if reason in ('api_disabled', 'approval_required', 'credential_busy'):
+            return {'calendar_source_status': 'connected', 'calendar_event_status': reason}
     except (CheckStopped, sqlite3.Error, OSError, ValueError, TypeError, KeyError):
         pass
     status = _calendar_source_status(runtime, actor)

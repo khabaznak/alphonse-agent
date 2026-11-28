@@ -35,6 +35,7 @@ from .owner_outlook import (
     OWNER_OUTLOOK_TOOL_ID, outlook_display_locale, valid_owner_outlook,
 )
 from .owner_calendar import OWNER_CALENDAR_TOOL_ID, calendar_window, valid_owner_calendar
+from .owner_calendar_edit import OWNER_CALENDAR_EDIT_TOOL_ID, calendar_edit_response, valid_calendar_edit_observation
 from .owner_gmail_search import (
     OWNER_GMAIL_SEARCH_TOOL_ID, final_gmail_search_result, gmail_search_arguments, gmail_search_can_refine,
     gmail_search_prompt, new_gmail_search_attempt, owner_gmail_planner_labels, private_gmail_search_result,
@@ -354,6 +355,12 @@ class OwnerReadConversationProcessor:
                                 and calendar_descriptor.read_only is True and context.owner_calendar_service is not None)
             if calendar_enabled:
                 descriptors += (calendar_descriptor,)
+            calendar_edit_descriptor = context.tools.get(OWNER_CALENDAR_EDIT_TOOL_ID)
+            calendar_edit_enabled = (not scheduled_origin and not telegram_origin and calendar_edit_descriptor is not None
+                and calendar_edit_descriptor.read_only is True and context.owner_calendar_edit_service is not None
+                and self.atomic_checkpoints is not None)
+            if calendar_edit_enabled:
+                descriptors += (calendar_edit_descriptor,)
             search_descriptor = context.tools.get(OWNER_GMAIL_SEARCH_TOOL_ID)
             gmail_search_enabled = (not scheduled_origin and not telegram_origin and search_descriptor is not None
                                    and search_descriptor.read_only is True and context.owner_gmail_search_service is not None)
@@ -445,6 +452,11 @@ class OwnerReadConversationProcessor:
                     tools=(refinement_descriptor,), max_input_tokens=65536, cancellation_checker=context.is_cancelled)
 
             def prepare_choice(projection: str, max_output_tokens: int):
+                calendar_edit = calendar_edit_observation()
+                if calendar_edit is not None:
+                    generate = web_summary_chooser.prepare(projection, min(4096, max_output_tokens))
+                    return lambda: {'kind': 'answer', 'text': calendar_edit_response(calendar_edit),
+                                    'usage': generate()['usage']}
                 outlook = outlook_observation()
                 if outlook is not None:
                     generate = outlook_chooser.prepare(projection, min(4096, max_output_tokens))
@@ -464,7 +476,7 @@ class OwnerReadConversationProcessor:
                 selected = base_chooser
                 if handled:
                     excluded = set(handled) | {OWNER_GMAIL_TOOL_ID, OWNER_GMAIL_SEARCH_TOOL_ID,
-                                               OWNER_OUTLOOK_TOOL_ID, OWNER_CALENDAR_TOOL_ID}
+                                               OWNER_OUTLOOK_TOOL_ID, OWNER_CALENDAR_TOOL_ID, OWNER_CALENDAR_EDIT_TOOL_ID}
                     selected = coordinator_chooser(tuple(item for item in descriptors if item.tool_id not in excluded))
                 generate = selected.prepare(projection, max_output_tokens)
                 return lambda: finish_decision(generate())
@@ -617,15 +629,20 @@ class OwnerReadConversationProcessor:
         def outlook_observation():
             return next((payload for tool, _, payload in observations.values() if tool == OWNER_OUTLOOK_TOOL_ID), None)
 
+        def calendar_edit_observation():
+            return next((payload for tool, _, payload in observations.values() if tool == OWNER_CALENDAR_EDIT_TOOL_ID), None)
+
         def private_provider_observed() -> bool:
-            return any(tool in {OWNER_CALENDAR_TOOL_ID, OWNER_GMAIL_SEARCH_TOOL_ID, OWNER_OUTLOOK_TOOL_ID}
+            return any(tool in {OWNER_CALENDAR_TOOL_ID, OWNER_GMAIL_SEARCH_TOOL_ID, OWNER_OUTLOOK_TOOL_ID,
+                                OWNER_CALENDAR_EDIT_TOOL_ID}
                        for tool, _, _ in observations.values())
 
         def allowed(actor_id: str, tool_id: str, args: dict[str, Any]) -> bool:
             if actor_id != actor or not self._authorized(task, context) or not isinstance(args, dict):
                 return False
             if (fixture_outcomes() and tool_id in {
-                    OWNER_GMAIL_TOOL_ID, OWNER_GMAIL_SEARCH_TOOL_ID, OWNER_OUTLOOK_TOOL_ID, OWNER_CALENDAR_TOOL_ID}):
+                    OWNER_GMAIL_TOOL_ID, OWNER_GMAIL_SEARCH_TOOL_ID, OWNER_OUTLOOK_TOOL_ID, OWNER_CALENDAR_TOOL_ID,
+                    OWNER_CALENDAR_EDIT_TOOL_ID}):
                 # Mixed private-provider result publication is a separate phase.
                 return False
             if tool_id == OWNER_GMAIL_SEARCH_TOOL_ID:
@@ -641,6 +658,10 @@ class OwnerReadConversationProcessor:
                 return True
             if private_provider_observed():
                 return False
+            if tool_id == OWNER_CALENDAR_EDIT_TOOL_ID:
+                return (calendar_edit_enabled and atomic is not None
+                        and not any(tool == SCHEDULED_TASK_TOOL_ID for tool, _, _ in observations.values())
+                        and context.messages.verify_trusted_local_owner_claim(context.claim_receipt, task))
             if tool_id == OWNER_OUTLOOK_TOOL_ID:
                 return (outlook_enabled and atomic is not None and not args
                         and not any(tool == SCHEDULED_TASK_TOOL_ID for tool, _, _ in observations.values())
@@ -790,6 +811,10 @@ class OwnerReadConversationProcessor:
             if tool_id == OWNER_CALENDAR_TOOL_ID:
                 return (calendar_enabled and actor_id == actor and self._authorized(task, context)
                         and valid_owner_calendar(actor_id, args, payload, context=execution_context))
+            if tool_id == OWNER_CALENDAR_EDIT_TOOL_ID:
+                return (calendar_edit_enabled and actor_id == actor and self._authorized(task, context)
+                        and context.messages.verify_trusted_local_owner_claim(context.claim_receipt, task)
+                        and valid_calendar_edit_observation(payload))
             if tool_id == OWNER_GMAIL_SEARCH_TOOL_ID:
                 return (gmail_search_enabled and actor_id == actor and self._authorized(task, context)
                         and valid_owner_gmail_search(actor_id, args, payload, context=execution_context))
@@ -897,6 +922,9 @@ class OwnerReadConversationProcessor:
                 if tool_id == OWNER_CALENDAR_TOOL_ID:
                     return json.dumps({'status': payload['status'],
                         'notice': 'The host will deliver the Calendar result privately. Return an answer now.'})
+                if tool_id == OWNER_CALENDAR_EDIT_TOOL_ID:
+                    return json.dumps({**payload, 'notice': 'The host will report the Calendar review result. '
+                        'Nothing was written to Google. Return an answer now.'})
                 if tool_id == OWNER_OUTLOOK_TOOL_ID:
                     return json.dumps({'status': payload['status'], 'notice': 'The host will display the verified Outlook '
                         'Inbox outcome privately. Return kind "answer" with only the BCP 47 language tag of the current '
@@ -1076,6 +1104,8 @@ class OwnerReadConversationProcessor:
                 return len(text.encode('utf-8')) <= 4096
             if outlook_observation() is not None:
                 return text == 'Outlook Inbox check recorded.' or outlook_display_locale(text) is not None
+            if calendar_edit_observation() is not None:
+                return text == calendar_edit_response(calendar_edit_observation())
             # New multi-turn paths must not turn a free-form model claim into
             # evidence of a persistent effect. Deterministic atomic effect
             # handlers select their own confirmations separately. Until a
@@ -1398,20 +1428,28 @@ class OwnerReadConversationProcessor:
             covered_web_fetch=covered_web_fetch,
             checkpoint_pause=checkpoint_pause, prepare_choice=prepare_choice,
             compact_source=compact_source, review_progress_checkpoint=assess_progress)
+
+        def discard_calendar_review():
+            if calendar_edit_enabled:
+                context.owner_calendar_edit_service.discard_pending_conversation_review(actor, task.message_id)
+
         try:
             result = run_candidate(candidate_state, host)
         except Exception:
+            discard_calendar_review()
             return self._failure(task, 'owner_read_execution_unavailable')
         if paused:
             return ProcessingResult(snapshot=StateSnapshot(task_owner=actor, current_work=task.goal,
                 metadata={'engine':'single_loop_experimental', 'status':'continuation_paused'}),
                 status=ProcessingStatus.WAITING)
         if result.status == 'cancelled':
+            discard_calendar_review()
             return ProcessingResult(snapshot=StateSnapshot(task_owner=actor, metadata={
                                         'engine': 'single_loop_experimental',
                                         'intelligence_schema_version': 1, 'status': 'cancelled'}),
                                     status=ProcessingStatus.CANCELLED, error='owner_read_cancelled')
         if result.status not in {'completed', 'waiting_user'}:
+            discard_calendar_review()
             from .owner_failure_recovery import LIMIT_REASONS, compose_owner_failure_recovery
             at_limit = result.blocker in LIMIT_REASONS
             if atomic is not None and (result.blocker == 'candidate_read_denied' or
@@ -1445,6 +1483,7 @@ class OwnerReadConversationProcessor:
                 # revalidate current authority before any later publication.
                 self.selected_draft_sink(atomic, context)
             except Exception:
+                discard_calendar_review()
                 return self._failure(task, 'owner_read_draft_handoff_unavailable')
         return ProcessingResult(snapshot=StateSnapshot(task_owner=actor, current_work=task.goal,
             metadata={'engine': 'single_loop_experimental', 'intelligence_schema_version': 1,

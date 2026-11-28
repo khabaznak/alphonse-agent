@@ -301,11 +301,12 @@ a { color: var(--accent); }
   min-height: 0;
   height: 100dvh;
   display: grid;
-  grid-template-rows: minmax(56px, 80px) auto minmax(0, 1fr) auto;
+  grid-template-rows: minmax(56px, 80px) auto minmax(0, 1fr) minmax(0, max-content) auto;
   grid-template-areas:
     "topbar"
     "error"
     "timeline"
+    "calendar-review"
     "input";
   max-width: 1040px;
   width: 100%;
@@ -1155,7 +1156,7 @@ a { color: var(--accent); }
 .shell-toolbar svg, .at-hand-drawer svg { width: 18px; height: 18px; }
 .workspace-panel { min-width: 0; min-height: 0; height: 100%; overflow: hidden; }
 .workspace-panel:focus { outline: none; }
-.desktop-shell .conversation { height: 100%; padding: 16px clamp(16px, 3vw, 40px); grid-template-rows: auto auto minmax(0, 1fr) auto; }
+.desktop-shell .conversation { height: 100%; padding: 16px clamp(16px, 3vw, 40px); grid-template-rows: auto auto minmax(0, 1fr) minmax(0, max-content) auto; }
 .desktop-shell .topbar { padding-bottom: 12px; }
 .desktop-shell .projects-workspace { height: 100%; grid-template-columns: minmax(180px, 30%) minmax(0, 1fr); }
 .embedded-workspace.modal { width: 100%; height: 100%; max-height: none; border: 0; border-radius: 0; box-shadow: none; background: var(--canvas); grid-template-rows: auto auto minmax(0, 1fr); }
@@ -1783,6 +1784,11 @@ button.mockup-member-card:not(:disabled):hover { border-color: var(--accent); }
 .optional-management .integration-connect-form fieldset { margin-bottom: 0; }
 .optional-management .dialog-actions { gap: 8px; }
 .optional-management .dialog-actions button { margin: 0; }
+.calendar-write-grant { display: grid; gap: 6px; margin-block: 12px 8px; }
+.calendar-write-grant input { width: 100%; }
+.calendar-write-grant input[type="datetime-local"] { width: min(100%, 22rem); }
+.calendar-write-grant small { color: var(--muted); line-height: 1.4; margin-bottom: 6px; overflow-wrap: anywhere; }
+.optional-management .calendar-write-grant button { justify-self: start; margin: 4px 0 0; }
 .outlook-inbox-settings > h4, .outlook-connect-form h5, .outlook-account-row h5 { margin: 0; }
 .outlook-inbox-settings h5 { overflow-wrap: anywhere; }
 .outlook-inbox-settings .outlook-status:empty { margin: 0; }
@@ -1932,6 +1938,107 @@ button.mockup-skill-card > p { flex: 1; }
 .composer-support { max-height: min(16vh, 120px); overflow-y: auto; overscroll-behavior: contain; }
 .composer-support:empty { display: none; }
 .composer-support:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.calendar-edit-reviews { grid-area: calendar-review; min-width: 0; min-height: 0; display: flex; flex-direction: column; container-type: inline-size; }
+.calendar-edit-reviews article, .calendar-review-result { border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+.calendar-edit-reviews article { min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.calendar-edit-reviews article > :not(.calendar-review-body), .calendar-review-result { flex-shrink: 0; }
+.calendar-review-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+.calendar-review-body:focus-visible { outline-offset: -3px; }
+.calendar-edit-reviews h3, .calendar-edit-reviews h4, .calendar-edit-reviews p, .calendar-edit-reviews dl, .calendar-edit-reviews dd { margin: 0; overflow-wrap: anywhere; }
+.calendar-review-heading { display: flex; align-items: flex-start; gap: 12px; padding: 15px 16px 9px; }
+.calendar-review-heading > div { min-width: 0; }
+.calendar-review-symbol { display: grid; place-items: center; flex: none; padding: 7px; border-radius: 9px; color: var(--accent); background: var(--accent-soft); }
+.calendar-review-heading h3 { font-size: 20px; line-height: 1.2; margin: 1px 0 3px; }
+.calendar-review-label, .calendar-review-change dt { color: var(--muted); font-size: 12px; }
+.calendar-edit-reviews select { max-width: calc(100% - 32px); margin: 0 16px 8px; }
+.calendar-edit-details { min-height: 0; max-height: min(44dvh, 350px); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--muted) transparent; padding: 4px 16px 10px; }
+.calendar-edit-details:focus-visible { outline-offset: -3px; }
+.calendar-review-change + .calendar-review-change, .calendar-review-guests { margin-top: 10px; }
+.calendar-edit-reviews h4 { font-family: var(--font-body); font-size: 13px; letter-spacing: normal; margin-bottom: 4px; }
+.calendar-review-change dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+.calendar-review-description dl { grid-template-columns: minmax(0, 1fr); }
+.calendar-review-change dl > div { min-width: 0; border-radius: 8px; padding: 6px 10px 7px; background: var(--surface-subtle); }
+.calendar-review-change dl > div:nth-child(2) { background: var(--accent-soft); }
+.calendar-review-change dd { white-space: pre-wrap; }
+.has-calendar-review-guests .calendar-edit-details { max-height: min(15dvh, 136px); }
+.calendar-review-guests { margin: 6px 16px 0; }
+.calendar-review-guests ul { list-style: none; padding: 0; margin: 0; max-height: 132px; overflow-y: auto; overscroll-behavior: contain; }
+.calendar-review-guests ul:focus-visible { outline-offset: -2px; }
+.calendar-review-guests li { display: flex; align-items: start; flex-wrap: wrap; gap: 3px 10px; padding: 5px 0; border-top: 1px solid var(--border); }
+.calendar-review-guests li > div { flex: 1 1 9rem; min-width: 0; overflow-wrap: anywhere; }
+.calendar-review-email, .calendar-review-guest-status { font-size: 12px; color: var(--muted); }
+.calendar-review-guests li > div > span { display: block; }
+.calendar-review-guest-added { color: var(--accent); font-weight: 650; }
+.calendar-review-context { display: flex; justify-content: space-between; align-items: baseline; gap: 6px 12px; flex-wrap: wrap; margin: 5px 16px 9px; font-size: 12px; }
+.calendar-review-event-details { min-width: 0; color: var(--muted); }
+.calendar-review-event-details summary { width: fit-content; cursor: pointer; }
+.calendar-review-event-details dl { margin: 4px 0 0; max-height: 44px; overflow: auto; }
+.calendar-review-scroll { display: inline-flex; align-items: center; gap: 4px; padding: 0; background: transparent; color: var(--accent); }
+.calendar-review-scroll:hover { text-decoration: underline; }
+.calendar-review-footer { padding: 10px 16px 12px; border-top: 1px solid var(--border); display: grid; gap: 8px; }
+.calendar-review-warning, .calendar-review-notification { display: flex; gap: 6px; font-size: 12px; }
+.calendar-review-warning { color: var(--muted); }
+.calendar-review-notification { font-weight: 600; }
+.calendar-review-footer p svg { flex: 0 0 15px; margin-top: 1px; }
+.calendar-review-footer .dialog-actions { justify-content: flex-end; flex-wrap: wrap; margin: 0; }
+.calendar-review-approve { background: var(--accent); color: var(--accent-contrast); border-color: var(--accent); font-weight: 650; }
+.calendar-review-approve:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+.calendar-edit-reviews .calendar-review-result { display: flex; gap: 8px; align-items: flex-start; padding: 10px 12px; }
+.calendar-review-result svg { flex: 0 0 17px; color: var(--warning); margin-top: 2px; }
+.calendar-review-result.is-verified svg { color: var(--accent); }
+.calendar-edit-reviews article + .calendar-review-result { margin-top: 8px; }
+.calendar-approval-card {
+  display: grid;
+  flex: 0 0 auto;
+  gap: 12px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.calendar-approval-card p, .calendar-approval-card h3, .calendar-approval-card h4,
+.calendar-approval-card dl, .calendar-approval-card dd, .calendar-approval-card ul { margin: 0; }
+.calendar-approval-card .calendar-review-heading { padding: 14px 16px 0; }
+.calendar-approval-card .calendar-approval-label { color: var(--accent); font-size: 12px; font-weight: 650; }
+.calendar-approval-card .calendar-review-heading h3 { margin: 2px 0 4px; }
+.calendar-approval-fields { display: grid; gap: 9px; padding-inline: 16px; }
+.calendar-approval-fields dt { color: var(--muted); font-size: 12px; font-weight: 600; }
+.calendar-approval-fields dd { white-space: pre-wrap; }
+.calendar-approval-guests { display: grid; gap: 4px; padding-inline: 16px; }
+.calendar-approval-guests h4 { font-family: var(--font-body); font-size: 13px; letter-spacing: normal; }
+.calendar-approval-guests ul { list-style: none; padding: 0; }
+.calendar-approval-guests li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; }
+.calendar-approval-guests p, .calendar-approval-footer { color: var(--muted); font-size: 12px; }
+.calendar-approval-footer { padding: 8px 16px 10px; border-top: 1px solid var(--border); }
+.calendar-approval-footer p { margin-top: 5px; }
+@container (max-width: 650px) {
+  .has-calendar-review-guests .calendar-edit-details { max-height: min(12.6dvh, 116px); }
+}
+@container (max-width: 430px) {
+  .calendar-review-change dl { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-height: 700px) {
+  .calendar-edit-details { max-height: clamp(80px, 22dvh, 150px); }
+  .has-calendar-review-guests .calendar-edit-details { max-height: clamp(52px, 9.5dvh, 68px); }
+  .calendar-review-heading { padding: 6px 12px 4px; }
+  .calendar-review-heading .calendar-review-label { line-height: 1.15; }
+  .calendar-review-heading h3 { line-height: 1.1; margin-bottom: 2px; }
+  .calendar-review-footer { padding: 5px 12px 7px; gap: 4px; }
+  .calendar-review-footer p { line-height: 1.25; }
+  .calendar-edit-details { padding: 3px 12px 4px; }
+  .calendar-review-change h4, .calendar-review-guests h4 { line-height: 1.2; margin-bottom: 2px; }
+  .calendar-review-change:not(.calendar-review-description) dl { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+  .calendar-review-change:not(.calendar-review-description) dl > div { display: flex; align-items: baseline; gap: 6px; padding: 2px 8px; }
+  .calendar-review-change:not(.calendar-review-description) dt { flex: none; }
+  .calendar-review-change:not(.calendar-review-description) dd { min-width: 0; }
+  .calendar-review-guests { margin: 3px 12px 0; }
+  .calendar-review-guests ul { max-height: 82px; }
+  .calendar-review-guests li { line-height: 1.25; padding: 3px 0; }
+  .calendar-review-guests li > div { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 6px; }
+  .calendar-review-context { margin: 3px 12px 4px; }
+  .calendar-review-event-details, .calendar-review-scroll { line-height: 1.1; }
+}
 /* Keep widget titles legible when their controls need a second row. */
 .widget-heading { flex-wrap: wrap; }
 .at-hand-drawer .widget-heading h3 { flex: 1 0 90px; overflow-wrap: normal; word-break: normal; }

@@ -970,7 +970,8 @@ class V2DaemonServer:
 
     def _optional_management(self, connection, request):
         from alphonse.agent_v2.accounts import (
-            AccountSession, GMAIL_CONTENT_OPERATION, OUTLOOK_INBOX_OPERATION, OUTLOOK_INBOX_RESOURCE, exact_gmail_label_id,
+            AccountSession, CALENDAR_WRITE_OPERATION, GMAIL_CONTENT_OPERATION, OUTLOOK_INBOX_OPERATION,
+            OUTLOOK_INBOX_RESOURCE, exact_calendar_id, exact_gmail_label_id,
         )
         self._local_peer_uid(connection)
         params = request.get('params', {})
@@ -995,12 +996,39 @@ class V2DaemonServer:
             session = AccountSession(self.daemon.runtime.user)
         action = params.get('action')
         values = params.get('values', {})
-        if not isinstance(values, dict):
+        if not isinstance(action, str) or not isinstance(values, dict):
             raise ValueError('management_values_invalid')
+        if action in {'calendar_edit_propose', 'calendar_edit_reviews', 'calendar_edit_commit', 'calendar_edit_cancel',
+                      'calendar_edit_receipts'}:
+            if not owner_only:
+                raise PermissionError('calendar_edit_owner_desktop_required')
+            service = self.daemon.runtime.integration_management.calendar_edits
+
+            def guard():
+                if not self._accepting_handlers:
+                    raise PermissionError('calendar_edit_daemon_stopping')
+
+            guard()
+            if action == 'calendar_edit_propose':
+                expected = {'connection_id', 'grant_id', 'calendar_id', 'event_id', 'fields'}
+                if not expected <= values.keys() <= expected | {'recurrence_scope', 'review_minutes'}:
+                    raise ValueError('calendar_edit_payload_invalid')
+                return service.propose(session, **values, guard=guard)
+            if action == 'calendar_edit_reviews' and not values:
+                return service.reviews(session)
+            if action == 'calendar_edit_receipts' and set(values) == {'local_date'}:
+                return service.receipts(session, **values)
+            if action == 'calendar_edit_commit' and set(values) in ({'review_token'}, {'review_token', 'notification_level'}):
+                return service.commit(session, **values, guard=guard)
+            if action == 'calendar_edit_cancel' and set(values) == {'review_token'}:
+                return service.cancel(session, **values)
+            raise ValueError('calendar_edit_payload_invalid')
         operations = values.get('operations')
         outlook_grant = operations == [OUTLOOK_INBOX_OPERATION]
         outlook_begin = (values.get('provider') == 'microsoft'
                          and values.get('capabilities') == [OUTLOOK_INBOX_OPERATION])
+        calendar_write_begin = (values.get('provider') == 'google'
+                                and values.get('capabilities') == [CALENDAR_WRITE_OPERATION])
         attempt_action = action in {'oauth_attempt_status', 'cancel_oauth_attempt'}
         if owner_only:
             if action not in {'catalog', 'begin', 'save_grant', 'revoke_grant', 'pause', 'disconnect',
@@ -1011,15 +1039,14 @@ class V2DaemonServer:
                 raise ValueError('management_values_invalid')
             google_begin = (values.get('provider') == 'google'
                             and values.get('capabilities') in (['mail_read'], ['calendar_read']))
-            if action == 'begin' and not (google_begin or outlook_begin):
+            if action == 'begin' and not (google_begin or calendar_write_begin or outlook_begin):
                 raise PermissionError('owner_only_account_scope_unavailable')
             if action == 'save_grant':
-                from .core.intelligence.simple_loop.owner_calendar import exact_calendar_id
                 resources = values.get('resources')
                 inbox = operations == ['mail_read'] and resources == ['INBOX']
                 gmail_content = (operations == [GMAIL_CONTENT_OPERATION] and isinstance(resources, list)
                                  and len(resources) == 1 and exact_gmail_label_id(resources[0]))
-                calendar = (operations == ['calendar_read'] and isinstance(resources, list)
+                calendar = (operations in (['calendar_read'], [CALENDAR_WRITE_OPERATION]) and isinstance(resources, list)
                             and len(resources) == 1 and exact_calendar_id(resources[0]))
                 outlook = outlook_grant and resources == [OUTLOOK_INBOX_RESOURCE]
                 if (not (inbox or gmail_content or calendar or outlook) or values.get('beneficiary_user_id') != owner.user_id
@@ -1077,8 +1104,8 @@ class V2DaemonServer:
         # Callback exchange is accepted only by the loopback listener, never raw IPC.
         if action == 'complete':
             raise PermissionError('oauth_callback_transport_required')
-        if owner_only and (action == 'list_gmail_labels' or action == 'begin' and outlook_begin
-                or (action == 'save_grant' and (operations == [GMAIL_CONTENT_OPERATION] or outlook_grant))):
+        if owner_only and (action == 'list_gmail_labels' or action == 'begin' and (outlook_begin or calendar_write_begin)
+                or (action == 'save_grant' and (operations in ([GMAIL_CONTENT_OPERATION], [CALENDAR_WRITE_OPERATION]) or outlook_grant))):
             return management.request(session, action, values, channel='owner_desktop')
         result = management.request(session, action, values)
         if owner_only and action == 'catalog':
@@ -1087,7 +1114,8 @@ class V2DaemonServer:
             result['owner_gmail_content_setup'] = True
             result['owner_gmail_label_setup'] = True
             result['owner_outlook_inbox_setup'] = True
-            supported = {'google': ('mail_read', 'calendar_read'), 'microsoft': (OUTLOOK_INBOX_OPERATION,)}
+            supported = {'google': ('mail_read', 'calendar_read', CALENDAR_WRITE_OPERATION),
+                         'microsoft': (OUTLOOK_INBOX_OPERATION,)}
             result['providers'] = [
                 dict(provider=provider['provider'], capabilities=[
                     capability for capability in supported[provider['provider']] if capability in provider['capabilities']])

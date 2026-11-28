@@ -22,6 +22,7 @@ from .owner_schedule_cancel import valid_cancel_observation
 from .owner_gmail import OWNER_GMAIL_TOOL_ID, valid_owner_gmail
 from .owner_outlook import OWNER_OUTLOOK_TOOL_ID, valid_owner_outlook
 from .owner_calendar import OWNER_CALENDAR_TOOL_ID, valid_owner_calendar
+from .owner_calendar_edit import OWNER_CALENDAR_EDIT_TOOL_ID, valid_calendar_edit_observation
 from .owner_gmail_search import OWNER_GMAIL_SEARCH_TOOL_ID, valid_owner_gmail_search
 from .owner_schedules import OWNER_SCHEDULES_TOOL_ID, execute_owner_schedules, valid_schedules_observation
 from alphonse.agent_v2.core.tools.registry.native.skill_catalog import SKILL_CATALOG_TOOL_ID, execute_skill_catalog, validate_skill_catalog_observation
@@ -109,6 +110,8 @@ def restore_owner_read_observations(checkpoint: OwnerAtomicCheckpoint, context: 
                 keys.add('outlook_observation')
             if isinstance(item, dict) and item.get('tool_id') == OWNER_CALENDAR_TOOL_ID:
                 keys.add('calendar_observation')
+            if isinstance(item, dict) and item.get('tool_id') == OWNER_CALENDAR_EDIT_TOOL_ID:
+                keys.add('calendar_edit_observation')
             if isinstance(item, dict) and item.get('tool_id') == OWNER_GMAIL_SEARCH_TOOL_ID:
                 keys.add('gmail_search_observation')
             if isinstance(item, dict) and item.get('tool_id') == OWNER_REMINDER_CREATE_TOOL_ID:
@@ -207,6 +210,12 @@ def restore_owner_read_observations(checkpoint: OwnerAtomicCheckpoint, context: 
                 observation = item['calendar_observation']
                 if not valid_owner_calendar(state.actor, args, observation, context=execution):
                     raise OwnerRecoveryUnavailable('owner_recovery_unavailable')
+            elif tool == OWNER_CALENDAR_EDIT_TOOL_ID:
+                recheck()
+                observation = item['calendar_edit_observation']
+                if (checkpoint.scheduled_origin or not valid_calendar_edit_observation(observation)
+                        or context.owner_calendar_edit_service is None):
+                    raise OwnerRecoveryUnavailable('owner_recovery_unavailable')
             elif tool == OWNER_GMAIL_SEARCH_TOOL_ID:
                 recheck()
                 observation = item['gmail_search_observation']
@@ -258,6 +267,8 @@ def restore_owner_read_observations(checkpoint: OwnerAtomicCheckpoint, context: 
                             if tool == OWNER_OUTLOOK_TOOL_ID else
                             valid_owner_calendar(state.actor, args, observation, context=execution)
                             if tool == OWNER_CALENDAR_TOOL_ID else
+                            valid_calendar_edit_observation(observation)
+                            if tool == OWNER_CALENDAR_EDIT_TOOL_ID else
                             valid_owner_gmail_search(state.actor, args, observation, context=execution)
                             if tool == OWNER_GMAIL_SEARCH_TOOL_ID else
                             valid_schedules_observation(state.actor, args, observation, context=execution)

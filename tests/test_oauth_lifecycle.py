@@ -235,22 +235,21 @@ def test_owner_refresh_gmail_access_requires_current_exact_grant_and_returns_no_
 
 
 def test_owner_list_gmail_labels_returns_only_metadata_and_renews_without_a_grant(f, monkeypatch):
-    from alphonse.agent_v2.integrations.gmail import GmailTransport
+    from alphonse.agent_v2.integrations.google_mcp import GoogleMcpClient
     connect(f)
     expire(f)
     calls = []
 
-    def get(_, path, *, params, token, deadline, max_bytes):
-        calls.append((path, params))
+    def call(_, product, tool, arguments, *, token, deadline, max_bytes, guard):
+        calls.append((product, tool, arguments))
         assert token == 'rotated-access' and max_bytes > 0
         return {'labels': [
-            {'id': 'Label_17', 'name': 'Projects/Planning', 'messagesTotal': 19},
-            {'id': 'INBOX', 'name': 'INBOX'},
-            {'id': 'gmail:all', 'name': 'Everything'},
-            {'id': 'Label_18', 'name': 'Invalid\nLabel'},
+            {'labelId': 'Label_17', 'name': 'Projects/Planning', 'messagesTotal': 19},
+            {'labelId': 'INBOX', 'name': 'INBOX'},
+            {'labelId': 'Label_18', 'name': 'Invalid\nLabel'},
         ]}, 200
 
-    monkeypatch.setattr(GmailTransport, 'get', get)
+    monkeypatch.setattr(GoogleMcpClient, 'call', call)
     before_revision = revision(f)
     args = {'connection_id': 'one', 'expected_revision': before_revision}
     with pytest.raises(PermissionError, match='owner_required'):
@@ -261,7 +260,7 @@ def test_owner_list_gmail_labels_returns_only_metadata_and_renews_without_a_gran
     assert f.service.list_gmail_labels(f.owner, **args) == {'labels': [
         {'id': 'INBOX', 'name': 'INBOX'}, {'id': 'Label_17', 'name': 'Projects/Planning'},
     ]}
-    assert calls == [('labels', {'fields': 'labels(id,name)'})]
+    assert calls == [('gmail', 'list_labels', {})]
     assert f.service.clients['google'].refresh_count == 1
     assert revision(f) == before_revision
 

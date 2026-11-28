@@ -7,7 +7,7 @@ import os
 import re
 from zoneinfo import ZoneInfo
 
-from alphonse.agent_v2.accounts import AccountHandle, AccountSession
+from alphonse.agent_v2.accounts import AccountHandle, AccountSession, exact_calendar_id
 from alphonse.agent_v2.core.core import ToolDescriptor, ToolKind
 from alphonse.agent_v2.core.messages.sqlite_queue import SQLiteMessageQueue
 from alphonse.agent_v2.core.tools.registry import ToolDefinition
@@ -37,15 +37,12 @@ _FAILURES = {
     'calendar_access_required': 'Connect Google Calendar in Settings → Integrations and grant access to the exact calendar you want to use.',
     'calendar_choice_required': 'More than one Google calendar is authorized. Keep access enabled for the one calendar you want to use.',
     'reconnect_required': 'Reconnect Google Calendar in Settings → Integrations and try again.',
-    'api_disabled': ('Google Calendar rejected the read because its API is disabled. In Google Cloud, enable '
-                     'Google Calendar API in the project configured for Alphonse, then try again.'),
+    'credential_busy': 'Google Calendar is busy. Try again shortly. If it stays busy, reconnect Google Calendar in Settings → Integrations.',
+    'api_disabled': ('Google Calendar rejected the read because Calendar MCP is disabled. In Google Cloud, enable '
+                     'Calendar MCP in the project configured for Alphonse, then try again.'),
+    'approval_required': 'Google Calendar requires an additional approval for this read.',
     'read_unavailable': 'Google Calendar could not verify events for this time window. Check the calendar and try again.',
 }
-
-
-def exact_calendar_id(value):
-    return (isinstance(value, str) and 0 < len(value) <= 512 and value == value.strip()
-            and value.casefold() not in {'primary', '.', '..'} and '*' not in value and value.isprintable())
 
 
 def _instant(value):
@@ -197,6 +194,9 @@ class OwnerCalendarService:
             if exc.args in (('oauth_reauth_required',), ('oauth_refresh_not_persisted',)):
                 guard()
                 return {'status': 'unavailable', 'reason': 'reconnect_required'}
+            if exc.args == ('oauth_operation_in_progress',):
+                check_grant()
+                return {'status': 'unavailable', 'reason': 'credential_busy'}
             return {'status': 'unavailable', 'reason': 'read_unavailable'}
         check_grant()
         return self._observe_window(actor, window, started=datetime.now(timezone.utc), guard=check_grant,
@@ -233,17 +233,23 @@ class OwnerCalendarService:
                 raise ValueError('owner_calendar_continuation_invalid')
         except OAuthError as exc:
             check()
-            reason = 'reconnect_required' if exc.args == ('oauth_refresh_required',) else 'read_unavailable'
+            reason = 'read_unavailable'
+            if exc.args == ('oauth_refresh_required',):
+                reason = 'reconnect_required'
+            elif exc.args == ('oauth_operation_in_progress',):
+                reason = 'credential_busy'
             return {'status': 'unavailable', 'reason': reason}
         except CheckStopped as exc:
             check()
-            reason = 'api_disabled' if exc.code == 'calendar_api_disabled' else 'read_unavailable'
+            reason = {'calendar_api_disabled': 'api_disabled',
+                      'calendar_google_approval_required': 'approval_required'}.get(exc.code, 'read_unavailable')
             return {'status': 'unavailable', 'reason': reason}
         except (AttributeError, CursorExpired, KeyError, OSError, TypeError, ValueError):
             check()  # Revocations and cancellation are not ordinary provider failures.
             return {'status': 'unavailable', 'reason': 'read_unavailable'}
         check()
-        return {'status': 'partial' if 'nextPageToken' in value else 'complete', 'events': events,
+        partial = 'nextPageToken' in value or not value['coverage_complete']
+        return {'status': 'partial' if partial else 'complete', 'events': events,
                 'window': [time_min, time_max], 'timezone': zone.key, 'authority': binding,
                 'observed_at': started.isoformat()}
 
@@ -351,7 +357,7 @@ def format_calendar_observation(payload, *, private_delivery=False):
     start, end = (value.replace('T', ' ') for value in payload['window'])
     lines = [f'Google Calendar events from {start} to {end}.']
     if payload['status'] == 'partial':
-        lines.append('This is the first page of results. Try a shorter date range for a more complete view.')
+        lines.append('Google Calendar returned limited results. Some events may be missing from this window.')
     if not payload['events'] and payload['status'] == 'complete':
         lines.append('No events were returned in this window.')
     for event in payload['events']:

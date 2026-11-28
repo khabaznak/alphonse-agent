@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 import json
 import os
 from types import SimpleNamespace
+from urllib.parse import urlencode
 
 import pytest
 
@@ -11,11 +12,11 @@ from alphonse.agent_v2.core.intelligence.simple_loop.owner_calendar import Owner
 from alphonse.agent_v2.core.projects import ProjectStore
 from alphonse.agent_v2.core.scheduled_tasks import ScheduledTaskStore
 from alphonse.agent_v2.integrations.credentials import CredentialVault
-from alphonse.agent_v2.integrations.google_calendar import CalendarHTTPError
+from alphonse.agent_v2.integrations.google_mcp import GoogleMcpError
 from alphonse.agent_v2.integrations.store import SQLiteIntegrationStore
 from alphonse.agent_v2.users import V2UserStore
 from test_oauth_lifecycle import MemoryBackend, expire
-from test_owner_calendar import PAGE, TITLE, Wire, connect_calendar
+from test_owner_calendar import CALENDAR_ID, PAGE, TITLE, Wire, connect_calendar
 from test_owner_gmail import f
 
 
@@ -208,16 +209,25 @@ def test_spring_forward_is_a_23_hour_day(home):
     assert {r["name"] for r in read(home, "2026-03-08", "2026-03-09")["items"]} == {"At start", "Before end"}
 
 
-@pytest.mark.parametrize('case', ['complete', 'partial', 'renewed', 'api_disabled', 'revoked_during_read'])
+@pytest.mark.parametrize('case', ['complete', 'partial', 'renewed', 'api_disabled',
+                                 'approval_required', 'revoked_during_read', 'credential_busy'])
 def test_verified_agenda_reads_one_bounded_calendar_page_without_projecting_credentials(f, case):
     from alphonse.agent_v2.ipc import V2DaemonServer
 
     connect_calendar(f)
     f.accounts.users.set_timezone('America/Mexico_City', f.owner.actor_user_id)
-    if case == 'renewed':
+    if case in {'renewed', 'credential_busy'}:
         expire(f)
-    page = {**PAGE, 'nextPageToken': 'PRIVATE_PAGE_CURSOR'} if case == 'partial' else PAGE
-    wire = Wire(CalendarHTTPError(403, api_disabled=True) if case == 'api_disabled' else page)
+    if case == 'credential_busy':
+        with f.store._connect() as conn:
+            conn.execute("INSERT INTO v2_oauth_leases VALUES ('one', 'PRIVATE_LEASE')")
+    page = {**PAGE, 'events': [{**PAGE['events'][0], 'attendees': [
+        {'email': 'PRIVATE_ATTENDEE@example.test', 'responseStatus': 'accepted'}]}, *PAGE['events'][1:]]}
+    if case == 'partial':
+        page['nextPageToken'] = 'PRIVATE_PAGE_CURSOR'
+    provider_response = {'api_disabled': GoogleMcpError(403, 'service_disabled'),
+                         'approval_required': GoogleMcpError(409, 'approval_required')}.get(case, page)
+    wire = Wire(provider_response)
     if case == 'revoked_during_read':
         wire.after = lambda: f.accounts.revoke_grant(f.owner, grant_id='grant', expected_revision=1)
     service = OwnerCalendarService(f.accounts, lambda _: f.service, transport=wire)
@@ -233,13 +243,28 @@ def test_verified_agenda_reads_one_bounded_calendar_page_without_projecting_cred
     assert not wire.calls
 
     result = server._dispatch(request, agenda_peer_verified=True)
+    if case == 'credential_busy':
+        assert result['calendar_source_status'] == 'connected'
+        assert result['calendar_event_status'] == 'credential_busy'
+        assert 'calendar_events' not in result
+        assert not wire.calls and f.service.clients['google'].refresh_count == 0
+        with f.store._connect() as conn:
+            assert conn.execute("SELECT nonce FROM v2_oauth_leases WHERE connection_id='one'").fetchone()[0] == 'PRIVATE_LEASE'
+        assert 'PRIVATE_' not in json.dumps(result)
+        revision = f.store.get('one').connection['revision']
+        f.service.begin(f.owner, connection_id='one', provider='google', capabilities=['calendar_read'],
+                        expected_revision=revision)
+        client = f.service.clients['google']
+        f.service.complete(f.owner, client.config.redirect_uri + '?' + urlencode({'state': client.state, 'code': 'disposable-code'}))
+        result = server._dispatch(request, agenda_peer_verified=True)
     assert len(wire.calls) == 1
-    assert wire.calls[0][1]['params']['timeMin'] == '2026-11-02T06:00:00+00:00'
-    assert wire.calls[0][1]['params']['timeMax'] == '2026-12-14T06:00:00+00:00'
-    assert wire.calls[0][1]['params']['maxResults'] == 200
+    assert wire.calls[0][1]['params']['calendarId'] == CALENDAR_ID
+    assert wire.calls[0][1]['params']['startTime'] == '2026-11-02T06:00:00+00:00'
+    assert wire.calls[0][1]['params']['endTime'] == '2026-12-14T06:00:00+00:00'
+    assert wire.calls[0][1]['params']['pageSize'] == 200
     assert f.service.clients['google'].refresh_count == (1 if case == 'renewed' else 0)
-    if case == 'api_disabled':
-        assert result['calendar_event_status'] == 'api_disabled' and 'calendar_events' not in result
+    if case in {'api_disabled', 'approval_required'}:
+        assert result['calendar_event_status'] == case and 'calendar_events' not in result
     elif case == 'revoked_during_read':
         assert result['calendar_source_status'] == 'grant_required'
         assert result['calendar_event_status'] == 'unavailable' and 'calendar_events' not in result

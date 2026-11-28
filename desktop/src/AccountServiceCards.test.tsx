@@ -29,6 +29,17 @@ describe("email and calendar integrations", () => {
     expect(html).toContain("Account needs attention");
     expect(html).not.toContain("1 account connected");
   });
+  it("shows Calendar editing as connected when it can renew its expired token", () => {
+    const stale = { ...catalog.connections[0], access_token_status: "refresh_required" };
+    const calendarCatalog = { ...catalog, owner_google_setup_only: true, connections: [
+      { ...stale, connection_id: "read", capabilities: ["calendar_read"] },
+      { ...stale, connection_id: "edit", capabilities: ["calendar_write"] },
+    ], providers: [{ provider: "google", capabilities: ["calendar_read", "calendar_write"] }] };
+    const html = renderToStaticMarkup(<AccountServiceCards catalog={calendarCatalog} onChoose={() => {}} />);
+    const cards = html.match(/<article\b.*?<\/article>/g) ?? [];
+    expect(cards.find(card => card.includes(">Google Calendar editing</h3>"))).toContain("1 account connected");
+    expect(cards.find(card => card.includes(">Google Calendar</h3>"))).toContain("Account needs attention");
+  });
   it("does not mark an account connected when its credentials are unavailable", () => {
     const unavailable = { ...catalog, connections: [{ ...catalog.connections[0], credential_health: "credential_backend_unavailable", access_token_status: "unavailable" }] };
     const html = renderToStaticMarkup(<AccountServiceCards catalog={unavailable} onChoose={() => {}} />);

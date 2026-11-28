@@ -268,6 +268,12 @@ def build_runtime_host(
         if tools.get(OWNER_CALENDAR_TOOL_ID) is not None:
             raise ValueError('owner_calendar_tool_conflict')
         tools.register(build_owner_calendar_tool_definition())
+        from alphonse.agent_v2.core.intelligence.simple_loop.owner_calendar_edit import (
+            OWNER_CALENDAR_EDIT_TOOL_ID, build_owner_calendar_edit_tool_definition,
+        )
+        if tools.get(OWNER_CALENDAR_EDIT_TOOL_ID) is not None:
+            raise ValueError('owner_calendar_edit_tool_conflict')
+        tools.register(build_owner_calendar_edit_tool_definition())
         from alphonse.agent_v2.core.intelligence.simple_loop.owner_gmail_search import (
             OWNER_GMAIL_SEARCH_TOOL_ID, build_owner_gmail_search_tool_definition,
         )
@@ -576,6 +582,8 @@ def refresh_runtime_artifacts(runtime: V2RuntimeHost) -> None:
         registry.register(build_owner_outlook_tool_definition())
         from alphonse.agent_v2.core.intelligence.simple_loop.owner_calendar import build_owner_calendar_tool_definition
         registry.register(build_owner_calendar_tool_definition())
+        from alphonse.agent_v2.core.intelligence.simple_loop.owner_calendar_edit import build_owner_calendar_edit_tool_definition
+        registry.register(build_owner_calendar_edit_tool_definition())
         from alphonse.agent_v2.core.intelligence.simple_loop.owner_gmail_search import build_owner_gmail_search_tool_definition
         registry.register(build_owner_gmail_search_tool_definition())
         registry.register(build_owner_named_skill_tool_definition())

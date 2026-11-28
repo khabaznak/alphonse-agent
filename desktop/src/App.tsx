@@ -9,6 +9,7 @@ import { OptionalAccounts, ProjectCheckPanel, CheckAgenda } from "./OptionalInte
 import { appendWidgetDraft, CoordinationList, type CoordinationData } from "./CoordinationWidgets";
 import { authorizedWidgets, type WidgetContext } from "./widgetContext";
 import { Agenda } from "./Agenda";
+import { CalendarApprovalCard, CalendarEditReviews, useCalendarApprovalHistory, type CalendarApproval } from "./CalendarEditReviews";
 import { confirmedScheduleMutation } from "./scheduleMutation";
 import { SkillMascot, SkillAppearanceSettings, SkillAppearancePreview, MascotImage } from "./SkillMascot";
 import { BASE_CONTEXT, type AppearanceContext, type SkillAppearance } from "./skillAppearances";
@@ -129,6 +130,9 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const [contextProjects, setContextProjects] = useState<Project[]>([]);
   const [conversationDay, setConversationDay] = useState(() => localDay("UTC"));
   const conversationDayRef = useRef(conversationDay);
+  const [latestCalendarApproval, setLatestCalendarApproval] = useState<(CalendarApproval & { owner: string })>();
+  const calendarApprovalFocused = useCallback((id: string) =>
+    setLatestCalendarApproval(latest => latest?.receipt.id === id ? { ...latest, focus: false } : latest), []);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("appearance");
   const [outlookSettingsRequested, setOutlookSettingsRequested] = useState(false);
   const onOutlookOpened = useCallback(() => setOutlookSettingsRequested(false), []);
@@ -922,6 +926,9 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const activeSurface = Object.values(surfaces).find((surface) => !surface.surfaceId.startsWith("question:") && !surface.surfaceId.startsWith("task-progress:") && !progressTaskIds.includes(questionTaskId(surface)));
   const timelineRenderVersion = diagnosticBehavior.memoizesTimeline ? 0 : diagnosticRenderTick;
   const questionTaskIds = new Set(questions.map((question) => question.task_id));
+  const calendarHistory = useCalendarApprovalHistory({ owner: user, day: conversationDay, timezone,
+    active: ownerOnly && isAdmin && connected && workspace === "conversation",
+    latest: latestCalendarApproval?.owner === user ? latestCalendarApproval : undefined });
   const timelineNodes: ReactNode[] = useMemo(() => buildConversationTimeline(
       messages.filter((message) => !message.private_reply_owner || (isAdmin
         && message.private_reply_owner === user && messageLocalDay(message.created_at, timezone) === conversationDay)),
@@ -933,14 +940,18 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
         const data = (archivedProgress[taskId] || surfaces[`task-progress:${taskId}`])?.dataModel || {};
         return [taskId, { created_at: String(data.request_created_at || data.first_activity_at || ""), sequence: Number(data.request_sequence || 0) }];
       })),
+      calendarHistory.receipts,
     ).map((item) => {
       if (item.kind === "message") {
         return <ConversationTimelineEntry key={item.key} message={item.message} questions={questions} user={user} timezone={timezone} onDone={poll} projectName={contextProjects.find((projectItem) => projectItem.project_id === item.message.project_id)?.name || ""} memoize={diagnosticBehavior.memoizesMessages} renderMarkdown={!diagnosticBehavior.plainTextMessages} failures={ownerFailures} showFailureRecovery={isAdmin} workLogRequest={isAdmin && connected ? daemonRequest : undefined} onActiveLogUpdate={followActiveLog} active={ownerConversationWorking && item.message.id === activeConversationMessageId} onDraftQuestion={isAdmin ? (id, content, createdAt) => { setOwnerReplyTarget(""); setFailedReferenceError(""); setFailedReference({ owner: user, id, quote: quotedRequestText(content), createdAt }); setPrompt((current) => draftQuestionAboutRequest(current, content)); window.requestAnimationFrame(() => textareaRef.current?.focus()); } : undefined} onReviewRecovery={isAdmin && ownerRecoveryItems.some((entry) => entry.message_id === item.message.id) ? (id) => { recoveryReturnMessageId.current = id; setOwnerRecoverySnapshot({user, items: []}); setOwnerRecoveryCheck({user, state: "loading"}); setOwnerRecoveryNotice("Checking request status…"); setOwnerRecoveryFocus(id); navigate("attention"); void refreshOwnerRecovery(); } : undefined} onOpenModelSettings={isAdmin ? () => { setSettingsTab("model"); navigate("settings"); } : undefined} onOpenOutlookSettings={isAdmin ? () => { setOutlookSettingsRequested(true); setSettingsTab("integrations"); navigate("settings", "outlook-settings"); } : undefined} onFailureDismissedChange={(messageId, dismissed) => updateOwnerFailures((current) => current.map((entry) => entry.messageId === messageId ? { ...entry, dismissed } : entry))} />;
       }
+      if (item.kind === "calendar-receipt") {
+        return <CalendarApprovalCard key={item.key} receipt={item.receipt} timezone={timezone} latest={calendarHistory.latest} onFocused={calendarApprovalFocused} />;
+      }
       const archivedSurface = archivedProgress[item.taskId];
       const surface = archivedSurface || surfaces[`task-progress:${item.taskId}`];
       return surface ? <TaskProgressBubble key={item.key} surface={surface} archived={Boolean(archivedSurface)} connected={connected} timezone={timezone} /> : null;
-    }), [archivedProgress, clientId, connected, contextProjects, conversationDay, diagnosticBehavior.memoizesMessages, diagnosticBehavior.plainTextMessages, messages, ownerConversation, ownerFailures, ownerRecoveryItems, ownerConversationWorking, activeConversationMessageId, isAdmin, poll, refreshOwnerRecovery, followActiveLog, progressTaskIds, questionTaskIds, questions, surfaces, timelineRenderVersion, timezone, user]);
+    }), [archivedProgress, calendarApprovalFocused, calendarHistory.receipts, calendarHistory.latest, clientId, connected, contextProjects, conversationDay, diagnosticBehavior.memoizesMessages, diagnosticBehavior.plainTextMessages, messages, ownerConversation, ownerFailures, ownerRecoveryItems, ownerConversationWorking, activeConversationMessageId, isAdmin, poll, refreshOwnerRecovery, followActiveLog, progressTaskIds, questionTaskIds, questions, surfaces, timelineRenderVersion, timezone, user]);
 
   useEffect(() => {
     if (workspace !== "attention" || !ownerRecoveryFocus) return;
@@ -1011,9 +1022,12 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
         {error && <div className="error" role="alert">{error}</div>}
         <div id="conversation-timeline" className="timeline" ref={timelineRef} tabIndex={-1} aria-live="polite" onScroll={rememberPosition}>
           {timelineNodes}
+          {calendarHistory.truncated && <p>Showing the latest 100 Calendar approvals for this day.</p>}
           {ownerConversationWorking && conversationDay === localDay(timezone) && <ConversationActivity />}
           <OwnerContinuation key={user} request={daemonRequest} active={isAdmin && connected && ownerContinuationAvailable && conversationDay === localDay(timezone)} />
         </div>
+        <CalendarEditReviews key={`calendar-edit:${user}`} timezone={timezone} active={ownerOnly && isAdmin && connected && workspace === "conversation" && conversationDay === localDay(timezone)}
+          onSaved={approval => setLatestCalendarApproval({ ...approval, owner: user })} />
         <section className="input-dock">
           <div className="composer-support" tabIndex={0} aria-label="Request context">
           {activeSurface && (

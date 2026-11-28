@@ -17,6 +17,18 @@ coordinated specialized agents as family needs grow.
 - `docs/` contains architecture, design decisions, operational guidance, and
   rollout plans.
 
+## Desktop UI merge gate
+
+The Critic independently reviews Desktop UI changes against the approved
+design before merge. Require an explicit PASS on the final changes. Verify
+visual fidelity, layout, and the task's main interactions at representative
+desktop and compact sizes. A HOLD or an unverified required state blocks
+merge. Re-review visual or interaction changes made after a PASS.
+
+Delegate independent implementation and UI testing when they can run in
+parallel. Keep The Critic independent of implementation. Record the rendered
+fixture, viewport, observed behavior, and limitations of the review.
+
 ## Language-neutral interaction
 
 Alphonse serves people whose languages and ways of expressing themselves cannot

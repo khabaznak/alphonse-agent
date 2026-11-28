@@ -56,7 +56,7 @@ with args.receipt.open('x') as evidence:
     except Exception as exc:
         report.update(status='infrastructure_error', error_type=type(exc).__name__)
     report.update(elapsed_seconds=round(time.monotonic()-started, 3), title_visible_to_model=provider.title_visible,
-                  provider_reads=[{'path': path, 'query': attrs['params']} for path, attrs in wire.calls], decisions=provider.decisions,
+                  provider_reads=[{'tool': tool, 'arguments': attrs['params']} for tool, attrs in wire.calls], decisions=provider.decisions,
                   limitations=['Synthetic provider data. Real Google, rendering in native Desktop, account scope changes and alternate providers were not assessed.',
                                'One attempt per case; model decisions do not prove grounding. IPC acknowledgement is not proof of human receipt.'])
     evidence.write(json.dumps(report, ensure_ascii=False) + '\n')

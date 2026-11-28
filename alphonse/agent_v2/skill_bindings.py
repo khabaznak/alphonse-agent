@@ -434,7 +434,7 @@ class SkillBindings:
                 account = self.integrations.get(row["target"])
                 if account is None or not account.enabled:
                     raise ValueError("skill_binding_account_unavailable")
-                if account.connection:
+                if account.connection or account.provider_key == 'google-calendar':
                     raise PermissionError('skill_binding_managed_service_required')
                 credentials = self.integrations.resolve_credentials(account)
                 if any(not isinstance(item, str) for item in credentials.values()):

@@ -329,6 +329,19 @@ class SQLiteIntegrationStore:
             secrets=secrets,
         )
 
+    def save_calendar_edit_receipt(self, owner: str, receipt: dict[str, Any]) -> None:
+        with self._connect() as conn:
+            conn.execute("""INSERT INTO v2_calendar_edit_receipts
+                (receipt_id, owner_user_id, approved_at, receipt_json) VALUES (?, ?, ?, ?)""",
+                (receipt['id'], owner, receipt['approved_at'], json.dumps(receipt)))
+
+    def calendar_edit_receipts(self, owner: str, start: str, end: str) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute("""SELECT receipt_json FROM v2_calendar_edit_receipts
+                WHERE owner_user_id=? AND approved_at>=? AND approved_at<?
+                ORDER BY approved_at DESC, receipt_id DESC LIMIT 101""", (owner, start, end)).fetchall()
+        return [json.loads(row['receipt_json']) for row in rows]
+
     def _connect(self) -> sqlite3.Connection:
         if self._memory_connection is not None:
             return _ConnectionProxy(self._memory_connection)
@@ -354,6 +367,16 @@ class SQLiteIntegrationStore:
 
                 CREATE INDEX IF NOT EXISTS idx_v2_integrations_provider
                   ON v2_integrations (provider_key, enabled);
+
+                CREATE TABLE IF NOT EXISTS v2_calendar_edit_receipts (
+                  receipt_id TEXT PRIMARY KEY,
+                  owner_user_id TEXT NOT NULL,
+                  approved_at TEXT NOT NULL,
+                  receipt_json TEXT NOT NULL
+                ) STRICT;
+
+                CREATE INDEX IF NOT EXISTS idx_v2_calendar_edit_receipts_owner_day
+                  ON v2_calendar_edit_receipts (owner_user_id, approved_at, receipt_id);
                 """
             )
 

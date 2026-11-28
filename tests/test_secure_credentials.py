@@ -31,6 +31,13 @@ def install(store, account='one', token=SECRET, generation=0):
                                      expected_generation=generation)
 
 
+@pytest.fixture
+def binding_store(tmp_path, secure_vault):
+    store = SQLiteIntegrationStore(tmp_path / 'binding-integrations.sqlite', credential_vault=secure_vault)
+    store.upsert(integration_id='one', provider_key='synthetic-provider', display_name='Fixture', enabled=True)
+    return store
+
+
 def test_encrypted_roundtrip_restart_and_metadata_only_projections(store, tmp_path):
     record = install(store)
     assert record.secrets == {}
@@ -225,7 +232,8 @@ def test_explicit_migration_preserves_account_and_does_not_touch_messaging(store
     assert store.get('one').credential_ref == migrated.credential_ref
 
 
-def test_secure_binding_delivery_redaction_and_denied_actor(store, tmp_path):
+def test_secure_binding_delivery_redaction_and_denied_actor(binding_store, tmp_path):
+    store = binding_store
     install(store)
     users = V2UserStore(tmp_path / 'users.sqlite')
     users.onboard(display_name='Owner', user_id='owner', users_root=tmp_path / 'profiles')
@@ -295,11 +303,12 @@ def test_resolve_rechecks_disconnect_during_backend_read(store):
         store.resolve_credentials(record)
 
 
-def test_secure_bash_output_and_task_evidence_never_contain_credentials(store, tmp_path):
+def test_secure_bash_output_and_task_evidence_never_contain_credentials(binding_store, tmp_path):
     from alphonse.agent_v2.core.core import ToolExecutionContext
     from alphonse.agent_v2.core.intelligence.task_state import TaskState
     from alphonse.agent_v2.core.messages import InMemoryMessageQueue
     from alphonse.agent_v2.core.tools.registry.native.bash import execute_bash
+    store = binding_store
     install(store)
     users = V2UserStore(tmp_path / 'users.sqlite')
     users.onboard(display_name='Owner', user_id='owner', users_root=tmp_path / 'profiles')
