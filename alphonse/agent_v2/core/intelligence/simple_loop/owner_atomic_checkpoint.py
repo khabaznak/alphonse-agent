@@ -432,6 +432,8 @@ class OwnerAtomicCheckpoint:
             from .owner_gmail import OWNER_GMAIL_TOOL_ID, valid_owner_gmail_locked
             from .owner_outlook import OWNER_OUTLOOK_TOOL_ID, outlook_inbox_result, valid_owner_outlook_locked
             from .owner_calendar import OWNER_CALENDAR_TOOL_ID, valid_owner_calendar_locked
+            from .owner_calendar_edit import (OWNER_CALENDAR_EDIT_TOOL_ID, calendar_edit_response,
+                                               valid_calendar_edit_observation)
             from .owner_gmail_search import (
                 OWNER_GMAIL_SEARCH_TOOL_ID, valid_owner_gmail_search_locked,
             )
@@ -461,6 +463,12 @@ class OwnerAtomicCheckpoint:
                             conn, self.task.user, binding.get('arguments'), binding.get('calendar_observation'),
                             context=context))):
                     raise CheckpointConflict('owner_calendar_authority_unavailable')
+                if binding.get('tool_id') == OWNER_CALENDAR_EDIT_TOOL_ID:
+                    proposal = binding.get('calendar_edit_observation')
+                    if (self.scheduled_origin or state.status != 'completed' or context.owner_calendar_edit_service is None
+                            or not valid_calendar_edit_observation(proposal)
+                            or state.response != calendar_edit_response(proposal)):
+                        raise CheckpointConflict('owner_calendar_edit_evidence_unavailable')
                 if (binding.get('tool_id') == OWNER_GMAIL_SEARCH_TOOL_ID
                         and (state.status != 'completed' or not valid_owner_gmail_search_locked(
                             conn, self.task.user, binding.get('arguments'), binding.get('gmail_search_observation'),
@@ -1003,6 +1011,11 @@ class OwnerAtomicCheckpoint:
             from .owner_calendar import OWNER_CALENDAR_TOOL_ID
             if tool_id == OWNER_CALENDAR_TOOL_ID:
                 observations[evidence_ref]['calendar_observation'] = deepcopy(observation)
+            from .owner_calendar_edit import OWNER_CALENDAR_EDIT_TOOL_ID, valid_calendar_edit_observation
+            if tool_id == OWNER_CALENDAR_EDIT_TOOL_ID:
+                if self.scheduled_origin or not valid_calendar_edit_observation(observation):
+                    raise CheckpointConflict('owner_calendar_edit_evidence_unavailable')
+                observations[evidence_ref]['calendar_edit_observation'] = deepcopy(observation)
             from .owner_gmail_search import OWNER_GMAIL_SEARCH_TOOL_ID
             if tool_id == OWNER_GMAIL_SEARCH_TOOL_ID:
                 observations[evidence_ref]['gmail_search_observation'] = deepcopy(observation)

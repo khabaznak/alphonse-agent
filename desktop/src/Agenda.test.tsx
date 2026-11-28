@@ -140,6 +140,74 @@ it("keeps ordinary refreshes stable and clears private rows immediately on acces
   }
 });
 
+it("picks up external changes on focus and polling and refreshes immediately after a verified Calendar edit", async () => {
+  vi.useFakeTimers();
+  const day = dayInZone("UTC");
+  const empty: AgendaResult = { ...calendar, items: [], calendar_events: [] };
+  const withEvent = (title: string): AgendaResult => ({ ...empty, calendar_events: [
+    { ...calendar.calendar_events![0], title, start: day, end: shiftDay(day, 1) },
+  ] });
+  let next: AgendaResult = empty;
+  let pending: ((value: AgendaResult) => void) | undefined;
+  let holdNext = false;
+  let reads = 0;
+  invoke.mockImplementation(async (_command, args) => {
+    if (args.method === "agenda") {
+      reads++;
+      if (!holdNext) return next;
+      holdNext = false;
+      return await new Promise<AgendaResult>(resolve => { pending = resolve; });
+    }
+    return { status: args.params.values.review_token === "approved" ? "updated" : "unknown" };
+  });
+  const div = document.createElement("div");
+  const root = createRoot(div);
+  try {
+    await act(async () => root.render(<Agenda member="owner" timezone="UTC" compact onSchedule={() => {}} onProjects={() => {}} />));
+    expect(div.textContent).toContain("No events or scheduled work.");
+    holdNext = true;
+    await act(async () => vi.advanceTimersByTimeAsync(30000));
+    expect(reads).toBe(2);
+    next = withEvent("Externally accepted event");
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+      window.dispatchEvent(new Event("focus"));
+    });
+    expect(reads).toBe(2);
+    await act(async () => pending?.(empty));
+    expect(reads).toBe(3);
+    expect(div.querySelector(".agenda-google-event")?.textContent).toContain("Externally accepted event");
+    next = withEvent("Provider update found by polling");
+    await act(async () => vi.advanceTimersByTimeAsync(30000));
+    expect(div.textContent).toContain("Provider update found by polling");
+    next = withEvent("Approved Desktop edit");
+    await act(async () => { await optionalManagement("calendar_edit_commit", { review_token: "unknown" }); });
+    expect(div.textContent).toContain("Provider update found by polling");
+    await act(async () => { await optionalManagement("calendar_edit_commit", { review_token: "approved" }); });
+    expect(div.textContent).toContain("Approved Desktop edit");
+    expect(reads).toBe(5);
+  } finally {
+    await act(async () => root.unmount());
+    invoke.mockReset();
+    vi.useRealTimers();
+  }
+});
+
+it("shows how to recover a busy Google Calendar connection without claiming the day is empty", async () => {
+  invoke.mockResolvedValue({ ...result, items: [], calendar_source_status: "connected", calendar_event_status: "credential_busy" });
+  const div = document.createElement("div");
+  const root = createRoot(div);
+  try {
+    await act(async () => root.render(<Agenda member="owner" timezone="UTC" compact onSchedule={() => {}} onProjects={() => {}} />));
+    expect(div.querySelector(".widget-source-details summary")?.textContent).toBe("Google Calendar connection busy");
+    expect(div.textContent).toContain("reconnect Google Calendar in Settings → Integrations");
+    expect(div.textContent).not.toContain("No events or scheduled work.");
+  } finally {
+    await act(async () => root.unmount());
+    invoke.mockReset();
+  }
+});
+
 it("does not display a prior member's Calendar result while the new member loads", async () => {
   const day = dayInZone("UTC");
   const privateResult = { ...calendar, items: [], calendar_events: [

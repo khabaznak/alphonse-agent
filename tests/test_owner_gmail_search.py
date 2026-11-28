@@ -23,7 +23,7 @@ from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.messages.sqlite_queue import SQLiteMessageQueue
 from alphonse.agent_v2.integrations.gmail import GmailHTTPError
 from alphonse.agent_v2.services.project_check_worker import CheckStopped
-from test_gmail_adapter import Wire, encoded
+from test_gmail_adapter import McpWire, Wire, encoded
 from test_gmail_unread import grant
 from test_oauth_lifecycle import connect, expire
 from test_owner_gmail import f
@@ -107,6 +107,26 @@ def test_scoped_inbox_search_filters_label_and_time_and_bounds_model_projection(
     answer = format_gmail_search_observation(result, 'Ships on Friday [1].', private_delivery=True)
     assert history == 'Gmail Inbox matches were displayed privately in Desktop.'
     assert 'Shipping update' in answer and '[1]' in answer and 'Search coverage is incomplete' in answer
+
+
+def test_owner_search_uses_managed_mcp_by_default_and_keeps_observation_private(f, monkeypatch):
+    from alphonse.agent_v2.integrations.google_mcp import GoogleMcpClient
+
+    connect(f)
+    grant_content(f)
+    metadata = {key: value for key, value in mail().items() if key != 'payload'}
+    wire = McpWire({'threads': [{'id': 't', 'messageCount': 1, 'messages': [metadata]}]}, metadata,
+        dict(metadata, subject='Shipping update', sender='p@example.invalid', plaintextBody='Ships Friday.'))
+    monkeypatch.setattr(GoogleMcpClient, 'call', lambda _, *args, **kwargs: wire.call(*args, **kwargs))
+    service = OwnerGmailSearchService(f.accounts, lambda _: f.service)
+    result = service.observe('owner', {'query': 'from:p@example.invalid'}, guard=lambda: None)
+
+    assert result['status'] == 'complete' and private_gmail_search_result(result)
+    assert result['messages'][0]['excerpt'] == 'Ships Friday.'
+    assert [tool for tool, _ in wire.calls] == ['search_threads', 'get_message', 'get_message']
+    assert 'in:inbox' in wire.calls[0][1]['arguments']['query']
+    assert 'Ships Friday' not in format_gmail_search_observation(result)
+    assert 'disposable-access' not in gmail_search_prompt(result)
 
 
 def test_twenty_label_matches_share_the_excerpt_budget_and_keep_later_sources(f):

@@ -47,6 +47,7 @@ export async function playAlertSound(path = ""): Promise<void> {
 export async function optionalManagement<T>(action: string, values: Record<string, unknown> = {}): Promise<T> {
   const result = await daemonRequest<T>("optional_management", { action, values });
   if (typeof window !== "undefined" && (["catalog", "pause", "disconnect", "revoke_grant"].includes(action)
+      || action === "calendar_edit_commit" && (result as { status?: string })?.status === "updated"
       || (action === "save_grant" && Array.isArray(values.operations) && values.operations.includes("calendar_read")))) {
     window.dispatchEvent(new Event(CALENDAR_CONFIGURATION_CHANGED));
   }

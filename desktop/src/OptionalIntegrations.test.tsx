@@ -46,7 +46,7 @@ async function mountAccounts() {
   return { element, button, click, select, choose, close };
 }
 
-describe("Gmail label permissions in Desktop settings", () => {
+describe("Google account permissions in Desktop settings", () => {
   afterEach(() => invoke.mockReset());
 
   it("loads nested labels on request, saves a standing grant, and revises or revokes that label only", async () => {
@@ -112,6 +112,33 @@ describe("Gmail label permissions in Desktop settings", () => {
       await ui.click("Add label access");
       expect(ui.element.textContent).toContain("Return to Gmail settings and reconnect the account");
       expect(ui.element.querySelector("select")).toBeNull();
+    } finally {
+      await ui.close();
+    }
+  });
+
+  it("keeps keyboard focus in Calendar editing settings when entering the exact grant form", async () => {
+    const resource = "fixture@group.calendar.google.com";
+    const calendarCatalog = {
+      ...catalog, owner_google_setup_only: true,
+      connections: [{ ...catalog.connections[0], connection_id: "calendar-edit", capabilities: ["calendar_write"] }],
+      providers: [{ provider: "google", capabilities: ["calendar_write"] }],
+      grants: [{ ...inbox, connection_id: "calendar-edit", operations: ["calendar_write"], resources: [resource],
+        expires_at: new Date(Date.now() + 3600_000).toISOString() }],
+    };
+    invoke.mockImplementation(async (_command, { params }) => {
+      if (params.action === "catalog") return calendarCatalog;
+    });
+    const ui = await mountAccounts();
+    try {
+      await ui.click("Manage Google Calendar editing");
+      expect(document.activeElement?.textContent).toBe("Google Calendar editing");
+      await ui.click("Manage access");
+      expect(document.activeElement?.textContent).toBe("Allow approved edits to one Google calendar");
+      const input = ui.element.querySelector<HTMLInputElement>("#owner-calendar-id");
+      expect(input?.readOnly).toBe(true);
+      expect(input?.value).toBe(resource);
+      expect(input?.getAttribute("aria-describedby")).toBe("owner-calendar-id-help");
     } finally {
       await ui.close();
     }

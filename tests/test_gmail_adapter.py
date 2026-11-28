@@ -7,10 +7,11 @@ import json
 
 import pytest
 
-from alphonse.agent_v2.accounts import AccountHandle, AccountSession
+from alphonse.agent_v2.accounts import AccountHandle, AccountSession, GMAIL_CONTENT_OPERATION
 from alphonse.agent_v2.integrations.acquisition import ReadContext, ReadLimits, CursorExpired
 from alphonse.agent_v2.integrations.content import normalize_mime
-from alphonse.agent_v2.integrations.gmail import GmailAdapter, GmailHTTPError, ALL_MAIL
+from alphonse.agent_v2.integrations.gmail import GmailAdapter, GmailHTTPError, GmailTransport, ALL_MAIL
+from alphonse.agent_v2.integrations.google_mcp import GoogleMcpError
 from alphonse.agent_v2.services.project_check_worker import CheckStopped
 
 NOW = datetime(2026, 11, 2, 14, tzinfo=timezone.utc)
@@ -306,36 +307,103 @@ def test_capabilities_reauthorize_and_health_is_redacted(setup):
         f.adapter.capabilities(f.context)
 
 
-@pytest.mark.parametrize('case', ['ok', 'oversize', 'redirect', 'timeout'])
-def test_fixed_get_transport_stream_budget_no_redirect_or_retry(monkeypatch, case):
-    import sys
-    from alphonse.agent_v2.integrations.gmail import GmailTransport
-    calls = []
-    class RequestFailure(Exception):
-        pass
-    class Response:
-        status_code = 302 if case == 'redirect' else 200
-        def __enter__(self): return self
-        def __exit__(self, *args): pass
-        def iter_content(self, **kw):
-            yield b'{"ok":true}'
-    def get(url, **kw):
-        calls.append((url, kw))
-        if case == 'timeout':
-            raise RequestFailure('private credential diagnostics')
-        return Response()
-    monkeypatch.setitem(sys.modules, 'requests', SimpleNamespace(get=get, RequestException=RequestFailure))
-    kwargs = dict(params={}, token='synthetic', deadline=datetime.now(timezone.utc) + timedelta(seconds=10),
-                  max_bytes=2 if case == 'oversize' else 100)
-    if case == 'ok':
-        assert GmailTransport().get('profile', **kwargs) == ({'ok': True}, 11)
-    else:
-        with pytest.raises((CheckStopped, GmailHTTPError)) as exc:
-            GmailTransport().get('profile', **kwargs)
-        assert 'private' not in str(exc.value)
-    assert len(calls) == 1
-    assert calls[0][0] == 'https://gmail.googleapis.com/gmail/v1/users/me/profile'
-    assert calls[0][1]['allow_redirects'] is False and calls[0][1]['stream'] is True
+class McpWire(Wire):
+    def call(self, product, tool, arguments, **kw):
+        assert product == 'gmail'
+        return self.get(tool, arguments=arguments, **kw)
+
+
+def mcp_message(identity='m', *, labels=('Label_7',), received=NOW):
+    return {'id': identity, 'labelIds': list(labels), 'internalDate': str(int(received.timestamp() * 1000)),
+            'historyId': '214'}
+
+
+def test_mcp_label_counts_use_exact_record_and_preserve_unknown():
+    wire = McpWire({'labels': [{'labelId': 'INBOX', 'threadsUnread': 3, 'name': 'Inbox'},
+                              {'labelId': 'Label_7', 'messagesUnread': 0, 'private': 'unrelated'}]},
+                   {'labels': [{'labelId': 'INBOX', 'threadsUnread': 3}]},
+                   GoogleMcpError(409, 'approval_required'))
+    transport = GmailTransport(client=wire)
+    kwargs = dict(params={}, token='fixture', deadline=NOW + timedelta(minutes=1), max_bytes=2048)
+    assert transport.get('labels/Label_7', **kwargs)[0] == {'id': 'Label_7', 'messagesUnread': 0}
+    assert transport.get('labels/Label_7', **kwargs)[0] == {}
+    with pytest.raises(CheckStopped, match='gmail_provider_approval_required') as exc:
+        transport.get('labels/INBOX', **kwargs)
+    assert exc.value.outcome == 'blocked'
+    assert [(tool, data['arguments']) for tool, data in wire.calls] == [('list_labels', {})] * 3
+    assert all(data['max_bytes'] == 2048 for _, data in wire.calls)
+
+
+def test_mcp_owner_search_never_reads_body_for_out_of_scope_members(setup):
+    f = setup
+    context = replace(f.context, grant=replace(f.context.grant, operation=GMAIL_CONTENT_OPERATION,
+                      resources=('Label_7',)), project_id=None, limits=ReadLimits(1, 20, 50_000))
+    matching = mcp_message()
+    stale = mcp_message('stale', received=NOW - timedelta(days=40))
+    moved = mcp_message('moved')
+    outside = mcp_message('outside', labels=('Label_8',))
+    thread = {'id': 't', 'messageCount': 6, 'messages': [matching, stale, moved, outside]}
+    catalog = {'labels': [{'labelId': 'Label_7', 'name': 'School/Current'}]}
+    full = dict(matching, plaintextBody='Archived notice.', subject='School deadline',
+                sender='school@example.invalid',
+                addressDisplayNames=[{'emailAddress': 'school@example.invalid', 'displayName': 'School Office'}],
+                attachments=[{'id': 'attachment1', 'mimeType': 'application/pdf'}])
+    wire = McpWire(catalog, {'threads': [thread]}, matching, full, stale,
+                   mcp_message('moved', labels=('Label_8',)))
+    adapter = GmailAdapter(f.oauth, transport=GmailTransport(wire), clock=lambda: NOW)
+    result = adapter.search_label(context, query='from:school@example.invalid',
+                                  since=NOW - timedelta(days=30), until=NOW)
+    assert result.complete and not result.coverage_complete
+    assert [record.source_id for record in result.records] == ['m']
+    record = result.records[0]
+    assert record.version == '214' and b'School Office' in record.mime
+    assert normalize_mime(record.mime, max_bytes=10_000)['parts'][0]['text'].strip() == 'Archived notice.'
+    assert [args['arguments'] for tool, args in wire.calls if tool == 'get_message'] == [
+        {'messageId': 'm', 'messageFormat': 'METADATA_ONLY'},
+        {'messageId': 'm', 'messageFormat': 'FULL_CONTENT'},
+        {'messageId': 'stale', 'messageFormat': 'METADATA_ONLY'},
+        {'messageId': 'moved', 'messageFormat': 'METADATA_ONLY'},
+    ]
+    search = wire.calls[1][1]['arguments']
+    assert search['view'] == 'THREAD_VIEW_METADATA_ONLY' and 'label:"School/Current"' in search['query']
+    assert not search['includeTrash']
+    assert all(req['owner_gmail_content'] and req['resources'] == ['Label_7'] for req in f.oauth.requests)
+
+
+def test_mcp_scheduled_snapshots_paginate_without_history_or_retaining_delta_cursor(setup):
+    f = setup
+    context = replace(f.context, grant=replace(f.context.grant, resources=('INBOX',)))
+    source = mcp_message(labels=('INBOX',))
+    wire = McpWire({'nextPageToken': 'second'}, {'threads': [
+        {'id': 'thread', 'messageCount': 1, 'messages': [source]}]}, source,
+        dict(source, plaintextBody='Current.'), {'omittedContent': {'omittedReasonCounts': [{}]}})
+    adapter = GmailAdapter(f.oauth, transport=GmailTransport(wire), clock=lambda: NOW)
+    since = NOW - timedelta(days=20)
+    query = {'text': ''}
+    first = adapter.search(context, query=query, since=since)
+    second = adapter.search(context, query=query, since=since, cursor=first.cursor)
+    assert not first.complete and first.coverage_complete and first.cursor
+    assert second.complete and second.coverage_complete and second.cursor is None
+    assert [item.source_id for item in second.records] == ['m']
+    assert wire.calls[1][1]['arguments'] == {**wire.calls[0][1]['arguments'], 'pageToken': 'second'}
+    assert not adapter.search(context, query=query, since=since).coverage_complete
+    with pytest.raises(CursorExpired):
+        adapter.changes(context, query=query, cursor='old-rest-cursor')
+    with pytest.raises(CheckStopped, match='gmail_attachment_unavailable'):
+        adapter.attachment(context, resource='INBOX', source_id='m', attachment_id='a', max_bytes=100)
+    assert [tool for tool, _ in wire.calls] == [
+        'search_threads', 'search_threads', 'get_message', 'get_message', 'search_threads']
+
+
+def test_mcp_malformed_query_cannot_escape_label_and_time_clauses(setup):
+    f = setup
+    context = replace(f.context, grant=replace(f.context.grant, resources=('Label_7',)))
+    wire = McpWire()
+    adapter = GmailAdapter(f.oauth, transport=GmailTransport(wire), clock=lambda: NOW)
+
+    with pytest.raises(ValueError, match='gmail_query_invalid'):
+        adapter.search(context, query={'text': 'foo) OR in:anywhere (bar'}, since=NOW - timedelta(days=1))
+    assert not wire.calls
 
 
 def test_multiple_labels_history_keeps_original_anchor_and_separate_scope(setup):

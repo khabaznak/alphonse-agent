@@ -7,8 +7,10 @@ import time
 from uuid import uuid4
 
 from alphonse.agent_v2.accounts import (
-    AccountSession, GMAIL_CONTENT_OPERATION, OUTLOOK_INBOX_OPERATION, exact_gmail_label_id, valid_gmail_label_name,
+    AccountSession, CALENDAR_WRITE_OPERATION, GMAIL_CONTENT_OPERATION, OUTLOOK_INBOX_OPERATION,
+    exact_gmail_label_id, valid_gmail_label_name,
 )
+from alphonse.agent_v2.integrations.calendar_edits import CalendarEditService
 from alphonse.agent_v2.project_checks import _digest
 
 
@@ -23,6 +25,8 @@ class IntegrationManagement:
         self.findings = findings
         self._reviews = {}
         self._lock = threading.RLock()
+        self.calendar_edits = CalendarEditService(self.accounts,
+            lambda session: self.oauth or (self.oauth_factory(session) if self.oauth_factory else None))
 
     def _session(self, session):
         if not isinstance(session, AccountSession):
@@ -248,6 +252,9 @@ class IntegrationManagement:
             return result
         if action == 'save_grant':
             operations = values.get('operations')
+            if (isinstance(operations, (list, tuple)) and CALENDAR_WRITE_OPERATION in operations
+                    and channel != 'owner_desktop'):
+                raise PermissionError('calendar_edit_setup_requires_desktop')
             if operations == [OUTLOOK_INBOX_OPERATION]:
                 if channel != 'owner_desktop':
                     raise PermissionError('outlook_inbox_grant_requires_desktop')
@@ -286,6 +293,8 @@ class IntegrationManagement:
                           and g['grantor_user_id'] == session.actor_user_id), None)
             if not grant:
                 raise PermissionError('account_owner_required')
+            if CALENDAR_WRITE_OPERATION in grant['operations']:
+                raise PermissionError('calendar_edit_grant_requires_desktop')
             if OUTLOOK_INBOX_OPERATION in grant['operations']:
                 raise PermissionError('outlook_inbox_grant_requires_desktop')
             binding_id = 'account_' + uuid4().hex
@@ -297,6 +306,9 @@ class IntegrationManagement:
             self.policies.bindings.select(actor_id=session.actor_user_id, **values)
             return {'selected': True}
         if action in {'begin', 'complete', 'pause', 'disconnect', 'retry_deletion'}:
+            if (action == 'begin' and CALENDAR_WRITE_OPERATION in (values.get('capabilities') or [])
+                    and channel != 'owner_desktop'):
+                raise PermissionError('calendar_edit_setup_requires_desktop')
             if (action == 'begin' and OUTLOOK_INBOX_OPERATION in (values.get('capabilities') or [])
                     and channel != 'owner_desktop'):
                 raise PermissionError('outlook_inbox_setup_requires_desktop')

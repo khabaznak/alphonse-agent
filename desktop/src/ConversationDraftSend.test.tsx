@@ -50,6 +50,31 @@ describe("confirmed conversation sends", () => {
     service.takeDraft.mockReset(); service.optionalManagement.mockReset();
   });
   afterEach(() => vi.restoreAllMocks());
+  it("keeps a pending Calendar approval above the current draft without moving focus", async () => {
+    let reveal!: (value: unknown) => void;
+    service.optionalManagement.mockImplementation((action: string) => action === "calendar_edit_reviews"
+      ? new Promise(resolve => { reveal = resolve; }) : Promise.resolve({}));
+    const element = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(element);
+    try {
+      await act(async () => { root.render(<App />); await flush(); });
+      const textarea = element.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message Alphonse"]')!;
+      textarea.focus();
+      await act(async () => typeValue(textarea, "Current draft"));
+      await act(async () => reveal({ reviews: [{ review_token: "fixture-review", event_title: "Test event",
+        event_id: "fixture-event", calendar_id: "test-calendar", recurrence_scope: "event",
+        expires_at: "2099-01-01T00:00:00Z", before: { location: "Old" }, after: { location: "New" } }] }));
+      const card = element.querySelector('[aria-label="Calendar edit reviews"]')!;
+      expect(card.compareDocumentPosition(textarea) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(card.closest(".input-dock")).toBeNull();
+      expect(document.activeElement).toBe(textarea);
+      expect(textarea.value).toBe("Current draft");
+      expect(service.optionalManagement).not.toHaveBeenCalledWith("calendar_edit_commit", expect.anything());
+    } finally {
+      await act(async () => root.unmount());
+      element.remove();
+    }
+  });
   it("focuses the composer and Outlook heading when handing off in both directions", async () => {
     service.optionalManagement.mockResolvedValue({
       actor_user_id: "fixture", owner_outlook_inbox_setup: true,

@@ -16,6 +16,8 @@ from alphonse.agent_v2.users import V2UserStore
 
 GMAIL_CONTENT_OPERATION = 'mail_content_read'
 GMAIL_READ_SCOPE = 'https://www.googleapis.com/auth/gmail.readonly'
+CALENDAR_WRITE_OPERATION = 'calendar_write'
+CALENDAR_WRITE_SCOPE = 'https://www.googleapis.com/auth/calendar.events'
 OUTLOOK_INBOX_OPERATION = 'outlook_inbox_unread'
 OUTLOOK_INBOX_RESOURCE = 'outlook:inbox'
 OUTLOOK_INBOX_SCOPE = 'https://graph.microsoft.com/Mail.ReadBasic'
@@ -34,6 +36,11 @@ def exact_gmail_label_id(value: object) -> bool:
 
 def valid_gmail_label_name(value: object) -> bool:
     return isinstance(value, str) and 0 < len(value) <= 256 and value == value.strip() and value.isprintable()
+
+
+def exact_calendar_id(value: object) -> bool:
+    return (isinstance(value, str) and 0 < len(value) <= 512 and value == value.strip()
+            and value.casefold() not in {'primary', '.', '..'} and '*' not in value and value.isprintable())
 
 
 @dataclass(frozen=True)
@@ -122,6 +129,15 @@ class AccountService:
                 and record.provider_key == 'microsoft' and record.connection['capabilities'] == [OUTLOOK_INBOX_OPERATION]
                 and OUTLOOK_INBOX_SCOPE in record.connection['granted_scopes'] and not record.revocation_pending
                 and operations == [OUTLOOK_INBOX_OPERATION] and resources == [OUTLOOK_INBOX_RESOURCE]
+                and recipients == [actor] and project_id is None)
+
+    def _calendar_write_scope(self, record, actor, *, beneficiary, operations, resources, recipients, project_id):
+        owner = self.users.admin_user()
+        return (owner is not None and owner.user_id == actor == beneficiary == record.connection['owner_user_id']
+                and owner.is_active and owner.role in ('owner', 'admin') and self.users.is_admin(actor)
+                and record.provider_key == 'google' and record.connection['capabilities'] == [CALENDAR_WRITE_OPERATION]
+                and CALENDAR_WRITE_SCOPE in record.connection['granted_scopes'] and not record.revocation_pending
+                and operations == [CALENDAR_WRITE_OPERATION] and len(resources) == 1 and exact_calendar_id(resources[0])
                 and recipients == [actor] and project_id is None)
 
     def create_connection(self, session: AccountSession, *, connection_id: str,
@@ -224,6 +240,7 @@ class AccountService:
             self._active(recipient)
         content_grant = GMAIL_CONTENT_OPERATION in operations
         outlook_grant = OUTLOOK_INBOX_OPERATION in operations
+        calendar_write_grant = CALENDAR_WRITE_OPERATION in operations
         compatible_operations = set(operations) <= set(record.connection['capabilities'])
         if content_grant:
             compatible_operations = requested_resource_count == 1 and self._gmail_content_scope(record, session.actor_user_id,
@@ -231,6 +248,10 @@ class AccountService:
                 recipients=recipients, project_id=project_id, gmail_label_name=gmail_label_name)
         if outlook_grant:
             compatible_operations = requested_resource_count == 1 and self._outlook_inbox_scope(
+                record, session.actor_user_id, beneficiary=beneficiary_user_id, operations=operations,
+                resources=resources, recipients=recipients, project_id=project_id)
+        if calendar_write_grant:
+            compatible_operations = requested_resource_count == 1 and self._calendar_write_scope(
                 record, session.actor_user_id, beneficiary=beneficiary_user_id, operations=operations,
                 resources=resources, recipients=recipients, project_id=project_id)
         if (not grant_id.strip() or not operations or not resources
@@ -253,7 +274,8 @@ class AccountService:
                         or old['project_id'] != project_id or old['revoked_at']
                         or (GMAIL_CONTENT_OPERATION in old['operations']) != content_grant
                         or (OUTLOOK_INBOX_OPERATION in old['operations']) != outlook_grant
-                        or (content_grant and old['resources'] != resources)):
+                        or (CALENDAR_WRITE_OPERATION in old['operations']) != calendar_write_grant
+                        or ((content_grant or calendar_write_grant) and old['resources'] != resources)):
                 raise ValueError('account_grant_identity_immutable')
             if expected_revision != (row['revision'] if row else 0):
                 raise ValueError('account_revision_conflict')
@@ -316,7 +338,7 @@ class AccountService:
                   operation: str, resources: list[str], recipient_user_ids: list[str],
                   required_scopes: list[str], project_id: str | None = None,
                   expected_grant_revision: int | None = None, owner_gmail_content: bool = False,
-                  owner_outlook_inbox: bool = False):
+                  owner_outlook_inbox: bool = False, owner_calendar_write: bool = False):
         """Called at each managed use/page; config/project membership grants nothing."""
         self._active(session.actor_user_id)
         record = self.integrations.get(connection_id)
@@ -352,6 +374,13 @@ class AccountService:
                     beneficiary=grant['beneficiary_user_id'], operations=grant['operations'],
                     resources=grant['resources'], recipients=grant['recipient_user_ids'],
                     project_id=grant['project_id']))
+        if operation == CALENDAR_WRITE_OPERATION:
+            capable = (owner_calendar_write is True and scopes == [CALENDAR_WRITE_SCOPE]
+                and requested_resource_count == 1 and resources == grant['resources']
+                and grant.get('grant_id') == grant_id and grant.get('revision') == row['revision']
+                and recipients == [session.actor_user_id] and self._calendar_write_scope(record, session.actor_user_id,
+                    beneficiary=grant['beneficiary_user_id'], operations=grant['operations'], resources=grant['resources'],
+                    recipients=grant['recipient_user_ids'], project_id=grant['project_id']))
         if (grant['schema_version'] != 1 or grant['connection_id'] != connection_id
                 or grant['grantor_user_id'] != connection['owner_user_id']
                 or grant['beneficiary_user_id'] != session.actor_user_id or grant['project_id'] != project_id

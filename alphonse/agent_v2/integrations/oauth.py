@@ -20,7 +20,8 @@ import time
 from urllib.parse import parse_qs, urlsplit, urlencode
 
 from alphonse.agent_v2.accounts import (
-    AccountService, AccountSession, GMAIL_CONTENT_OPERATION, GMAIL_READ_SCOPE,
+    AccountService, AccountSession, CALENDAR_WRITE_OPERATION, CALENDAR_WRITE_SCOPE,
+    GMAIL_CONTENT_OPERATION, GMAIL_READ_SCOPE,
     OUTLOOK_INBOX_OPERATION, OUTLOOK_INBOX_RESOURCE, OUTLOOK_INBOX_SCOPE, account_grant_is_live,
     exact_gmail_label_id, valid_gmail_label_name,
 )
@@ -75,6 +76,7 @@ SCOPES = {
         'mail_read': GMAIL_READ_SCOPE,
         'calendar_discover': 'https://www.googleapis.com/auth/calendar.calendarlist.readonly',
         'calendar_read': 'https://www.googleapis.com/auth/calendar.events.readonly',
+        CALENDAR_WRITE_OPERATION: CALENDAR_WRITE_SCOPE,
         'classroom_read': 'https://www.googleapis.com/auth/classroom.coursework.me.readonly',
         'classroom_announcements_read': 'https://www.googleapis.com/auth/classroom.announcements.readonly',
     },
@@ -290,7 +292,10 @@ class OAuthService:
         outlook = capabilities == [OUTLOOK_INBOX_OPERATION]
         if OUTLOOK_INBOX_OPERATION in capabilities and not outlook:
             raise OAuthError('oauth_capability_invalid')
-        if outlook:
+        calendar_write = capabilities == [CALENDAR_WRITE_OPERATION]
+        if CALENDAR_WRITE_OPERATION in capabilities and not calendar_write:
+            raise OAuthError('oauth_capability_invalid')
+        if outlook or calendar_write:
             owner = self.accounts.users.admin_user()
             if owner is None or not owner.is_active or owner.user_id != session.actor_user_id or owner.role not in ('admin', 'owner'):
                 raise PermissionError('owner_only_account_scope_unavailable')
@@ -310,6 +315,9 @@ class OAuthService:
         if record.credential_deletion_pending:
             raise OAuthError('oauth_credential_cleanup_required')
         if outlook and record.connection['capabilities'] not in ([], [OUTLOOK_INBOX_OPERATION]):
+            raise OAuthError('oauth_capability_invalid')
+        if (calendar_write and record.connection['capabilities'] not in ([], [CALENDAR_WRITE_OPERATION])
+                or not calendar_write and CALENDAR_WRITE_OPERATION in record.connection['capabilities']):
             raise OAuthError('oauth_capability_invalid')
         scopes = sorted({'openid', *(s for c in capabilities for s in capability_scopes(provider, c))})
         if provider == 'microsoft':

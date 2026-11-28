@@ -68,3 +68,16 @@ it("places unanchored active and archived logs by request time", () => {
     "task:earlier", "message:one", "task:between", "message:two",
   ]);
 });
+
+it("places a Calendar approval between its request and newer conversation", () => {
+  const messages: ChatMessage[] = [
+    { id: "propose", role: "user", content: "Move the workshop", created_at: "2026-11-28T14:00:00Z" },
+    { id: "later", role: "user", content: "What is next?", created_at: "2026-11-28T16:00:00Z" },
+  ];
+  const receipt = {
+    id: "approved", approved_at: "2026-11-28T15:00:00Z", event_title: "Workshop",
+    event_start: "2026-12-01", event_end: "2026-12-02", recurrence_scope: "event", changes: { location: "Room B" },
+  };
+  expect(buildConversationTimeline(messages, [], {}, {}, [], {}, [receipt]).map(item => item.key))
+    .toEqual(["message:propose", "calendar-receipt:approved", "message:later"]);
+});

@@ -14,8 +14,7 @@ from alphonse.agent_v2.skill_bindings import SkillBindings
 from alphonse.agent_v2.skills import SkillStore
 from alphonse.agent_v2.users import V2UserStore
 
-ROOT = Path(__file__).parents[1] / 'alphonse/agent_v2/builtin_skills/family-calendar'
-spec = importlib.util.spec_from_file_location('family_calendar_client', ROOT / 'scripts/google_calendar.py')
+spec = importlib.util.spec_from_file_location('family_calendar_client', Path(__file__).with_name('fixtures') / 'legacy_family_calendar_client.py')
 client = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(client)
 NOW = datetime(2030, 1, 1, tzinfo=timezone.utc)
@@ -287,14 +286,13 @@ def test_package_binding_boundary_rechecks_actor_account_and_grant(tmp_path, sec
     resolver.select(actor_id='member', skill_id='skill:family-calendar', name='calendar', binding_id='calendar-test')
     with pytest.raises(PermissionError):
         resolver.select(actor_id='other', skill_id='skill:family-calendar', name='calendar', binding_id='calendar-test')
-    payload = resolver.prepare(actor_id='member', skill_id='skill:family-calendar', names=['calendar'])
-    with pytest.raises(client.CalendarError, match='authorization_required'):
-        run(request, bound=payload.values)
+    with pytest.raises(PermissionError, match='skill_binding_managed_service_required'):
+        resolver.prepare(actor_id='member', skill_id='skill:family-calendar', names=['calendar'])
     resolver.configure(actor_id='owner', owner_id='member', binding_id='effect-test', skill_id='skill:family-calendar',
                        kind='configuration', configuration=bindings(request)['authorization']['configuration'])
     resolver.select(actor_id='member', skill_id='skill:family-calendar', name='authorization', binding_id='effect-test')
-    payload = resolver.prepare(actor_id='member', skill_id='skill:family-calendar', names=['calendar', 'authorization'])
-    assert run(request, bound=payload.values)['verified']
+    with pytest.raises(PermissionError, match='skill_binding_managed_service_required'):
+        resolver.prepare(actor_id='member', skill_id='skill:family-calendar', names=['calendar', 'authorization'])
     integrations.set_enabled('synthetic-google', False)
     with pytest.raises(ValueError, match='account_unavailable'):
         resolver.prepare(actor_id='member', skill_id='skill:family-calendar', names=['calendar', 'authorization'])
@@ -367,7 +365,7 @@ def test_main_uses_managed_credentials_and_real_http_encoding_without_logging(mo
     assert len(calls) == 4  # OAuth, initial GET, insert, readback.
 
 
-def test_native_bash_runs_shipped_package_without_catalog_or_network(tmp_path, secure_vault):
+def test_retired_calendar_cli_and_managed_bash_refuse_legacy_binding(tmp_path, secure_vault, monkeypatch):
     from alphonse.agent_v2.core.core import ToolExecutionContext
     from alphonse.agent_v2.core.intelligence.task_state import TaskState
     from alphonse.agent_v2.core.messages import InMemoryMessageQueue
@@ -387,7 +385,10 @@ def test_native_bash_runs_shipped_package_without_catalog_or_network(tmp_path, s
                      metadata={'v3_skill_selection': {'selected_skill_ids': ['skill:family-calendar']}})
     context = ToolExecutionContext(task=task, messages=InMemoryMessageQueue(), skill_bindings=resolver)
     command = '"' + client.sys.executable + '" scripts/google_calendar.py <<\'REQUEST\'\n' + json.dumps(create()) + '\nREQUEST'
-    result = execute_bash({'skill_id': 'skill:family-calendar', 'binding_names': ['calendar'], 'command': command}, context=context)
+    monkeypatch.setattr(integrations, 'resolve_credentials', lambda *_: pytest.fail('legacy secrets read'))
+    with pytest.raises(PermissionError, match='skill_binding_managed_service_required'):
+        execute_bash({'skill_id': 'skill:family-calendar', 'binding_names': ['calendar'], 'command': command}, context=context)
+    result = execute_bash({'skill_id': 'skill:family-calendar', 'command': command}, context=context)
     assert result['exit_code'] == 1
-    assert 'exact_effect_authorization_required' in result['stderr']
+    assert 'calendar_legacy_script_retired' in result['stderr']
     assert 'synthetic-secret' not in json.dumps(result)

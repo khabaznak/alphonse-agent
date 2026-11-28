@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { isGrantCurrent, isOwnerReadGrant, type Catalog, type Connection, type Grant } from "./integrationManagement";
+import { isGrantCurrent, isOwnerCalendarEditGrant, isOwnerReadGrant, type Catalog, type Connection, type Grant } from "./integrationManagement";
 
 export type AccountServiceDetailProps = {
   catalog: Catalog;
@@ -39,11 +39,12 @@ export function AccountServiceDetail(props: AccountServiceDetailProps) {
   const [scopeSelections, setScopeSelections] = useState<Record<string, string[]>>({});
   const ownerSetup = catalog.owner_gmail_setup_only || catalog.owner_google_setup_only;
   const ownerCalendar = catalog.owner_google_setup_only === true && provider === 'google' && capability === 'calendar_read';
+  const ownerCalendarEdit = catalog.owner_google_setup_only === true && provider === 'google' && capability === 'calendar_write';
   const records = catalog.connections.filter(account => account.provider === provider
     && (!catalog.owner_google_setup_only || account.capabilities.length === 0 || account.capabilities.includes(capability)));
   const availableScopes = catalog.providers.find(item => item.provider === provider)?.capabilities || [];
   const configured = catalog.providers.some(item => item.provider === provider && item.capabilities.includes(capability));
-  const service = provider === "google" ? (capability === "calendar_read" ? "Google Calendar" : "Gmail") : "Outlook / Hotmail";
+  const service = provider === "google" ? (ownerCalendarEdit ? "Google Calendar editing" : capability === "calendar_read" ? "Google Calendar" : "Gmail") : "Outlook / Hotmail";
   const canAdd = configured && !busy;
 
   const visible = records.filter(account => account.status !== "disconnected");
@@ -56,7 +57,7 @@ export function AccountServiceDetail(props: AccountServiceDetailProps) {
         const ownerGmail = catalog.owner_gmail_setup_only === true && provider === 'google' && capability === 'mail_read';
         const status = accountStatus(account, ownerGmail || ownerCalendar, capability);
         const readGrant = catalog.grants.find(grant => grant.connection_id === account.connection_id
-          && isOwnerReadGrant(catalog, grant, capability)
+          && (ownerCalendarEdit ? isOwnerCalendarEditGrant(catalog, grant) : isOwnerReadGrant(catalog, grant, capability))
           && isGrantCurrent(grant));
         const contentGrants = ownerGmail ? catalog.grants.filter(grant => grant.connection_id === account.connection_id
           && isOwnerReadGrant(catalog, grant, 'mail_content_read')) : [];
@@ -77,6 +78,7 @@ export function AccountServiceDetail(props: AccountServiceDetailProps) {
             {status === "Service not enabled" && <p>This saved connection does not include {service} access.</p>}
             {ownerGmail && manageable && !readGrant && !inboxGrant && <p>Grant INBOX access before asking for the unread count.</p>}
             {ownerCalendar && status === "Connected" && !readGrant && <p>Grant access to one calendar before asking about its events.</p>}
+            {ownerCalendarEdit && status === "Connected" && !readGrant && <p>Grant access to the one calendar Alphonse may edit.</p>}
             {combined && <p>This connection includes other services; reconnecting it here is unavailable to preserve its existing permissions.</p>}
             {account.credential_deletion_pending && <p>Local credential deletion is pending.</p>}
             {account.revocation_pending && <p>Provider revocation is pending; local access is stopped.</p>}
@@ -115,7 +117,7 @@ export function AccountServiceDetail(props: AccountServiceDetailProps) {
         : catalog.owner_gmail_content_setup
         ? "Inbox content access enables search, summaries, and unread counts in Desktop. You can also grant access to unread counts alone."
         : "Connect Gmail, then grant access to your INBOX to ask for an unread count.")
-      : ownerCalendar ? 'Connect Google Calendar, then choose one calendar for agenda questions in Desktop.' : `Connect an account to use ${service}.`}</p>
+      : ownerCalendarEdit ? 'Google consent covers all calendars in the account. In Alphonse, choose one calendar and approve each edit in Desktop.' : ownerCalendar ? 'Connect Google Calendar, then choose one calendar for agenda questions in Desktop.' : `Connect an account to use ${service}.`}</p>
     <button type="button" className="integration-link" disabled={busy} onClick={props.onRefresh}>Refresh account status</button>
     {visible.length > 0 && <div className="mockup-settings-rows" aria-label={`${service} accounts`}>{visible.map(accountRow)}</div>}
     {removed.length > 0 && <details className="integration-removed-accounts"><summary>Removed accounts ({removed.length}){removed.some(account => account.credential_deletion_pending || account.revocation_pending) ? ' · cleanup needs attention' : ''}</summary><p>These recovery records remain available for pending cleanup or reconnection.</p><div className="mockup-settings-rows">{removed.map(accountRow)}</div></details>}

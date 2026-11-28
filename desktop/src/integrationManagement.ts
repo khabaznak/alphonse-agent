@@ -19,6 +19,13 @@ export function isOwnerReadGrant(catalog: Catalog, grant: Grant, operation = gra
       || catalog.owner_google_setup_only === true && operation === 'calendar_read'
       || catalog.owner_outlook_inbox_setup === true && operation === OUTLOOK_INBOX_UNREAD && grant.resources[0] === OUTLOOK_INBOX);
 }
+export function isOwnerCalendarEditGrant(catalog: Catalog, grant: Grant): boolean {
+  const owner = catalog.actor_user_id;
+  return catalog.owner_google_setup_only === true && grant.beneficiary_user_id === owner
+    && grant.grantor_user_id === owner && !grant.revoked_at && grant.project_id === null
+    && grant.operations.length === 1 && grant.operations[0] === 'calendar_write'
+    && grant.resources.length === 1 && grant.recipient_user_ids.length === 1 && grant.recipient_user_ids[0] === owner;
+}
 export function isGrantCurrent(grant: Grant): boolean {
   return grant.expires_at === null
     ? grant.operations.length === 1 && grant.operations[0] === 'mail_content_read'
@@ -28,7 +35,7 @@ export type Definition = { project_id: string; source_bindings: Omit<Source, "di
 export type Policy = Definition & { policy_id: string; revision: number; status: string };
 export type Run = { check_run_id: string; state: string; outcome: string; error_code: string; window_start: string; window_end: string; stale: boolean; offline: boolean; pending_analysis: boolean; coverage: Record<string, unknown> };
 export type ProjectChecks = { checks: { policy: Policy; runs: Run[]; next_run_at: string | null }[]; findings: { finding_id: string; summary: string; state: string; due_at: string | null; timezone: string | null; uncertainty: string[]; coverage: Record<string, unknown>; deliveries: Record<string, { state: string }> }[]; sources: Source[] };
-export const labels: Record<string, string> = { mail_read: "Read mail", mail_content_read: "Find and summarize emails", [OUTLOOK_INBOX_UNREAD]: "Count unread messages", calendar_read: "Read calendar events", read: "Read", search: "Search", list: "List", changes: "Read changes", 'attachments.read': "Read attachments" };
+export const labels: Record<string, string> = { mail_read: "Read mail", mail_content_read: "Find and summarize emails", [OUTLOOK_INBOX_UNREAD]: "Count unread messages", calendar_read: "Read calendar events", calendar_write: "Edit calendar events after approval", read: "Read", search: "Search", list: "List", changes: "Read changes", 'attachments.read': "Read attachments" };
 export const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 export function defaultDefinition(projectId: string): Definition {
   return { project_id: projectId, source_bindings: [], query: { text: "" }, trigger: { kind: "schedule", weekdays: [0, 1, 2, 3, 4], local_time: "08:00" }, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, retrieval_window: { weekdays: [0, 1, 2, 3, 4], start: "08:00", end: "09:00" }, duration: { ongoing: false, starts_at: new Date().toISOString(), ends_at: null }, budgets: { max_pages: 5, max_items: 100, max_bytes: 1000000, max_model_calls: 2, max_runtime_seconds: 60 }, initial_lookback_days: 30, recipient_user_ids: [], skill_hints: [], notification_mode: "material_changes", missed_run: { kind: "next_allowed_window" } };

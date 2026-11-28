@@ -742,6 +742,7 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
             return _terminal(host, state, 'blocked', 'candidate_claim_unavailable')
         private_digest = None
         from .owner_calendar import OWNER_CALENDAR_TOOL_ID
+        from .owner_calendar_edit import OWNER_CALENDAR_EDIT_TOOL_ID
         from .owner_gmail_search import OWNER_GMAIL_SEARCH_TOOL_ID
         from .owner_outlook import OWNER_OUTLOOK_TOOL_ID
         if tool_id == OWNER_KNOWLEDGE_TOOL_ID:
@@ -756,7 +757,7 @@ def run_candidate(state: CandidateState, host: CandidateHost) -> CandidateState:
                 result = {'status': 'success', 'result': deepcopy(private.observation)}
             except Exception:
                 result = {'status': 'failed', 'result': None}
-        elif tool_id in {OWNER_CALENDAR_TOOL_ID, OWNER_GMAIL_SEARCH_TOOL_ID, OWNER_OUTLOOK_TOOL_ID}:
+        elif tool_id in {OWNER_CALENDAR_TOOL_ID, OWNER_CALENDAR_EDIT_TOOL_ID, OWNER_GMAIL_SEARCH_TOOL_ID, OWNER_OUTLOOK_TOOL_ID}:
             # Keep provider details outside generic result events, memory and telemetry.
             if host.atomic_checkpoint is None or descriptor.metadata.get('sensitive_content') is not True:
                 return _terminal(host, state, 'blocked', 'candidate_private_read_unavailable')

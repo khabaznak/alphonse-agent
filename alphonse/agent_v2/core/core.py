@@ -213,6 +213,7 @@ class ToolExecutionContext:
     owner_gmail_service: Any | None = None
     owner_outlook_service: Any | None = None
     owner_calendar_service: Any | None = None
+    owner_calendar_edit_service: Any | None = None
     owner_gmail_search_service: Any | None = None
 
     def record_memory_event(self, task: TaskState, heading: str, content: Any) -> None:
@@ -255,6 +256,7 @@ class CoreLoopContext:
     owner_gmail_service: Any | None = None
     owner_outlook_service: Any | None = None
     owner_calendar_service: Any | None = None
+    owner_calendar_edit_service: Any | None = None
     owner_gmail_search_service: Any | None = None
     skill_store: Any | None = None
     artifact_resources: Any | None = None
@@ -335,6 +337,7 @@ class CoreLoopContext:
             owner_gmail_service=self.owner_gmail_service,
             owner_outlook_service=self.owner_outlook_service,
             owner_calendar_service=self.owner_calendar_service,
+            owner_calendar_edit_service=self.owner_calendar_edit_service,
             owner_gmail_search_service=self.owner_gmail_search_service,
         )
 

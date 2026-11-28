@@ -6,6 +6,9 @@ and acceptance contract, not implementation of transports or monitoring.
 Prerequisite [#105](https://github.com/khabaznak/alphonse-agent/issues/105) is complete.
 Inspected main revision: `8d18b63672ce1f1200fa8a8b37b1f91106e86a1d`.
 
+The later [Google Workspace MCP replacement plan](google-mcp-replacement.md)
+reopens MCP for Google Workspace while retaining the equivalence contract below.
+
 The [account integration contract](optional-account-integrations.md) remains the
 authority for accounts, grants, timing, evidence and delivery. This decision
 resolves its optional-extension question without changing those contracts or

@@ -1,26 +1,18 @@
 # Family calendar package adoption and validation (#41)
 
-`alphonse/agent_v2/builtin_skills/family-calendar/` is explicitly adopted as a shipped
-reusable Agent Skills package. This is product-maintained service support, not a
-copy of an individual household artifact. Its SKILL.md, ordinary Python script and
-references use existing skill discovery/installation, account bindings and native
-Bash. The package has no script manifests or per-script tool entries. Package
-exports contain no account state. See its references for connection, request and
-authorization procedures. No automatic invitations are supported.
+The shipped `family-calendar` Agent Skills package directs Calendar work through
+Alphonse’s managed Google MCP integration. Owner Agenda and project checks read
+authorized calendar windows. Desktop Conversation can prepare an edit for explicit
+owner approval. Connecting an account starts no monitoring.
 
-Project-scoped read context and incremental sync extend this package through
-`integrations/google_calendar.py` and the existing `SourceAcquisition` service
-(#119). They reuse account bindings, secure managed OAuth and the existing project
-scheduler/evidence/finding stores. The interactive script retains its exact write
-authorization, readback and retry guards. Connecting an account starts no monitoring.
-Legacy `google-calendar` script bindings are preserved; they are not silently
-converted to managed `google` grants. An owner explicitly connects/selects the
-managed account and calendar IDs, following [secure account setup](secure-credentials.md).
+Stored legacy script bindings and household files are preserved. The managed
+runtime no longer gives Google Calendar credentials to those scripts. Use the
+managed account and exact calendar grants for future requests.
 
 ## Owner Desktop agenda
 
 The owner can ask for event titles and times in a date range of up to 32 days in
-Desktop Conversation. Enable the [Google Calendar API](https://developers.google.com/workspace/guides/enable-apis)
+Desktop Conversation. Enable the [Google Calendar MCP](https://developers.google.com/workspace/guides/configure-mcp-servers)
 in the Google Cloud project that owns Alphonse’s OAuth client. In **Settings → Integrations → Google Calendar**, connect
 the Google account, then choose **Manage access**. Copy the exact calendar ID from
 that calendar’s **Integrate calendar** settings in Google Calendar and choose an
@@ -30,14 +22,12 @@ settings. An expired access token requires reconnecting the Calendar account.
 
 Alphonse reads up to 40 event occurrences from one exact calendar and reports
 when there are more results. Ask a separate Calendar question for a shorter
-range when needed. The Desktop agenda handles reads only. The family-calendar
-package's separately authorized write workflows and project sync continue to
-have their own setup and controls.
+range when needed. The Desktop Agenda handles reads.
 
 Event titles and times appear in a day-grouped card in the live Desktop
 conversation. Timed events use the owner's local timezone. Multi-day all-day
 events include their last day, and an event with only a start time says its end
-is unspecified. The conversation
+is unspecified where Google supplies that field. The conversation
 history records that the result was displayed and the model receives only the
 read status. The existing local task checkpoint holds the bounded observation
 to support verified pickup without another provider read. That database remains
@@ -62,7 +52,31 @@ renewal if its token expires. A revoked authorization requires reconnecting.
 Agenda sends event data to the active Desktop view and does not send it to the
 model or store it in conversation history.
 
-## Managed project read context and sync (#119)
+## Owner-approved edits
+
+In **Settings → Integrations → Google Calendar editing**, connect the same Google
+account and grant editing to the exact calendar with an expiry. Google’s consent
+permits event editing across calendars. Alphonse applies its own exact calendar
+grant for each proposal and checks the grant again when the owner approves.
+
+Ask in private Desktop Conversation to change an exact event. Review the event,
+occurrence or series, and **Current** and **Proposed** values in the separate
+review card above the composer. Read long descriptions at full width in the
+review. Choose **Approve and update** for an ordinary edit.
+
+When the request adds guests, provide their exact email addresses. The card shows
+existing and new guests and who Google will notify. **Approve and notify** applies
+the reviewed changes and requests email notifications for all guests, including
+existing guests. Alphonse checks the saved guest list by reading the event back.
+That read verifies guest membership. Email delivery requires separate evidence.
+
+Wait until Alphonse reports the result before editing the same event in Google
+Calendar. If the provider snapshot changed before dispatch, request a new proposal.
+A simultaneous edit can also change which guests Google notifies.
+If the outcome is unknown, inspect the event in Google Calendar before retrying.
+[Calendar update protection](google-mcp-replacement.md#calendar-update-protection)
+
+## Managed project read context (#119)
 
 Use trusted `OAuthService` setup with capabilities chosen independently:
 `calendar_discover` requests only `calendar.calendarlist.readonly` (plus identity),
@@ -98,36 +112,18 @@ window without provider text filtering so renamed events cannot leave stale
 matches. Jev performs bounded relevance judgments downstream; System Two composes
 interpretations and canonical identities.
 
-Baseline lists use `singleEvents=true`, `showDeleted=true`, `timeMin` and
-`timeMax`. Provider event IDs, ETags, iCalUID, recurringEventId, originalStartTime,
-exception start/end, recurrence fields and status are preserved as inert JSON
-text in normalized source evidence. Instances retain separate provider identities;
-a shared series UID is not a unique occurrence ID. All-day dates remain local
-DATEs with exclusive end dates. Calendar timezone and timed offsets/IANA zones
-are retained, including daylight-saving transitions. Cancelled sparse instances
-are source tombstones, never a completed assignment. New reads do not execute
-HTML, follow links or fetch attachments.
+Calendar MCP lists bounded windows with `list_events`. Each selected calendar has
+its own page continuation. The acquisition transaction persists accepted evidence
+before advancing a page. Google’s MCP schema has no incremental sync token, ETag,
+or recurrence-expansion switch. Alphonse uses fresh snapshots, retains provider
+occurrence identity when returned, and treats explicit cancellations as tombstones.
+An event missing from a snapshot cannot prove deletion or movement. All-day dates
+stay local with exclusive ends. Direct event reads verify the authorized window.
 
-Each selected calendar has its own opaque sync token and page continuation. The
-acquisition transaction persists accepted pages/evidence before advancing tokens.
-Incremental pages reuse the original sync token through the last page. Google's
-API forbids `timeMin`, `timeMax` and `q` with `syncToken`; delta transport therefore
-reads changes in the **selected calendars**, then filters event data against the
-explicit window before retention. Consent to this selected-calendar change read
-is part of enabling sync. Out-of-window changes retain only an ID/version
-tombstone to redact stale cached evidence. Delta pages can be large for recurring
-series: page/item/byte/runtime budgets apply and exhaustion is partial coverage,
-never an unbounded scan or successful absence. Direct event expansion also checks
-the authorized event window, using the actual calendar zone for all-day dates.
-
-HTTP 410 triggers the shared service's single bounded baseline resync and records
-a coverage gap; it never widens the event window or certifies old history. Query,
-actor, project, exact account, grant revision, resource and adapter-version changes
-invalidate cursor scope. HTTP 401/403/404 is blocked access, and redacted/busy-only
-records, missing final sync tokens, throttling and budget exhaustion never mean
-no-match. Every GET checks current authority before and after I/O. No retries,
-redirects, credential forwarding, provider writes or live-account probes occur
-at startup or in synthetic tests.
+Query, actor, project, exact account, grant revision, resource and adapter version
+determine cursor scope. Provider failures, redaction and exhausted budgets surface
+as blocked or partial coverage. Each provider call checks authority before and
+after I/O. Read results do not execute HTML or fetch links and attachments.
 
 Calendar/mail reconciliation uses the existing `FindingService`: explicit
 source-backed canonical person/commitment IDs can collect separate source
@@ -139,15 +135,13 @@ assignment absence. Each source grant and recipient remains independently
 required for finding reads and delivery; loss of Calendar access cannot be filled
 by mail access.
 
-Provider contracts: [event list and sync constraints](https://developers.google.com/workspace/calendar/api/v3/reference/events/list),
-[incremental sync](https://developers.google.com/workspace/calendar/api/guides/sync),
-and [calendar discovery](https://developers.google.com/workspace/calendar/api/v3/reference/calendarList/list).
-This is synthetic qualification of the shared service extension; real-account
-and provider behavior still require separately authorized opt-in validation.
+See the provider’s [event list](https://developers.google.com/workspace/calendar/api/v3/reference/mcp/tools_list/list_events)
+and [calendar discovery](https://developers.google.com/workspace/calendar/api/v3/reference/mcp/tools_list/list_calendars)
+schemas.
 
 ## Synthetic validation
 
-Run `python3 -m pytest -q tests/test_calendar_acquisition.py tests/test_source_acquisition.py
+Run `python3 -m pytest -q tests/test_calendar_acquisition.py tests/test_calendar_mcp_edits.py tests/test_source_acquisition.py
  tests/test_oauth_lifecycle.py tests/test_project_checks.py tests/test_findings.py tests/test_family_calendar.py tests/test_agent_v2_skill_bindings.py
  tests/test_skill_script_execution.py tests/test_agent_v2_skills.py` (on one line).
 The calendar tests inject synthetic OAuth and HTTP responses; no real network or
@@ -161,29 +155,17 @@ opt in, connect their chosen test Google account through trusted setup, select a
 empty dedicated test calendar and review its ACLs. Never use a production family
 calendar for smoke validation. Keep all resulting records and tokens outside Git.
 
-1. Confirm Python/timezone readiness. List a finite date window and compare to the
-   Google UI. Query free/busy and verify busy intervals; a provider error is unknown.
-2. Confirm an unselected actor/calendar is rejected before any network call. Disable
-   the binding and confirm managed denial; re-enable only with explicit owner action.
-3. Only after separate approval for a real write, provision a short-lived exact hash
-   grant. Create a uniquely identified test event with no attendees and
-   `send_updates=none`. Read back its ID, title, offset, timezone and dates. Repeat the
-   exact request with the same operation ID and confirm one event, including after
-   simulating interrupted readback. This test must not send invitations.
-4. Read the ETag, approve the precise update and grant its hash. Change the title,
-   read back, and repeat to verify no second PATCH. Make a manual conflicting edit
-   and confirm the old ETag fails without overwriting it.
-5. With explicit series approval, test a COUNT=2 weekly series across a daylight
-   saving transition in a relevant IANA timezone. Confirm local wall time in Google,
-   list expanded instances, then authorize only one instance update and verify that
-   the other occurrence is unchanged. Confirm ambiguous dates/nonexistent local
-   times require clarification or fail before mutation.
-6. Revoke OAuth consent and confirm reconnect guidance without token/error-body
-   disclosure; test missing scopes using a separate read-only consent. Remove test
-   events manually in Google (deletion is outside this package), disable grants and
-   test bindings, and retain only a redacted pass/fail report outside the package.
+1. Compare a finite Agenda window against Google Calendar and exercise one exact
+   scheduled read within its retrieval window.
+2. Seed a test event in Google Calendar with no attendees. Propose a change in
+   Desktop. Verify the exact review and confirm dismissal leaves the event intact.
+3. After explicit approval for the live write, approve a fresh review and verify
+   the reviewed fields in Google Calendar. Check that the same review cannot run
+   again. Prepare another review, manually change the event before approving, and
+   verify that Alphonse stops when its preflight sees the newer change.
+4. Run permission loss, ambiguous responses and conflicting requests with
+   disposable provider fixtures. Revoke test grants and remove test events
+   manually in Google Calendar after the authorized live run.
 
-Real-account validation is intentionally not claimed by the synthetic suite. Google
-provider delivery/concurrency behavior remains an opt-in integration check. Requests
-with attendees, invitation delivery, conferencing, deletion and complex recurrence
-are outside the initial implementation and must never be approximated silently.
+The test plan covers fixture-backed behavior and opt-in live checks separately.
+[Google MCP qualification evidence](agent-loop/evidence/google-mcp-discovery-2026-11-27.md)

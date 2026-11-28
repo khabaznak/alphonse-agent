@@ -13,9 +13,11 @@ const calendarSourceCopy: Record<CalendarSourceStatus, { label: string; details:
 };
 
 const calendarEventCopy: Partial<Record<CalendarEventStatus, { label: string; details: string }>> = {
-  partial: { label: "Google Calendar results limited", details: "Some events may be missing. Choose a shorter period to see more." },
+  partial: { label: "Google Calendar results limited", details: "Some events may be missing from this period." },
   unavailable: { label: "Google Calendar events unavailable", details: "Try reloading Agenda or check the connection in Settings." },
-  api_disabled: { label: "Google Calendar API disabled", details: "Enable the Google Calendar API in the Cloud project configured for Alphonse." },
+  api_disabled: { label: "Calendar MCP disabled", details: "Enable Calendar MCP in the Cloud project configured for Alphonse." },
+  approval_required: { label: "Google Calendar approval required", details: "Google requires an additional approval to read these events." },
+  credential_busy: { label: "Google Calendar connection busy", details: "Agenda retries automatically. If this persists, reconnect Google Calendar in Settings → Integrations." },
 };
 
 function AgendaSources({ result, compact }: { result: AgendaResult; compact?: boolean }) {
@@ -52,11 +54,12 @@ export function Agenda({ member, timezone, active = true, compact = false, onSch
       return;
     }
     setLoaded(previous => previous?.scope === scope ? previous : null);
-    let live = true, generation = 0, loading = false;
+    let live = true, generation = 0, loading = false, refetchOnFocus = false;
     const load = async (invalidate = false) => {
       if (loading && !invalidate) return;
       const request = ++generation;
       loading = true;
+      refetchOnFocus = false;
       if (invalidate) setLoaded(null);
       try {
         const next = await daemonRequest<AgendaResult>("agenda", { actor_user_id: member, start_day: range.start, end_day: range.end, include_calendar_events: true });
@@ -64,20 +67,24 @@ export function Agenda({ member, timezone, active = true, compact = false, onSch
       } catch (cause) {
         if (live && request === generation) setLoaded({ scope, error: cause instanceof Error ? cause.message : "Agenda unavailable" });
       } finally {
-        if (request === generation) loading = false;
+        if (request === generation) {
+          loading = false;
+          if (live && refetchOnFocus) void load();
+        }
       }
     };
     const refresh = () => void load();
     const changed = () => void load(true);
+    const focused = () => { if (loading) refetchOnFocus = true; else refresh(); };
     refresh();
     const timer = window.setInterval(refresh, 30000);
     window.addEventListener(CALENDAR_CONFIGURATION_CHANGED, changed);
-    window.addEventListener("focus", refresh);
+    window.addEventListener("focus", focused);
     return () => {
       live = false;
       window.clearInterval(timer);
       window.removeEventListener(CALENDAR_CONFIGURATION_CHANGED, changed);
-      window.removeEventListener("focus", refresh);
+      window.removeEventListener("focus", focused);
     };
   }, [member, scope, range.start, range.end, active, revision]);
   if (compact) return <section className="agenda agenda-compact" aria-label="Agenda preview">
